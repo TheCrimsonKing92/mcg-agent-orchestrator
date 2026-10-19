@@ -15,7 +15,13 @@ internal static class GoalLifecycleChangeSink
             var detail = commit.EventType;
             if (commit.TaskId is not null) detail += $" task={commit.TaskId}";
             if (commit.Role is not null) detail += $" role={commit.Role}";
-            writer.Append("goal-lifecycle", commit.GoalId.Value, detail, commit.Timestamp);
+            var source = commit.EventType switch
+            {
+                "HumanInputReceived" => ChangeStreamRecord.DecisionAnsweredSource,
+                "HumanInputSuperseded" => ChangeStreamRecord.DecisionRetiredSource,
+                _ => "goal-lifecycle"
+            };
+            writer.Append(source, commit.GoalId.Value, detail, commit.Timestamp);
         };
     }
 }

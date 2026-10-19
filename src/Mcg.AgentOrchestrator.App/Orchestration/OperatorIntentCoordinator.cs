@@ -18,6 +18,7 @@ internal sealed partial class OperatorIntentCoordinator
     internal const string TerminalGoalEvictedReasonCode = "goal-terminal-evicted";
 
     private readonly IOperatorIntentStore _store;
+    internal OperatorGateCancellation? GateCancellation { get; init; }
     private readonly Func<DateTimeOffset> _utcNow;
     private readonly Func<GoalId, string?>? _goalHeadResolver;
     private readonly Func<GoalId, string, string?>? _policyChangeFingerprintResolver;
@@ -69,6 +70,8 @@ internal sealed partial class OperatorIntentCoordinator
     {
         var versionReader = OperatorChannelComposition.BuildGoalStateVersionReader(workspace.OrchestratorDirectory);
         var collaboration = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
+        var solo = new ConductorParallelAcceptanceAttemptCoordinator(
+            Path.Combine(workspace.OrchestratorDirectory, "acceptance-gate-attempts"), workspace.IntegrationBranch, workspace.ExecutionDirectory);
         var refinement = new GoalRefinementService(
             new InMemoryModelProviderRegistry([]), ModelFunctionCatalog.Empty, collaboration,
             new SpecRefinerPrecedentStore(workspace.SpecRefinerPrecedentsPath));
@@ -79,8 +82,7 @@ internal sealed partial class OperatorIntentCoordinator
             goalStateVersionResolver: goalId => versionReader(goalId.Value, CancellationToken.None).GetAwaiter().GetResult(),
             evidenceResolver: new AdjudicationEvidenceResolver(workspace.OrchestratorDirectory),
             apparatusRegateIndex: ConductorStewardCaseDSources.CreateIndex(workspace),
-            hasLiveAcceptanceAttempt: BuildLiveAcceptanceAttemptQuery(new ConductorParallelAcceptanceAttemptCoordinator(
-                Path.Combine(workspace.OrchestratorDirectory, "acceptance-gate-attempts"), workspace.IntegrationBranch, workspace.ExecutionDirectory)),
+            hasLiveAcceptanceAttempt: BuildLiveAcceptanceAttemptQuery(solo),
             clarificationAnswers: (key, answer, briefVersion) =>
                 refinement.TryResolveOpenClarificationAsync(key, answer, briefVersion),
             clarificationAnswerRecovery: (key, answer, briefVersion) =>
@@ -98,6 +100,8 @@ internal sealed partial class OperatorIntentCoordinator
                 }
             })
         {
+            GateCancellation = new(solo, OwnedChildAttemptCoordinatorFactory.CreateGroupedGate(workspace, null),
+                new ConductEventLogWriter(workspace.ConductEventsLogPath)),
             CancelLatestProcess = (kernel, goalId, taskId) =>
                 OperatorCancelAwareDispatchRunner.ForWorkspace(workspace).CancelLatestProcess(kernel, goalId, taskId),
             CancelCompletionBuild = (kernel, goalId, taskId, target) =>
@@ -130,7 +134,12 @@ internal sealed partial class OperatorIntentCoordinator
                 RemoteLaneExecutorConfiguration.ResolveStorePath(workspace.ExecutionDirectory)),
             ExperimentDecisions = new ExperimentDecideIntentHandler(workspace.ExperimentStorePath),
             EpicOutcomes = new EpicOutcomeIntentHandler(workspace.PortfolioStorePath),
-            Directives = new OperatorDirectiveIntentHandler(workspace.OperatorDirectivesStorePath)
+            Directives = new OperatorDirectiveIntentHandler(workspace.OperatorDirectivesStorePath),
+            ProviderResets = new ProviderResetRetainedSourceRecorder(() => new SqliteOrchestratorStateRepository(workspace.SqliteStatePath)),
+            ExecutorSettings = new ExecutorSettingIntentHandler(
+                RemoteLaneExecutorConfiguration.ResolveStorePath(workspace.ExecutionDirectory), workspace.ConductEventsLogPath,
+                new RemoteExecutorSlotsFileSync(GoalAcceptanceVerifier.RunRemoteLaneTransportAsync,
+                    workspace.ExecutionDirectory, TimeSpan.FromSeconds(30)))
         };
     }
 
@@ -369,6 +378,12 @@ internal sealed partial class OperatorIntentCoordinator
     {
         switch (intent.Verb)
         {
+            case OperatorIntentVerbs.GateCancel:
+                (GateCancellation ?? throw new InvalidOperationException("gate-cancel-unavailable")).Apply(kernel, goal, intent, _utcNow());
+                return;
+            case OperatorIntentVerbs.ProviderReset:
+                ProviderResetIntentHandler.Apply(kernel, goal, intent, _utcNow());
+                return;
             case OperatorIntentVerbs.ApprovePolicyChange:
                 var policyApproval = Deserialize<ApprovePolicyChangeOperatorIntentPayload>(intent);
                 OperatorIntentPolicyApproval.Apply(
@@ -384,6 +399,12 @@ internal sealed partial class OperatorIntentCoordinator
                 if (!GoalPriorities.TryParse(priorityPayload.Level, out var priority))
                     throw new InvalidOperationException($"Invalid goal priority '{priorityPayload.Level}'; valid levels: {GoalPriorities.ValidLevelsText}.");
                 kernel.SetGoalPriority(goal.Id, priority, intent.Actor, priorityPayload.Rationale ?? "");
+                return;
+            case OperatorIntentVerbs.GoalIsolation:
+                var isolationPayload = Deserialize<GoalIsolationOperatorIntentPayload>(intent);
+                if (!GoalIsolations.TryParse(isolationPayload.Mode, out var isolation))
+                    throw new InvalidOperationException($"Invalid goal isolation '{isolationPayload.Mode}'; valid modes: {GoalIsolations.ValidModesText}.");
+                GoalIsolationCommands.Apply(kernel, goal.Id, isolation, intent.Actor, isolationPayload.Rationale ?? "");
                 return;
             case OperatorIntentVerbs.CriterionEvidenceMap:
                 var mapping = Deserialize<CriterionEvidenceMappingOperatorIntentPayload>(intent);

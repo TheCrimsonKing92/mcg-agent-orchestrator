@@ -260,7 +260,7 @@ internal static partial class CliPersistentStateRunner
         }
         if (IsCancelDispatchCommand(args))
             return ExecuteCommandWithoutTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel);
-        if (CliGoalPriorityCommand.IsCommand(args))
+        if (CliGoalPriorityCommand.IsCommand(args) || CliGoalIsolationCommand.IsCommand(args) || CliProviderResetCommand.IsCommand(args))
         {
             CliCommandHelp.ThrowIfInvalidFlags(args);
             return ExecuteCommandWithoutTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel);
@@ -605,6 +605,10 @@ internal static partial class CliPersistentStateRunner
             "project" => true,
             "trial-compare" => !TrialCompareCliCommand.RequiresHistoricalState(args),
             "hermes-acp-trial" or "hermes-acp-verify-identity" => true,
+            // Listing reads only the independent dogfood-log store.
+            "dogfood-log" when args.Count == 1 ||
+                args[1].Equals("list", StringComparison.OrdinalIgnoreCase) ||
+                args[1].StartsWith("--", StringComparison.Ordinal) => true,
             _ => false,
         };
     }
@@ -1015,7 +1019,7 @@ internal static partial class CliPersistentStateRunner
             {
                 EmitPreLoopJanitorialFailure(workspace, ex);
             }
-
+            ProviderHoldHistorySeed.Apply(startupKernel, stateRepository, Console.WriteLine);
             return startupKernel;
         }
 
@@ -1736,27 +1740,6 @@ internal static partial class CliPersistentStateRunner
         string GoalId,
         string Status,
         bool IsLanded);
-
-    private static TerminalGoalMetadata ToTerminalGoalMetadata(GoalSummary summary)
-    {
-        var status = Enum.TryParse<GoalStatus>(summary.Status, ignoreCase: true, out var parsed)
-            ? parsed
-            : GoalStatus.Completed;
-        var title = string.IsNullOrWhiteSpace(summary.Objective)
-            ? summary.Id
-            : summary.Objective;
-        var terminatedAt = summary.TerminatedAt ?? TryParseTimestamp(summary.UpdatedAt);
-        return new TerminalGoalMetadata(
-            new GoalId(summary.Id),
-            status,
-            title,
-            summary.ResultCommit,
-            summary.CreatedAt,
-            terminatedAt);
-    }
-
-    private static DateTimeOffset? TryParseTimestamp(string value) =>
-        DateTimeOffset.TryParse(value, out var parsed) ? parsed : null;
 
     private static bool ExecuteCommandWithoutTransaction(
         IReadOnlyList<string> args,
@@ -2646,7 +2629,7 @@ internal static partial class CliPersistentStateRunner
 
         var committedKernel = stateRepository.LoadAsync().GetAwaiter().GetResult();
         currentGoal = committedKernel.Goals.Single(goal => goal.Id.Value == committedGoalId);
-        ConsoleViews.PrintGoal(currentGoal);
+        GoalTextView.PrintGoal(currentGoal);
         return shouldSave;
     }
 
@@ -2998,7 +2981,7 @@ internal static partial class CliPersistentStateRunner
         currentGoal = successor;
         Console.WriteLine(
             $"GOAL_REPLACE_REPLAYED requestId={requestId:D} predecessor={audit.PredecessorGoalId} successor={successorGoalId} backlogItem={audit.BacklogItemId} owner={claim.OwnerGoalId} claimVersion={claim.Version}");
-        ConsoleViews.PrintGoal(successor);
+        GoalTextView.PrintGoal(successor);
         result = true;
         return true;
     }
@@ -3476,7 +3459,7 @@ internal static partial class CliPersistentStateRunner
             intakeRecord = reservation.Record;
             if (reservation.Kind == GoalIntakeReservationKind.Replay)
             {
-                ConsoleViews.PrintGoalIntakeReceipt(reservation.Record);
+                GoalIntakeReceiptTextView.PrintGoalIntakeReceipt(reservation.Record);
                 if (reservation.Record.State == GoalIntakeRequestStates.Created)
                 {
                     var replayKernel = stateRepository.LoadAsync().GetAwaiter().GetResult();
@@ -3487,7 +3470,7 @@ internal static partial class CliPersistentStateRunner
                         throw new InvalidOperationException(
                             $"GOAL_INTAKE_RECEIPT_INVALID requestKey={request.RequestKey} reason=created-goal-missing");
                     }
-                    ConsoleViews.PrintGoal(currentGoal);
+                    GoalTextView.PrintGoal(currentGoal);
                     return false;
                 }
                 if (reservation.Record.State == GoalIntakeRequestStates.Failed)
@@ -3542,7 +3525,7 @@ internal static partial class CliPersistentStateRunner
                 .GetResult();
             committedSnapshot = preparedSnapshot;
             if (intakeRecord is not null)
-                ConsoleViews.PrintGoalIntakeReceipt(intakeRecord);
+                GoalIntakeReceiptTextView.PrintGoalIntakeReceipt(intakeRecord);
             try
             {
                 _ = DeliverGoalCreationSideEffects(outboxRepository, workspace, kernel, goal.Id);
@@ -3576,7 +3559,7 @@ internal static partial class CliPersistentStateRunner
                 reportGoalCreationProgress: () =>
                 {
                     if (intakeRecord is not null)
-                        ConsoleViews.PrintGoalIntakeReceipt(intakeRecord);
+                        GoalIntakeReceiptTextView.PrintGoalIntakeReceipt(intakeRecord);
                 });
             if (committedSnapshot is null)
             {
@@ -3826,7 +3809,7 @@ internal static partial class CliPersistentStateRunner
                 var refreshTarget = ResolveDispatchCommandTask(commandArgs, kernel, currentGoal, refreshUsage);
                 currentGoal = refreshTarget.Goal;
                 runner.RefreshLatestProcess(kernel, refreshTarget.Goal.Id, refreshTarget.Task.Id);
-                ConsoleViews.PrintRefreshDispatchResult(refreshTarget.Goal, refreshTarget.Task, refreshOptions!);
+                TaskTextView.PrintRefreshDispatchResult(refreshTarget.Goal, refreshTarget.Task, refreshOptions!);
                 break;
 
             case "refresh-dispatches":

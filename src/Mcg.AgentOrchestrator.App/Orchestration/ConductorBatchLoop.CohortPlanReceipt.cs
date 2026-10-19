@@ -88,7 +88,7 @@ internal sealed partial class ConductorBatchLoop
         HashSet<string> escalatedGoals,
         AgentOrchestratorKernel kernel)
     {
-        if (!IsParallelAcceptanceLifecycleEligible(goal, driver))
+        if (!ParallelAcceptanceLifecycleEligibility.IsParallelAcceptanceLifecycleEligible(goal, driver))
         {
             return driver.ParallelAcceptanceEnabled
                 ? ConductorSpeculativeUpstreamExclusionReason.LifecycleRetired

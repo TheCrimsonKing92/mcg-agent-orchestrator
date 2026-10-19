@@ -14,7 +14,8 @@ internal sealed partial class ConductorDriver
     private AcceptanceRunExecutionOptions CreateCohortAttributionExecutionOptions(
         ConductEventLogWriter writer,
         AcceptanceCohortIdentity identity,
-        AcceptanceCohortMemberBinding member) =>
+        AcceptanceCohortMemberBinding member,
+        AcceptanceAttributionLaneScope? scope) =>
         new(ProgressSink: progress =>
         {
             var goalId = member.GoalId.Value[..8];
@@ -24,7 +25,7 @@ internal sealed partial class ConductorDriver
             TryAppendGateProgressEvent(writer, goalId, detail);
         }, RemoteLaneEventSink: detail => AppendRemoteLaneEvent(writer, member.GoalId.Value[..8], detail),
             GateRunIdentity: CohortGateRunIdentity(identity.Members.Select(binding => binding.GoalId.Value)),
-            ProjectHomeDirectory: _cohortWorkspace?.ProjectHomeDirectoryOrNull, IntegrationBranch: _integrationBranch);
+            ProjectHomeDirectory: _cohortWorkspace?.ProjectHomeDirectoryOrNull, IntegrationBranch: _integrationBranch, AttributionLaneScope: scope);
 
     private static void AppendCohortAttributionStartEvent(
         ConductEventLogWriter writer,

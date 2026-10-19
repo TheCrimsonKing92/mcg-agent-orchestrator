@@ -24,6 +24,10 @@ internal sealed partial class ConductorDriver
           _cohortAcceptanceVerifier is not null &&
           _mergeTrainAcceptanceStore is not null));
 
+    internal IReadOnlySet<GoalId> ReconcileAttributedTrainFailures(ConductorAutonomyPolicy policy, ISet<GoalId>? checkpointGoalIds = null) =>
+        MergeTrainAttributedFailureReconciliation.Reconcile(_cohortWorkspace, _cohortKernel, _mergeTrainAcceptanceStore,
+            goal => ProjectGateReadyCandidate(goal, policy), _recordAcceptanceFailure, checkpointGoalIds);
+
     internal ConductorMergeTrainRunResult RunMergeTrain(
         ConductorMergeTrainSelection selection,
         IReadOnlyList<Goal> orderedGoals,
@@ -38,24 +42,14 @@ internal sealed partial class ConductorDriver
         ArgumentNullException.ThrowIfNull(selection);
         ArgumentNullException.ThrowIfNull(orderedGoals);
         if (_runMergeTrainOverride is not null)
-        {
             return _runMergeTrainOverride(selection, orderedGoals, policy);
-        }
         if (_cohortKernel is null || _cohortWorkspace is null ||
             _cohortAcceptanceVerifier is null || _mergeTrainAcceptanceStore is null)
-        {
             throw new InvalidOperationException("Production merge train dependencies are unavailable.");
-        }
-
         var goalsById = orderedGoals.ToDictionary(goal => goal.Id);
         foreach (var member in selection.Members)
-        {
             if (!goalsById.ContainsKey(member.GoalId))
-            {
-                throw new InvalidOperationException(
-                    $"Selected merge train goal {member.GoalId.Value} is not in the current Ready batch.");
-            }
-        }
+                throw new InvalidOperationException($"Selected merge train goal {member.GoalId.Value} is not in the current Ready batch.");
         var originalBindings = selection.BindMembers();
         var attemptId = $"merge-train-attempt-{Guid.NewGuid():N}";
         var allEjections = new List<MergeTrainEjection>();
@@ -86,7 +80,7 @@ internal sealed partial class ConductorDriver
         MergeTrainReceipt? redReceipt = null;
         IReadOnlyList<string> redSubjects = [];
         var redAttributionSource = "ownership";
-
+        Action? completeAttributedFailure = null;
         for (var attempt = 0; attempt <= 1; attempt++)
         {
             MergeTrainWorkspace workspace;
@@ -122,6 +116,7 @@ internal sealed partial class ConductorDriver
             }
 
             var members = workspace.Members;
+            var composed = selection.Members.Where(member => members.Any(bound => bound.GoalId == member.GoalId)).ToArray();
             var changedFiles = members.SelectMany(member => member.LandingPaths)
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToArray();
@@ -145,7 +140,7 @@ internal sealed partial class ConductorDriver
             var receipt = _mergeTrainAcceptanceStore.TryReadReceipt(identity.Value);
             if (runGateInBackground && _groupedGateAttempts is not null)
             {
-                var recovered = RecoverGroupedGateAttempt("train", selection.Members,
+                var recovered = RecoverGroupedGateAttempt("train", composed,
                     selection.Members[0].MainRevision, workspace.TreeRevision,
                     trainKey, receipt is not null);
                 if (recovered.Running is not null)
@@ -171,7 +166,10 @@ internal sealed partial class ConductorDriver
                 {
                     if (_groupedGateAttempts is not null)
                     {
-                        var ownedRun = StartGroupedGateAttempt("train", selection.Members,
+                        if (ConductorRefusedGroupedIdentityGuard.IsRefused(_groupedGateAttempts.ReadAll(), "train",
+                            composed, selection.Members[0].MainRevision, workspace.TreeRevision, identity.Value))
+                            return Fallback($"outcome=identity-refused identity={identity.Value}");
+                        var ownedRun = StartGroupedGateAttempt("train", composed,
                             selection.Members[0].MainRevision, workspace.TreeRevision,
                             manifest, identity.Value, trainKey, policy);
                         onGateAdmitted?.Invoke();
@@ -267,6 +265,7 @@ internal sealed partial class ConductorDriver
             }
 
             lastRecordedReceipt = receipt;
+            completeAttributedFailure?.Invoke();
             if (receipt.Outcome == MergeTrainGateOutcome.Passed)
             {
                 if (redDropped is not null && redReceipt is not null)
@@ -351,6 +350,8 @@ internal sealed partial class ConductorDriver
             {
                 attributed = MergeTrainImpactAttribution.TryAttribute(receipt.GateTestResultPaths, workspace.Path, members, out subjects);
                 if (attributed is not null) attributionSource = "impact";
+                if (attributed is null && attempt == 0) attributed = MergeTrainReachAttribution.TryAttribute(receipt.GateTestResultPaths, workspace.Path, members, out subjects);
+                if (attributed is not null && attributionSource != "impact") attributionSource = "reach";
             }
             var messageSubjectFailure = MergeTrainRedAttribution.ReadFatalFailures(receipt.GateTestResultPaths)
                 .Any(MergeTrainRedAttribution.IsMessageSubjectGuard);
@@ -358,6 +359,9 @@ internal sealed partial class ConductorDriver
             // the existing sink keeps repeat implication records idempotent.
             if (attributed is not null && (messageSubjectFailure || MergeTrainBisectRedRetention.RecordsBeforeBisect(receipt, members.Count, attempt, attributed)))
                 RecordTrainImplicatedMember(attributed, receipt, subjects, attributionSource);
+            if (attempt == 0 && !messageSubjectFailure && attributed is not null && MergeTrainRedAttribution.IsGenuineTrainRed(receipt))
+                completeAttributedFailure = MergeTrainAttributedFailure.Prepare(receipt, attributed, GetCurrentGoal(goalsById[attributed.GoalId]), attributionSource, members.Count,
+                    allEjections, ejection => _mergeTrainAcceptanceStore.RecordEjections(attemptId, [ejection]), _recordAcceptanceFailure, _cohortKernel.RouteRecordedAcceptanceFailure);
             if (receipt.Outcome != MergeTrainGateOutcome.Failed || members.Count == 2 || attempt == 1)
             {
                 if (!messageSubjectFailure && attributed is not null)

@@ -21,7 +21,7 @@ internal static class BoardFillScopeDepends
         return new(report.VerdictToken, dependencies);
     }
 
-    private static bool Counts(ScopeCollision collision)
+    internal static bool Counts(ScopeCollision collision)
     {
         if (collision.Kind != ScopeCollisionKind.DirectoryPrefix)
         {

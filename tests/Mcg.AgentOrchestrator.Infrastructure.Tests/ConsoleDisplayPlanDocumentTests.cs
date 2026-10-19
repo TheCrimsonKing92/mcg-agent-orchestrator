@@ -15,7 +15,7 @@ public sealed class ConsoleDisplayPlanDocumentTests
     private static readonly string[] Headings =
     [
         "## Inventory", "## Use-case classification", "## Recommended display form per use case",
-        "## Shared visual vocabulary", "## Prioritized slice list", "## Non-goals"
+        "## Shared visual vocabulary", "## Prioritized slice list", "## Keys and commands", "## Non-goals"
     ];
 
     [Xunit.Fact]

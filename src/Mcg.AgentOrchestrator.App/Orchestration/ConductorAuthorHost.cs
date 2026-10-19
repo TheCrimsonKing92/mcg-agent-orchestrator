@@ -175,8 +175,7 @@ internal sealed partial class ConductorAuthorHost
     {
         var result = ConductorAuthorResultParser.Parse(output);
         return result?.Kind == "ask-owner" || result?.Kind == "answer" &&
-            (item.ForkKind == AcceptanceCriterionFeasibility.ForkKind ||
-             ConductorAuthorOwnerClassCheck.Evaluate(item.Question, result.Text!, result.EvidenceReferences) is not null);
+            ConductorAuthorAnswerRouting.Decide(item, result.Text!, result.EvidenceReferences).EscalationReason is not null;
     }
 
     private void ProcessCompleted(AgentOrchestratorKernel kernel, ConductorAuthorItem item,
@@ -225,16 +224,14 @@ internal sealed partial class ConductorAuthorHost
     private void SubmitCheckedAnswer(AgentOrchestratorKernel kernel, Goal goal,
         ConductorAuthorItem item, ConductorAuthorResult result, HashSet<GoalId> changed)
     {
-        var reason = item.ForkKind == AcceptanceCriterionFeasibility.ForkKind
-            ? "acceptance-weakening"
-            : ConductorAuthorOwnerClassCheck.Evaluate(item.Question, result.Text!, result.EvidenceReferences);
-        if (reason is not null)
+        var route = ConductorAuthorAnswerRouting.Decide(item, result.Text!, result.EvidenceReferences);
+        if (route.EscalationReason is { } reason)
         {
             Escalate(kernel, goal, item, item.Question, result.Text!, reason, changed);
             _claims.Complete(item.Identity, "owner-question");
             return;
         }
-        SubmitAnswer(item, result.Text!, result.EvidenceReferences!, result.Precedent, "answer");
+        SubmitAnswer(item, route.SubmittedText, result.EvidenceReferences!, result.Precedent, "answer");
     }
 
     private void SubmitAnswer(ConductorAuthorItem item, string text, IReadOnlyList<string> evidenceReferences,

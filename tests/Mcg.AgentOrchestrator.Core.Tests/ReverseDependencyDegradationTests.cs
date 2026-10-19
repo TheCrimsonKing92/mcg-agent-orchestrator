@@ -17,7 +17,7 @@ public sealed class ReverseDependencyDegradationTests
         Xunit.Assert.Equal(ReverseDependencySelectionOutcome.Abandoned, selection.Outcome);
         Xunit.Assert.Equal(ReverseDependencyDegradationKind.IndexedSourceBound, selection.DegradationKind);
         Xunit.Assert.Equal(BoundReason, selection.Reason);
-        Xunit.Assert.Equal(4_000, ReverseDependencyTestImpactReader.MaximumIndexedSourceFiles);
+        Xunit.Assert.Equal(8_000, ReverseDependencyTestImpactReader.MaximumIndexedSourceFiles);
     }
 
     [Xunit.Fact]

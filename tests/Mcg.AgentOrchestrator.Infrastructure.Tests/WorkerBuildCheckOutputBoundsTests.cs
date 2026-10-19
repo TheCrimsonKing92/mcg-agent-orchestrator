@@ -28,6 +28,7 @@ public sealed class WorkerBuildCheckOutputBoundsTests
     [Xunit.InlineData("CompilerFailure")]
     [Xunit.InlineData("NonDiagnosticFailure")]
     [Xunit.InlineData("MultipleProjects")]
+    [Xunit.InlineData("MultipleProjectsOneFails")]
     [Xunit.InlineData("LogUnavailable")]
     [Xunit.InlineData("ScopeBootstrapFailure")]
     public async Task WorkerBuildCheckPreservesBoundedFailureAndMultiProjectContracts(string scenario)

@@ -2,6 +2,7 @@ namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 
 internal interface IOwnerConsoleDialogs
 {
+    int? TextWidth => null;
     Task<bool> ConfirmAsync(string title, string text);
     Task<string?> PromptTextAsync(string title, string text);
     Task<OwnerExperimentDecisionForm?> PromptExperimentDecisionAsync(string title, string text, string defaultEvidence) =>

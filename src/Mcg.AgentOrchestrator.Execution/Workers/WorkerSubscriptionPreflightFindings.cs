@@ -62,10 +62,12 @@ internal static class WorkerSubscriptionPreflightFindings
         List<string> findings,
         IEnumerable<Goal> providerHoldScope,
         string providerName,
-        string? credentialBinding)
+        string? credentialBinding,
+        Goal goal, TaskSpec task, DateTimeOffset now)
     {
+        var goals = providerHoldScope.ToArray();
         if (!DispatchFailureClassifier.TryGetProviderBudgetExhaustionHold(
-            providerHoldScope,
+            goals,
             providerName,
             credentialBinding,
             out var providerHold))
@@ -73,8 +75,15 @@ internal static class WorkerSubscriptionPreflightFindings
             return;
         }
 
+        var schedule = ProviderBudgetHoldSchedules.Evaluate(goals, providerHold, now);
+        if (schedule.AdmittedGoalId == goal.Id && schedule.AdmittedTaskId == task.Id)
+        {
+            findings.Add($"probe: code=provider-budget-probe; binding={providerHold.BindingKey}; due={ProviderBudgetHoldSchedules.FormatInstant(schedule.NextProbeAt)}; attempt={schedule.Attempt}");
+            return;
+        }
         findings.Add(
             $"blocked: code={WorkerProfileDispatcher.ProviderBudgetExhaustionErrorCode}; provider budget exhausted for binding {providerHold.BindingKey} ({providerHold.BindingScope}); " +
-            $"source goal {providerHold.SourceGoalId.Value[..8]} task {providerHold.SourceTaskId.Value[..8]} receipt {providerHold.EvidenceReceipt}");
+            $"source goal {providerHold.SourceGoalId.Value[..8]} task {providerHold.SourceTaskId.Value[..8]} receipt {providerHold.EvidenceReceipt}" +
+            $"; next_probe={ProviderBudgetHoldSchedules.FormatInstant(schedule.NextProbeAt)}; reset_source={schedule.ResetSource}; attempt={schedule.Attempt}");
     }
 }

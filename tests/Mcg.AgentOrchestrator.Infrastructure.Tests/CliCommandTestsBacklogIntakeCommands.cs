@@ -862,6 +862,20 @@ public sealed class CliCommandTestsBacklogIntakeCommands : CliCommandTestBase
             CliCommandCapabilities.Classify(["backlog-similar", "query"]));
     }
 
+    [Xunit.Fact]
+    public void RunnerSkipsKernelStateForDogfoodLogListOnly()
+    {
+        Xunit.Assert.True(CliPersistentStateRunner.SkipsKernelState(["dogfood-log"]));
+        Xunit.Assert.True(CliPersistentStateRunner.SkipsKernelState(["dogfood-log", "list"]));
+        Xunit.Assert.True(CliPersistentStateRunner.SkipsKernelState(["DOGFOOD-LOG", "LIST", "--limit", "1"]));
+        Xunit.Assert.True(CliPersistentStateRunner.SkipsKernelState(["dogfood-log", "--limit", "1"]));
+
+        Xunit.Assert.False(CliPersistentStateRunner.SkipsKernelState(["dogfood-log", "add"]));
+        Xunit.Assert.False(CliPersistentStateRunner.SkipsKernelState(["dogfood-log", "add", "abc12345"]));
+        Xunit.Assert.False(CliPersistentStateRunner.SkipsKernelState(["dogfood-log", "record"]));
+        Xunit.Assert.False(CliPersistentStateRunner.SkipsKernelState(["dogfood-log", "unknown"]));
+    }
+
     [Xunit.Fact(DisplayName = "Cli_gate_status_lists_stable_slot_heartbeats")]
     public void CliGateStatusListsStableSlotHeartbeats()
     {

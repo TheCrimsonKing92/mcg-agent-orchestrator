@@ -63,7 +63,7 @@ internal static partial class CliCommandHandlers
         {
             case GoalLifecycleTransitionDisposition.Applied:
             case GoalLifecycleTransitionDisposition.AppliedWithLiveDispatches:
-                ConsoleViews.PrintGoal(outcome.Goal!);
+                GoalTextView.PrintGoal(outcome.Goal!);
                 if (outcome.Disposition == GoalLifecycleTransitionDisposition.AppliedWithLiveDispatches)
                 {
                     Console.WriteLine($"Live dispatches still running: {outcome.LiveDispatches!.Count}");

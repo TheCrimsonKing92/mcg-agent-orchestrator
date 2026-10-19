@@ -215,6 +215,7 @@ internal sealed partial class ConductorBatchLoop
 
         using var activeConductorLease = leaseAcquisition.StateLease!;
         using var activeRunEventLease = leaseAcquisition.RunEventLease!;
+        using var activationAdmissionHealth = BeginActivationAdmission(emitActivationHeartbeat);
         checkpointGoalTick = ResetLandingTickSave(checkpointGoalTick);
         _consecutiveJanitorialFailures.Clear();
         _slotContentionHolds.Clear();
@@ -244,7 +245,11 @@ internal sealed partial class ConductorBatchLoop
             EmitProgress($"LOOP_STOP tick={totalTicks} rechecks={totalBlockedRechecks} reason={reason}" +
                          (string.IsNullOrWhiteSpace(detail) ? string.Empty : $" {detail}"));
         }
-        void CompleteActivationTick(int tick) => EmitActivationTickEnd(emitActivationHeartbeat, tick);
+        void CompleteActivationTick(int tick)
+        {
+            EmitActivationAdmissionProbeAndHealth(emitActivationHeartbeat, tick);
+            EmitActivationTickEnd(emitActivationHeartbeat, tick);
+        }
 
         driver.DispatchRecordWriteSucceededSink = goalId =>
         {
@@ -1083,7 +1088,7 @@ internal sealed partial class ConductorBatchLoop
             }
 
             var changedGoalLines = new List<string>();
-            var changedGoalIds = new HashSet<GoalId>(preWalkIntentChangedGoalIds.Concat(GoalKernelChange.ChangedSince(kernel, sweepResult?.ReloadBaseline ?? preSweepBaseline, checkpointHeldGoals.Keys, sweepTerminalizedGoalIds)));
+            var changedGoalIds = new HashSet<GoalId>(preWalkIntentChangedGoalIds.Concat(GoalKernelChange.ChangedSince(kernel, sweepResult?.ReloadBaseline ?? preSweepBaseline, checkpointHeldGoals.Keys, sweepTerminalizedGoalIds)).Concat(GoalEffectivePriorityIndex.ApplyPending(kernel.Goals, line => EmitProgress(line, tickLines), _utcNow, _priorityStarvationGuard.BeginTick(kernel, totalTicks), recordDecision: kernel.RecordGoalPolicyDecision)));
             var liveChangeSnapshots = new Dictionary<(string Worktree, string? BaseCommit), DispatchLiveChangeSnapshot>();
 
             DispatchLiveChangeSnapshot LiveChangesFor(TaskSpec task)
@@ -1467,9 +1472,9 @@ internal sealed partial class ConductorBatchLoop
                 goalProjectionCache.Invalidate(goal.Id);
                 FinishGoalWalk(result.Outcome.GetType().Name);
             }
-            goalWalkClock.Stop();
-            ObserveWorkerCapacityTick(kernel, effectiveGoalStallThreshold);
+            goalWalkClock.Stop(); ObserveWorkerCapacityTick(kernel, effectiveGoalStallThreshold);
             ConductorExperimentWatch.For(this, _workspace, CurrentConductEventLogWriter.Value ?? _conductEventLogWriter)?.ObserveTick(_utcNow());
+            ConductorProviderHoldWatch.For(this, CurrentConductEventLogWriter.Value ?? _conductEventLogWriter)?.ObserveTick(kernel.ProviderHoldScope, _utcNow());
             driver.PhaseTimingSink = previousPhaseTimingSink;
             foreach (var line in perGoalPhaseTimingLines)
             {
@@ -2184,6 +2189,7 @@ internal sealed partial class ConductorBatchLoop
         var state = BeginParallelAcceptanceBatch(
             eligible, kernel, driver, policy, completedGoals, escalatedGoals,
             configuredAcceptanceWidth, tick, changedGoalLines);
+        RecordActivationAdmissionWaitingForProbe(state);
         if (state.CapacityStateUnavailable) return state.Results;
 
         ReconcileParallelAcceptanceAttempts(state, kernel, driver, policy, tick, changedGoalLines, changedGoalIds);
@@ -2191,6 +2197,9 @@ internal sealed partial class ConductorBatchLoop
             state, eligible, scopedGoals, verifiedGoalIdsAtTickStart, preWalkIntentChangedGoalIds,
             kernel, driver, policy, completedGoals, escalatedGoals, tick, changedGoalLines, changedGoalIds,
             suppressNewAcceptanceAdmission);
+        var priorityOccupantsBefore = GoalPriorityStarvationGuard.GateOccupants(state.LiveAttempts.Select(attempt => attempt.GoalId), driver);
+        var priorityResultsBefore = state.Results.Keys.ToHashSet(StringComparer.Ordinal);
+        var priorityBaseOrder = GoalSchedulingOrder.BaseAcceptance(state.OrderedEligible);
         if (!suppressNewAcceptanceAdmission())
             AdmitMergeTrain(state, driver, policy, tick, changedGoalLines);
         AdmitPairCohort(state, kernel, driver, policy, tick, changedGoalLines, changedGoalIds,
@@ -2202,35 +2211,10 @@ internal sealed partial class ConductorBatchLoop
         if (!suppressNewAcceptanceAdmission())
             AdmitSoloAcceptance(state, kernel, driver, policy, tick, changedGoalLines, changedGoalIds,
                 suppressNewAcceptanceAdmission);
+        _priorityStarvationGuard.ObserveGateTick(state.OrderedEligible, priorityBaseOrder, priorityOccupantsBefore, GoalPriorityStarvationGuard.GateOccupants(state.LiveAttempts.Select(attempt => attempt.GoalId), driver).Concat(state.Results.Where(pair => pair.Value.SlotIndex is not null && !priorityResultsBefore.Contains(pair.Key)).Select(pair => pair.Key)).ToHashSet(StringComparer.Ordinal), tick, changedGoalIds, changedGoalLines.Add);
         SummarizeAcceptanceDeferrals(state, tick, changedGoalLines);
 
         return state.Results;
-    }
-
-    private static bool IsParallelAcceptanceLifecycleEligible(
-        Goal goal,
-        ConductorDriver driver)
-    {
-        if (!driver.ParallelAcceptanceEnabled)
-        {
-            return false;
-        }
-
-        if (string.IsNullOrWhiteSpace(driver.ExecutionDirectory))
-        {
-            return true;
-        }
-
-        try
-        {
-            var journal = GoalOperationJournal.Read(driver.ExecutionDirectory, goal.Id);
-            return !GoalOperationJournal.HasRetiredTerminalDisposition(journal) &&
-                !GoalOperationJournal.HasMergeEvidenceTerminalDisposition(journal);
-        }
-        catch
-        {
-            return true;
-        }
     }
 
     private static string BoundSingleLine(string value)

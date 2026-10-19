@@ -96,7 +96,9 @@ internal sealed class OwnerConsoleEpicDialog : FrameView
     internal async Task<bool> HandleKeyAsync(Key key)
     {
         key.Handled = true;
-        if (key == Key.Esc)
+        var binding = key.IsAlt ? null : OwnerConsoleBindings.ForDialogKey(
+            OwnerConsoleScope.EpicView, (char)key.NoCtrl.AsRune.Value, key.IsCtrl);
+        if (key == Key.Esc || binding?.Command == "quit")
         {
             if (ShowingDetail)
             {
@@ -111,7 +113,7 @@ internal sealed class OwnerConsoleEpicDialog : FrameView
             Close();
             return true;
         }
-        if (char.ToLowerInvariant((char)key.AsRune.Value) == 'w')
+        if (binding?.Command == "window")
         {
             TimeWindow = TimeWindow switch
             {
@@ -123,7 +125,7 @@ internal sealed class OwnerConsoleEpicDialog : FrameView
             BeginLoading();
             await ReloadAsync();
         }
-        else if (char.ToLowerInvariant((char)key.AsRune.Value) == 'r' && LoadState == OwnerConsoleEpicLoadState.Failed)
+        else if (binding?.Command == "reload")
         {
             _revision++;
             BeginLoading();
@@ -315,8 +317,17 @@ internal sealed class OwnerConsoleEpicDialog : FrameView
             _body.SelectedItem = Lines.Count == 0 ? null : Math.Clamp(row, 0, Lines.Count - 1);
             // Scrolling can raise ViewportChanged; suppress reentrant formatting here.
             _body.EnsureSelectedItemVisible();
+            RenderTitle();
         }
         finally { _formatting = false; }
+    }
+
+    private void RenderTitle()
+    {
+        var title = OwnerConsoleOverflow.Title("Epics",
+            OwnerConsoleOverflow.Of(Lines.Count, _body.Viewport.Y, _body.Viewport.Height),
+            Frame.Width - OwnerConsoleOverflow.TitleChrome);
+        if (Title != title) Title = title;
     }
 
     private void Close()

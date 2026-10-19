@@ -16,6 +16,7 @@ internal sealed class CompletionBuildEvidenceCoordinator : ICompletionBuildEvide
     private readonly string _statePath;
     private readonly string _executionDirectory;
     private readonly Func<DateTimeOffset> _utcNow;
+    private readonly Func<string, TimeSpan> _remoteBuildBudget;
     private readonly Func<CompletionBuildEvidenceOperation, CompletionBuildEvidenceOperation?, CompletionBuildEvidenceOperation> _persist;
     private readonly Func<CompletionBuildEvidenceOperation, CompletionBuildChildLaunch> _launch;
     private readonly Func<CompletionBuildEvidenceOperation, CompletionBuildChildLiveness> _probe;
@@ -37,11 +38,22 @@ internal sealed class CompletionBuildEvidenceCoordinator : ICompletionBuildEvide
         Action<Goal, CompletionBuildEvidenceOperation>? finish = null,
         Func<ProcessStartInfo, Process>? startProcess = null,
         Func<Process, SpawnProcessIdentityReadResult>? readIdentity = null,
-        Func<Process, (TextReader Output, TextReader Error)>? hostReaders = null)
+        Func<Process, (TextReader Output, TextReader Error)>? hostReaders = null,
+        Func<string, TimeSpan>? remoteBuildBudget = null)
     {
         _statePath = statePath;
         _executionDirectory = executionDirectory;
         _utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
+        _remoteBuildBudget = remoteBuildBudget ?? (worktree =>
+        {
+            try
+            {
+                var settings = RemoteLaneExecutorConfiguration.LoadForWorkerBuildCheck(
+                    RemoteLaneExecutorConfiguration.ResolveStorePath(worktree)).WorkerBuildCheck;
+                return settings.Mode == "remote-first" ? TimeSpan.FromSeconds(settings.RemoteSeconds) : TimeSpan.Zero;
+            }
+            catch (Exception) { return TimeSpan.Zero; }
+        });
         _persist = persist ?? Persist;
         _launch = launch ?? Launch;
         _probe = probe ?? CompletionBuildEvidenceChildIdentity.Probe;
@@ -75,7 +87,7 @@ internal sealed class CompletionBuildEvidenceCoordinator : ICompletionBuildEvide
             operation = new CompletionBuildEvidenceOperation(id, goalId.Value, taskId.Value,
                 task.LastDispatch!.DispatchedAt, BackgroundDispatchRunner.BuildDispatchId(goalId, taskId, task.LastDispatch),
                 Path.GetFullPath(request.WorktreeRoot), digest, NormalizeProjects(request.Projects), workerProcess,
-                _utcNow() + request.Timeout, CompletionBuildEvidencePhase.Launching,
+                _utcNow() + request.Timeout + _remoteBuildBudget(request.WorktreeRoot), CompletionBuildEvidencePhase.Launching,
                 _statePath, _executionDirectory,
                 Path.Combine(DotnetBuildStorageLayout.GoalArtifactsPath(goalId), "completion-build-evidence", id + ".result.json"),
                 Environment.ProcessId, new DateTimeOffset(owner.StartTime.ToUniversalTime()));
@@ -469,27 +481,26 @@ internal sealed class CompletionBuildEvidenceCoordinator : ICompletionBuildEvide
                 result = operation with { Phase = CompletionBuildEvidencePhase.StaleCandidate, Diagnostic = "Candidate changed before build authorization." };
             else
             {
-                var script = OrchestratorBuildEvidenceCheck.ResolveScriptPath();
-                if (script is null || !File.Exists(script)) throw new FileNotFoundException("Sanctioned build helper is unavailable.");
-                var run = WorkerProcessRunner.RunBufferedAsync(new WorkerProcessRunRequest(
-                    OrchestratorBuildEvidenceCheck.BuildCommand(script, operation.Projects), operation.WorktreeRoot,
-                    Timeout: remaining, RequireOwnedProcessGroup: true), CancellationToken.None).GetAwaiter().GetResult();
-                var classified = OrchestratorBuildEvidenceCheck.ClassifyOutput(run.ExitCode, run.StandardOutput + Environment.NewLine + run.StandardError);
-                if (classified.Ran && classified.ExitCode == 0)
+                RemoteLaneExecutorConfiguration configuration;
+                try
                 {
-                    var receipt = WorkerBuildReceipt.Evaluate(
-                        Path.Combine(DotnetBuildStorageLayout.GoalArtifactsPath(goal.Id), WorkerBuildReceipt.FileName), operation.WorktreeRoot);
-                    if (!receipt.Matches || WorkerBuildReceiptCoverage.FindMissingProjects(operation.Projects, receipt.Projects).Count != 0)
-                        classified = new(false, run.ExitCode, "Build helper did not produce exact required receipt coverage. " + classified.Output);
+                    configuration = RemoteLaneExecutorConfiguration.LoadForWorkerBuildCheck(
+                        RemoteLaneExecutorConfiguration.ResolveStorePath(operation.WorktreeRoot));
                 }
-                Directory.CreateDirectory(Path.GetDirectoryName(operation.ResultPath)!);
-                File.WriteAllText(operation.ResultPath + ".stdout", run.StandardOutput);
-                File.WriteAllText(operation.ResultPath + ".stderr", run.StandardError);
+                catch (Exception) { configuration = new([], [], "invalid"); }
+                var receiptPath = Path.Combine(DotnetBuildStorageLayout.GoalArtifactsPath(goal.Id), WorkerBuildReceipt.FileName);
+                var executor = new SshRemoteLaneExecutor(configuration, operation.WorktreeRoot, operation.ResultPath,
+                    TimeProvider.System, GoalAcceptanceVerifier.RunRemoteLaneTransportAsync, GitCli.Run);
+                var placement = CompletionBuildPlacement.Run(operation, receiptPath,
+                    Path.Combine(Path.GetDirectoryName(RemoteLaneExecutorConfiguration.ResolveStorePath(operation.WorktreeRoot))!, "remote-build-check.jsonl"),
+                    configuration.WorkerBuildCheck,
+                    request => RemoteWorkerBuildCheck.RunAsync(request, new(configuration, executor, TimeProvider.System,
+                        TimeSpan.FromSeconds(1), RemoteBuildCandidateCommit.RunGit)),
+                    budget => CompletionBuildPlacement.RunLocal(operation, receiptPath, budget,
+                        () => CompletionBuildPlacement.DefaultLocalBuild(operation, budget)), TimeProvider.System);
                 result = operation with
                 {
-                    Phase = !classified.Ran ? CompletionBuildEvidencePhase.ApparatusFailure : classified.ExitCode == 0
-                        ? CompletionBuildEvidencePhase.Success : CompletionBuildEvidencePhase.CompilerFailure,
-                    BuildExitCode = run.ExitCode, Diagnostic = VerificationTextBounds.BoundText(classified.Output, path: operation.ResultPath + ".stdout")
+                    Phase = placement.Phase, BuildExitCode = placement.BuildExitCode, Diagnostic = placement.Diagnostic
                 };
             }
         }

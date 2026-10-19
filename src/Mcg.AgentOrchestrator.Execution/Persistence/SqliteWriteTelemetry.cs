@@ -40,6 +40,7 @@ internal sealed class SqliteWriteTelemetryOptions
 
 internal sealed class SqliteWriteTelemetry
 {
+    public const string DiagnosticsDirectoryName = "diagnostics";
     public const string DiagnosticsFileName = "state-write-transactions.jsonl";
 
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
@@ -56,7 +57,7 @@ internal sealed class SqliteWriteTelemetry
         _dbPath = Path.GetFullPath(dbPath);
         _options = options ?? SqliteWriteTelemetryOptions.FromEnvironment();
         var logDirectory = Path.Combine(Path.GetDirectoryName(_dbPath) ?? ".", "logs");
-        _diagnosticsPath = _options.DiagnosticsPath ?? Path.Combine(logDirectory, DiagnosticsFileName);
+        _diagnosticsPath = _options.DiagnosticsPath ?? Path.Combine(Path.GetDirectoryName(_dbPath) ?? ".", DiagnosticsDirectoryName, DiagnosticsFileName);
         _conductEventsPath = Path.Combine(logDirectory, "conduct-events.log");
         _mirrorToConductEventStream = _options.MirrorToConductEventStream ?? IsConductLoopProcess();
     }

@@ -234,6 +234,14 @@ if (CliDirectiveCommands.IsCommand(startupArgs))
 {
     return ExitCompletedStartupCommand(CliDirectiveCommands.Run(startupArgs, workspace));
 }
+if (CliExecutorSettingCommands.IsCommand(startupArgs))
+{
+    return ExitCompletedStartupCommand(CliExecutorSettingCommands.Run(startupArgs, workspace));
+}
+if (CliGateCancelCommand.IsCommand(startupArgs))
+{
+    return ExitCompletedStartupCommand(CliGateCancelCommand.Run(startupArgs, workspace));
+}
 
 if (CliEscapeCommands.IsCommand(startupArgs))
 {
@@ -273,7 +281,7 @@ if (CliOperatorIntentRoute.IsServed(startupArgs))
 
 if (CliGateStatusJsonQueryCommand.IsGateStatusJsonCommand(startupArgs))
 {
-    CliGateStatusJsonQueryCommand.Execute();
+    CliGateStatusJsonQueryCommand.Execute(workspace: workspace);
     return ExitCompletedStartupCommand(0);
 }
 
@@ -314,6 +322,7 @@ if (ConductorContinuitySupervisor.ShouldSupervise(
             new SqliteRunEventStore(workspace.RunEventStorePath),
             inspectStores: () => StoreSetupRunner.Plan(workspace.OrchestratorDirectory, includeState: true),
             stopFilePath: workspace.ConductorStopFilePath,
+            successorExitRetryDelay: TimeSpan.FromSeconds(60),
             stageSuccessor: stageSuccessor,
             stageSuccessorWithHook: stageSuccessorWithHook,
             schemaUpgrade: new ConductorHandoffSchemaUpgrade(
@@ -373,12 +382,7 @@ if (IsGoalEventsFollowCommand(startupArgs))
     }
 }
 
-var providers = commandCapability == CliCommandCapability.Execution
-    ? ProviderRegistryFactory.CreateDefaultProviders()
-    : new InMemoryModelProviderRegistry([]);
-var agentFallback = commandCapability == CliCommandCapability.Execution && ProviderRegistryFactory.IsLlamaCppReachable()
-    ? AgentCatalog.LlamaCppDefault()
-    : null;
+var (providers, agentFallback) = StartupProviderComposition.Create(commandCapability == CliCommandCapability.Execution);
 var agents = AgentCatalogStore.Load(workspace.AgentCatalogPath, agentFallback).Agents;
 var workerProfiles = WorkerProfileStore.Load(workspace.WorkerProfilePath);
 var operatorCatalog = OperatorChannelStore.Load(workspace.OperatorChannelPath);
@@ -405,8 +409,8 @@ if (startupArgs.Count > 0 && startupArgs[0].Equals("prototype", StringComparison
     var objective = startupArgs.Count > 1 ? string.Join(' ', startupArgs.Skip(1)) : "Create a Windows-based agent orchestrator";
     var prototypeKernel = new AgentOrchestratorKernel();
     var prototypeGoal = GoalLifecycleCommands.CreateAndActivateGoal(prototypeKernel, agents, objective);
-    ConsoleViews.PrintGoal(prototypeGoal);
-    ConsoleViews.PrintTimeline(prototypeGoal);
+    GoalTextView.PrintGoal(prototypeGoal);
+    TaskTimelineTextView.PrintTimeline(prototypeGoal);
     return 0;
 }
 
@@ -501,7 +505,8 @@ try
         // explicitly transfers its sole-writer authority.
         ConductorLoopHandoff.WaitForAuthorityTransferIfRequested();
         VerifyWorkspaceBinding();
-        StoreSetupRunner.RequireCompatible(StoreSetupRunner.Plan(workspace.OrchestratorDirectory, includeState: true),
+        StoreSetupRunner.RequireCompatible(StartupSqliteRetry.Run(workspace.OrchestratorDirectory, "store-plan-precheck",
+                () => StoreSetupRunner.Plan(workspace.OrchestratorDirectory, includeState: true)),
             requireCurrent: invocationBinding.RequireCurrentStores);
         // Transfer the same controller into the loop; never release ownership between migration and startup.
         startupLoopLease = ConductorLoopLeaseController.Acquire(workspace.OrchestratorDirectory);
@@ -522,10 +527,11 @@ try
             workspace.ExecutionDirectory,
             cleanupContext);
     }
-    stateRepository = defersStateUpgrade
+    stateRepository = StartupSqliteRetry.Run(workspace.SqliteStatePath, "state-repository-open", () => defersStateUpgrade
         ? SqliteOrchestratorStateRepository.OpenReadOnly(workspace.SqliteStatePath)
-        : new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
-    (currentGoal, stateHydrated) = await CliReadOnlyStartupHydration.PrepareStartupAsync(startupArgs, stateRepository);
+        : new SqliteOrchestratorStateRepository(workspace.SqliteStatePath));
+    (currentGoal, stateHydrated) = await StartupSqliteRetry.RunAsync(workspace.SqliteStatePath, "state-hydration",
+        () => CliReadOnlyStartupHydration.PrepareStartupAsync(startupArgs, stateRepository));
 }
 catch (Exception ex)
 {

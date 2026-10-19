@@ -28,8 +28,12 @@ internal static class ConductEventOperatorClassifier
             "host-health" when StartsWithToken("HOST_HEALTH_RECOVERED") => Outcome,
             "program-health" when StartsWithToken("PROGRAM_HEALTH_ALERT") => Decision,
             "program-health" when StartsWithToken("PROGRAM_HEALTH_CLEARED") => Outcome,
+            "invariant-breach" when StartsWithToken("INVARIANT_BREACH") => Decision,
+            "invariant-breach" when StartsWithToken("INVARIANT_CLEARED") => Outcome,
             "remote-executor-health" when StartsWithToken("REMOTE_EXECUTOR_WARNING") => Decision,
             "remote-executor-health" when StartsWithToken("REMOTE_EXECUTOR_RECOVERED") => Outcome,
+            "executor-tools-deploy" when StartsWithToken("EXECUTOR_TOOLS_DEPLOY") && HasToken("outcome=failed") => Decision,
+            "executor-tools-deploy" when StartsWithToken("EXECUTOR_TOOLS_DEPLOY") && HasToken("outcome=deployed") => Outcome,
             "state-log-divergence" when StartsWithToken("STATE_LOG_DIVERGENCE") =>
                 ClassifyStateLogDivergence(tokens),
             "host-health" when StartsWithToken("HOST_HEALTH_FOREGROUND_LOCK_ARMED") => Decision,

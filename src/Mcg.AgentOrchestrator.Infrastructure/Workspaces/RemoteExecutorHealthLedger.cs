@@ -10,7 +10,8 @@ internal enum RemoteLaneOutcomeCode
     BindingMismatchCommit, BindingMismatchTree, BindingMismatchMain, BindingMismatchFilter,
     BindingMismatchExecutor, BindingMismatchManifest, TrxIncomplete, RemoteRed,
     LateAfterFallback, NotEligibleExclusiveResource, UnexpectedNotExecuted,
-    CancelledAfterGrace, ShadowSkippedNoExecutor
+    CancelledAfterGrace, ShadowSkippedNoExecutor, ExecutorBusy, OfferSkippedNoExecutor,
+    ShadowPreemptRequested, PreemptedByGate, ExecutorToolsMismatch, ExecutorToolsUnverified
 }
 
 internal sealed record RemoteLaneBinding(
@@ -27,7 +28,17 @@ internal sealed record RemoteExecutorHealthRecord(
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] double? RemoteDurationSeconds = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] double? LocalDurationSeconds = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? LocalVerdict = null,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? Agree = null);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? Agree = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] IReadOnlyList<RemoteExecutorOccupancyEntry>? Occupancy = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] double? RemoteTestHostCpuSeconds = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] double? RemoteTestHostPeakWorkingSetBytes = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] double? RemoteAvailableMemoryMbMin = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? RemoteResourceSamples = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] RemoteLanePhaseTimings? Phases = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] RemoteLaneTestHostBudgetDecision? TestHostBudget = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] IReadOnlyList<string>? LocalFailingTests = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Agreement = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? AgreementReason = null);
 
 internal static class RemoteExecutorHealthLedger
 {

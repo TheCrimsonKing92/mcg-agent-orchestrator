@@ -3,6 +3,9 @@ namespace Mcg.AgentOrchestrator.Core;
 public static class OperatorIntentVerbs
 {
     public const string GoalPriority = "goal-priority";
+    public const string ProviderReset = "provider-reset";
+    public const string GateCancel = "gate-cancel";
+    public const string GoalIsolation = "goal-isolation";
     public const string Progress = "progress";
     public const string Retry = "retry";
     public const string CancelDispatch = "cancel-dispatch";
@@ -25,6 +28,8 @@ public static class OperatorIntentVerbs
     public const string ExperimentDecide = "experiment-decide";
     public const string EpicOutcomeDefine = "epic-outcome-define";
     public const string EpicOutcomeRecord = "epic-outcome-record";
+    public const string ExecutorSetSlots = "executor-set-slots";
+    public const string FocusedEvidenceSet = "focused-evidence-set";
 }
 
 public static class OperatorIntentScopes
@@ -34,6 +39,10 @@ public static class OperatorIntentScopes
 
 public sealed record EpicOutcomeDefineOperatorIntentPayload(string EpicId, EpicOutcomeDefinition Definition);
 public sealed record EpicOutcomeRecordOperatorIntentPayload(string EpicId, EpicOutcomeEvidence Evidence);
+public sealed record ExecutorSetSlotsOperatorIntentPayload(string ExecutorId, int Slots);
+public sealed record FocusedEvidenceSetOperatorIntentPayload(string? Mode, int? SampleEvery);
+public sealed record ProviderResetOperatorIntentPayload(string BindingKey, DateTimeOffset ResetAt, string Rationale);
+public sealed record GateCancelOperatorIntentPayload(string Reason, string? AttemptId);
 
 public enum OperatorActorKind
 {

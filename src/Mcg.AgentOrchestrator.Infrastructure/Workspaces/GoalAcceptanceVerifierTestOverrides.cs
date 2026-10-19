@@ -41,6 +41,7 @@ internal sealed record GoalAcceptanceVerifierTestOverrides
     internal TimeSpan? GateChildExitConfirmationBudget { get; set; }
     internal IGateChildReapSeam? GateChildReapSeamForTests { get; set; }
     internal IRemoteLaneExecutor? RemoteLaneExecutorForTests { get; set; }
+    internal bool RemoteLaneEarlyOfferDisabledForTests { get; set; }
     internal Func<string[], string, TimeSpan, CancellationToken, Task<GoalAcceptanceVerifier.CommandResult>>? RemoteLaneTransportRunnerForTests { get; set; }
     internal Func<string, int, string[], GitCli.GitResult>? RemoteLaneGitRunnerForTests { get; set; }
     internal TimeProvider? RemoteLaneTimeProviderForTests { get; set; }
@@ -94,6 +95,7 @@ internal sealed record GoalAcceptanceVerifierTestOverrides
         GateChildExitConfirmationBudget = GateChildExitConfirmationBudget,
         GateChildReapSeamForTests = GateChildReapSeamForTests,
         RemoteLaneExecutorForTests = RemoteLaneExecutorForTests,
+        RemoteLaneEarlyOfferDisabledForTests = RemoteLaneEarlyOfferDisabledForTests,
         RemoteLaneTransportRunnerForTests = RemoteLaneTransportRunnerForTests,
         RemoteLaneGitRunnerForTests = RemoteLaneGitRunnerForTests,
         RemoteLaneTimeProviderForTests = RemoteLaneTimeProviderForTests,

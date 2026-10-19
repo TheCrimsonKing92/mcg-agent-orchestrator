@@ -118,7 +118,7 @@ private static bool HandleConfigAlias(IReadOnlyList<string> parts, CliExecutionC
             AutonomyPoliciesTextView.PrintAutonomyPolicies();
             return false;
         case "doctor":
-            ConsoleViews.PrintHealth(OrchestratorHealthInspector.InspectCurrentEnvironment(
+            HealthTextView.PrintHealth(OrchestratorHealthInspector.InspectCurrentEnvironment(
                 new AgentCatalog(context.Agents), context.WorkerProfiles));
             return false;
         default:

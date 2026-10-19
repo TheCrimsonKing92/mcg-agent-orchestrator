@@ -214,6 +214,7 @@ public sealed partial class GoalAcceptanceVerifier
                 waitForPermit: true)
                 .ConfigureAwait(false);
             mainBuild = managedBuild.Result;
+            if (operationName == "acceptance-main-coverage-baseline") AcceptanceGateLaneProgress.CheckCompleted(goalId, mainBuild, EmitGateProgress);
             lockRemediationApplied = managedBuild.Retried;
         }
         catch (BuildLockBlockedException ex)

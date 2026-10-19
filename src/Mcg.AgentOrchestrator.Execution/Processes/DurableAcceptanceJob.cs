@@ -105,8 +105,7 @@ internal sealed class DurableAcceptanceJob : IDisposable
         {
             var receipt = JsonSerializer.Deserialize<AcceptanceJobSettlement>(File.ReadAllText(path));
             return receipt is { Settled: true, Holder: not null } && receipt.JobName == name &&
-                receipt.Holder.ProcessId == holder.ProcessId && receipt.Holder.StartedAt == holder.StartedAt &&
-                string.Equals(receipt.Holder.ImagePath, holder.ImagePath, StringComparison.OrdinalIgnoreCase);
+                ProcessImageResolution.SameProcess(receipt.Holder, holder);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
         { return false; }

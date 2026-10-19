@@ -397,13 +397,8 @@ internal sealed partial class ConductorDriver
     private void TryRaiseMissingBaselineNotice(
         Goal goal, string guard, string receiptId, string? resultPath, string reason)
     {
-        if (string.IsNullOrWhiteSpace(_executionDirectory))
-        {
-            return;
-        }
-
-        var storeDirectory = Path.Combine(_executionDirectory, ".orchestrator");
-        if (!Directory.Exists(storeDirectory))
+        var storeDirectory = ConductorAttentionStoreDirectory.Resolve(_cohortWorkspace, _executionDirectory);
+        if (storeDirectory is null || !Directory.Exists(storeDirectory))
         {
             return;
         }

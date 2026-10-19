@@ -6,6 +6,10 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal sealed partial class ConductorDriver
 {
+    internal ProviderHoldFailedGoalRedispatch? ProviderHoldRedispatch { get; set; }
+    internal ProviderSignInFailover? SignInFailover { get; set; }
+    internal Func<Goal, FailedGoalRecoveryDecision, string?, AttributedFailureRouteDecision>? InconclusiveRedRoute { get; set; }
+
     private ConductorAdvanceResult ExecuteFailedGoalRecovery(
         Goal goal,
         string goalPrefix,
@@ -19,7 +23,6 @@ internal sealed partial class ConductorDriver
         FailedGoalFindingObservation? verifyingFindingObservation = null;
         var reviewContractObservationCompleted = false;
         var verifyingFindingObservationCompleted = false;
-
         while (decision.Action is FailedGoalRecoveryAction.ObserveReviewContract or
                FailedGoalRecoveryAction.ObserveVerifyingFinding)
         {
@@ -38,18 +41,12 @@ internal sealed partial class ConductorDriver
                 if (verifyingFindingObservationCompleted)
                     throw new InvalidOperationException("Verifying-finding observation repeated after it was fulfilled.");
                 var landingFileScopes = _getLandingFileScopes(goal);
-                hasObservation = TryObserveVerifyingFindingRecovery(
-                    goal,
-                    policy,
-                    landingFileScopes,
-                    out observation);
+                hasObservation = TryObserveVerifyingFindingRecovery(goal, policy, landingFileScopes, out observation);
                 verifyingFindingObservationCompleted = true;
                 verifyingFindingObservation = hasObservation ? observation : null;
             }
-
             if (hasObservation && !observation.PendingNotes.IsDefaultOrEmpty)
                 pendingNotes = pendingNotes.Concat(observation.PendingNotes).ToArray();
-
             goal = GetCurrentGoal(goal);
             state = GoalLifecycle.ResolveState(goal, GetFacts(goal));
             if (state != GoalLifecycleState.Failed)
@@ -60,7 +57,6 @@ internal sealed partial class ConductorDriver
                     new ConductorAdvanceOutcome.Held(state, observationHeldReason)
                     { Decision = FailedGoalRecoveryDecisionRecords.StaleRecoveryFacts(decision.Identity, observationHeldReason) });
             }
-
             facts = BuildFailedGoalRecoveryFacts(goal, policy, state);
             if (reviewContractObservationCompleted)
                 facts = facts.WithReviewContractObservation(reviewContractObservation);
@@ -71,6 +67,8 @@ internal sealed partial class ConductorDriver
         if (decision.Action is (FailedGoalRecoveryAction.CriterionRetry or FailedGoalRecoveryAction.Escalate) &&
             TryRecoverFailedWorkerBuildCheck(goal, goalPrefix, policy, state, decision, pendingNotes) is { } buildRecovery)
             return buildRecovery;
+        if ((InconclusiveRedRoute ?? InconclusiveTesterRedRoute.Decide)(goal, decision, _getPreReviewEvidenceContext(goal).CandidateSha) is { IsRoute: true } inconclusiveRoute)
+        { ApplyPendingFailedGoalNotes(goal, pendingNotes); return RouteAttributedFailure(goal, goalPrefix, policy, inconclusiveRoute); }
         if (decision.Action is FailedGoalRecoveryAction.ReconcileExitedDispatch or
             FailedGoalRecoveryAction.RetryTransient or
             FailedGoalRecoveryAction.RetryStale or
@@ -89,12 +87,22 @@ internal sealed partial class ConductorDriver
                 new ConductorAdvanceOutcome.Held(state, decision.Reason)
                 { Owner = decision.HoldOwner, Decision = FailedGoalRecoveryDecisionRecords.FromPolicy(decision) });
         }
-
+        if (decision.Action == FailedGoalRecoveryAction.Escalate &&
+            IsFailedGoalRecoveryContextCurrent(goal, policy, state, decision, out _) &&
+            ((ProviderHoldRedispatch ?? ProviderHoldFailedGoalRedispatch.ForWorkspace(_cohortKernel, _cohortWorkspace, policy))?.TryRedispatch(goal, facts, _retryTask) == true ||
+             (SignInFailover ?? ProviderSignInFailover.ForWorkspace(_cohortKernel, _cohortWorkspace))?.TryFailover(goal, decision, _retryTask) == true))
+        {
+            ApplyPendingFailedGoalNotes(goal, pendingNotes);
+            return ExecuteDispatchAndStart(GetCurrentGoal(goal), goalPrefix, policy, GoalLifecycleState.WorkspaceReady);
+        }
         if (decision.Action == FailedGoalRecoveryAction.Escalate)
         {
             if (TryResumeTimedOutSelectionRerun(goal, goalPrefix, policy, state, facts, decision, pendingNotes) is { } resumed)
                 return resumed;
             ApplyPendingFailedGoalNotes(goal, pendingNotes);
+            if (decision.DiscriminatingEvidence == "failed-terminal-fallthrough" && goal.Tasks.LastOrDefault(task => task.RequiredRole == AgentRole.Tester && task.Status == WorkTaskStatus.Failed) is { } tester &&
+                _getPreReviewEvidenceContext(goal).CandidateSha is { } candidate && AttributedFailureDeveloperRoute.Decide(goal, AttributedFailureDeveloperRoute.ReadTesterReceipt(goal, tester, candidate), candidate) is { IsRoute: true } route)
+                return RouteAttributedFailure(goal, goalPrefix, policy, route);
             var escalated = Escalate(goal, goalPrefix, policy, state, decision.Reason);
             return escalated with
             {
@@ -106,7 +114,6 @@ internal sealed partial class ConductorDriver
         }
         if (decision.Backoff > TimeSpan.Zero)
             _emptyOutputBackoffDelay(decision.Backoff);
-
         if (!IsFailedGoalRecoveryContextCurrent(goal, policy, state, decision, out var staleReason))
         {
             ApplyPendingFailedGoalNotes(goal, pendingNotes);
@@ -114,7 +121,6 @@ internal sealed partial class ConductorDriver
                 new ConductorAdvanceOutcome.Held(state, staleReason)
                 { Decision = FailedGoalRecoveryDecisionRecords.StaleRecoveryFacts(decision.Identity, staleReason) });
         }
-
         ApplyPendingFailedGoalNotes(goal, pendingNotes);
         var targetTaskId = decision.Identity.TaskId ??
             throw new InvalidOperationException($"Recovery action {decision.Action} must identify a target task.");
@@ -139,7 +145,6 @@ internal sealed partial class ConductorDriver
                 }
             };
         }
-
         var refreshedGoal = GetCurrentGoal(goal);
         var refreshedTarget = refreshedGoal.Tasks.FirstOrDefault(task => task.Id == targetTaskId);
         if (refreshedTarget is null || refreshedTarget.Status is not (WorkTaskStatus.Assigned or WorkTaskStatus.Pending) ||
@@ -152,7 +157,6 @@ internal sealed partial class ConductorDriver
                     targetChangedReason)
                 { Decision = FailedGoalRecoveryDecisionRecords.StaleRecoveryFacts(decision.Identity, targetChangedReason) });
         }
-
         return ExecuteDispatchAndStart(refreshedGoal, goalPrefix, policy, GoalLifecycleState.WorkspaceReady);
     }
 
@@ -188,11 +192,7 @@ internal sealed partial class ConductorDriver
                         new ConductorAdvanceOutcome.Held(currentState, reconcileHeldReason)
                         { Decision = FailedGoalRecoveryDecisionRecords.StaleRecoveryFacts(decision.Identity, reconcileHeldReason) });
                 }
-
-                facts = BuildFailedGoalRecoveryFacts(
-                    goal,
-                    policy,
-                    currentState);
+                facts = BuildFailedGoalRecoveryFacts(goal, policy, currentState);
                 decision = FailedGoalRecoveryPolicy.Evaluate(facts);
                 if (decision.Action != FailedGoalRecoveryAction.ReconcileExitedDispatch)
                     break;

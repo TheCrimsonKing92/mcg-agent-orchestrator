@@ -44,7 +44,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteExecutorSlot
         Assert.Equal("one", request.ExecutorId);
         var localLane = Assert.Single(scenario.LocalStarts);
         Assert.NotEqual($"infrastructure tests: Lane {localLane}", request.Lane);
-        Assert.Equal(RemoteLaneOutcomeCode.Accepted, Assert.Single(scenario.Health()).Outcome);
+        Assert.Equal(RemoteLaneOutcomeCode.Accepted, Assert.Single(scenario.Health(), row => row.Lane == request.Lane).Outcome);
+        Assert.Equal(RemoteLaneOutcomeCode.OfferSkippedNoExecutor, Assert.Single(scenario.Health(), row => row.Lane == $"infrastructure tests: Lane {localLane}").Outcome);
         var folder = Path.Combine(scenario.HostRoot, ".orchestrator", "remote-executor-occupancy", "one");
         Assert.Equal("claim.lock", Assert.Single(Directory.GetFiles(folder).Select(Path.GetFileName)));
     }

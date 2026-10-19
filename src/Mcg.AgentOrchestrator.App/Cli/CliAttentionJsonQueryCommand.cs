@@ -26,6 +26,7 @@ internal static class CliAttentionJsonQueryCommand
             : [];
         var waits = CliCommandHandlers.HumanWaitsForAttention(kernel, null, includeHistory: false);
         items = CliCommandHandlers.CollaborationItemsForAttention(items, kernel, null, includeHistory: false);
-        Console.WriteLine(AttentionAgentReadView.Render(waits, items, time));
+        Console.WriteLine(AttentionAgentReadView.Render(waits, items, time,
+            ProviderUsageHoldView.Read(kernel.Goals, (time ?? TimeProvider.System).GetUtcNow())));
     }
 }

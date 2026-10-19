@@ -46,7 +46,7 @@ public sealed class CliCommandTestsGoalAmendDisposition : CliCommandTestBase
         var restoredGoal = restored.GetGoal(goal.Id);
         var waiver = Xunit.Assert.Single(restoredGoal.EffectiveAcceptanceCriteriaCorrections);
         var disposition = Xunit.Assert.Single(waiver.Dispositions!);
-        var output = CaptureConsole(() => ConsoleViews.PrintGoal(restoredGoal));
+        var output = CaptureConsole(() => GoalTextView.PrintGoal(restoredGoal));
         var criterionOffset = output.IndexOf("  2. Measure after landing.", StringComparison.Ordinal);
         var dispositionOffset = output.IndexOf("disposition (waiver of Implement the mechanism.)", StringComparison.Ordinal);
         var nextCriterionOffset = output.IndexOf("  3. Preserve unrelated behavior.", StringComparison.Ordinal);
@@ -88,7 +88,7 @@ public sealed class CliCommandTestsGoalAmendDisposition : CliCommandTestBase
             []));
         kernel.ActivateGoal(legacyGoal.Id, AgentCatalog.Default().Agents);
         kernel.WaiveAcceptanceCriterion(legacyGoal.Id, "1", "old waiver");
-        var output = CaptureConsole(() => ConsoleViews.PrintGoal(legacyGoal));
+        var output = CaptureConsole(() => GoalTextView.PrintGoal(legacyGoal));
 
         Xunit.Assert.Contains("Measure after landing.", error.Message, StringComparison.Ordinal);
         Xunit.Assert.Empty(affectedGoal.EffectiveAcceptanceCriteriaCorrections);

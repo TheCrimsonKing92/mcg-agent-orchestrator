@@ -64,7 +64,8 @@ internal static class OwnerConsoleFullScreenHost
             var gateMotion = new OwnerGateMotionReader(workspace.ConductEventsLogPath, clock);
             var gateProgress = new OwnerConsoleGateProgressLoader(workspace.ConductEventsLogPath,
                 Path.Combine(workspace.RootDirectory, "config", "acceptance-manifest.json"),
-                AcceptanceLaneDurationStore.ResolveStorePath(workspace.RootDirectory), clock);
+                AcceptanceLaneDurationStore.ResolveStorePath(workspace.RootDirectory), clock,
+                executorConfigPath: RemoteLaneExecutorConfiguration.ResolveStorePath(workspace.RootDirectory));
             var changes = new ChangeStreamFileReader(Path.Combine(workspace.LogDirectory, Orchestration.ChangeStreamWriter.FileName));
             var builder = new OwnerConsoleViewModelBuilder(state, questions,
                 new ConductorLeaseLiveness(workspace.OrchestratorDirectory), new PortfolioGoalEpicLookup(workspace.PortfolioStorePath), clock,
@@ -141,7 +142,8 @@ internal static class OwnerConsoleFullScreenHost
                         workspace.OrchestratorDirectory, workspace.LogDirectory, clock),
                     notifier: new SystemOwnerConsoleNotifier(new WindowsOwnerConsoleSoundOutput(), notifications, File.Exists),
                     notifications: notifications,
-                    fleet: () => OwnerFleetViewModelBuilder.Load(workspace, new ConductorLeaseLiveness(workspace.OrchestratorDirectory)));
+                    fleet: () => OwnerFleetViewModelBuilder.Load(workspace, new ConductorLeaseLiveness(workspace.OrchestratorDirectory)),
+                    landings: argument => OwnerLandingsPage.Load(state, workspace.OrchestratorDirectory, clock, argument));
                 view = new(app, controller, () => RefreshAsync(), token, clock, OwnerConsoleLoopOptions.Default, diagnostics);
                 boardIds = board.Board.Select(row => row.GoalId).ToArray();
                 view.Render(board);

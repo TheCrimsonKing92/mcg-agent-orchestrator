@@ -4,7 +4,8 @@ namespace Mcg.AgentOrchestrator.App.Cli;
 
 internal static class GateStatusTextView
 {
-    public static void Print(IReadOnlyList<GateHeartbeatStatus> statuses, DateTimeOffset? observedAt = null)
+    public static void Print(IReadOnlyList<GateHeartbeatStatus> statuses, DateTimeOffset? observedAt = null,
+        int remoteWaits = 0)
     {
         Console.WriteLine("Gate status:");
         var now = observedAt ?? DateTimeOffset.UtcNow;
@@ -33,10 +34,12 @@ internal static class GateStatusTextView
                 $"heartbeat={status.Path} verdict={verdict.Label}");
         }
 
-        var hostVerdict = GateHostVerdict.Label(running, stalled);
+        var hostVerdict = GateHostVerdict.Label(running, stalled, remoteWaits);
         Console.WriteLine(
-            $"host: verdict={hostVerdict} running={running} stalled={stalled} slots={statuses.Count}; covers per-goal and cohort gates alike" +
-            (hostVerdict == "NONE" ? "; no gate running on any build slot; no process check needed" : ""));
+            $"host: verdict={hostVerdict}" + (remoteWaits > 0 ? $" remote_waits={remoteWaits}" : "") +
+            $" running={running} stalled={stalled} slots={statuses.Count}; covers per-goal and cohort gates alike" +
+            (hostVerdict == "NONE" ? "; no gate running on any build slot; no process check needed" :
+                hostVerdict == "RUNNING (remote)" ? "; gate waiting on remote lane; no build-slot process to check" : ""));
     }
 
     private static string ShortGateGoal(string? goalId) =>

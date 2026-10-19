@@ -91,6 +91,10 @@ internal sealed partial class ConductorDriver
             return false;
         }
 
+        var superseded = prior is { Outcome: "unusable" } && PreTesterEvidenceRefreshRule.Decide(prior,
+            PreTesterApparatusReceiptClassifier.IsApparatusUnusable(_focusedEvidenceAttemptCoordinator.ReadFocusedReceiptEvidence(goal.Id, prior.ReceiptId, candidateSha!)),
+            tester.PendingRetryCause, PreTesterEvidenceRefreshRule.CountForCandidate(goal, tester.Id, candidateSha!)) == PreTesterEvidenceRefreshDecision.Refresh ? prior.ReceiptId : null;
+        if (superseded is not null) prior = null;
         if (prior is not null && prior.Outcome != "started")
         {
             if (prior.Outcome == "actionable-red")
@@ -159,7 +163,7 @@ internal sealed partial class ConductorDriver
                     selected.AddRange(normalized.Selections);
             }
         }
-        foreach (var selection in PreTesterAlwaysRunGuardTestClasses.Select(worktreePath))
+        foreach (var selection in PreTesterAlwaysRunGuardTestClasses.Select(worktreePath).Concat(PreTesterTestSourceGuardClasses.Select(worktreePath, _getLandingFileScopes(goal))))
         {
             if (TryNormalizeFindingEvidenceRequest(
                     new FindingEvidenceRequest([selection]), settings,
@@ -171,7 +175,7 @@ internal sealed partial class ConductorDriver
         // Pre-change attempts keep their original request identity and per-class TRX obligation.
         if (prior?.Outcome == "started")
             distinct = distinct.Where(selection =>
-                !PreTesterAlwaysRunGuardTestClasses.ContainsClass(selection.TestClass) ||
+                !(PreTesterAlwaysRunGuardTestClasses.ContainsClass(selection.TestClass) || PreTesterTestSourceGuardClasses.ContainsClass(selection.TestClass)) ||
                 prior.Selections.Contains(FormatFindingEvidenceSelection(selection), StringComparer.OrdinalIgnoreCase))
                 .ToArray();
         var request = string.Join("; ", distinct.Select(FormatFindingEvidenceSelection));
@@ -181,10 +185,19 @@ internal sealed partial class ConductorDriver
              !prior.NotRun.SequenceEqual(notRun, StringComparer.Ordinal)))
             throw new InvalidDataException("Started pre-Tester evidence selection changed before reconciliation.");
         var identity = FindingEvidenceExecutionClassifier.BuildRequestIdentity(new FindingEvidenceRequest(distinct));
-        var receiptId = CreateFindingEvidenceReceiptId(candidateSha!, "pre-tester-deferred", identity);
+        var refresh = PreTesterEvidenceRefreshRule.LatestForCandidate(goal, tester.Id, candidateSha!);
+        var refreshId = CreateFindingEvidenceReceiptId(candidateSha!, "pre-tester-deferred-refresh", identity);
+        var salt = superseded is not null || prior?.ReceiptId == refresh?.FreshReceiptId && prior?.ReceiptId == refreshId
+            ? "pre-tester-deferred-refresh" : "pre-tester-deferred";
+        var receiptId = CreateFindingEvidenceReceiptId(candidateSha!, salt, identity);
+        if (superseded is not null)
+        {
+            refresh = new(candidateSha!, superseded, receiptId);
+            _recordFindingEvidenceRequest(goal.Id, tester.Id, PreTesterEvidenceRefreshRule.FormatMarker(refresh));
+        }
         var requestContext = new ConductorFocusedEvidenceRequestContext(
             "pre-tester-deferred",
-            CreateFindingEvidenceBatchId(candidateSha!, "pre-tester-deferred", policy.Name, identity),
+            CreateFindingEvidenceBatchId(candidateSha!, salt, policy.Name, identity),
             []);
         var completed = TryReconcileFocusedEvidenceAttempt(
             goal, policy, request, candidateSha, "pre-tester-deferred", requestContext,
@@ -224,36 +237,23 @@ internal sealed partial class ConductorDriver
             return true;
         }
 
-        var candidate = (evidence?.Arms ?? []).Select(CreateFindingEvidenceArmReceipt)
-            .FirstOrDefault(arm => arm.Arm == FindingEvidenceArm.Candidate &&
-                                   string.Equals(arm.Sha, candidateSha, StringComparison.OrdinalIgnoreCase));
-        var baseline = (evidence?.Arms ?? []).Select(CreateFindingEvidenceArmReceipt)
-            .FirstOrDefault(arm => arm.Arm == FindingEvidenceArm.Baseline);
-        var failingTests = candidate?.FailingTestIdentities ?? [];
-        var candidateRed = completed && evidence.Accepted &&
-                           candidate is { Accepted: true, Disposition: FindingEvidenceArmDisposition.Red };
         var attributionBatch = new FindingEvidenceBatch(
             identity, request, new FindingEvidenceRequest(distinct), [], []);
-        var unlistedFailures = failingTests.Where(test => !PreTesterAlwaysRunGuardTestClasses.IsListed(test)).ToArray();
-        var actionableRed = candidateRed && failingTests.Count > 0 &&
-                            (baseline is null
-                                ? unlistedFailures.Length == 0 ||
-                                  EveryFailingTestIsInsideCandidateChanges(goal, attributionBatch, unlistedFailures)
-                                : baseline.Disposition == FindingEvidenceArmDisposition.Green);
-        var green = completed && evidence.IsValidEvidence &&
-                    candidate is { Accepted: true, Passed: true, Disposition: FindingEvidenceArmDisposition.Green,
-                        ExecutedTestCount: > 0 } &&
-                    AcceptanceCohortGateEvidence.HasContentBoundGreenTrxEvidence(
-                        candidate.TestResultPaths, candidate.ReceiptArtifacts,
-                        candidate.ExecutedTestCount!.Value,
-                        distinct.Select(selection => selection.TestClass).ToHashSet(StringComparer.OrdinalIgnoreCase));
-        var outcome = green ? "green" : actionableRed ? "actionable-red" : candidateRed ? "red" : "unusable";
-        _recordFindingEvidenceRun(goal.Id, tester.Id,
+        var (outcome, candidate, failingTests) = PreTesterApparatusReceiptClassifier.ClassifyOutcome(evidence, completed, candidateSha, distinct,
+            failures => EveryFailingTestIsInsideCandidateChanges(goal, attributionBatch, failures));
+        if (outcome == "unusable" && attempt is not null)
+            _focusedEvidenceAttemptCoordinator.RecordFocusedEvidenceRequestDispositions(attempt, requestContext.FindingRoundFingerprint, receiptId, []);
+        _recordFindingEvidenceRun(goal.Id, tester.Id, PreTesterFailureSignatureReader.AppendTo(
             PreTesterEvidenceIndexLines.FormatMarker(new PreTesterEvidenceEntry(
                 outcome, candidateSha!, receiptId, selectionNames, notRun,
-                attempt?.ResultPath, failingTests)));
+                attempt?.ResultPath, failingTests)), outcome, failingTests, candidate?.TestResultPaths));
+        if (PreTesterEvidenceRefreshRule.DecideAfterRun(refresh, receiptId, outcome) == PreTesterEvidenceRefreshDecision.EscalateRepeat)
+        {
+            result = Escalate(goal, goalPrefix, policy, fromState, PreTesterEvidenceRefreshRule.DescribeRepeat(candidateSha!, refresh!.SupersededReceiptId, receiptId));
+            return true;
+        }
 
-        if (!actionableRed) return false;
+        if (outcome != "actionable-red") return false;
         if (TryEscalatePreTesterRedLoop(GetCurrentGoal(goal), goalPrefix, policy, fromState, out result))
             return true;
 
@@ -298,8 +298,8 @@ internal sealed partial class ConductorDriver
             .Where(evt => evt.TaskId == tester.Id && evt.Kind == ProgressKind.TaskDispatchRecorded)
             .Select(evt => evt.OccurredAt).DefaultIfEmpty(DateTimeOffset.MinValue).Max();
         var window = redHistory.Where(evt => evt.OccurredAt > lastTesterDispatch).ToArray();
-        var decision = PreTesterRedLoopRule.Evaluate(window.Select(evt =>
-            (IReadOnlyCollection<string>)(PreTesterEvidenceIndexLines.Parse(evt.Message)?.FailingTests ?? [])).ToArray());
+        var decision = PreTesterRedLoopRule.EvaluateRuns(
+            window.Select(evt => PreTesterFailureSignature.ReadRun(evt.Message)).ToArray());
         if (!decision.Trip) return false;
         result = Escalate(goal, goalPrefix, policy, fromState,
             "PRE_TESTER_RED_LOOP: three consecutive candidate RED runs without Tester dispatch; " +

@@ -32,7 +32,7 @@ public sealed class CliAttentionNextReadOnlyRouteTests : CliTaskQueryTestSupport
                 ["attention"], repository, workspace, providers, null,
                 ref agents, ref profiles, ref currentGoal, out var changed) && !changed));
             Xunit.Assert.Equal(CliAttentionNextGoldenFixtures.EmptyAttention, output);
-            Xunit.Assert.Equal(257, repository.LoadedGoalIds.Count);
+            Xunit.Assert.Empty(repository.LoadedGoalIds);
             Xunit.Assert.Equal(0, repository.FullLoadAttempts);
             Xunit.Assert.Equal(0, repository.MutationAttempts);
         }

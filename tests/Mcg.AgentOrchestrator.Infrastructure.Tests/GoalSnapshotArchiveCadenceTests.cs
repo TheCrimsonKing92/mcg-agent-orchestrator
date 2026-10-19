@@ -231,6 +231,11 @@ public sealed class GoalSnapshotArchiveCadenceTests
         using var fixture = new Fixture();
         var old = MakeSnapshot(GoalStatus.Completed);
         var recent = MakeSnapshot(GoalStatus.Completed);
+        recent = recent with
+        {
+            Timeline = [.. recent.Timeline, new ProgressEventSnapshot(recent.Id, null,
+                ProgressKind.GoalPolicyDecision, "Recent terminal evidence", Now.AddDays(-7))]
+        };
         var active = MakeSnapshot(GoalStatus.Active);
         var unfinished = MakeSnapshot(GoalStatus.Completed);
         unfinished = unfinished with

@@ -10,12 +10,14 @@ internal sealed class OwnerConsoleTextDialog : Dialog
     internal ListView Body { get; } = new() { Width = Dim.Fill(), Height = Dim.Fill(1) };
     internal OwnerConsoleTextPage Page { get; }
     internal event Action<int>? ChoiceAccepted;
+    private readonly string _baseTitle;
     private bool _formatting;
 
     internal OwnerConsoleTextDialog(string title, string text, IReadOnlyList<int>? choiceLines = null,
         OwnerConsoleTextPage? page = null)
     {
-        Title = title; Width = Dim.Percent(85); Height = Dim.Percent(80);
+        _baseTitle = title;
+        Title = title; Width = Dim.Percent(OwnerConsoleDialogWidth.Percent); Height = Dim.Percent(80);
         Page = page ?? new(text, 60, 15, choiceLines);
         Add(Body);
         Body.ViewportChanged += (_, _) => Format(Body.Viewport.Width, Body.Viewport.Height);
@@ -47,6 +49,8 @@ internal sealed class OwnerConsoleTextDialog : Dialog
         {
             Body.SetSource(new ObservableCollection<string>(Page.Visible));
             Body.SelectedItem = Page.Selected - Page.Offset;
+            var title = OwnerConsoleOverflow.Title(_baseTitle, Page.Overflow, Frame.Width - OwnerConsoleOverflow.TitleChrome);
+            if (Title != title) Title = title;
         }
         finally { _formatting = wasFormatting; }
     }

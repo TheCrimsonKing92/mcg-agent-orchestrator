@@ -26,6 +26,10 @@ internal static class CliAttentionQueryCommand
         if (!File.Exists(itemsDb))
             return false;
 
+        if (args.Count == 1 || args[1].Equals("list", StringComparison.OrdinalIgnoreCase))
+            return TryExecuteSelective(args, stateQueries, workspace, providers, channel,
+                ref agents, ref workerProfiles, ref currentGoal);
+
         var metadata = stateQueries.ListGoalMetadataAsync().GetAwaiter().GetResult();
         if (metadata.Any(goal =>
                 goal.Status.Equals(nameof(GoalStatus.Parked), StringComparison.OrdinalIgnoreCase)))
@@ -36,6 +40,45 @@ internal static class CliAttentionQueryCommand
             ? new AgentOrchestratorKernel()
             : stateQueries.LoadGoalsAsync(ids).GetAwaiter().GetResult();
         if (kernel.Goals.Count != metadata.Count || kernel.Goals.Any(goal => goal.Status == GoalStatus.Parked))
+            return false;
+
+        CliReadOnlyQueryExecutor.Execute(args, kernel, workspace, providers, channel,
+            ref agents, ref workerProfiles, ref currentGoal);
+        return true;
+    }
+
+    private static bool TryExecuteSelective(
+        IReadOnlyList<string> args,
+        IOrchestratorStateQueries stateQueries,
+        OrchestratorWorkspace workspace,
+        IModelProviderRegistry providers,
+        IOperatorChannel? channel,
+        ref IReadOnlyList<AgentDefinition> agents,
+        ref WorkerProfileCatalog workerProfiles,
+        ref Goal? currentGoal)
+    {
+        var metadata = stateQueries.ListGoalMetadataAsync().GetAwaiter().GetResult();
+        IReadOnlyList<HumanInputRequestSnapshot> openWaits;
+        try
+        {
+            openWaits = stateQueries.ListOpenHumanInputRequestsAsync().GetAwaiter().GetResult();
+        }
+        catch (NotSupportedException)
+        {
+            return false;
+        }
+
+        var store = CollaborationItemStore.OpenExisting(workspace.OrchestratorDirectory);
+        var storedItems = store.ListAsync().GetAwaiter().GetResult();
+        var attentionQueue = store.GetAttentionQueueAsync().GetAwaiter().GetResult();
+        var selection = AttentionReadGoalSelection.Select(metadata, openWaits, storedItems, attentionQueue);
+        if (selection.Decline)
+            return false;
+
+        var kernel = selection.GoalIds.Count == 0
+            ? new AgentOrchestratorKernel()
+            : stateQueries.LoadGoalsAsync(selection.GoalIds).GetAwaiter().GetResult();
+        if (kernel.Goals.Count != selection.GoalIds.Count || kernel.Goals.Any(goal => goal.Status == GoalStatus.Parked))
             return false;
 
         CliReadOnlyQueryExecutor.Execute(args, kernel, workspace, providers, channel,
