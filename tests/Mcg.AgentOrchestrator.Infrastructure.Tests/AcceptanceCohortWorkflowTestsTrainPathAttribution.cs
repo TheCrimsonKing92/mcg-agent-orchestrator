@@ -94,7 +94,8 @@ public sealed class AcceptanceCohortWorkflowTestsTrainPathAttribution : Acceptan
         Assert.Equal(MergeTrainGateOutcome.Passed, receipt.Outcome);
         Assert.Equal(remaining, receipt.Identity.Members.Select(member => member.GoalId));
         Assert.Equal(Paths.Where((_, index) => index != culprit), train.Verifier.ChangedFiles[1]);
-        Assert.Equal(remaining.Select(id => id.Value).Order(), train.Result.MemberResults.Keys.Order());
+        // Gate-only runs record the passing membership in the receipt without landing members.
+        Assert.Empty(train.Result.MemberResults);
         var store = new MergeTrainAcceptanceStore(Path.Combine(train.Repo, ".orchestrator", "merge-train-acceptance.db"));
         var receipts = store.ReadReceiptsSince(DateTimeOffset.MinValue);
         Assert.Equal(2, receipts.Count);
