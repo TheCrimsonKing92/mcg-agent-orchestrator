@@ -186,9 +186,10 @@ public sealed class IsolatedProcessSpawningLaneSplitTests
         Xunit.Assert.Single(lanes, lane => lane.Name == LaneA);
         Xunit.Assert.Single(lanes, lane => lane.Name == LaneB);
         Xunit.Assert.Single(lanes, lane => lane.Name == Remainder);
+        // The reference carries later carve-outs unrelated to this split.
         return lanes.Where(lane => lane.Name != LaneA && lane.Name != LaneB)
             .Select(lane => lane.Name == Remainder
-                ? lane with { Filter = PreSplitRemainderFilter }
+                ? lane with { Filter = PreSplitRemainderFilter + "&FullyQualifiedName!~AcceptanceExecutionCacheIsolatedBuildTests" }
                 : lane).ToArray();
     }
 
