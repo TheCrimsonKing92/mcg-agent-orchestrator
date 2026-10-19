@@ -19,7 +19,7 @@ public sealed class RemoteLaneToolsMismatchClassificationTests
             var entry = new RemoteLaneExecutorEntry("one", 60);
             var fake = new FakeRemoteLaneExecutor { Submit = (_, _) => Task.FromResult(new RemoteLaneSubmission(null, reason)) };
             using var coordinator = new RemoteLaneCoordinator(new([entry], ["lane"], null),
-                new("attempt", "goal", "commit", "tree", "main", "manifest"), root, Path.Combine(root, "result"),
+                new RemoteLaneCandidateIdentity("attempt", "goal", "commit", "tree", "main", "manifest"), root, Path.Combine(root, "result"),
                 fake, clock, TimeSpan.FromSeconds(1), null);
             Assert.Equal(entry, coordinator.TryClaimIdleExecutor());
             var outcome = await coordinator.RunRemoteAsync(new Check
