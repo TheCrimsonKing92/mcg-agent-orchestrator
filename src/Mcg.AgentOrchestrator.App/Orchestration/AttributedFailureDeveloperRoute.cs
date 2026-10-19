@@ -23,7 +23,7 @@ internal static class AttributedFailureDeveloperRoute
                     .Select(test => test.Trim()).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray());
 
         var train = Regex.Match(detail,
-            @"\Amerge train RED attributed \((?<source>ownership|reach)\) receipt (?<receipt>\S+): (?<tests>[^\r\n]+)\z");
+            @"\Amerge train RED attributed \((?<source>ownership|reach|path)\) receipt (?<receipt>\S+): (?<tests>[^\r\n]+)\z");
         return train.Success
             ? new("train-" + train.Groups["source"].Value, train.Groups["receipt"].Value, summary.BranchHeadSha,
                 train.Groups["tests"].Value.Split(',').Select(test => test.Trim())
