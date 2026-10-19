@@ -154,7 +154,25 @@ public sealed partial class GoalAcceptanceVerifier
         Console.Out.Flush(); try { _executionContext?.ReportRemoteLaneEvent(line.Length <= 512 ? line : line[..512]); } catch (Exception) { }
         _testOverrides.OnRemoteLaneProgressLineForTests?.Invoke(line);
     }
-
+    private RemoteLaneCoordinator? ResolveGateRemoteLanes(AcceptancePartitionVerdictCache? cache) =>
+        ShardPermitLaneClass != GateShardLaneClass.Gate ? null : cache is null ? _cachelessRemoteLaneCoordinator :
+        _remoteLaneCoordinators.TryGetValue(cache, out var remote) ? remote : null;
+    private RemoteLaneEarlyOffer.Context CreateRemoteLaneOfferContext(RemoteLaneCoordinator remote,
+        IReadOnlyList<AcceptanceManifestCheck> shards, int concurrency, AcceptancePartitionVerdictCache? cache, GoalId? goal, int slot) =>
+        new(lane => _remoteLaneOfferPlans.GetValue(remote, _ => throw new InvalidOperationException("Remote lane offer plan missing."))
+                .Decide(lane, shards.All(UsesMicrosoftTestingPlatform) ? concurrency : 1, ReportRemoteLanePolicy).Offer,
+            (check, entry) => AcceptanceGateLaneProgress.RemoteStarted(goal, check.Name, entry.Id, slot, _storageRoot, EmitGateProgress),
+            check => EngineSettings.ResolveCheckTimeout(check.TimeoutMinutes), cache, _timeProvider);
+    private RemoteLaneEarlyOffer? StartRemoteLaneEarlyOffer(IReadOnlyList<AcceptanceManifestCheck> checks,
+        AcceptancePartitionVerdictCache? cache, GoalId? goal, int? slot, DotnetBuildEnvironmentLease? lease,
+        int concurrency, CancellationToken token)
+    {
+        if (!slot.HasValue || lease is null || concurrency <= 1 || ResolveGateRemoteLanes(cache) is not { } remote) return null;
+        var shards = AcceptanceDotnetTestBatchScheduler.Group(checks, check => TryGetInfrastructurePartitionId(check, out _, out _))
+            .FirstOrDefault(group => group.IsInfrastructurePartition)?.Checks ?? [];
+        return RemoteLaneEarlyOffer.For(remote).Start(_testOverrides.RemoteLaneEarlyOfferDisabledForTests, shards,
+            CreateRemoteLaneOfferContext(remote, shards, concurrency, cache, goal, slot.Value), token);
+    }
     private async Task<CheckBatchResult> RunInfrastructureShardBatchAsync(
         IReadOnlyList<AcceptanceManifestCheck> shardChecks,
         AcceptancePartitionVerdictCache? cacheContext,
@@ -187,35 +205,27 @@ public sealed partial class GoalAcceptanceVerifier
                 SignalStructuralCoverageCandidateBuildComplete();
             }
         }
-
         AcceptanceGatePhaseAccountant.TransitionCurrent(AcceptanceGatePhaseNames.LaneExecution);
         var wallClock = _timeProvider.GetTimestamp();
-        var orderedShards = shardChecks
-            .Select((check, index) => new IndexedShard(index, check))
-            .OrderByDescending(shard => AcceptanceLaneDurationStore.ResolveSortSeconds(shard.Check))
-            .ThenBy(shard => shard.Index)
-            .ToArray();
+        var orderedShards = RemoteLaneEarlyOffer.Order(shardChecks).Select(shard => new IndexedShard(shard.Index, shard.Check)).ToArray();
         var outcomes = new ShardRunOutcome?[shardChecks.Count];
-        var maxConcurrentExecutions = allShardsUseMtp
-            ? Math.Min(maxConcurrentShards, shardChecks.Count)
-            : 1;
+        var maxConcurrentExecutions = allShardsUseMtp ? Math.Min(maxConcurrentShards, shardChecks.Count) : 1;
         var pendingShards = orderedShards.ToList();
         var activeResourceKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var activeShards = new List<(IndexedShard Shard, Task Task, IReadOnlyList<string> ResourceKeys)>();
         var activeRemote = new List<(IndexedShard Shard, Task<RemoteLaneOutcome> Task)>();
         var reuseConsulted = new System.Collections.Concurrent.ConcurrentDictionary<int, bool>();
         var fallbackOutcomes = new System.Collections.Concurrent.ConcurrentDictionary<int, RemoteLaneOutcome>();
-        RemoteLaneCoordinator? remote = null;
-        if (cacheContext is not null && ShardPermitLaneClass == GateShardLaneClass.Gate)
-            _remoteLaneCoordinators.TryGetValue(cacheContext, out remote);
-        else if (cacheContext is null && ShardPermitLaneClass == GateShardLaneClass.Gate)
-            remote = _cachelessRemoteLaneCoordinator;
+        var remote = ResolveGateRemoteLanes(cacheContext);
+        var offers = remote is null ? null : RemoteLaneEarlyOffer.For(remote);
+        var offerContext = remote is null ? null : CreateRemoteLaneOfferContext(remote, shardChecks, maxConcurrentShards, cacheContext, goalId, primarySlotIndex);
+        if (offers is not null) await offers.OfferPassCompleted.ConfigureAwait(false);
         var shardConcurrency = new GateShardConcurrencyCounter();
         var failures = new List<Exception>();
         AcceptanceLaneEarlyStop? earlyStop = null;
         var laneStopEnabled = cacheContext is not null && _testOverrides.PartitionVerdictWithinAttemptRerunEnabled;
         using var sharedApparatusCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, stopToken);
-        using var remoteCancellation = sharedApparatusCancellation.Token.Register(() => remote?.AbandonAll());
+        using var remoteCancellation = sharedApparatusCancellation.Token.Register(() => { offers?.Cancel(); remote?.AbandonAll(); });
 
         bool IsConfirmedLocalFailure(IndexedShard shard, Task task) =>
             laneStopEnabled && task.IsCompleted &&
@@ -285,23 +295,14 @@ public sealed partial class GoalAcceptanceVerifier
                 {
                     var shard = pendingShards[index];
                     if (activeShards.Any(active => IsConfirmedLocalFailure(active.Shard, active.Task))) break;
-                    if (reuseConsulted.ContainsKey(shard.Index) || !remote.IsEligible(shard.Check)) continue;
-                    if (!_remoteLaneOfferPlans.GetValue(remote, _ => throw new InvalidOperationException("Remote lane offer plan missing."))
-                        .Decide(shard.Check.Name, allShardsUseMtp ? maxConcurrentShards : 1, ReportRemoteLanePolicy).Offer) continue;
-                    var entry = await remote.ClaimForGateAsync(shard.Check, sharedApparatusCancellation.Token).ConfigureAwait(false);
-                    if (entry is null) continue;
+                    if (reuseConsulted.ContainsKey(shard.Index)) continue;
+                    var offered = offers!.TryAdopt(shard.Check.Name, out var adopted) ? adopted :
+                        await offers.TryOfferAsync(shard.Check, offerContext!, sharedApparatusCancellation.Token).ConfigureAwait(false);
+                    if (offered is null) continue;
                     pendingShards.RemoveAt(index--);
                     reuseConsulted[shard.Index] = true;
-                    var reuseStarted = _timeProvider.GetTimestamp();
-                    if (cacheContext?.TryReuse(shard.Check) is { } reused)
-                    {
-                        remote.Release(entry.Id);
-                        CompleteShard(shard, reused, false, _timeProvider.GetElapsedTime(reuseStarted));
-                        continue;
-                    }
-                    AcceptanceGateLaneProgress.RemoteStarted(goalId, shard.Check.Name, entry.Id, primarySlotIndex, _storageRoot, EmitGateProgress);
-                    activeRemote.Add((shard, remote.RunRemoteAsync(shard.Check, entry,
-                        EngineSettings.ResolveCheckTimeout(shard.Check.TimeoutMinutes), sharedApparatusCancellation.Token)));
+                    if (offered.Reused is { } reused) CompleteShard(shard, reused, false, offered.ReuseElapsed);
+                    else activeRemote.Add((shard, offered.Remote!));
                 }
             }
             while (!cancellationToken.IsCancellationRequested &&
@@ -478,5 +479,4 @@ public sealed partial class GoalAcceptanceVerifier
             earlyStop is null ? results : [.. results, earlyStop.ToReceiptCheck()],
             completed.Any(outcome => outcome.Retried), earlyStop);
     }
-
 }

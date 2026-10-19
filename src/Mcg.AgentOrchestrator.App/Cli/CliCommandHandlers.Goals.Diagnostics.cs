@@ -88,7 +88,7 @@ private static void PrintBoundedGoalDiagnostics(CliExecutionContext context)
 private static void PrintNextFullDetail(CliExecutionContext context, AutonomyPolicy policy)
 {
     var goal = context.CurrentGoal!;
-    ConsoleViews.PrintGoal(goal);
+    GoalTextView.PrintGoal(goal);
     ConsoleViews.PrintMonitor(context.Kernel.BuildMonitor(goal.Id));
     ConsoleViews.PrintGoalReadinessPreflight(GoalReadinessPreflight.Build(
         goal,

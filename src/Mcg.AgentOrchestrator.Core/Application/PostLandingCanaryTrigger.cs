@@ -114,6 +114,7 @@ public static class AcceptanceEngineSurfaceRegistry
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/RemoteFocusedEvidenceShadow",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/RemoteLaneCandidateIdentity",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/RemoteLaneCoordinator",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/RemoteLaneEarlyOffer",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/RemoteLaneExecutor",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/RemoteLaneExecutorConfiguration",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/RemoteLaneFailureHistory",

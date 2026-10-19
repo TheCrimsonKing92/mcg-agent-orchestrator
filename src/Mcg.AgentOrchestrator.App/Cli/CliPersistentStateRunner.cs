@@ -2629,7 +2629,7 @@ internal static partial class CliPersistentStateRunner
 
         var committedKernel = stateRepository.LoadAsync().GetAwaiter().GetResult();
         currentGoal = committedKernel.Goals.Single(goal => goal.Id.Value == committedGoalId);
-        ConsoleViews.PrintGoal(currentGoal);
+        GoalTextView.PrintGoal(currentGoal);
         return shouldSave;
     }
 
@@ -2981,7 +2981,7 @@ internal static partial class CliPersistentStateRunner
         currentGoal = successor;
         Console.WriteLine(
             $"GOAL_REPLACE_REPLAYED requestId={requestId:D} predecessor={audit.PredecessorGoalId} successor={successorGoalId} backlogItem={audit.BacklogItemId} owner={claim.OwnerGoalId} claimVersion={claim.Version}");
-        ConsoleViews.PrintGoal(successor);
+        GoalTextView.PrintGoal(successor);
         result = true;
         return true;
     }
@@ -3459,7 +3459,7 @@ internal static partial class CliPersistentStateRunner
             intakeRecord = reservation.Record;
             if (reservation.Kind == GoalIntakeReservationKind.Replay)
             {
-                ConsoleViews.PrintGoalIntakeReceipt(reservation.Record);
+                GoalIntakeReceiptTextView.PrintGoalIntakeReceipt(reservation.Record);
                 if (reservation.Record.State == GoalIntakeRequestStates.Created)
                 {
                     var replayKernel = stateRepository.LoadAsync().GetAwaiter().GetResult();
@@ -3470,7 +3470,7 @@ internal static partial class CliPersistentStateRunner
                         throw new InvalidOperationException(
                             $"GOAL_INTAKE_RECEIPT_INVALID requestKey={request.RequestKey} reason=created-goal-missing");
                     }
-                    ConsoleViews.PrintGoal(currentGoal);
+                    GoalTextView.PrintGoal(currentGoal);
                     return false;
                 }
                 if (reservation.Record.State == GoalIntakeRequestStates.Failed)
@@ -3525,7 +3525,7 @@ internal static partial class CliPersistentStateRunner
                 .GetResult();
             committedSnapshot = preparedSnapshot;
             if (intakeRecord is not null)
-                ConsoleViews.PrintGoalIntakeReceipt(intakeRecord);
+                GoalIntakeReceiptTextView.PrintGoalIntakeReceipt(intakeRecord);
             try
             {
                 _ = DeliverGoalCreationSideEffects(outboxRepository, workspace, kernel, goal.Id);
@@ -3559,7 +3559,7 @@ internal static partial class CliPersistentStateRunner
                 reportGoalCreationProgress: () =>
                 {
                     if (intakeRecord is not null)
-                        ConsoleViews.PrintGoalIntakeReceipt(intakeRecord);
+                        GoalIntakeReceiptTextView.PrintGoalIntakeReceipt(intakeRecord);
                 });
             if (committedSnapshot is null)
             {

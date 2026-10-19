@@ -48,7 +48,7 @@ private static bool HandleOperatorIntentTemplate(CliExecutionContext context, IR
     {
         ConsoleViews.PrintGoalObjectivePlan(goalObjectivePlan);
     }
-    ConsoleViews.PrintGoal(context.CurrentGoal);
+    GoalTextView.PrintGoal(context.CurrentGoal);
     return true;
 }
 

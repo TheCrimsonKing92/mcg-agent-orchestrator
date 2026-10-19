@@ -209,7 +209,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             var record = new GoalIntakeRequestStore(context.Workspace.SqliteStatePath).Get(parts[1])
                 ?? throw new InvalidOperationException(
                     $"GOAL_INTAKE_REQUEST_NOT_FOUND requestKey={parts[1]}");
-            ConsoleViews.PrintGoalIntakeReceipt(record);
+            GoalIntakeReceiptTextView.PrintGoalIntakeReceipt(record);
             return false;
         }
 
@@ -299,7 +299,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             var objective = parts.Count > 1 ? parts[1] : "Create a Windows-based agent orchestrator";
             var prototypeKernel = new AgentOrchestratorKernel();
             var prototypeGoal = GoalLifecycleCommands.CreateAndActivateGoal(prototypeKernel, context.Agents, objective);
-            ConsoleViews.PrintGoal(prototypeGoal);
+            GoalTextView.PrintGoal(prototypeGoal);
             TaskTimelineTextView.PrintTimeline(prototypeGoal);
             return false;
 
@@ -362,7 +362,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 ApplySourceBacklogItemLink(context, context.CurrentGoal, runSourceBacklogLink);
                 context.FinalizeGoalCreation(context.CurrentGoal);
                 EpicAtCreation.AssignAfterCommit(context.Workspace, PortfolioMemberKind.Goal, context.CurrentGoal.Id.Value, runEpicId);
-                ConsoleViews.PrintGoal(context.CurrentGoal);
+                GoalTextView.PrintGoal(context.CurrentGoal);
                 var runParts = new List<string> { "run-goal", context.CurrentGoal.Id.Value[..8] };
                 AppendGoalAliasFlags(parts, runParts, includeRoleAgentFlags: false, "--run", "--brief-file", "--text-file", "--pipeline");
                 return TryExecuteGoalCommand("run-goal", runParts, context);
@@ -390,7 +390,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             ApplySourceBacklogItemLink(context, context.CurrentGoal, goalSourceBacklogLink);
             context.FinalizeGoalCreation(context.CurrentGoal);
             EpicAtCreation.AssignAfterCommit(context.Workspace, PortfolioMemberKind.Goal, context.CurrentGoal.Id.Value, goalEpicId);
-            ConsoleViews.PrintGoal(context.CurrentGoal);
+            GoalTextView.PrintGoal(context.CurrentGoal);
             return true;
 
         case "simple-goal":
@@ -423,7 +423,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             }
             context.FinalizeGoalCreation(context.CurrentGoal);
             EpicAtCreation.AssignAfterCommit(context.Workspace, PortfolioMemberKind.Goal, context.CurrentGoal.Id.Value, simpleEpicId);
-            ConsoleViews.PrintGoal(context.CurrentGoal);
+            GoalTextView.PrintGoal(context.CurrentGoal);
             if (HasCliConfirmation(parts, "--dispatch"))
             {
                 var dispatchParts = new List<string> { "subscription-dispatch", "1", "--confirm-dispatch-start" };
@@ -953,7 +953,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 context.Kernel,
                 context.CurrentGoal,
                 GetOptionalArgument(parts, "--tasks-only"));
-            ConsoleViews.PrintGoal(
+            GoalTextView.PrintGoal(
                 context.CurrentGoal,
                 ResolveGoalFriendlyLabel(context.CurrentGoal, context.Workspace.BacklogStorePath),
                 ResolveGoalStatusText(context.Workspace, context.CurrentGoal),

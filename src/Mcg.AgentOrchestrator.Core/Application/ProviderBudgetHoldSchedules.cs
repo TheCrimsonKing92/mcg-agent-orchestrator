@@ -109,9 +109,15 @@ public static class ProviderBudgetHoldSchedules
     public static bool TryGetHoldByBindingKey(IEnumerable<Goal> goals, string bindingKey, out ProviderBudgetExhaustionHold hold)
     {
         var all = goals.ToArray();
+        return TryGetHoldByBindingKey(all, bindingKey, out hold, new ProviderBudgetHoldMemo(all));
+    }
+
+    internal static bool TryGetHoldByBindingKey(IReadOnlyCollection<Goal> all, string bindingKey,
+        out ProviderBudgetExhaustionHold hold, ProviderBudgetHoldMemo memo)
+    {
         foreach (var dispatch in all.SelectMany(goal => goal.Tasks).SelectMany(task => task.DispatchHistory))
-            if (IsBinding(dispatch, bindingKey) && DispatchFailureClassifier.TryGetProviderBudgetExhaustionHold(
-                    all, dispatch.ProviderName ?? dispatch.WorkerName, dispatch.ClaudeCredentialSourceDirectory, out hold))
+            if (IsBinding(dispatch, bindingKey) && memo.TryGet(
+                    dispatch.ProviderName ?? dispatch.WorkerName, dispatch.ClaudeCredentialSourceDirectory, out hold))
                 return true;
         hold = null!;
         return false;
