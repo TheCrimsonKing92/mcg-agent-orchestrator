@@ -1,31 +1,28 @@
 namespace Mcg.AgentOrchestrator.Core;
 
-public sealed partial class AgentOrchestratorKernel
+// Owns validation and routing of a complete Planner evidence batch under the kernel request lock.
+internal sealed class PlannerEvidenceRecorder(
+    AgentOrchestratorKernel kernel,
+    object requestLock,
+    IClock clock,
+    Action<Goal, TaskId?, ProgressKind, string> append)
 {
-    private bool HasCurrentBlockingHumanInput(Goal goal, TaskSpec task)
+    internal static bool HasCurrentBlockingHumanInput(Goal goal, TaskSpec task, IEnumerable<HumanInputRequest> requests)
     {
-        var pending = _humanInputRequests.Values.Where(item => item.GoalId == goal.Id && item.TaskId == task.Id &&
+        var pending = requests.Where(item => item.GoalId == goal.Id && item.TaskId == task.Id &&
             !item.IsCompleted && HumanWaitPolicyDefaults.BlocksActiveWork(item.Kind)).ToArray();
         return pending.Any(item => item.IsCurrentForBrief(goal.AuthoritativeBrief.Version)) ||
             task.Status == WorkTaskStatus.WaitingForHuman && !pending.Any(item => !item.IsCurrentForBrief(goal.AuthoritativeBrief.Version));
     }
 
-    private static bool IsObsoletePlannerEvidenceRound(Goal goal, TaskSpec task) =>
+    internal static bool IsObsoletePlannerEvidenceRound(Goal goal, TaskSpec task) =>
         task.RequiredRole == AgentRole.Planner && task.LastDispatch is { BriefSnapshot: not null } dispatch &&
         dispatch.BriefVersion != goal.AuthoritativeBrief.Version &&
         task.LastVerification is { DispatchAttemptAt: not null, PlannerEvidenceBatch: { } batch } &&
         batch.Directives.Any(item => item.PlannerEvidence is not null);
 
-    private void RejectPlannerEvidence(Goal goal, TaskSpec task, TaskVerificationRecord verification, string diagnostic)
-    {
-        // Preserve the observed process exit. A protocol rejection is nevertheless not passing
-        // verification and must never authorize completion when an unrelated answer arrives.
-        task.RecordVerification(verification with { OrchestratorFailureReason = diagnostic });
-        ReportWorkerTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, diagnostic);
-    }
-
     // Called by host execution paths only. Validation completes before any obligation is published.
-    internal string? RecordPlannerEvidenceBatch(Goal goal, TaskSpec task,
+    internal string? Record(Goal goal, TaskSpec task,
         HumanInputDirectiveParseResult batch, int? dispatchBriefVersion, out bool blocksActiveWork)
     {
         blocksActiveWork = false;
@@ -34,7 +31,7 @@ public sealed partial class AgentOrchestratorKernel
             return "Planner evidence requires a Planner task.";
         if (batch.EvidenceLineCount > 1 && dispatchBriefVersion is null)
             return "Plural Planner evidence requires authoritative dispatch brief provenance; replan with a new dispatch.";
-        lock (_humanInputRequestLock)
+        lock (requestLock)
         {
             if (dispatchBriefVersion is not null && dispatchBriefVersion != goal.AuthoritativeBrief.Version)
                 return "Planner evidence belongs to an obsolete dispatch brief; replan against the current brief.";
@@ -52,7 +49,7 @@ public sealed partial class AgentOrchestratorKernel
                     : null;
                 if (identity is not null)
                 {
-                    var storedPayloads = _humanInputRequests.Values.Where(item => item.PlannerIdentity == identity)
+                    var storedPayloads = kernel.HumanInputRequests.Where(item => item.PlannerIdentity == identity)
                         .Select(item => item.PlannerEvidence)
                         .Concat(goal.GateTestObligations.Where(item => item.PlannerIdentity == identity).Select(item => item.PlannerEvidence));
                     if (storedPayloads.Any(stored => !payload.SemanticallyEquals(stored)))
@@ -68,13 +65,13 @@ public sealed partial class AgentOrchestratorKernel
                 {
                     var obligation = new GateTestObligation(identity?.StableId ?? directive.QuestionFingerprint,
                         dispatchBriefVersion ?? goal.AuthoritativeBrief.Version, directive.TestNames.ToArray(),
-                        task.Id.Value, directive.Question, _clock.UtcNow, identity, directive.PlannerEvidence);
+                        task.Id.Value, directive.Question, clock.UtcNow, identity, directive.PlannerEvidence);
                     goal.RecordGateTestObligation(obligation);
-                    Append(goal, task.Id, ProgressKind.TaskNote, obligation.RecordingNote);
+                    append(goal, task.Id, ProgressKind.TaskNote, obligation.RecordingNote);
                 }
                 else
                 {
-                    RequestHumanInputDeduplicated(goal.Id, task.Id, directive.Question, kind: directive.Kind,
+                    kernel.RequestHumanInputDeduplicated(goal.Id, task.Id, directive.Question, kind: directive.Kind,
                         questionFingerprint: directive.QuestionFingerprint, blockerFingerprint: directive.BlockerFingerprint,
                         recordDuplicateSuppression: false, evidenceOwner: directive.EvidenceOwner,
                         storeReference: directive.StoreReference, testNames: directive.TestNames,
@@ -82,7 +79,7 @@ public sealed partial class AgentOrchestratorKernel
                 }
             }
             // Record all siblings first. Answered replays stay answered and cannot reopen a task.
-            blocksActiveWork = GetPendingBlockingHumanInput(goal.Id).Any(item => item.TaskId == task.Id);
+            blocksActiveWork = kernel.GetPendingBlockingHumanInput(goal.Id).Any(item => item.TaskId == task.Id);
         }
         return null;
     }

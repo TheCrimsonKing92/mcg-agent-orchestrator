@@ -2,6 +2,20 @@ namespace Mcg.AgentOrchestrator.Core;
 
 public sealed partial class AgentOrchestratorKernel
 {
+    private void RejectPlannerEvidence(Goal goal, TaskSpec task, TaskVerificationRecord verification, string diagnostic)
+    {
+        // Preserve the observed process exit. A protocol rejection is nevertheless not passing
+        // verification and must never authorize completion when an unrelated answer arrives.
+        task.RecordVerification(verification with { OrchestratorFailureReason = diagnostic });
+        ReportWorkerTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, diagnostic);
+    }
+
+    internal string? RecordPlannerEvidenceBatch(Goal goal, TaskSpec task,
+        HumanInputDirectiveParseResult batch, int? dispatchBriefVersion, out bool blocksActiveWork) =>
+        new PlannerEvidenceRecorder(this, _humanInputRequestLock, _clock,
+            (g, t, k, message) => Append(g, t, k, message))
+            .Record(goal, task, batch, dispatchBriefVersion, out blocksActiveWork);
+
     private const int ProviderConnectivityRetryLimit = 3;
     private const int ProviderInterruptionRetryLimit = 3;
     private const int VerificationContractRepairLimit = 2;
@@ -2185,7 +2199,7 @@ public sealed partial class AgentOrchestratorKernel
 
     private bool TryCompleteTaskWithPassingVerification(Goal goal, TaskSpec task, string message)
     {
-        if (IsObsoletePlannerEvidenceRound(goal, task)) return false;
+        if (PlannerEvidenceRecorder.IsObsoletePlannerEvidenceRound(goal, task)) return false;
         if (task.Status == WorkTaskStatus.Completed ||
             task.LastVerification is not { Succeeded: true } ||
             !WorkerResultBlockers.AssessSubscriptionVerification(task, task.LastVerification).AllowsCompletion ||

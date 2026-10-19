@@ -1282,9 +1282,7 @@ public sealed partial class BackgroundDispatchRunner
         var wrapperExitReconciled = false;
         var resourceAccounting = capturedResourceAccounting;
         var goal = kernel.GetGoal(goalId);
-        var humanInputDirective = AgentOutputDirectives.ParseHumanInputRequest(authoritativeStandardOutput, task.RequiredRole);
-        if (humanInputDirective.Directives.Any(item => item.PlannerEvidence is not null) && fullStandardOutput.Content is null)
-            humanInputDirective = new(null, "Cannot validate Planner evidence without the complete authoritative worker decision stream; replan.");
+        var humanInputDirective = PlannerOutputContract.ParseEvidenceRequests(authoritativeStandardOutput, task.RequiredRole, fullStandardOutput.Content is not null);
         var hasRoleCapability = DispatchRoleOutputCapabilities.TryGet(task.RequiredRole, out var dispatchRoleCapability);
         var requiresTerminalContract = task.RequiredRole is AgentRole.Reviewer or AgentRole.Tester &&
             DispatchFailureClassifier.IsSubscriptionProviderCliDispatch(task);

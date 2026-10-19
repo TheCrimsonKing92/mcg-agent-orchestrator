@@ -65,19 +65,8 @@ internal static partial class CliCommandHandlers
     }
 
     internal static IReadOnlyList<HumanInputRequest> HumanWaitsForAttention(
-        AgentOrchestratorKernel kernel,
-        GoalId? goalId,
-        bool includeHistory)
-    {
-        return kernel.HumanInputRequests
-            .Where(request => goalId is null || request.GoalId == goalId)
-            .Where(request => includeHistory || !request.IsCompleted)
-            .Where(request => includeHistory || request.PlannerIdentity is null ||
-                request.PlannerIdentity.BriefVersion == kernel.GetGoal(request.GoalId).AuthoritativeBrief.Version)
-            .Where(request => includeHistory || IsLiveAttentionGoal(kernel, request.GoalId))
-            .OrderBy(request => request.CreatedAt)
-            .ToList();
-    }
+        AgentOrchestratorKernel kernel, GoalId? goalId, bool includeHistory) =>
+        AttentionHumanWaitQuery.Read(kernel, goalId, includeHistory);
 
     internal static IReadOnlyList<CollaborationItem> CollaborationItemsForAttention(
         IReadOnlyList<CollaborationItem> items,
@@ -88,18 +77,8 @@ internal static partial class CliCommandHandlers
         return items
             .Where(item => CollaborationItemLifecycle.IsReachUpType(item.Type))
             .Where(item => goalId is null || string.Equals(item.GoalId, goalId.Value, StringComparison.OrdinalIgnoreCase))
-            .Where(item => includeHistory || item.GoalId is null || IsLiveAttentionGoal(kernel, new GoalId(item.GoalId)))
+            .Where(item => includeHistory || item.GoalId is null || AttentionHumanWaitQuery.IsLiveAttentionGoal(kernel, new GoalId(item.GoalId)))
             .ToList();
-    }
-
-    private static bool IsLiveAttentionGoal(AgentOrchestratorKernel kernel, GoalId goalId)
-    {
-        var goal = kernel.Goals.FirstOrDefault(candidate => candidate.Id == goalId);
-        return goal is not null && goal.Status is not GoalStatus.Parked
-            and not GoalStatus.Completed
-            and not GoalStatus.Failed
-            and not GoalStatus.Cancelled
-            and not GoalStatus.Superseded;
     }
 
     private static int ResolveParkedAttentionItems(AgentOrchestratorKernel kernel, CollaborationItemStore store)
