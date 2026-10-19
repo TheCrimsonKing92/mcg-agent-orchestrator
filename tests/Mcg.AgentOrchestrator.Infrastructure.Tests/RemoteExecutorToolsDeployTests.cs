@@ -100,16 +100,21 @@ public sealed class RemoteExecutorToolsDeployTests
             var digest = new string('a', 64);
             var path = Path.Combine(root, ExecutorToolsDigest.ManifestFileName);
             File.WriteAllText(path, JsonSerializer.Serialize(new { digest }));
-            var deploy = Create((args, directory, bound, _) =>
+            var calls = new List<(string[] Args, string Directory, TimeSpan Bound, CancellationToken Token, bool Stale)>();
+            var deploy = Create((args, directory, bound, token) =>
             {
-                Assert.Equal(new[] { SshRemoteLaneExecutor.ScpPath, "-o", "BatchMode=yes", "admin:D:/runner/tools-digest.json", "tools-digest.json" }, args);
-                Assert.Equal(root, directory);
-                Assert.Equal(TimeSpan.FromSeconds(30), bound);
-                Assert.False(File.Exists(path));
+                calls.Add((args, directory, bound, token, File.Exists(path)));
                 if (mode != "missing") File.WriteAllText(path, mode == "invalid" ? "broken" : JsonSerializer.Serialize(new { digest }));
                 return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(mode == "failed" ? 255 : 0, ""));
             });
             Assert.Equal(mode == "valid" ? digest : null, deploy.ReadDeployedDigest(Entry, root));
+            // Assert outside the transport: the reader deliberately catches callback exceptions.
+            var call = Assert.Single(calls);
+            Assert.Equal(new[] { SshRemoteLaneExecutor.ScpPath, "-o", "BatchMode=yes", "admin:D:/runner/tools-digest.json", "tools-digest.json" }, call.Args);
+            Assert.Equal(root, call.Directory);
+            Assert.Equal(TimeSpan.FromSeconds(30), call.Bound);
+            Assert.Equal(CancellationToken.None, call.Token);
+            Assert.False(call.Stale);
         }
         finally { Directory.Delete(root, true); }
     }
