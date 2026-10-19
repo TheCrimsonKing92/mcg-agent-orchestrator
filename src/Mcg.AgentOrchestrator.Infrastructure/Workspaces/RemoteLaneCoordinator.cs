@@ -34,6 +34,7 @@ internal sealed class RemoteLaneCoordinator : IDisposable
 
     internal IReadOnlyDictionary<(string Lane, string Filter), RemoteExecutorLaneSeconds> RemoteLaneHistory { get; init; }
         = new Dictionary<(string Lane, string Filter), RemoteExecutorLaneSeconds>();
+    internal RemoteLaneOccupancyHeartbeat? Occupancy { get; set; }
 
     internal RemoteLaneCoordinator(RemoteLaneExecutorConfiguration configuration,
         IRemoteLaneCandidateIdentity cache, string worktreePath, string? attemptPrefix,
@@ -204,6 +205,7 @@ internal sealed class RemoteLaneCoordinator : IDisposable
     internal async Task<RemoteLaneOutcome> RunRemoteAsync(Check check, RemoteLaneExecutorEntry entry,
         TimeSpan timeout, CancellationToken cancellationToken)
     {
+        var occupancy = Occupancy;
         var request = CreateRequest(check, entry.Id);
         RemoteLaneHistory.TryGetValue((request.Lane, request.FilterHash), out var history);
         var budget = RemoteLaneTestHostBudget.Decide(timeout, history);
@@ -257,6 +259,7 @@ internal sealed class RemoteLaneCoordinator : IDisposable
                         request.ExecutorId, entry.RunnerAlias, request.Lane, request.AttemptId, Snapshot());
                     return await Fallback(RemoteLaneOutcomeCode.LeaseExpired).ConfigureAwait(false);
                 }
+                occupancy?.Beat(request.Lane, heartbeat, now);
                 if (handle.TryGetResult() is { } result)
                 {
                     observedResult = result;
@@ -322,6 +325,10 @@ internal sealed class RemoteLaneCoordinator : IDisposable
             exceptionMessage = ex.Message;
             return await Fallback(inspectingTrx ? RemoteLaneOutcomeCode.TrxIncomplete : RemoteLaneOutcomeCode.Unreachable,
                 observedResult, reason: $"{ex.GetType().Name}: {ex.Message}").ConfigureAwait(false);
+        }
+        finally
+        {
+            occupancy?.End(request.Lane, _clock.GetUtcNow());
         }
 
         async Task<RemoteLaneOutcome> Fallback(RemoteLaneOutcomeCode code, RemoteLaneResult? result = null, string? reason = null)
