@@ -5,7 +5,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 using static ConductorDriverTests;
 using static LandingExecutorTests;
 
-[Xunit.Collection("IsolatedProcessSpawning")]
+[Xunit.Collection("IsolatedProcessSpawningRemainderB")]
 public sealed class LandingRebindEquivalenceTests : HostCapacityBoundTestBase
 {
     [Xunit.Fact]
