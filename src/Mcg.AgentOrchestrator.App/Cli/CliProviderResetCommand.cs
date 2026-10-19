@@ -12,7 +12,8 @@ internal static class CliProviderResetCommand
     internal static bool IsCommand(IReadOnlyList<string> args) =>
         args.Count > 0 && args[0].Equals(OperatorIntentVerbs.ProviderReset, StringComparison.OrdinalIgnoreCase);
 
-    internal static bool Execute(IReadOnlyList<string> parts, CliExecutionContext context, IOperatorIntentStore? intentStore = null)
+    internal static bool Execute(IReadOnlyList<string> parts, CliExecutionContext context, IOperatorIntentStore? intentStore = null,
+        ProviderBudgetHoldMemo? holdMemo = null)
     {
         CliCommandHelp.ThrowIfInvalidFlags(parts);
         parts = OperatorIntentSubmissionOutput.StripJsonFlag(parts, out var emitJson);
@@ -28,11 +29,11 @@ internal static class CliProviderResetCommand
         var agent = context.Agents.FirstOrDefault(item => item.Id.Value.Equals(target, StringComparison.OrdinalIgnoreCase));
         if (agent is not null) target = agent.Model.ProviderName;
         var holds = new Dictionary<string, ProviderBudgetExhaustionHold>(StringComparer.OrdinalIgnoreCase);
+        holdMemo ??= new ProviderBudgetHoldMemo(context.Kernel.Goals);
         foreach (var dispatch in context.Kernel.Goals.SelectMany(goal => goal.Tasks).SelectMany(task => task.DispatchHistory))
         {
             var provider = dispatch.ProviderName ?? dispatch.WorkerName;
-            if (!DispatchFailureClassifier.TryGetProviderBudgetExhaustionHold(context.Kernel.Goals,
-                    provider, dispatch.ClaudeCredentialSourceDirectory, out var hold)) continue;
+            if (!holdMemo.TryGet(provider, dispatch.ClaudeCredentialSourceDirectory, out var hold)) continue;
             if (provider.Equals(target, StringComparison.OrdinalIgnoreCase) || hold.BindingKey.Equals(target, StringComparison.OrdinalIgnoreCase))
                 holds.TryAdd(hold.BindingKey, hold);
         }
