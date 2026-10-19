@@ -77,7 +77,20 @@ internal static class AcceptanceCriterionFeasibility
             WorkerCapability.MultipleGoalCoordination,
             Patterns(
                 @"\b(?:(?<!(?:['’]s|\b(?:the|a|an|each|every|this|its|their))\s+)run(?!\s+(?:identity|identities|id|ids|key|record)\b)|execute|drive|start|dispatch|coordinate|compare|observe)\b.{0,80}\b(?:two|multiple|several|more\s+than\s+one|concurrent|parallel)\b.{0,30}\bgoals?\b",
-                @"\b(?:two|multiple|several|more\s+than\s+one|concurrent|parallel)\b.{0,30}\bgoals?\b.{0,80}\b(?:(?<!(?:['’]s|\b(?:the|a|an|each|every|this|its|their))\s+)run(?!\s+(?:identity|identities|id|ids|key|record)\b)|execute|drive|start|dispatch|coordinate|compare|observe)\b")),
+                @"\b(?:two|multiple|several|more\s+than\s+one|concurrent|parallel)\b.{0,30}\bgoals?\b.{0,80}\b(?:(?<!(?:['’]s|\b(?:the|a|an|each|every|this|its|their))\s+)run(?!\s+(?:identity|identities|id|ids|key|record)\b)|execute|drive|start|dispatch|coordinate|compare|observe)\b"))
+        {
+            // A method name alone is not a local boundary: require nearby constructed operands.
+            InProcessMarkers = Patterns(
+                @"\b(?:isolated\s+in[- ]process|in[- ]process\s+(?:unit\s+)?(?:test|fixture))\b",
+                @"\b(?:[A-Za-z_]\w*\.)+[A-Za-z_]\w*\b[^\r\n]{0,160}\b(?:(?:constructed|synthetic|local)\s+`?(?:GoalIds?|goals?)|fixtures?\s+with\s+the\s+same\s+goals?)\b",
+                @"\b(?:constructed|synthetic|local)\s+`?(?:GoalIds?|goals?)\b[^\r\n]{0,160}\b(?:[A-Za-z_]\w*\.)+[A-Za-z_]\w*\b"),
+            LiveMarkers = Patterns(
+                @"\b(?:real|live|running|production)\s+(?:(?:concurrent|parallel)\s+)?goals?\b",
+                @"\bdispatch(?:er|ing)?\b",
+                @"\b(?:live|running|production)[-\s]+boards?\b",
+                @"\b(?:real|live|running|production)\s+conductor\b",
+                @"\bconductor\s+loop\b")
+        },
         new(
             "live-conductor-or-multiple-ticks",
             WorkerCapability.LiveConductorControl,
