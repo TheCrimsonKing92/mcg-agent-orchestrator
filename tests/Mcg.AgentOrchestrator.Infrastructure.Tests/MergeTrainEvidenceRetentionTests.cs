@@ -265,7 +265,9 @@ public sealed class MergeTrainEvidenceRetentionTests
         MergeTrainGateOutcome outcome = MergeTrainGateOutcome.Failed, bool validForLanding = false,
         DateTimeOffset? completedAt = null)
     {
-        var sources = SourceNames.Select(name => Write(Path.Combine(fixture.ExecutionDirectory, name), PassingTrx(name))).ToArray();
+        var sources = SourceNames.Select(name => Write(Path.Combine(fixture.ExecutionDirectory, name), PassingTrx(name)))
+            .Order(StringComparer.OrdinalIgnoreCase).ToArray();
+        Assert.True(AcceptanceCohortGateEvidence.HasCoherentTrxEvidence(sources));
         var identity = MergeTrainIdentity.Create(
             [Binding(RetentionReclaimFixture.CompletedId), Binding(CancelledId)], new string('f', 40), new string('1', 40), "manifest-v1");
         return new MergeTrainAcceptanceStore(StorePath(fixture)).SaveGateReceipt(new MergeTrainReceipt(
