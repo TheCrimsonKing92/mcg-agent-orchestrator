@@ -190,6 +190,12 @@ public sealed class RemoteLaneToolsMismatchClassificationTests
             return result.Output;
         }
 
-        public void Dispose() => Directory.Delete(_root, recursive: true);
+        public void Dispose()
+        {
+            // Git object files are read-only on Windows; clear that attribute before deletion.
+            foreach (var entry in new DirectoryInfo(_root).EnumerateFileSystemInfos("*", SearchOption.AllDirectories))
+                entry.Attributes &= ~FileAttributes.ReadOnly;
+            Directory.Delete(_root, recursive: true);
+        }
     }
 }
