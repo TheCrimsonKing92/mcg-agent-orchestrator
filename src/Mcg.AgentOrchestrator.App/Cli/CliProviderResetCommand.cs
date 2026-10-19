@@ -39,17 +39,22 @@ internal static class CliProviderResetCommand
         if (holds.Count == 0) throw new ArgumentException($"no-current-hold: {parts[1]}");
         if (holds.Count > 1) throw new ArgumentException($"ambiguous-binding: {string.Join(", ", holds.Keys.Order(StringComparer.OrdinalIgnoreCase))}");
         var selected = holds.Values.Single();
+        var sourceTerminal = context.Kernel.Goals.Any(goal => goal.Id == selected.SourceGoalId && goal.IsTerminal);
         var attribution = CliPersistentStateRunner.ResolveOperatorIntentAttribution(parts,
             CliPersistentStateRunner.OperatorIntentSubmissionSource.Cli);
         var id = Guid.NewGuid().ToString("N");
         var intent = new OperatorIntentRecord(id, GetFlagValue(parts, "--idempotency-key") ?? id,
-            OperatorIntentVerbs.ProviderReset, selected.SourceGoalId.Value, selected.SourceTaskId.Value,
+            OperatorIntentVerbs.ProviderReset, sourceTerminal ? OperatorIntentScopes.Workspace : selected.SourceGoalId.Value,
+            sourceTerminal ? null : selected.SourceTaskId.Value,
             JsonSerializer.Serialize(new ProviderResetOperatorIntentPayload(selected.BindingKey, resetAt.ToUniversalTime(), rationale), OperatorIntentJson.Options),
             [], attribution.Actor, attribution.Channel, attribution.AuthenticationAssurance,
             DateTimeOffset.UtcNow, ActorKind: attribution.ActorKind);
         var persisted = (intentStore ?? SqliteOperatorIntentStore.ForDirectories(
             context.Workspace.OrchestratorDirectory, context.Workspace.LogDirectory)).EnqueueAsync(intent).GetAwaiter().GetResult();
-        OperatorIntentSubmissionOutput.PrintAnswer(persisted, context.Workspace.OrchestratorDirectory, selected.SourceGoalId.Value, emitJson);
+        if (sourceTerminal)
+            OperatorIntentSubmissionOutput.PrintWorkspace(persisted, context.Workspace.OrchestratorDirectory, emitJson);
+        else
+            OperatorIntentSubmissionOutput.PrintAnswer(persisted, context.Workspace.OrchestratorDirectory, selected.SourceGoalId.Value, emitJson);
         return false;
     }
 
