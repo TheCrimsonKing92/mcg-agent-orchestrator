@@ -1472,9 +1472,9 @@ internal sealed partial class ConductorBatchLoop
                 goalProjectionCache.Invalidate(goal.Id);
                 FinishGoalWalk(result.Outcome.GetType().Name);
             }
-            goalWalkClock.Stop();
-            ObserveWorkerCapacityTick(kernel, effectiveGoalStallThreshold);
+            goalWalkClock.Stop(); ObserveWorkerCapacityTick(kernel, effectiveGoalStallThreshold);
             ConductorExperimentWatch.For(this, _workspace, CurrentConductEventLogWriter.Value ?? _conductEventLogWriter)?.ObserveTick(_utcNow());
+            ConductorProviderHoldWatch.For(this, CurrentConductEventLogWriter.Value ?? _conductEventLogWriter)?.ObserveTick(kernel.ProviderHoldScope, _utcNow());
             driver.PhaseTimingSink = previousPhaseTimingSink;
             foreach (var line in perGoalPhaseTimingLines)
             {

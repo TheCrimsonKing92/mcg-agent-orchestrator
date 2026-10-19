@@ -21,8 +21,6 @@ public sealed class GoalLifecycleChangeSinkTests : IDisposable
     [InlineData("TaskCompleted")]
     [InlineData("TaskVerified")]
     [InlineData("TaskFailed")]
-    [InlineData("HumanInputReceived")]
-    [InlineData("HumanInputSuperseded")]
     [InlineData("AcceptanceResult")]
     [InlineData("TaskRetried")]
     public void Append_StageOrIntentEmitsOneStructuralRecord(string eventType)

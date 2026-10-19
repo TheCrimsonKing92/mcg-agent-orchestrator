@@ -80,6 +80,8 @@ internal sealed class OwnerConsoleSession(
                 await RefreshQuestionsAsync(cancellationToken);
             else
             {
+                if (record.ChangeKind is ChangeStreamRecord.OwnerDecisionAnswered or ChangeStreamRecord.OwnerDecisionRetired)
+                    await RefreshQuestionsAsync(cancellationToken);
                 var id = record.GoalId;
                 if (id.Length != 32)
                 {

@@ -13,7 +13,7 @@ public sealed class OwnerLandingsCommandTests
         var harness = new OwnerConsoleHarness();
         var dialogs = new Dialogs();
         var calls = new List<string>();
-        using var controller = Controller(harness, dialogs, value => { calls.Add(value); return "delivered rows"; });
+        using var controller = Controller(harness, dialogs, value => { calls.Add(value); return OwnerLandingsPage.Plain("delivered rows"); });
 
         await controller.RunCommandAsync(command);
 
@@ -61,7 +61,7 @@ public sealed class OwnerLandingsCommandTests
         var harness = new OwnerConsoleHarness();
         var dialogs = new Dialogs();
         using var controller = Controller(harness, dialogs,
-            arg => OwnerLandingsQuery.Text(fixture, fixture.DirectoryPath, fixture.Clock, arg));
+            arg => OwnerLandingsPage.Load(fixture, fixture.DirectoryPath, fixture.Clock, arg));
 
         await controller.RunCommandAsync("landings");
 
@@ -79,7 +79,7 @@ public sealed class OwnerLandingsCommandTests
     }
 
     private static OwnerConsoleScreenController Controller(OwnerConsoleHarness harness,
-        Dialogs dialogs, Func<string, string>? seam = null) => new(harness.Questions, harness.Answers, dialogs,
+        Dialogs dialogs, Func<string, OwnerLandingsPage>? seam = null) => new(harness.Questions, harness.Answers, dialogs,
         harness.State, harness.Tail, harness.Conductor, harness.DigestReport, harness.Digest, harness.Clock, landings: seam);
 
     private sealed class Dialogs : IOwnerConsoleDialogs

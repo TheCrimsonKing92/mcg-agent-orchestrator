@@ -55,7 +55,9 @@ internal sealed partial class ConductorBoardFillHost
         filing: CreateFilingSeams(workspace), mainHead: mainHead,
         trackedEdits: () => GitTrackedEditsProbe.Probe(workspace.ExecutionDirectory),
         staleMainHead: mainHead ?? (() => BoardFillStaleItemRule.ReadMainHead(workspace.ExecutionDirectory, workspace.IntegrationBranch)),
-        preferredOrder: () => EpicPlanReadySliceSelector.Read(workspace));
+        preferredOrder: () => EpicPlanReadySliceSelector.Read(workspace),
+        stalledEpics: new StalledEpicAttention(() => StalledEpicAttention.ReadCandidates(workspace),
+            CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory), new(workspace.ConductEventsLogPath)));
 
     private static BoardFillFilingSeams CreateFilingSeams(OrchestratorWorkspace workspace)
     {
