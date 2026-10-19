@@ -154,7 +154,7 @@ internal static class CliReadOnlyCommandRunner
 
         if (CliGateStatusJsonQueryCommand.IsGateStatusJsonCommand(args))
         {
-            CliGateStatusJsonQueryCommand.Execute();
+            CliGateStatusJsonQueryCommand.Execute(workspace: workspace);
             changed = false;
             return true;
         }

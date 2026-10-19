@@ -16,6 +16,10 @@ internal sealed record ChangeStreamRecord(
     internal const int CurrentSchemaVersion = 1;
     internal const string GoalTransition = "goal-transition";
     internal const string OwnerDecisionRaised = "owner-decision-raised";
+    internal const string OwnerDecisionAnswered = "owner-decision-answered";
+    internal const string OwnerDecisionRetired = "owner-decision-retired";
+    internal const string DecisionAnsweredSource = "goal-decision-answered";
+    internal const string DecisionRetiredSource = "goal-decision-retired";
     internal const string GoalStage = "goal-stage";
     internal static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
@@ -24,6 +28,8 @@ internal sealed record ChangeStreamRecord(
         changeKind = string.IsNullOrWhiteSpace(goalId) ? null : eventKind switch
         {
             "goal-escalation" => OwnerDecisionRaised,
+            DecisionAnsweredSource => OwnerDecisionAnswered,
+            DecisionRetiredSource => OwnerDecisionRetired,
             "goal" or "goal-landing" or "goal-left-working-set" or "watch-transition" => GoalTransition,
             "goal-lifecycle" or "acceptance" or "acceptance-cohort" => GoalStage,
             _ => null

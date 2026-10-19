@@ -43,7 +43,11 @@ internal static class AcceptanceCriterionFeasibility
     private sealed record CapabilityRule(
         string Category,
         WorkerCapability Capability,
-        IReadOnlyList<Regex> DemandPatterns);
+        IReadOnlyList<Regex> DemandPatterns)
+    {
+        public IReadOnlyList<Regex> InProcessMarkers { get; init; } = [];
+        public IReadOnlyList<Regex> LiveMarkers { get; init; } = [];
+    }
 
     private static readonly IReadOnlySet<WorkerCapability> DeveloperAndAcceptanceUnavailableCapabilities =
         new HashSet<WorkerCapability>
@@ -80,7 +84,19 @@ internal static class AcceptanceCriterionFeasibility
             Patterns(
                 @"\b(?:(?<!(?:['’]s|\b(?:the|a|an|each|every|this|its|their))\s+)run(?!\s+(?:identity|identities|id|ids|key|record)\b)|execute|drive|start|restart|observe|control)\b.{0,80}\b(?:real|live|production)?\s*conductor(?>(?:\s+loop\b)?)\b(?!['’]s\b)(?!\s+(?:uses|used|writes|wrote|records|recorded|assigns|assigned|stamps|stamped|computes|computed|derives|derived|reads|emits|holds|keeps|stores|sets|returns|owns|is|was|has)\b)",
                 @"\b(?:assert|demonstrate|exercise|observe|test|verify)\b.{0,100}\b(?:cross[-\s]tick|(?:across|over|spanning)\s+(?:two|multiple|several)\s+(?:consecutive\s+)?(?:conductor\s+)?ticks?|(?:two|multiple|several)\s+consecutive\s+(?:conductor\s+)?ticks?|multiple\s+conductor\s+ticks?)\b",
-                @"\b(?:cross[-\s]tick|(?:across|over|spanning)\s+(?:two|multiple|several)\s+(?:consecutive\s+)?(?:conductor\s+)?ticks?|(?:two|multiple|several)\s+consecutive\s+(?:conductor\s+)?ticks?|multiple\s+conductor\s+ticks?)\b.{0,100}\b(?:assert|demonstrate|exercise|observe|test|verify)\b")),
+                @"\b(?:cross[-\s]tick|(?:across|over|spanning)\s+(?:two|multiple|several)\s+(?:consecutive\s+)?(?:conductor\s+)?ticks?|(?:two|multiple|several)\s+consecutive\s+(?:conductor\s+)?ticks?|multiple\s+conductor\s+ticks?)\b.{0,100}\b(?:assert|demonstrate|exercise|observe|test|verify)\b"))
+        {
+            InProcessMarkers = Patterns(
+                @"\bfixtures?\b",
+                @"\bin[- ]process\b",
+                @"\bper-test temporary\b",
+                @"`[^`\r\n]*\b\w+\.\w+\([^`\r\n]*`"),
+            LiveMarkers = Patterns(
+                @"\b(?:real|live|running|production)\s+conductor\b",
+                @"\bconductor\s+loop\b",
+                @"\bnext\s+tick\s+of\s+the\s+loop\b",
+                @"\blive\s+board\b")
+        },
         new(
             "whole-host-or-wall-clock-performance",
             WorkerCapability.HostPerformanceObservation,
@@ -99,7 +115,12 @@ internal static class AcceptanceCriterionFeasibility
 
     public static IReadOnlyList<CriterionFeasibilityFinding> Evaluate(
         IReadOnlyList<string> criteria,
-        AgentRole fallbackRole)
+        AgentRole fallbackRole) => Evaluate(criteria, fallbackRole, honorInProcessMarkers: true);
+
+    internal static IReadOnlyList<CriterionFeasibilityFinding> Evaluate(
+        IReadOnlyList<string> criteria,
+        AgentRole fallbackRole,
+        bool honorInProcessMarkers)
     {
         var findings = new List<CriterionFeasibilityFinding>();
         foreach (var criterion in criteria.Where(value => !string.IsNullOrWhiteSpace(value)))
@@ -116,6 +137,9 @@ internal static class AcceptanceCriterionFeasibility
             var matches = Rules
                 .Where(rule => profile.UnavailableCapabilities.Contains(rule.Capability))
                 .Where(rule => rule.DemandPatterns.Any(pattern => pattern.IsMatch(criterion)))
+                .Where(rule => !honorInProcessMarkers ||
+                    !(rule.InProcessMarkers.Any(pattern => pattern.IsMatch(criterion)) &&
+                      !rule.LiveMarkers.Any(pattern => pattern.IsMatch(criterion))))
                 .ToList();
             if (matches.Count == 0)
                 continue;

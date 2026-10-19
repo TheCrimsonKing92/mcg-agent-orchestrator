@@ -51,7 +51,7 @@ internal static class CliCommandHelp
     public const string BacklogPremiseCloseUsage = "Usage: backlog-premise-close <id-prefix> [<id-prefix> ...] --confirm-backlog-premise-close [--min-age-days <n>]";
     public const string BacklogAddUsage = "Usage: backlog-add <title> [body] [--epic <id-or-title>] [--depends-on <id-prefix>] [--no-similar] | backlog-add --title <title> [--text-file <path>|--body-file <path>] [--epic <id-or-title>] [--depends-on <id-prefix>] [--no-similar] | backlog-add <title> --text-file <path> [--epic <id-or-title>] [--depends-on <id-prefix>] [--no-similar] | backlog-add <title> --body-file <path> [--epic <id-or-title>] [--depends-on <id-prefix>] [--no-similar]";
     public const string BacklogUpdateUsage = "Usage: backlog-update <id-prefix> [--title <text>] [--description <text> | --text-file <path> | --body-file <path>] [--priority <value>] [--tags <csv>] [--status <open|done|superseded>]";
-    public const string BacklogShowUsage = "Usage: backlog-show <id-prefix>";
+    public const string BacklogShowUsage = "Usage: backlog-show <id-prefix> [--json]";
     public const string BacklogAnnotateUsage = "Usage: backlog-annotate <id-prefix> <note> | backlog-annotate <id-prefix> --text-file <path>";
     public const string BacklogCloseUsage = "Usage: backlog-close <id-prefix> [reason] | backlog-close <id-prefix> --reason-file <path> | backlog-close <id-prefix> --text-file <path>";
     public const string BacklogSupersedeUsage = "Usage: backlog-supersede <old-id-prefix> <new-id-prefix>";
@@ -104,6 +104,8 @@ internal static class CliCommandHelp
     public const string RemoteExecutorsUsage = "Usage: remote-executors [--since <ISO-8601>] [--last <N>] [--json]";
     public const string RemoteLaneSelfTestUsage = "Usage: remote-lane-selftest --executor <id> [--timeout-minutes <n>]";
     public const string ExecutorScreenUsage = "Usage: executor-screen [--max-candidates <n>] [--executor <id>]";
+    public const string ExecutorSetSlotsUsage = "Usage: executor-set-slots <executor-id> <slots> [--operator-actor <actor>] [--actor-kind <human|agent>] [--idempotency-key <key>] [--json]";
+    public const string FocusedEvidenceSetUsage = "Usage: focused-evidence-set [--mode off|shadow|remote-first] [--sample-every <n>] [--operator-actor <actor>] [--actor-kind <human|agent>] [--idempotency-key <key>] [--json]";
     public const string RoundValueUsage = "Usage: round-value [--since <ISO-8601-with-offset>] [--until <ISO-8601-with-offset>] [--json] [--by-skill] [--by-check] [--baseline-since <ISO-8601-with-offset> --baseline-until <ISO-8601-with-offset>]";
     public const string LessonUsage = "Usage: lesson record --situation <text> --rule <text> --evidence <ref>... [--applies-to <tag>...] [--goal <goal-prefix>] [--until-goal <goal-prefix>] [--actor-kind human|agent] [--json] | lesson retire <lesson-id> --reason <text> [--evidence <ref>...] [--json]";
     public const string LessonsUsage = "Usage: lessons [--all] [--applies-to <tag>] [--json]";
@@ -432,8 +434,8 @@ internal static class CliCommandHelp
 
     private static readonly CommandHelpEntry BacklogShow = new(
         BacklogShowUsage,
-        "Show a backlog item by id prefix.",
-        ["--help", "-h"]);
+        "Show a backlog item by id prefix. --json emits the mcg.backlog-item agent envelope.",
+        ["--help", "-h", "--json"]);
 
     private static readonly CommandHelpEntry BacklogSimilar = new(
         BacklogSimilarUsage,
@@ -673,6 +675,16 @@ internal static class CliCommandHelp
     private static readonly CommandHelpEntry ExecutorScreen = new(
         ExecutorScreenUsage, "Screen a candidate on an idle executor and record an advisory receipt.",
         ["--max-candidates", "--executor", "--help", "-h"]);
+    public const string GateCancelUsage = "Usage: gate-cancel <goal-prefix> --text-file <path> [--attempt <attempt-id>] [--idempotency-key <key>] [--operator-actor <actor>] [--actor-kind <human|agent>] [--json]";
+    private static readonly CommandHelpEntry GateCancel = new(
+        GateCancelUsage, "Queue a typed request that stops the goal's live gate attempt without a verdict on the next tick.",
+        ["--text-file", "--attempt", "--idempotency-key", "--operator-actor", "--actor-kind", "--json", "--help", "-h"]);
+    private static readonly CommandHelpEntry ExecutorSetSlots = new(
+        ExecutorSetSlotsUsage, "Queue an audited host executor slot change for the next tick.",
+        ["--operator-actor", "--actor-kind", "--idempotency-key", "--json", "--help", "-h"]);
+    private static readonly CommandHelpEntry FocusedEvidenceSet = new(
+        FocusedEvidenceSetUsage, "Queue an audited focused-evidence setting change for the next tick.",
+        ["--mode", "--sample-every", "--operator-actor", "--actor-kind", "--idempotency-key", "--json", "--help", "-h"]);
 
     public const string BoardSimulateUsage = "Usage: board-simulate [--day <yyyy-MM-dd>] [--width <1-4>] [--train-size <0|3|4>] [--cohorts on|off] [--drop newest|lowest-pass-rate] [--seed <n>] [--json]";
 
@@ -768,7 +780,6 @@ internal static class CliCommandHelp
             ["operator-inbox-ack"] = Flags("--goal"),
             ["operator-channel"] = Flags(
                 "--forum-channel-id", "--operator-user-id", "--operator-user-ids", "--spine"),
-            ["operator-control-plane"] = Flags("--hours"),
             ["next"] = Flags("--autonomy", "--autonomy-policy", "--full"),
             ["advance-subscription"] = Flags(
                 "--autonomy", "--autonomy-policy", "--confirm-large-paid-subscription-start",
@@ -809,6 +820,8 @@ internal static class CliCommandHelp
             ["logs"] = GoalScopedTaskFlags(),
             ["cancel-dispatch"] = Flags("--goal", "--completion-build-operation", "--idempotency-key", "--operator-actor", "--actor-kind", "--json"),
             ["goal-priority"] = Flags("--reason", "--idempotency-key", "--operator-actor", "--actor-kind", "--json"),
+            ["provider-reset"] = Flags("--text-file", "--idempotency-key", "--operator-actor", "--actor-kind", "--json"),
+            ["goal-isolation"] = Flags("--reason", "--idempotency-key", "--operator-actor", "--actor-kind", "--json"),
             ["accept"] = Flags(
                 "--autonomy", "--autonomy-policy", "--keep-workspace", "--no-record", "--skip-verify")
         };
@@ -1234,6 +1247,21 @@ internal static class CliCommandHelp
         if (args[0].Equals("executor-screen", StringComparison.OrdinalIgnoreCase))
         {
             entry = ExecutorScreen;
+            return true;
+        }
+        if (args[0].Equals("gate-cancel", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = GateCancel;
+            return true;
+        }
+        if (args[0].Equals("executor-set-slots", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = ExecutorSetSlots;
+            return true;
+        }
+        if (args[0].Equals("focused-evidence-set", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = FocusedEvidenceSet;
             return true;
         }
         if (args[0].Equals("remote-lane-selftest", StringComparison.OrdinalIgnoreCase))
@@ -1789,8 +1817,12 @@ internal static class CliCommandHelp
                     ? $"Usage: {command} <objective> --confirm-batch-start [--confirm-large-paid-subscription-start] [--confirm-readiness-risk] [--backlog-item <id-prefix> --backlog-coverage <full|slice>] [--epic <id-or-title>] [--autonomy <policy>]"
                     : command.Equals("cancel-dispatch", StringComparison.OrdinalIgnoreCase)
                     ? $"Usage: {command} [options] [--json]"
+                    : command.Equals("goal-isolation", StringComparison.OrdinalIgnoreCase)
+                    ? CliGoalIsolationCommand.Usage
                     : command.Equals("goal-priority", StringComparison.OrdinalIgnoreCase)
                     ? CliGoalPriorityCommand.Usage
+                    : command.Equals("provider-reset", StringComparison.OrdinalIgnoreCase)
+                    ? CliProviderResetCommand.Usage
                     : command.Equals("finding", StringComparison.OrdinalIgnoreCase)
                     ? $"Usage: {CliFindingQueryCommand.Usage}"
                     : $"Usage: {command} [options]",

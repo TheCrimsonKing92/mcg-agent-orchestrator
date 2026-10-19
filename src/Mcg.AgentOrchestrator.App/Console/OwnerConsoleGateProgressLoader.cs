@@ -1,17 +1,28 @@
 using System.Text.Json;
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 
-internal sealed class OwnerConsoleGateProgressLoader(string logPath, string manifestPath, string durationPath, TimeProvider clock)
+internal sealed class OwnerConsoleGateProgressLoader(string logPath, string manifestPath, string durationPath, TimeProvider clock,
+    string? executorConfigPath = null, int? coreBudget = null)
 {
+    private static readonly OwnerConsoleGateFailureNames FailureNames = new();
     internal OwnerConsoleGateProgress? Load(IReadOnlyDictionary<string, string> titles)
     {
         try
         {
-            var events = ReadTail().Select(OwnerConsoleGateProgress.ParseEvent).OfType<OwnerConductEvent>().ToArray();
+            var tail = ReadTail().ToArray();
+            var now = clock.GetUtcNow();
+            var events = tail.Select(OwnerConsoleGateProgress.ParseEvent).OfType<OwnerConductEvent>().ToArray();
             using var manifest = JsonDocument.Parse(File.ReadAllText(manifestPath));
-            var lanes = manifest.RootElement.GetProperty("engine").GetProperty("infrastructureTestLanes").EnumerateArray()
+            var engine = manifest.RootElement.GetProperty("engine");
+            var maxConcurrentShards = engine.TryGetProperty("maxConcurrentShards", out var shards) &&
+                shards.ValueKind == JsonValueKind.Number && shards.TryGetInt32(out var value) && value > 0 ? value : 1;
+            var executors = executorConfigPath is null ? Array.Empty<OwnerConsoleGateExecutorSlots>() :
+                RemoteLaneExecutorConfiguration.LoadExecutors(executorConfigPath)
+                    .Select(executor => new OwnerConsoleGateExecutorSlots(executor.Id, executor.Slots)).ToArray();
+            var lanes = engine.GetProperty("infrastructureTestLanes").EnumerateArray()
                 .Select(lane => new OwnerConsoleGateManifestLane(lane.GetProperty("name").GetString()!,
                     lane.GetProperty("estimatedSerialSeconds").GetDouble())).ToArray();
             var history = new List<OwnerConsoleGateDuration>();
@@ -27,8 +38,15 @@ internal sealed class OwnerConsoleGateProgressLoader(string logPath, string mani
                     }
                     catch (Exception ex) when (ex is JsonException or KeyNotFoundException or InvalidOperationException or FormatException) { }
                 }
-            return OwnerConsoleGateProgress.Build(clock.GetUtcNow(), events, lanes, history,
+            var gate = OwnerConsoleGateProgress.Build(now, events, lanes, history,
                 id => titles.FirstOrDefault(pair => pair.Key.StartsWith(id, StringComparison.Ordinal)).Value);
+            return gate with
+            {
+                Capacity = new(executors, Math.Min(maxConcurrentShards, coreBudget ?? Math.Max(1, Environment.ProcessorCount / 2))),
+                HostActivity = OwnerConsoleHostEvidenceRuns.Read(tail, now),
+                Lanes = gate.Lanes.Select(row => row.State == OwnerConsoleGateLaneState.Done && row.Outcome == "failed" && !row.IsAttribution
+                    ? row with { FailingTestNames = FailureNames.Read(row) } : row).ToArray()
+            };
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or KeyNotFoundException or
             InvalidOperationException or FormatException or ArgumentException or NotSupportedException or System.Security.SecurityException)

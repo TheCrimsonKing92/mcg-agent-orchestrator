@@ -6,7 +6,7 @@ namespace Mcg.AgentOrchestrator.App.Cli;
 internal static class GateStatusAgentReadView
 {
     internal static string Render(IReadOnlyList<GateHeartbeatStatus> statuses,
-        DateTimeOffset observedAt, TimeProvider? time = null)
+        DateTimeOffset observedAt, TimeProvider? time = null, int remoteWaits = 0)
     {
         var verdicts = statuses.Select(status => GateLivenessVerdict.Classify(status, observedAt)).ToArray();
         var running = verdicts.Count(verdict => verdict.Liveness == GateLiveness.Running);
@@ -30,11 +30,15 @@ internal static class GateStatusAgentReadView
                 verdict = verdicts[index].Label
             };
         }).ToArray();
+        var hostVerdict = GateHostVerdict.Label(running, stalled, remoteWaits);
+        object host = remoteWaits > 0
+            ? new { verdict = hostVerdict, running, stalled, slots = statuses.Count, remoteWaits }
+            : new { verdict = hostVerdict, running, stalled, slots = statuses.Count };
         return AgentReadEnvelope.Serialize(AgentReadEnvelope.GateStatusSchema, AgentReadEnvelope.GateStatusSchemaVersion,
             new
             {
                 slots,
-                host = new { verdict = GateHostVerdict.Label(running, stalled), running, stalled, slots = statuses.Count }
+                host
             }, new JsonSerializerOptions(JsonSerializerDefaults.Web), time);
     }
 

@@ -27,7 +27,7 @@ internal sealed partial class ConductorBatchLoop
         GateReadyCandidateProjection? followerProjection = null;
         foreach (var goal in state.OrderedEligible)
         {
-            if (goal.Id == leader?.Id || state.Results.ContainsKey(goal.Id.Value) || state.LiveAttemptGoalIds.Contains(goal.Id.Value)) continue;
+            if (goal.Isolation == GoalIsolation.Solo || goal.Id == leader?.Id || state.Results.ContainsKey(goal.Id.Value) || state.LiveAttemptGoalIds.Contains(goal.Id.Value)) continue;
             if (driver.ProjectGroupedAdmissionCandidate(goal, policy, kernel) is not GateReadyCandidateProjectionResult.Ready ready) continue;
             follower = goal;
             followerProjection = ready.Projection;
@@ -39,9 +39,9 @@ internal sealed partial class ConductorBatchLoop
                 (_followerStartedLeaderAttemptIds.Contains(leaderAttempt.AttemptId) ||
                  driver.HasFollowerGateForLeader(new(leaderAttempt.GoalId), leaderAttempt.BranchHeadSha!)), follower is not null);
         var leaderPrefix = leader?.Id.Value[..8] ?? "-";
-        if (decision != FollowerGateAdmissionDecision.Start)
+        if (leader?.Isolation == GoalIsolation.Solo || decision != FollowerGateAdmissionDecision.Start)
         {
-            Report(follower, leaderPrefix, "skipped", decision.ToString());
+            Report(follower, leaderPrefix, "skipped", leader?.Isolation == GoalIsolation.Solo ? "leader-solo" : decision.ToString());
             return;
         }
         if (leader is null || driver.ProjectFollowerLeader(leader, policy) is not GateReadyCandidateProjectionResult.Ready leaderReady ||

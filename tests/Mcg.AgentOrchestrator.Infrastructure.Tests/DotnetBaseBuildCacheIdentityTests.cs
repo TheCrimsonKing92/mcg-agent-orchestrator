@@ -7,6 +7,29 @@ public sealed class DotnetBaseBuildCacheIdentityTests : IDisposable
     private readonly string _root = Path.Combine(Path.GetTempPath(), "cache-identity", Guid.NewGuid().ToString("N"));
     private int _queries;
 
+    [Fact]
+    public async Task EvaluationQuery_OmitsNewestImportMarker()
+    {
+        Seed();
+        var commands = new List<string[]>();
+        Assert.NotNull(await Resolve(commands: commands));
+        Assert.Equal("-getProperty:Configuration,TargetFramework,TargetFrameworks,RuntimeIdentifier,NETCoreSdkVersion,MSBuildSDKsPath,ProjectAssetsFile",
+            Assert.Single(commands.SelectMany(args => args).Where(arg => arg.StartsWith("-getProperty:", StringComparison.Ordinal))));
+    }
+
+    [Fact]
+    public async Task Components_CarryDigestsNotEnvironmentValues()
+    {
+        Seed();
+        var baseline = Assert.IsType<DotnetBaseBuildCacheIdentity>(await Resolve());
+        var changed = Assert.IsType<DotnetBaseBuildCacheIdentity>(await Resolve(variable: "value-must-not-appear"));
+        Assert.DoesNotContain("value-must-not-appear", changed.Components);
+        Assert.Equal("environment", DotnetBaseBuildCacheMissDetail.DifferingComponents(baseline.Components, changed.Components));
+        var components = changed.Components.Split(';');
+        Assert.Equal(components.Order(StringComparer.Ordinal), components);
+        Assert.All(components, component => Assert.Matches("^[^=]+=[0-9a-f]{16}$", component));
+    }
+
     [Theory]
     [InlineData("source")]
     [InlineData("project")]
@@ -104,7 +127,7 @@ public sealed class DotnetBaseBuildCacheIdentityTests : IDisposable
     });
 
     private Task<DotnetBaseBuildCacheIdentity?> Resolve(string configuration = "Debug", string variable = "fixed",
-        string slot = "first", string? failure = null)
+        string slot = "first", string? failure = null, List<string[]>? commands = null)
     {
         var owned = Path.Combine(_root, "owned", slot);
         var artifacts = Path.Combine(owned, "artifacts");
@@ -120,6 +143,7 @@ public sealed class DotnetBaseBuildCacheIdentityTests : IDisposable
         return DotnetBaseBuildCacheIdentityResolver.ResolveAsync(_root, ["src/Fixture/Fixture.csproj"],
             ["dotnet", "build", "Fixture.csproj", "-c", configuration], environment, args =>
             {
+                commands?.Add(args);
                 if (failure == "failed") return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(1, "failed"));
                 if (failure == "timed-out") return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "", TimedOut: true));
                 if (failure == "capture-limited") return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "", CaptureLimited: true));

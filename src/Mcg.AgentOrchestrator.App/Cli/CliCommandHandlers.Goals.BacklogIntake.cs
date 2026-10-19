@@ -485,7 +485,7 @@ private static bool HandleBacklogIntake(CliExecutionContext context, IReadOnlyLi
             {
                 ConsoleViews.PrintGoalObjectivePlan(goalObjectivePlan);
             }
-            ConsoleViews.PrintGoal(existingGoal);
+            GoalTextView.PrintGoal(existingGoal);
         }
         if (context.HasGoalCreationFinalizer)
         {
@@ -529,7 +529,7 @@ private static bool HandleBacklogIntake(CliExecutionContext context, IReadOnlyLi
     {
         ConsoleViews.PrintGoalObjectivePlan(goalObjectivePlan);
     }
-    ConsoleViews.PrintGoal(context.CurrentGoal);
+    GoalTextView.PrintGoal(context.CurrentGoal);
     return true;
 }
 
@@ -662,7 +662,7 @@ private static void PrintBacklogIntakeRecord(BacklogIntakeRecord record, AgentOr
         Console.WriteLine($"Goal: {record.GoalId[..Math.Min(8, record.GoalId.Length)]}");
         var goal = kernel.Goals.FirstOrDefault(candidate => candidate.Id.Value.Equals(record.GoalId, StringComparison.Ordinal));
         if (goal is not null)
-            ConsoleViews.PrintGoal(goal);
+            GoalTextView.PrintGoal(goal);
         Console.WriteLine($"Recommended next command: next {record.GoalId[..Math.Min(8, record.GoalId.Length)]} --full");
         return;
     }

@@ -198,7 +198,7 @@ public sealed class CliCommandTestsPersistentRunnerCommandsStartupAndMetadata : 
             task.Id,
             "CRITERIA CORRECTION: supersedes=\"full suite required\"; correction=\"focused build-check accepted\"");
 
-        var output = CaptureConsole(() => ConsoleViews.PrintGoal(goal));
+        var output = CaptureConsole(() => GoalTextView.PrintGoal(goal));
 
         Xunit.Assert.Contains("Effective acceptance criteria corrections:", output);
         Xunit.Assert.Contains("supersedes: full suite required", output);

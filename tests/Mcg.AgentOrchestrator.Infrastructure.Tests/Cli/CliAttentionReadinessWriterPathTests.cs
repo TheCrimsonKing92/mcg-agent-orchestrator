@@ -630,10 +630,12 @@ public sealed class CliAttentionReadinessWriterPathTests : CliTaskQueryTestSuppo
         try
         {
             var workspace = OrchestratorWorkspace.ForDirectory(root);
-            _ = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
+            var store = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
             var kernel = new AgentOrchestratorKernel();
             var goal = kernel.CreateGoal("Parked goal");
             kernel.ParkGoal(goal.Id, "Operator wait");
+            store.RaiseAsync(CollaborationItemType.Decision, goal.Id.Value,
+                "Parked decision", "Needs the writer sweep").GetAwaiter().GetResult();
             var repository = new ProbeStateRepository(kernel);
             IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
             var profiles = WorkerProfileCatalog.Default();

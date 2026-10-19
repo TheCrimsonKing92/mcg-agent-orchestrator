@@ -244,7 +244,7 @@ private static bool HandleRecover(CliExecutionContext context, IReadOnlyList<str
         Console.WriteLine("recover: nothing to recover (no pending input, stuck tasks, or lifecycle/task desync).");
     }
 
-    ConsoleViews.PrintGoal(goal);
+    GoalTextView.PrintGoal(goal);
     return actions > 0;
 }
 

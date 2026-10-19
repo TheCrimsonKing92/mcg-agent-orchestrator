@@ -31,32 +31,12 @@ internal sealed record WorkerAdmissionSnapshot(
     int ReservedGateSlots,
     int EffectiveWorkerCap);
 
-internal enum DeveloperBranchIntegrationStatus
-{
-    Current,
-    Integrated,
-    Conflict,
-    Failed
-}
-
-internal sealed record DeveloperBranchIntegrationResult(
-    DeveloperBranchIntegrationStatus Status,
-    string Message,
-    IReadOnlyList<string> ConflictPaths,
-    string? OriginalCandidateSha = null,
-    string? IntegratedMainSha = null,
-    string? ResultingCandidateSha = null)
-{
-    internal bool CanDispatch =>
-        Status is DeveloperBranchIntegrationStatus.Current or DeveloperBranchIntegrationStatus.Integrated;
-}
-
 internal sealed partial class ConductorDriver
 {
     internal static DispatchReadinessVerdict EvaluateConductorReadiness(
         AgentOrchestratorKernel kernel, Goal goal, IReadOnlyList<AgentDefinition> agents,
         WorkerProfileCatalog profiles, DateTimeOffset now) =>
-        DispatchReadinessAssessment.Evaluate(goal, kernel.Goals, agents, profiles, now).Verdict;
+        DispatchReadinessAssessment.Evaluate(goal, kernel.ProviderHoldScope, agents, profiles, now).Verdict;
 
     private sealed record JournalLifecycleFacts(bool IsMerged, bool IsRecorded, bool IsCleanedUp);
 
@@ -89,7 +69,7 @@ internal sealed partial class ConductorDriver
     private readonly Func<Goal, GoalLifecycleFacts> _getFacts;
     private readonly Func<int> _getRunningPaidWorkerCount;
     private readonly Func<Goal, string> _createWorkspace;
-    private readonly Func<Goal, DeveloperBranchIntegrationResult> _integrateMainBeforeDeveloperDispatch;
+    private Func<Goal, DeveloperBranchIntegrationResult> _integrateMainBeforeDeveloperDispatch;
     private readonly Func<Goal, AgentRole, DeveloperBranchIntegrationResult>? _integrateMainBeforeReadOnlyDispatch;
     private readonly Action<Goal, DeveloperBranchIntegrationResult> _recordPreDispatchIntegrationReceipt;
     private readonly Func<Goal, ConductorAutonomyPolicy, DispatchStartOutcome> _dispatchAndStart;
@@ -423,7 +403,7 @@ internal sealed partial class ConductorDriver
                     readCurrentInterruptedDispatchState: readCurrentInterruptedDispatchState,
                     conductorPolicy: policy,
                     recordDurableGoalBaseline: recordDurableGoalBaseline,
-                    excludedTaskIds: GetUnchangedCandidateExclusions(goal));
+                    excludedTaskIds: GetUnchangedCandidateExclusions(goal), admitProviderBudgetProbe: true, utcNow: _utcNow);
             }
             catch (DispatchRecordWriteException ex)
             {
@@ -834,11 +814,11 @@ internal sealed partial class ConductorDriver
 
         _runAdvisorySemanticAcceptance = (_, _) => { };
 
-        _integrateMainBeforeDeveloperDispatch = new FailedRoundCheckpointPreDispatch(kernel, dir, workspace.IntegrationBranch).IntegrateMainBeforeDeveloperDispatch;
+        _integrateMainBeforeDeveloperDispatch = (_conflictIntegration = new ConductorConflictIntegration(kernel, dir, workspace.IntegrationBranch, _retryDeveloperAfterStructuralPreflight!, new RatchetConflictDispatchIntegration(kernel, dir, workspace.IntegrationBranch, workspace.ConductEventsLogPath).IntegrateMainBeforeDeveloperDispatch)).IntegrateMainBeforeDeveloperDispatch;
         _integrateMainBeforeReadOnlyDispatch = (goal, role) =>
             IntegrateMainBeforeReadOnlyDispatch(dir, goal, role, workspace.IntegrationBranch);
         _recordPreDispatchIntegrationReceipt = new PreDispatchIntegrationReceiptRecorder(kernel).Record;
-        _rebaseOntoMain = goal => GoalBranchMainMerge.TryMergeMainIntoGoalBranch(dir, goal.Id, CreateAdditiveConflictMergeOptions(kernel, goal, workspace.ConductEventsLogPath), workspace.IntegrationBranch);
+        _rebaseOntoMain = goal => RatchetConflictDispatchIntegration.MergeMainBeforeLanding(kernel, dir, goal, CreateAdditiveConflictMergeOptions(kernel, goal, workspace.ConductEventsLogPath), workspace.IntegrationBranch);
         PreLandingMergeConflictProbe = goal => GoalWorktrees.ProbeAdditiveConflictMerge(dir, goal.Id, CreateAdditiveConflictMergeOptions(kernel, goal, workspace.ConductEventsLogPath).FrozenPaths, workspace.IntegrationBranch);
         _recheckPreLandingRebaseConflict = goal =>
         {
@@ -1332,19 +1312,11 @@ internal sealed partial class ConductorDriver
     internal static DispatchStartOutcome ClassifyRecordedDispatchStartForConductor(ProcessBatchExecutionResult result)
     {
         if (result.RecoveryActions?.FirstOrDefault() is { } recoveryAction)
-        {
             return DispatchStartOutcome.RecoverableSandboxPrep(recoveryAction);
-        }
-
         if (result.Tasks.Count > 0)
-        {
             return DispatchStartOutcome.Started(result.Tasks);
-        }
-
         if (result.StartFailures?.FirstOrDefault() is { } startFailure)
-        {
             return DispatchStartOutcome.SpawnFailed(startFailure.Reason);
-        }
 
         if (result.RequeueSkippedCount > 0)
         {
@@ -1402,8 +1374,16 @@ internal sealed partial class ConductorDriver
             GoalLifecycleState.Verified => ExecuteLanding(goal, goalPrefix, policy),
             GoalLifecycleState.Merged => ExecuteRecord(goal, goalPrefix, policy),
             GoalLifecycleState.Recorded => ExecuteCleanup(goal, goalPrefix, policy),
+            GoalLifecycleState.AcceptanceFailed when AttributedFailureDeveloperRoute.Decide(goal,
+                AttributedFailureDeveloperRoute.ReadAcceptanceFailure(goal.LatestAcceptanceFailure),
+                ReadCurrentCohortAttributionRevisions(goal)?.BranchRevision) is { IsRoute: true } route => RouteAttributedFailure(goal, goalPrefix, policy, route),
             _ => Escalate(goal, goalPrefix, policy, state, $"Unhandled lifecycle state {state}")
         };
+    }
+    private ConductorAdvanceResult RouteAttributedFailure(Goal goal, string goalPrefix, ConductorAutonomyPolicy policy, AttributedFailureRouteDecision route)
+    {
+        _retryTask(goal.Id, route.DeveloperTaskId!, route.Feedback!, null, RetryCause.NewTestFinding);
+        return ExecuteDispatchAndStart(GetCurrentGoal(goal), goalPrefix, policy, GoalLifecycleState.WorkspaceReady);
     }
     internal GoalLifecycleFacts GetFacts(Goal goal) => _getFacts(goal);
 

@@ -8,6 +8,10 @@ public sealed class IsolatedDotnetRootFixture : IDisposable
     internal static readonly TimeSpan LockLessRootStaleAge = TimeSpan.FromHours(24);
     internal const string OwnerLockSuffix = ".owner.lock";
 
+    private static readonly SharedIsolatedDotnetRoot ProcessShared =
+        new(() => new IsolatedDotnetRootFixture(GetWindowsBasePath(), null));
+    private readonly SharedIsolatedDotnetRoot? _shared;
+    private int _released;
     private readonly string? _originalValue;
     private readonly string _root;
     private readonly FileStream? _ownerLock;
@@ -16,8 +20,15 @@ public sealed class IsolatedDotnetRootFixture : IDisposable
 
     internal string RootPath => _root;
 
-    public IsolatedDotnetRootFixture() : this(GetWindowsBasePath(), null)
+    public IsolatedDotnetRootFixture() : this(ProcessShared)
     {
+    }
+
+    internal IsolatedDotnetRootFixture(SharedIsolatedDotnetRoot shared)
+    {
+        _shared = shared;
+        _diagnostic = Console.Error.WriteLine;
+        _root = shared.Acquire();
     }
 
     internal IsolatedDotnetRootFixture(string? basePath, Action<string>? diagnostic)
@@ -332,6 +343,13 @@ public sealed class IsolatedDotnetRootFixture : IDisposable
 
     public void Dispose()
     {
+        if (_shared is not null)
+        {
+            if (Interlocked.Exchange(ref _released, 1) == 0)
+                _shared.Release();
+            return;
+        }
+
         try
         {
             Environment.SetEnvironmentVariable(DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable, _originalValue);

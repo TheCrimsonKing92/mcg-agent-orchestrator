@@ -75,6 +75,25 @@ public sealed class Goal
     public GoalStatus Status { get; private set; } = GoalStatus.Draft;
     public GoalPriority Priority { get; private set; } = GoalPriority.Normal;
 
+    public GoalIsolation Isolation { get; internal set; }
+
+    internal void SetIsolation(GoalIsolation isolation)
+    {
+        if (!Enum.IsDefined(isolation)) throw new ArgumentOutOfRangeException(nameof(isolation));
+        Isolation = isolation;
+    }
+
+    private GoalPrioritySchedulingSnapshot? _priorityScheduling;
+    public GoalPrioritySchedulingSnapshot? PriorityScheduling
+    {
+        get => _priorityScheduling;
+        internal set => _priorityScheduling = value is null ||
+            (GoalPriorities.ParseOrDefault(value.EffectiveLevel) == Priority &&
+             value.PendingSeedGoalIds is not { Count: > 0 } && value.GateOvertakes == 0 && value.DispatchOvertakes == 0)
+                ? null : value;
+    }
+    internal bool PrioritySchedulingPendingPersistence { get; set; }
+
     internal void SetPriority(GoalPriority priority)
     {
         _ = GoalPriorities.Format(priority);
@@ -232,7 +251,12 @@ public sealed class Goal
             orderedTimeline.LastOrDefault()?.OccurredAt);
     }
 
-    internal void SetStatus(GoalStatus status) => Status = status;
+    internal void SetStatus(GoalStatus status)
+    {
+        if (!IsTerminal && IsTerminalMetadataStatus(status))
+            GoalEffectivePriorityIndex.RecordSeeds(this, [], terminal: true);
+        Status = status;
+    }
 
     internal void SetRefinedSpec(RefinedSpec spec, DateTimeOffset recordedAt)
     {
@@ -988,13 +1012,22 @@ public sealed class Goal
         _tasks.Insert(index, task);
     }
 
-    internal void AddDependency(GoalId dependencyId) => _dependsOn.Add(dependencyId);
+    internal void AddDependency(GoalId dependencyId)
+    {
+        if (_dependsOn.Add(dependencyId)) GoalEffectivePriorityIndex.RecordSeeds(this, [dependencyId]);
+    }
 
-    internal bool RemoveDependency(GoalId dependencyId) => _dependsOn.Remove(dependencyId);
+    internal bool RemoveDependency(GoalId dependencyId)
+    {
+        if (!_dependsOn.Remove(dependencyId)) return false;
+        GoalEffectivePriorityIndex.RecordSeeds(this, [dependencyId]);
+        return true;
+    }
 
     internal int ClearDependencies()
     {
         var count = _dependsOn.Count;
+        if (count > 0) GoalEffectivePriorityIndex.RecordSeeds(this, _dependsOn);
         _dependsOn.Clear();
         return count;
     }
@@ -1121,7 +1154,9 @@ public sealed class Goal
             SliceBatchParentId: SliceBatchParentId?.Value,
             AcceptanceFailureDeferredForRetry: _acceptanceFailureDeferredForRetry,
             CriterionEvidenceObligations: _criterionEvidenceObligations.Count == 0 ? null : _criterionEvidenceObligations.ToArray(),
-            GateTestObligations: _gateTestObligations.Count == 0 ? null : _gateTestObligations.ToArray());
+            GateTestObligations: _gateTestObligations.Count == 0 ? null : _gateTestObligations.ToArray(),
+            PriorityScheduling: PriorityScheduling,
+            Isolation: Isolation == GoalIsolation.None ? null : GoalIsolations.Format(Isolation));
     }
 
     internal static Goal FromSnapshot(GoalSnapshot snapshot)
@@ -1235,6 +1270,8 @@ public sealed class Goal
             snapshot.ConsecutiveAcceptanceIdentityStaleCount,
             snapshot.LastAcceptanceIdentityStaleAttemptId);
         goal.SetPriority(GoalPriorities.ParseOrDefault(snapshot.Priority));
+        goal.PriorityScheduling = snapshot.PriorityScheduling;
+        goal.SetIsolation(GoalIsolations.ParseOrDefault(snapshot.Isolation));
         goal.RestoreHold(snapshot.CurrentHold);
 
         return goal;

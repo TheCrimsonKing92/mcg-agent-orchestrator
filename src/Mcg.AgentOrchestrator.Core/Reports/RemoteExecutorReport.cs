@@ -18,22 +18,28 @@ public sealed record RemoteExecutorLaneSeconds(string Lane, int Samples, double 
     double LastSeconds, double? SoloMedianSeconds, double? ConcurrentMedianSeconds);
 
 public sealed record RemoteExecutorReport(IReadOnlyList<RemoteExecutorReportRow> Executors,
-    int UnreadableOutcomeLines, int UnreadableProbeLines)
+    int UnreadableOutcomeLines, int UnreadableProbeLines,
+    [property: JsonIgnore] int NoExecutorFreeCount = 0,
+    [property: JsonIgnore] DateTimeOffset? NoExecutorFreeLastAt = null)
 {
     public static RemoteExecutorReport Build(IEnumerable<string> configuredIds,
         IEnumerable<RemoteExecutorOutcomeRow> outcomes, IEnumerable<RemoteExecutorProbeRow> probes,
         DateTimeOffset? since = null, int last = 10, int unreadableOutcomeLines = 0, int unreadableProbeLines = 0,
-        IReadOnlyDictionary<string, int>? configuredSlots = null)
+        IReadOnlyDictionary<string, int>? configuredSlots = null, DateTimeOffset? noExecutorSince = null)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(last);
-        var all = outcomes.ToArray();
-        var allProbes = probes.ToArray();
-        var ids = configuredIds.Concat(all.Select(row => row.ExecutorId))
+        var supplied = outcomes.ToArray();
+        var skipSince = noExecutorSince ?? since;
+        var noExecutor = supplied.Where(row => string.IsNullOrWhiteSpace(row.ExecutorId) &&
+            row.Outcome == "shadow-skipped-no-executor" && (skipSince is null || row.ObservedAt >= skipSince)).ToArray();
+        var all = supplied.Where(row => !string.IsNullOrWhiteSpace(row.ExecutorId)).ToArray();
+        var allProbes = probes.Where(row => !string.IsNullOrWhiteSpace(row.ExecutorId)).ToArray();
+        var ids = configuredIds.Where(id => !string.IsNullOrWhiteSpace(id)).Concat(all.Select(row => row.ExecutorId))
             .Concat(allProbes.Select(row => row.ExecutorId)).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal);
         var rows = ids.Select(id =>
         {
             var attempts = all.Where(row => row.ExecutorId == id &&
-                row.Outcome is not ("not-eligible-exclusive-resource" or "late-after-fallback")).ToArray();
+                row.Outcome is not ("not-eligible-exclusive-resource" or "late-after-fallback" or "executor-busy" or "preempted-by-gate" or "executor-tools-mismatch")).ToArray();
             var window = attempts.Where(row => since is null || row.ObservedAt >= since).ToArray();
             var counts = new SortedDictionary<string, int>(StringComparer.Ordinal);
             foreach (var group in window.GroupBy(row => row.Outcome)) counts.Add(group.Key, group.Count());
@@ -68,7 +74,8 @@ public sealed record RemoteExecutorReport(IReadOnlyList<RemoteExecutorReportRow>
                 configuredSlots is not null && configuredSlots.TryGetValue(id, out var slots) ? slots : null,
                 peak, concurrent.Count(value => value), lanes);
         }).ToArray();
-        return new(rows, unreadableOutcomeLines, unreadableProbeLines);
+        return new(rows, unreadableOutcomeLines, unreadableProbeLines, noExecutor.Length,
+            noExecutor.Select(row => (DateTimeOffset?)row.ObservedAt).Max());
     }
 
     private static bool HasInterval(RemoteExecutorOutcomeRow row) =>

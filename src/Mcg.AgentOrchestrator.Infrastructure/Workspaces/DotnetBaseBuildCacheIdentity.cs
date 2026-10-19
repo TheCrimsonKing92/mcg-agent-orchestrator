@@ -6,7 +6,7 @@ using System.Text.Json;
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
 // Compatibility is invocation scoped. A base SHA is provenance, not a build-input identity.
-internal sealed record DotnetBaseBuildCacheIdentity(string Fingerprint);
+internal sealed record DotnetBaseBuildCacheIdentity(string Fingerprint, string Components = "");
 
 internal static class DotnetBaseBuildCacheIdentityResolver
 {
@@ -27,7 +27,8 @@ internal static class DotnetBaseBuildCacheIdentityResolver
             processEnvironment.ToDictionary(entry => entry.Key, entry => entry.Value ?? "")).ConfigureAwait(false);
     }
 
-    private const string Properties = "Configuration,TargetFramework,TargetFrameworks,RuntimeIdentifier,NETCoreSdkVersion,MSBuildSDKsPath,ProjectAssetsFile,MSBuildAllProjects";
+    // MSBuildAllProjects heads with the newest-write-time import; preprocessed text already binds the import set.
+    private const string Properties = "Configuration,TargetFramework,TargetFrameworks,RuntimeIdentifier,NETCoreSdkVersion,MSBuildSDKsPath,ProjectAssetsFile";
     private const string Items = "Compile,Analyzer,AdditionalFiles,EditorConfigFiles,GlobalAnalyzerConfigFiles,AnalyzerConfigFiles,EmbeddedResource,Content,None,ProjectReference,Reference";
 
     internal static async Task<DotnetBaseBuildCacheIdentity?> ResolveAsync(
@@ -45,13 +46,17 @@ internal static class DotnetBaseBuildCacheIdentityResolver
             var parts = new List<string> { "base-build-inputs-v1", root, Normalize(JsonSerializer.Serialize(properties)),
                 System.Runtime.InteropServices.RuntimeInformation.OSDescription,
                 System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture.ToString() };
+            var buckets = new SortedDictionary<string, List<string>>(StringComparer.Ordinal) { ["invocation"] = [.. parts] };
             // Environment variables become MSBuild properties. Hash all of them rather than a
             // hand-maintained allow-list of possible build-affecting variables. Never log their values.
             var variables = processEnvironment ?? Environment.GetEnvironmentVariables().Cast<DictionaryEntry>()
                 .ToDictionary(entry => (string)entry.Key, entry => (string)entry.Value!, StringComparer.Ordinal);
-            parts.Add(JsonSerializer.Serialize(variables.OrderBy(entry => entry.Key, StringComparer.Ordinal)));
+            Add("environment", JsonSerializer.Serialize(variables.OrderBy(entry => entry.Key, StringComparer.Ordinal)));
             foreach (var project in projects)
             {
+                var name = Path.GetFileNameWithoutExtension(project);
+                foreach (var component in new[] { "evaluation", "sdk", "packs", "assets", "packages", "imports", "items", "project-tree", "shared-inputs" })
+                    buckets.TryAdd($"{name}:{component}", []);
                 var projectPath = Path.GetFullPath(project, root);
                 if (!File.Exists(projectPath)) return null;
                 var restore = await run(["dotnet", "msbuild", projectPath, .. properties, "-t:Restore", "-nologo", "-v:q"]).ConfigureAwait(false);
@@ -69,18 +74,18 @@ internal static class DotnetBaseBuildCacheIdentityResolver
                 var sdkVersion = values.GetProperty("NETCoreSdkVersion").GetString();
                 var sdkDirectory = Path.GetDirectoryName(values.GetProperty("MSBuildSDKsPath").GetString());
                 if (string.IsNullOrWhiteSpace(sdkVersion) || sdkDirectory is null || !Directory.Exists(sdkDirectory)) return null;
-                parts.Add(project);
-                parts.Add(Normalize(CanonicalSnapshot(snapshot)));
-                parts.Add(HashTree(sdkDirectory));
+                Add($"{name}:evaluation", project);
+                Add($"{name}:evaluation", Normalize(CanonicalSnapshot(snapshot)));
+                Add($"{name}:sdk", HashTree(sdkDirectory));
                 // Framework references and SDK analyzers need content identity as well as version.
                 var packs = Path.GetFullPath(Path.Combine(sdkDirectory, "..", "..", "packs"));
                 if (!Directory.Exists(packs)) return null;
-                parts.Add(HashTree(packs));
+                Add($"{name}:packs", HashTree(packs));
 
                 var assetsPath = values.GetProperty("ProjectAssetsFile").GetString();
                 if (assetsPath is null || !File.Exists(assetsPath)) return null;
                 using var assets = JsonDocument.Parse(File.ReadAllText(assetsPath));
-                parts.Add(Normalize(assets.RootElement.GetRawText()));
+                Add($"{name}:assets", Normalize(assets.RootElement.GetRawText()));
                 var packageFolders = assets.RootElement.GetProperty("packageFolders").EnumerateObject().Select(folder => folder.Name).ToArray();
                 foreach (var library in assets.RootElement.GetProperty("libraries").EnumerateObject())
                 {
@@ -88,7 +93,7 @@ internal static class DotnetBaseBuildCacheIdentityResolver
                     var packagePath = library.Value.GetProperty("path").GetString();
                     var folder = packageFolders.Select(parent => Path.Combine(parent, packagePath!)).FirstOrDefault(Directory.Exists);
                     if (folder is null) return null;
-                    parts.Add(HashTree(folder));
+                    Add($"{name}:packages", HashTree(folder));
                 }
 
                 // Preprocessing includes evaluated imports, including NuGet and ancestor props/targets.
@@ -100,7 +105,7 @@ internal static class DotnetBaseBuildCacheIdentityResolver
                     var preprocess = await run(["dotnet", "msbuild", projectPath, .. properties,
                         $"-preprocess:{preprocessedPath}", "-nologo"]).ConfigureAwait(false);
                     if (!Completed(preprocess) || !File.Exists(preprocessedPath)) return null;
-                    parts.Add(Normalize(File.ReadAllText(preprocessedPath)));
+                    Add($"{name}:imports", Normalize(File.ReadAllText(preprocessedPath)));
                 }
                 finally
                 {
@@ -113,30 +118,38 @@ internal static class DotnetBaseBuildCacheIdentityResolver
                     var input = fullPath.GetString();
                     // References can be assembly names; unsupported resolution must not authorize reuse.
                     if (string.IsNullOrWhiteSpace(input)) return null;
-                    parts.Add(Normalize(input));
+                    Add($"{name}:items", Normalize(input));
                     // Roslyn discovers candidate ancestor .globalconfig paths, then passes only
                     // existing files to the compiler. Bind absence so creating one invalidates reuse.
                     if (!File.Exists(input))
                     {
                         if (itemGroup.Name != "GlobalAnalyzerConfigFiles") return null;
-                        parts.Add("absent-global-analyzer-config");
+                        Add($"{name}:items", "absent-global-analyzer-config");
                         continue;
                     }
-                    parts.Add(HashFile(input));
+                    Add($"{name}:items", HashFile(input));
                 }
                 // Include project-local generator/custom-target inputs, not just Compile items.
-                parts.Add(HashTree(Path.GetDirectoryName(projectPath)!, projectInputs: true));
+                Add($"{name}:project-tree", HashTree(Path.GetDirectoryName(projectPath)!, projectInputs: true));
                 for (var ancestor = Path.GetDirectoryName(projectPath); ancestor is not null; ancestor = Path.GetDirectoryName(ancestor))
                 {
                     foreach (var file in Directory.EnumerateFiles(ancestor).Where(IsSharedInput).Order(StringComparer.Ordinal))
                     {
-                        parts.Add(file);
-                        parts.Add(HashFile(file));
+                        Add($"{name}:shared-inputs", file);
+                        Add($"{name}:shared-inputs", HashFile(file));
                     }
                     if (ancestor.Equals(root, StringComparison.OrdinalIgnoreCase)) break;
                 }
             }
-            return new DotnetBaseBuildCacheIdentity(HashText(JsonSerializer.Serialize(parts)));
+            var components = string.Join(";", buckets.Select(bucket => $"{bucket.Key}={HashText(JsonSerializer.Serialize(bucket.Value))[..16]}"));
+            return new DotnetBaseBuildCacheIdentity(HashText(JsonSerializer.Serialize(parts)), components);
+
+            void Add(string component, string part)
+            {
+                parts.Add(part);
+                if (!buckets.TryGetValue(component, out var bucket)) buckets[component] = bucket = [];
+                bucket.Add(part);
+            }
 
             string Normalize(string value) => value
                 .Replace(environment.ArtifactsPath.Replace('\\', '/'), "<artifacts>", StringComparison.OrdinalIgnoreCase)

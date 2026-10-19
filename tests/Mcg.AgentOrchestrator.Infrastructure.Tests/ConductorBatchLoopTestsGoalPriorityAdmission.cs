@@ -47,10 +47,11 @@ public sealed class ConductorBatchLoopTestsGoalPriorityAdmission : ConductorBatc
     }
 
     [Xunit.Fact]
-    public void CriticalDoesNotChangeAcceptanceAdmissionOrder()
+    public void CriticalLeadsAcceptanceAdmissionOrder()
     {
         using var scope = ConductorBatchLoopTestsParallelAcceptance.IsolatedDotnetRootScope();
-        Assert.Equal(AcceptanceOrder(false), AcceptanceOrder(true));
+        Assert.Equal(new[] { 3, 0, 1, 2 }, AcceptanceOrder(true));
+        Assert.Equal(new[] { 0, 1, 2, 3 }, AcceptanceOrder(false));
     }
 
     private static IReadOnlyList<int> AcceptanceOrder(bool critical)
@@ -78,7 +79,6 @@ public sealed class ConductorBatchLoopTestsGoalPriorityAdmission : ConductorBatc
                     attemptRoot, TrunkBranchName.Default, runInline: true));
             new ConductorBatchLoop().Run(kernel, driver, ConductorAutonomyPolicy.Conservative with { AcceptanceWidth = 4 },
                 NoStopPath(), maxIterations: 1);
-            Assert.Equal(new[] { 0, 1, 2, 3 }, order);
             return order;
         }
         finally { TryDeleteDirectory(attemptRoot); }

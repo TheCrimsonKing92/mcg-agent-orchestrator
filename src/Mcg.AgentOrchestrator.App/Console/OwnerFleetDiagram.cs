@@ -20,16 +20,33 @@ internal static class OwnerFleetDiagram
             $"conductor: {(host.ConductorRunning ? "running" : "stopped")}",
             $"executors: {host.ExecutorCount}"
         };
+        var skipRow = host.NoExecutorFreeCount > 0 ? content.Count : -1;
+        if (host.NoExecutorFreeCount > 0)
+            content.Add($"shadow skipped, no free slot: {host.NoExecutorFreeCount} in last 24h (last {Stamp(host.NoExecutorFreeLastAt)})");
         if (host.ExecutorCount == 0) content.Add("no executors configured");
         if (host.UnreadableOutcomeLines != 0 || host.UnreadableProbeLines != 0)
         {
             content.Add($"unreadable ledger lines: outcomes {host.UnreadableOutcomeLines}");
             content.Add($"unreadable ledger lines: probes {host.UnreadableProbeLines}");
         }
-        Box(content, false);
+        Box(content, false, wrapRow: skipRow);
+        foreach (var hold in model.ProviderHolds ?? [])
+        {
+            lines.Add("│" + new string(' ', width - 1));
+            Box([
+                $"Provider {hold.Name}: HELD !",
+                $"binding: {hold.BindingKey}",
+                hold.NextProbeAt is { } nextProbe
+                    ? $"next probe: {Stamp(nextProbe)} attempt {hold.Attempt} ({hold.ResetSource})"
+                    : "next probe: unavailable",
+                $"last probe: {hold.LastProbe ?? "none"}",
+                $"held since: {Stamp(hold.PlacedAt)}",
+                $"source: {hold.Source}"
+            ], true);
+        }
         foreach (var executor in model.Executors)
         {
-            lines.Add("│");
+            lines.Add("│" + new string(' ', width - 1));
             content = [$"Executor {executor.Id}"];
             content.Add(executor.Reachability switch
             {
@@ -47,30 +64,37 @@ internal static class OwnerFleetDiagram
                     content.Add(string.Concat(Enumerable.Repeat("[ ]", Math.Min(perRow, slots - offset))));
             }
             else content.Add("slots: not configured");
+            if (executor.SlotsFile is { } sync)
+                content.Insert(content.FindIndex(row => row.StartsWith("slots:", StringComparison.Ordinal)) + 1,
+                    sync.Outcome == "synced" ? $"slots file: synced {sync.Slots} {Stamp(sync.ObservedAt)}" :
+                    $"slots file: FAILED {sync.Reason} {Stamp(sync.ObservedAt)}");
             content.Add($"peak concurrent attempts: {executor.PeakConcurrentAttempts}");
             content.Add(executor.LastOutcome is null ? "last: none" : $"last: {executor.LastOutcome} {Stamp(executor.LastOutcomeAt)}");
             content.Add("accepted: " + (executor.AcceptedShare is { } share ? share.ToString("P0", CultureInfo.InvariantCulture) : "n/a"));
             if (executor.Lanes.Count == 0) content.Add("lanes: no accepted remote runs");
+            var laneStart = content.Count;
             foreach (var lane in executor.Lanes)
             {
                 content.Add($"{lane.Lane} median {Seconds(lane.MedianSeconds)} n={lane.Samples}");
                 content.Add($"  solo {Seconds(lane.SoloMedianSeconds)} conc {Seconds(lane.ConcurrentMedianSeconds)}");
             }
-            Box(content, executor.Reachability == OwnerFleetReachability.Unreachable);
+            Box(content, executor.Reachability == OwnerFleetReachability.Unreachable, laneStart);
         }
         return string.Join("\n", lines);
 
-        void Box(IEnumerable<string> rows, bool unreachable)
+        void Box(IReadOnlyList<string> rows, bool unreachable, int laneStart = int.MaxValue, int wrapRow = -1)
         {
             var edge = unreachable ? '═' : '─';
             var side = unreachable ? '║' : '│';
             lines.Add((unreachable ? "╔" : "┌") + new string(edge, width - 2) + (unreachable ? "╗" : "┐"));
-            foreach (var row in rows)
+            for (var index = 0; index < rows.Count; index++)
             {
                 // Ledger text must not inject terminal controls or extra diagram rows.
-                var clean = new string(row.Select(ch => char.IsControl(ch) ? ' ' : ch).ToArray());
-                var fitted = OwnerConsoleLineFitter.Cut(clean, width - 4);
-                lines.Add($"{side} {fitted}{new string(' ', width - 4 - fitted.GetColumns())} {side}");
+                var clean = new string(rows[index].Select(ch => char.IsControl(ch) ? ' ' : ch).ToArray());
+                var fittedRows = index >= laneStart || index == wrapRow ? OwnerFleetLaneWrap.Wrap(clean, width - 4) :
+                    [OwnerConsoleLineFitter.Cut(clean, width - 4)];
+                foreach (var fitted in fittedRows)
+                    lines.Add($"{side} {fitted}{new string(' ', width - 4 - fitted.GetColumns())} {side}");
             }
             lines.Add((unreachable ? "╚" : "└") + new string(edge, width - 2) + (unreachable ? "╝" : "┘"));
         }

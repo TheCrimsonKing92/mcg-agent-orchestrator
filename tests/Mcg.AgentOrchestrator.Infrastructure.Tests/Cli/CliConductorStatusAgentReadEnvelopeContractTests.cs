@@ -35,6 +35,7 @@ public sealed class CliConductorStatusAgentReadEnvelopeContractTests
         Assert.Equal("stopped", Text(since, "kind"));
         Assert.Equal("2026-09-26T10:00:00.0000000+00:00", Text(since, "at"));
         Assert.Equal("operator-stop", Text(since, "reason"));
+        Assert.Equal(JsonValueKind.Null, since.GetProperty("previous").ValueKind);
         Assert.Equal("abc123", Text(payload, "supervisorBuild"));
         var build = payload.GetProperty("generation");
         Assert.Equal(generation, Text(build, "state"));
@@ -154,9 +155,9 @@ public sealed class CliConductorStatusAgentReadEnvelopeContractTests
         Assert.Equal("2026-10-01T12:00:00.0000000Z", Text(root, "generatedAt"));
         var payload = root.GetProperty("payload");
         Names(payload, "conductor", "since", "supervisorBuild", "generation", "latestTick", "goals",
-            "mostRecentLanding", "workerAdoption", "pendingIntents");
+            "mostRecentLanding", "workerAdoption", "pendingIntents", "providerHolds");
         Names(payload.GetProperty("conductor"), "state", "pid");
-        Names(payload.GetProperty("since"), "kind", "at", "reason");
+        Names(payload.GetProperty("since"), "kind", "at", "reason", "previous");
         Names(payload.GetProperty("generation"), "state", "build", "main");
         var goals = payload.GetProperty("goals");
         Names(goals, "available", "nonTerminal", "pendingClarifications", "humanWaits");

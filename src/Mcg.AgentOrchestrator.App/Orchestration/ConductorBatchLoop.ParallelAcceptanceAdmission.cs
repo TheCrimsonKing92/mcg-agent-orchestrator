@@ -27,7 +27,7 @@ internal sealed partial class ConductorBatchLoop
         state.DeferredByAdmission = 0;
         state.OrderedEligible = OrderParallelAcceptanceEligibleGoals(eligible
             .Where(goal =>
-                IsParallelAcceptanceLifecycleEligible(goal, driver) &&
+                ParallelAcceptanceLifecycleEligibility.IsParallelAcceptanceLifecycleEligible(goal, driver) &&
                 !driver.HasRoutableRecordedCohortAttributionFailure(goal) &&
                 goal.Status is GoalStatus.Verified or GoalStatus.Verifying &&
                 AcceptancePrecheck.HasCompletedPassedVerificationForAllTasks(goal) &&
@@ -268,6 +268,8 @@ internal sealed partial class ConductorBatchLoop
         Func<bool> suppressNewAcceptanceAdmission)
     {
         state.OrderedEligible = ConductorAcceptanceCohortTerminalReceiptConsumption.PrepareAdmission(driver, state.OrderedEligible, changedGoalIds, tick, changedGoalLines);
+        // Reconcile child ejections before projections or implication-key exclusions can hide them.
+        state.OrderedEligible = MergeTrainAttributedFailureReconciliation.PrepareAdmission(driver, state.OrderedEligible, policy, changedGoalIds, changedGoalLines);
         var speculativeCandidates = state.OrderedEligible.Select(goal => new ConductorSpeculativeAcceptanceCandidate(
             goal.Id, driver.ProjectGroupedAdmissionCandidate(goal, policy, kernel))).ToArray();
         state.ActiveCohortCapacity = driver.GetActiveAcceptanceCohortCapacity();
@@ -290,8 +292,8 @@ internal sealed partial class ConductorBatchLoop
             .Where(goal => !state.LiveAttemptGoalIds.Contains(goal.Id.Value) &&
                            !activeCohortMemberGoalIds.Contains(goal.Id.Value))
             .ToArray();
-        state.ProductionCandidates = ExcludeGroupedAcceptanceCandidatesWithNonAcceptanceObligations(
-            speculativeCandidates, state.CohortEligible, state.LiveAttemptGoalIds, activeCohortMemberGoalIds);
+        state.ProductionCandidates = GroupedAdmissionCandidateFilter.Filter(ExcludeGroupedAcceptanceCandidatesWithNonAcceptanceObligations(
+            speculativeCandidates, state.CohortEligible, state.LiveAttemptGoalIds, activeCohortMemberGoalIds), kernel.Goals, activeCohortMemberGoalIds);
         foreach (var goal in state.CohortEligible.ToArray())
         {
             if (state.Results.ContainsKey(goal.Id.Value) ||
@@ -363,7 +365,7 @@ internal sealed partial class ConductorBatchLoop
                 state.ProductionCandidates,
                 driver.ReadSuppressedGroupedPairs(),
                 TrainIneligibleCriterionEvidenceGoalIds(state.CohortEligible), driver.ReadCohortAttributedMemberKeys(),
-                driver.ReadTrainImplicatedMemberKeys()) is { } trainSelection)
+                driver.ReadTrainImplicatedMemberKeys()) is { } trainSelection && GoalSchedulingOrder.GroupKeepsHead(trainSelection.Members.Select(member => member.GoalId.Value), state.CohortEligible, state.LiveAttemptGoalIds))
         {
             var trainRun = driver.RunMergeTrain(
                 trainSelection,
@@ -372,9 +374,7 @@ internal sealed partial class ConductorBatchLoop
                 onGateAdmitted: () => driver.RecordMergeTrainAdmissionFairness(trainSelection),
                 runGateInBackground: true);
             foreach (var member in trainRun.MemberResults)
-            {
                 state.Results[member.Key] = new ParallelLandingOutcome(member.Value, SlotIndex: 0);
-            }
             RecordParallelAcceptanceProgress(
                 $"ACCEPTANCE_TRAIN tick={tick} members={string.Join(',', trainSelection.Members.Select(member => member.GoalId.Value[..8]))} " +
                 $"ejected={string.Join(',', trainRun.Ejections.Select(ejection => ejection.GoalId.Value[..8]))} {trainRun.Detail}",
@@ -419,7 +419,7 @@ internal sealed partial class ConductorBatchLoop
         {
             state.ForcedCohortPriority = driver.SelectForcedCohortCandidate(state.CohortEligible);
             var cohortDecision = SelectAndReportAcceptanceCohort(state.ProductionCandidates, state.LiveAttempts, state.ForcedCohortPriority, driver);
-            if (cohortDecision.Selection is { } cohortSelection)
+            if (cohortDecision.Selection is { } cohortSelection && GoalSchedulingOrder.GroupKeepsHead(cohortSelection.Members.Select(member => member.GoalId.Value), state.CohortEligible, state.LiveAttemptGoalIds))
             {
                 var memberIds = string.Join(',', cohortSelection.Members.Select(member => member.GoalId.Value[..8]));
                 var markerGoal = cohortSelection.Members[0].GoalId.Value[..8];
@@ -564,10 +564,10 @@ internal sealed partial class ConductorBatchLoop
             }
             try
             {
-            var soloAdmission = EvaluateSoloAcceptanceAdmissibility(
+            var soloAdmission = ActivationAdmissionProbeScope.RecordSolo(goal.Id, EvaluateSoloAcceptanceAdmissibility(
                 kernel, driver, goal, policy, state.AcceptanceCensus, state.ConfiguredAcceptanceWidth,
                 state.ActiveAttemptSlotIndexes, state.ActiveCandidates, state.LiveAttemptGoalIds,
-                state.OldestWaiterObservation, oldestServedThisTick, tick);
+                state.OldestWaiterObservation, oldestServedThisTick, tick));
             if (soloAdmission.Kind != SoloAcceptanceAdmissionKind.Admissible)
             {
                 if (soloAdmission.Kind == SoloAcceptanceAdmissionKind.Capacity) state.DeferredByAdmission++;

@@ -650,8 +650,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var infrastructureTestLanes = effectivePlan.InfrastructureTestLanes;
         var policyShardPlan = effectivePlan.PolicyShardPlan;
         var policyRequiredChecks = effectivePlan.PolicyRequiredChecks;
-        var structuralCoverageApplies = effectivePlan.StructuralCoverageApplies;
-        var effectiveChecks = effectivePlan.Checks;
+        var (effectiveChecks, structuralCoverageApplies) = AcceptanceAttributionLaneScope.Apply(effectivePlan.Checks,
+            executionOwner.AttributionLaneScope is null ? [] : ExpandBroadInfrastructureChecks(manifest.Checks, ResolveOwnedCollectionLanes(engineSettings, worktreePath)), effectivePlan.StructuralCoverageApplies, executionOwner.AttributionLaneScope, Console.Out);
         var (partitionVerdictCache, remoteLanes) = CreatePartitionVerdictCacheAndRemoteLanes(
             goalId, worktreePath, effectiveChecks, engineSettings, executionOwner);
         using var remoteLaneScope = remoteLanes;
@@ -1297,9 +1297,9 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var shardConcurrencyBudget = Math.Min(EngineSettings.MaxConcurrentShards, shardCoreBudget);
         await using var shadow = RemoteFocusedEvidenceShadow.Start(
             _testOverrides, _timeProvider, worktreePath, focusedChecks, goalId, executionOwner, cancellationToken);
-        var batch = await RunCheckBatchAsync(focusedChecks, cacheContext: null, worktreePath, goalId,
-            stableSlotIndex, stableSlotLease, dotnetTestBuildPhase, shardConcurrencyBudget,
-            cancellationToken, continueAfterFailure, executionOwner).ConfigureAwait(false);
+        var batch = await RemoteFirstFocusedEvidence.RunAsync(_testOverrides, _timeProvider, worktreePath, focusedChecks, goalId, executionOwner,
+            continueAfterFailure, async checks => (await RunCheckBatchAsync(checks, cacheContext: null, worktreePath, goalId, stableSlotIndex, stableSlotLease,
+                dotnetTestBuildPhase, shardConcurrencyBudget, cancellationToken, continueAfterFailure, executionOwner).ConfigureAwait(false)).Results, cancellationToken).ConfigureAwait(false);
         await shadow.CompleteAsync(batch.Results).ConfigureAwait(false);
         return batch.Results;
     }
@@ -1340,6 +1340,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         }
         if (!_coverageHasIndependentChecks && independentChecks.Length == 0 && laneChecks.Length > 0)
             SignalStructuralCoveragePrechecksPassed();
+        await using var earlyRemoteOffer = StartRemoteLaneEarlyOffer(batchChecks, cacheContext, goalId,
+            stableSlotIndex, stableSlotLease, maxConcurrentShards, cancellationToken);
         if (CanOverlapNonPartitionDotnetTests(batchChecks, stableSlotIndex, stableSlotLease,
                 dotnetTestBuildPhase, maxConcurrentShards))
             return await RunOverlappedDotnetTestBatchAsync(batchChecks, cacheContext, worktreePath,
@@ -1404,9 +1406,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             }
         }
 
-        return new CheckBatchResult(
-            cacheContext?.ApplySharedApparatusInvalidation(results) ?? results,
-            retried);
+        return new CheckBatchResult(cacheContext?.ApplySharedApparatusInvalidation(results) ?? results, retried);
     }
 
     internal static string ResolveInfrastructureShardResultsDirectory(
@@ -1601,6 +1601,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             cacheContext?.MainSha ?? attemptIdentity?.MainSha), fresh.Retried);
         cacheContext?.RecordExecution(check, fresh.Result,
             fresh.Result.LaneRerun?.Outcome == AcceptanceLaneRerunEvidence.Flake ? "lane_rerun_pass" : "first_run");
+        AcceptanceGateLaneProgress.CheckCompleted(goalId, fresh.Result, EmitGateProgress);
 
         return fresh;
     }

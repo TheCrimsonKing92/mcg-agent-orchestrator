@@ -39,8 +39,8 @@ internal static partial class ConductorSelfRelaunch
             return null;
         }
 
-        stageSuccessorWithHook = (hook, token) => PrepareSuccessor(staging, token, hook);
-        return cancellationToken => PrepareSuccessor(staging, cancellationToken);
+        stageSuccessorWithHook = (hook, token) => PrepareSuccessor(staging, token, hook, recordEvent: recordSkip);
+        return cancellationToken => PrepareSuccessor(staging, cancellationToken, recordEvent: recordSkip);
     }
 
     private static void RecordNotHome(

@@ -1,5 +1,3 @@
-using Mcg.AgentOrchestrator.App.Orchestration;
-using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed class ControlPlaneDelivererTests
@@ -424,88 +422,6 @@ public sealed class ControlPlaneDelivererTests
         Assert.Equal("muted", Assert.Single(result.Operations).Reason);
     }
 
-    [Xunit.Fact(DisplayName = "ControlPlaneReplayHarness_reports_per_channel_would_have_pushed_counts")]
-    public async Task ControlPlaneReplayHarnessReportsPerChannelWouldHavePushedCounts()
-    {
-        var from = DateTimeOffset.Parse("2026-07-20T00:00:00Z");
-        var to = from.AddHours(48);
-        var report = await new ControlPlaneReplayHarness(new ControlPlaneDeliveryPolicy(SystemicMergeThreshold: 99))
-            .ReplayAsync([
-                Card("goal-a", "FailedTask", "task-1", "cause-1", "First", "body", raisedAt: from.AddHours(10)),
-                Card("goal-b", "FailedVerification", "task-2", "cause-2", "Second", "body", raisedAt: from.AddHours(11))
-            ], from, to);
-
-        var decisionPushes = report.Operations
-            .Where(operation => operation.Channel == ControlPlaneDeliveryChannel.Decisions)
-            .Where(operation => operation.Kind is ControlPlaneDeliveryOperationKind.Send or ControlPlaneDeliveryOperationKind.Edit)
-            .Select(operation => operation.Reason)
-            .ToList();
-        Assert.Equal(["new-card", "new-card"], decisionPushes);
-        Assert.Equal(2, report.Decisions);
-        Assert.Equal(1, report.Board);
-        Assert.Equal(1, report.Digest);
-    }
-
-    [Xunit.Fact(DisplayName = "ControlPlaneReplayHarness_includes_daily_backlog_digest_when_backlog_items_are_supplied")]
-    public async Task ControlPlaneReplayHarnessIncludesDailyBacklogDigestWhenBacklogItemsAreSupplied()
-    {
-        var from = DateTimeOffset.Parse("2026-07-20T00:00:00Z");
-        var backlog = new[]
-        {
-            new ControlPlaneBacklogDigestItem("backlog-a", "Operator channel follow-up", BacklogItemStatus.Open, from.AddHours(6), "goal-a")
-        };
-
-        var report = await new ControlPlaneReplayHarness(new ControlPlaneDeliveryPolicy(SystemicMergeThreshold: 99))
-            .ReplayAsync(
-                [Card("goal-a", "FailedTask", "task-1", "cause-1", "First", "body", raisedAt: from.AddHours(10))],
-                backlog,
-                from,
-                from.AddHours(48));
-
-        var daily = Assert.Single(report.Operations, operation => operation.Reason == "daily-backlog-digest");
-        Assert.Equal(ControlPlaneDeliveryChannel.Digest, daily.Channel);
-        Assert.Contains("Daily backlog digest", daily.Content);
-        Assert.Contains("Operator channel follow-up", daily.Content);
-        Assert.Equal(2, report.Digest);
-    }
-
-    [Xunit.Fact(DisplayName = "ControlPlaneReplayHarness_uses_event_times_for_storm_windows")]
-    public async Task ControlPlaneReplayHarnessUsesEventTimesForStormWindows()
-    {
-        var from = DateTimeOffset.Parse("2026-07-20T10:00:00Z");
-        var report = await new ControlPlaneReplayHarness()
-            .ReplayAsync([
-                Card("goal-a", "FailedTask", "task-1", "cause-1", "First", "body", raisedAt: from),
-                Card("goal-b", "FailedTask", "task-2", "cause-2", "Second", "body", raisedAt: from.AddMinutes(40)),
-                Card("goal-c", "FailedTask", "task-3", "cause-3", "Third", "body", raisedAt: from.AddMinutes(50))
-            ], from, from.AddHours(2));
-
-        Assert.DoesNotContain(report.Operations, operation => operation.Content.Contains("systemic decision", StringComparison.OrdinalIgnoreCase));
-    }
-
-    [Xunit.Fact(DisplayName = "ControlPlaneReplayHarness_incremental_same_kind_storm_sends_only_systemic_card")]
-    public async Task ControlPlaneReplayHarnessIncrementalSameKindStormSendsOnlySystemicCard()
-    {
-        var from = DateTimeOffset.Parse("2026-07-20T10:00:00Z");
-        var report = await new ControlPlaneReplayHarness()
-            .ReplayAsync([
-                Card("goal-a", "FailedTask", "task-1", "cause-1", "First", "body", raisedAt: from),
-                Card("goal-b", "FailedTask", "task-2", "cause-2", "Second", "body", raisedAt: from.AddMinutes(10)),
-                Card("goal-c", "FailedTask", "task-3", "cause-3", "Third", "body", raisedAt: from.AddMinutes(20))
-            ], from, from.AddHours(2));
-
-        var decisionPushes = report.Operations
-            .Where(operation => operation.Channel == ControlPlaneDeliveryChannel.Decisions)
-            .Where(operation => operation.Kind is ControlPlaneDeliveryOperationKind.Send or ControlPlaneDeliveryOperationKind.Edit)
-            .ToList();
-        var pushed = Assert.Single(decisionPushes);
-        Assert.Contains(":systemicfailedtask:", pushed.DedupKey, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain(report.Operations, operation =>
-            operation.Reason == "new-card" &&
-            operation.DedupKey.Contains(":failedtask:", StringComparison.OrdinalIgnoreCase) &&
-            !operation.DedupKey.Contains(":systemicfailedtask:", StringComparison.OrdinalIgnoreCase));
-    }
-
     [Xunit.Fact(DisplayName = "DeadManHeartbeatClient_default_options_do_not_send")]
     public async Task DeadManHeartbeatClientDefaultOptionsDoNotSend()
     {
@@ -530,41 +446,6 @@ public sealed class ControlPlaneDelivererTests
         Assert.False(disabled.Enabled);
         Assert.True(enabled.Enabled);
         Assert.Equal(new Uri("https://example.test/deadman"), enabled.Endpoint);
-    }
-
-    [Xunit.Fact(DisplayName = "OperatorInboxControlPlaneProjection_projects_escalation_to_neutral_card")]
-    public void OperatorInboxControlPlaneProjectionProjectsEscalationToNeutralCard()
-    {
-        var item = new OperatorInboxItem(
-            "inbox-1",
-            OperatorInboxKind.FailedTask,
-            OperatorInboxSeverity.Blocker,
-            "goal-abcdef",
-            "abcdef",
-            "objective",
-            "task-123",
-            1,
-            "Task failed",
-            "message",
-            "evidence",
-            "retry",
-            "retry abcdef 1",
-            "source",
-            DateTimeOffset.Parse("2026-07-20T09:00:00Z"),
-            false,
-            null,
-            null);
-
-        var card = OperatorInboxControlPlaneProjection.Project(item);
-
-        Assert.Equal(ControlPlaneCardSource.OperatorInboxEscalation, card.Source);
-        Assert.Equal(DateTimeOffset.Parse("2026-07-20T09:00:00Z"), card.RaisedAt);
-        Assert.Equal("goal-abcdef:failedtask:task-123:" + card.CauseFingerprint, card.DedupKey);
-        var action = Assert.Single(card.ActionList);
-        var parsed = DiscordInteractionHandler.Process(action.CustomId, "operator-1", "interaction-1", ["operator-1"]);
-        Assert.Null(parsed.ErrorMessage);
-        Assert.Equal("inbox-1", parsed.Decision?.InboxItemId);
-        Assert.Equal(0, parsed.Decision?.ActionIndex);
     }
 
     private static ControlPlaneDecisionCard Card(

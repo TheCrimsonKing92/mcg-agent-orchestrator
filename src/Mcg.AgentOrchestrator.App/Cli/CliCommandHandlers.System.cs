@@ -260,7 +260,7 @@ internal static partial class CliCommandHandlers
             }
 
             case "gate-status":
-                ConsoleViews.PrintGateStatus(GateHeartbeatArtifacts.ReadStableSlots());
+                GateStatusRemoteWait.PrintText(context.Workspace);
                 return false;
 
             case "run-events-maintenance":
@@ -519,7 +519,7 @@ internal static partial class CliCommandHandlers
             }
 
             case "doctor":
-                ConsoleViews.PrintHealth(OrchestratorHealthInspector.InspectCurrentEnvironment(new AgentCatalog(context.Agents), context.WorkerProfiles));
+                HealthTextView.PrintHealth(OrchestratorHealthInspector.InspectCurrentEnvironment(new AgentCatalog(context.Agents), context.WorkerProfiles));
                 return false;
 
             case "repo-process-info":
@@ -624,7 +624,7 @@ internal static partial class CliCommandHandlers
                             DateTimeOffset.UtcNow,
                             FullStandardOutput: smokeEvidence,
                             FullStandardError: string.Empty));
-                    ConsoleViews.PrintTask(context.CurrentGoal, smokeTask);
+                    TaskTextView.PrintTask(context.CurrentGoal, smokeTask);
                     return true;
                 }
 
@@ -687,9 +687,6 @@ internal static partial class CliCommandHandlers
 
             case "operator-channel":
                 return HandleOperatorChannelCommand(parts, context);
-
-            case "operator-control-plane":
-                return HandleOperatorControlPlaneCommand(parts, context);
 
             case "operator-listen":
             {
@@ -1220,93 +1217,6 @@ internal static partial class CliCommandHandlers
             ForumChannelId = forumChannelId ?? existing.ForumChannelId,
             OperatorUserIds = operatorUserIds ?? existing.OperatorUserIds
         };
-
-    private static bool? HandleOperatorControlPlaneCommand(IReadOnlyList<string> parts, CliExecutionContext context)
-    {
-        var sub = parts.Count > 1 ? parts[1].ToLowerInvariant() : "show";
-        switch (sub)
-        {
-            case "replay":
-            {
-                var hours = GetFlagValue(parts, "--hours") is { } rawHours
-                    ? ParsePositiveInteger(rawHours, "--hours")
-                    : 48;
-                var now = DateTimeOffset.UtcNow;
-                var from = now.AddHours(-hours);
-                var catalog = OperatorChannelStore.Load(context.Workspace.OperatorChannelPath);
-                var policy = new ControlPlaneDeliveryPolicy(MutedUntil: catalog.ControlPlaneMutedUntil);
-                var store = CollaborationItemStore.ForDirectory(context.Workspace.OrchestratorDirectory);
-                var collaborationCards = store.ListAsync().GetAwaiter().GetResult()
-                    .Select(ControlPlaneDecisionCard.FromCollaborationItem);
-                var backlogItems = new BacklogStore(context.Workspace.BacklogStorePath)
-                    .ListAsync(includeAll: false)
-                    .GetAwaiter()
-                    .GetResult()
-                    .Select(item => new ControlPlaneBacklogDigestItem(
-                        item.Id,
-                        item.Title,
-                        item.Status,
-                        item.UpdatedAt,
-                        item.SourceGoalId));
-                var inboxCards = OperatorInbox.Build(
-                        context.Kernel,
-                        context.Agents,
-                        context.WorkerProfiles,
-                        context.Workspace,
-                        includeAcknowledged: true)
-                    .Items
-                    .Select(OperatorInboxControlPlaneProjection.Project);
-                var report = new ControlPlaneReplayHarness(policy)
-                    .ReplayAsync(collaborationCards.Concat(inboxCards), backlogItems, from, now)
-                    .GetAwaiter()
-                    .GetResult();
-                Console.WriteLine($"control-plane-replay windowHours={hours} {report.FormatCounts()}");
-                return false;
-            }
-            case "mute":
-            {
-                if (parts.Count < 3 || !TryParseDuration(parts[2], out var duration))
-                    throw new ArgumentException("Usage: operator-control-plane mute 24h");
-                var catalog = OperatorChannelStore.Load(context.Workspace.OperatorChannelPath);
-                var mutedUntil = DateTimeOffset.UtcNow.Add(duration);
-                OperatorChannelStore.Save(context.Workspace.OperatorChannelPath, catalog with { ControlPlaneMutedUntil = mutedUntil });
-                Console.WriteLine($"operator-control-plane mutedUntil={mutedUntil:O}");
-                return false;
-            }
-            case "show":
-            {
-                var catalog = OperatorChannelStore.Load(context.Workspace.OperatorChannelPath);
-                Console.WriteLine($"operator-control-plane mutedUntil={catalog.ControlPlaneMutedUntil?.ToString("O") ?? "(none)"}");
-                Console.WriteLine($"operator-control-plane deadManHeartbeat={(catalog.DeadManHeartbeatEnabled ? "enabled" : "disabled")}");
-                Console.WriteLine("operator-control-plane livePosting=disabled-by-default");
-                return false;
-            }
-            default:
-                throw new ArgumentException("Unknown operator-control-plane sub-command. Usage: operator-control-plane replay [--hours 48]|mute 24h|show");
-        }
-    }
-
-    private static bool TryParseDuration(string value, out TimeSpan duration)
-    {
-        duration = default;
-        if (value.EndsWith("h", StringComparison.OrdinalIgnoreCase) &&
-            int.TryParse(value[..^1], out var hours) &&
-            hours > 0)
-        {
-            duration = TimeSpan.FromHours(hours);
-            return true;
-        }
-
-        if (value.EndsWith("m", StringComparison.OrdinalIgnoreCase) &&
-            int.TryParse(value[..^1], out var minutes) &&
-            minutes > 0)
-        {
-            duration = TimeSpan.FromMinutes(minutes);
-            return true;
-        }
-
-        return false;
-    }
 
     internal static CollaborationItem RaiseOperatorChannelSpineTestItem(string orchestratorDirectory)
     {

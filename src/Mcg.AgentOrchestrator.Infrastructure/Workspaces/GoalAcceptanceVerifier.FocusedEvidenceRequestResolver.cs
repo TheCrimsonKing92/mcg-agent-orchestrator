@@ -603,13 +603,9 @@ internal static partial class FocusedEvidenceRequestResolver
         var segments = value.Split('.');
         if (segments.Length == 1)
         {
-            selection = new FocusedEvidenceFilterToken(
-                originalToken,
-                $"FullyQualifiedName~{value}",
-                FocusedEvidenceTokenKind.Class,
-                value,
-                value);
-            return true;
+            return FocusedEvidenceBareSelectorResolution.TryResolve(
+                () => EnumerateFocusedEvidenceSourceFiles(worktreePath, project),
+                project, originalToken, value, out selection, out rejection);
         }
 
         var candidates = new List<FocusedEvidenceFilterToken>();
@@ -683,7 +679,7 @@ internal static partial class FocusedEvidenceRequestResolver
             .ToArray();
     }
 
-    private static bool IsFocusedEvidenceTestAttribute(string attributeName)
+    internal static bool IsFocusedEvidenceTestAttribute(string attributeName)
     {
         var simpleName = attributeName.Split('.').Last();
         if (simpleName.EndsWith("Attribute", StringComparison.Ordinal))

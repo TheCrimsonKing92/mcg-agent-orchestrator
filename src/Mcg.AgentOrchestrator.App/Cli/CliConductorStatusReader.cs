@@ -1,4 +1,5 @@
 using System.Globalization;
+using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.App.Cli;
 
@@ -7,14 +8,18 @@ internal static class CliConductorStatusReader
     internal static void Print(ConductorStatusSnapshot snapshot, TextWriter output)
     {
         var owner = snapshot.OwnerPid;
-        output.WriteLine(owner is null ? "Conductor: stopped" : $"Conductor: running (pid {owner})");
+        output.WriteLine(owner is null ? $"Conductor: {snapshot.ConductorState}"
+            : $"Conductor: {snapshot.ConductorState} (pid {owner})");
         output.WriteLine(snapshot.Since.Kind switch
         {
             "host-restart" => $"stopped since host restart at {snapshot.Since.At:O}",
             "stopped" => $"Stopped since {snapshot.Since.At:O}; reason={snapshot.Since.Reason}",
             "running" => $"Running since {snapshot.Since.At:O}",
+            "starting" => $"Starting since {snapshot.Since.At:O}; stage={snapshot.Since.Reason}",
             _ => "Since: unavailable"
         });
+        if (snapshot.Since.Previous is { } previous)
+            output.WriteLine($"Previous stop: {previous.At:O}; reason={previous.Reason} (earlier generation)");
         output.WriteLine($"Supervisor build: {snapshot.SupervisorBuild ?? "unavailable"}");
         output.WriteLine(snapshot.Generation.State switch
         {
@@ -55,6 +60,12 @@ internal static class CliConductorStatusReader
             var latest = goal.Latest?.ToString("O", CultureInfo.InvariantCulture) ?? "none";
             var hint = owner is null ? $" | apply with: conductor apply-intents {goal.Goal[..Math.Min(8, goal.Goal.Length)]}" : "";
             output.WriteLine($"  {goal.Goal} | intents={goal.Intents} | latest={latest}{hint}");
+        }
+        if (snapshot.ProviderHolds is { Count: > 0 } holds)
+        {
+            output.WriteLine($"Provider usage holds: {holds.Count}");
+            foreach (var row in holds)
+                output.WriteLine(ProviderUsageHoldView.FormatStatusLine(row));
         }
     }
 }

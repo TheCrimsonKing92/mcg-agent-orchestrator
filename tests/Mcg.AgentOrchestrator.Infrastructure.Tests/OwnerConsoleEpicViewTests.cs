@@ -137,11 +137,11 @@ public sealed class OwnerConsoleEpicViewTests
         await fixture.View.HandleKeyAsync(new Key('e'));
         fixture.Source.PlanError = new InvalidOperationException("plan unavailable");
         await fixture.View.HandleKeyAsync(Key.Enter);
-        Assert.Contains("Could not load epics: plan unavailable. Press r to retry.", fixture.View.EpicView.Lines);
+        Assert.Contains("Could not load epics: plan unavailable. Press Ctrl+R to retry.", fixture.View.EpicView.Lines);
         Assert.Contains("stale", fixture.View.EpicView.HeaderLine);
         Assert.DoesNotContain("(no plan)", fixture.View.EpicView.Lines);
         fixture.Source.PlanError = null;
-        await fixture.View.HandleKeyAsync(new Key('r'));
+        await fixture.View.HandleKeyAsync(new Key('r').WithCtrl);
         Assert.Contains("Epic plan:", fixture.View.EpicView.Lines);
         Assert.Contains("(no plan)", fixture.View.EpicView.Lines);
         Assert.Equal(["alpha", "alpha"], fixture.Source.PlanIds);
@@ -215,8 +215,8 @@ public sealed class OwnerConsoleEpicViewTests
         using var fixture = new Fixture();
         fixture.Source.Error = new InvalidOperationException("portfolio unavailable");
         await fixture.View.HandleKeyAsync(new Key('e'));
-        Assert.Contains("Could not load epics: portfolio unavailable. Press r to retry.", fixture.View.EpicView.Lines);
-        foreach (var key in new[] { new Key('q'), new Key(':'), new Key('?'), Key.Tab })
+        Assert.Contains("Could not load epics: portfolio unavailable. Press Ctrl+R to retry.", fixture.View.EpicView.Lines);
+        foreach (var key in new[] { new Key(':'), new Key('?'), Key.Tab })
         {
             await fixture.View.HandleKeyAsync(key);
             Assert.True(key.Handled);
@@ -227,6 +227,9 @@ public sealed class OwnerConsoleEpicViewTests
         fixture.View.Render(fixture.Model);
         await fixture.View.EpicView.LastLoad;
         AssertSummaries(fixture, Now.AddHours(-24));
+        await fixture.View.HandleKeyAsync(new Key('q'));
+        AssertClosedAndFocused(fixture.View, OwnerConsolePane.Decisions);
+        Assert.False(fixture.Controller.QuitRequested);
     }
 
     [Fact]
@@ -326,7 +329,7 @@ public sealed class OwnerConsoleEpicViewTests
         Assert.True(dialog.Visible);
         Assert.Equal(["Loading epics (last 24 hours)…"], dialog.Lines);
         Assert.Contains("loading…", dialog.HeaderLine);
-        Assert.DoesNotContain("r retry", dialog.HintText);
+        Assert.DoesNotContain("Ctrl+R retry", dialog.HintText);
         fixture.Source.Release(pending, Now.AddHours(-24));
         await opening.WaitAsync(TestContext.Current.CancellationToken);
 
@@ -392,27 +395,27 @@ public sealed class OwnerConsoleEpicViewTests
         fixture.Source.Error = new InvalidOperationException("portfolio unavailable.");
         await fixture.View.HandleKeyAsync(detail ? Key.Enter : new Key('e'));
         var dialog = fixture.View.EpicView;
-        Assert.Contains("Could not load epics: portfolio unavailable. Press r to retry.", dialog.Lines);
+        Assert.Contains("Could not load epics: portfolio unavailable. Press Ctrl+R to retry.", dialog.Lines);
         if (detail)
         {
             Assert.Contains("> Beta epic", dialog.Lines);
             Assert.Contains("stale", dialog.HeaderLine);
         }
         Assert.Contains("failed", dialog.HeaderLine);
-        Assert.Contains("r retry", dialog.HintText);
+        Assert.Contains("Ctrl+R retry", dialog.HintText);
         fixture.Source.Error = null;
         var pending = fixture.Source.HoldNextLoad();
-        var retrying = fixture.View.HandleKeyAsync(new Key('r'));
+        var retrying = fixture.View.HandleKeyAsync(new Key('r').WithCtrl);
         await fixture.Source.LoadStarted.Task.WaitAsync(TestContext.Current.CancellationToken);
         if (detail) Assert.Contains("> Beta epic", dialog.Lines);
         else Assert.Equal(["Loading epics (last 24 hours)…"], dialog.Lines);
-        Assert.DoesNotContain("r retry", dialog.HintText);
+        Assert.DoesNotContain("Ctrl+R retry", dialog.HintText);
         fixture.Source.Release(pending, Now.AddHours(-24));
         await retrying.WaitAsync(TestContext.Current.CancellationToken);
 
         Assert.Contains(detail ? "Beta epic" : "> Alpha epic", dialog.Lines);
         Assert.DoesNotContain("Could not load", string.Join(" ", dialog.Lines));
-        Assert.DoesNotContain("r retry", dialog.HintText);
+        Assert.DoesNotContain("Ctrl+R retry", dialog.HintText);
         Assert.Contains("updated 01:00:00", dialog.HeaderLine);
     }
 
@@ -424,7 +427,7 @@ public sealed class OwnerConsoleEpicViewTests
         Assert.Equal(["Epic data is not available in this console session."], fixture.View.EpicView.Lines);
         Assert.DoesNotContain("No epics", string.Join(" ", fixture.View.EpicView.Lines));
         Assert.Contains("unavailable", fixture.View.EpicView.HeaderLine);
-        Assert.DoesNotContain("r retry", fixture.View.EpicView.HintText);
+        Assert.DoesNotContain("Ctrl+R retry", fixture.View.EpicView.HintText);
         Assert.Equal(0, fixture.Source.Calls);
     }
 
@@ -478,7 +481,7 @@ public sealed class OwnerConsoleEpicViewTests
         var refreshing = dialog.LastLoad;
         Assert.Equal(currentLines, dialog.Lines);
         Assert.Contains("refreshing…", dialog.HeaderLine);
-        Assert.DoesNotContain("r retry", dialog.HintText);
+        Assert.DoesNotContain("Ctrl+R retry", dialog.HintText);
         fixture.Source.Release(pending, Now.AddHours(-24));
         await refreshing.WaitAsync(TestContext.Current.CancellationToken);
         Assert.Contains("updated 01:00:00", dialog.HeaderLine);
@@ -690,13 +693,13 @@ public sealed class OwnerConsoleEpicViewTests
         await fixture.View.EpicView.ReloadAsync();
         var dialog = fixture.View.EpicView;
         Assert.Equal(prior, dialog.Lines.Take(prior.Length));
-        Assert.Contains("Could not load epics: refresh unavailable. Press r to retry.", dialog.Lines);
+        Assert.Contains("Could not load epics: refresh unavailable. Press Ctrl+R to retry.", dialog.Lines);
         Assert.Contains("stale", dialog.HeaderLine);
         var retainedHeader = dialog.HeaderLine.Replace("\n", " ");
         Assert.Contains("updated 01:00:00", retainedHeader);
         Assert.DoesNotContain("updated 01:01:00", retainedHeader);
         fixture.Source.Error = null;
-        await fixture.View.HandleKeyAsync(new Key('r'));
+        await fixture.View.HandleKeyAsync(new Key('r').WithCtrl);
         Assert.Equal(prior, dialog.Lines);
         Assert.Contains("updated 01:01:00", dialog.HeaderLine);
         Assert.DoesNotContain("stale", dialog.HeaderLine);
@@ -729,7 +732,7 @@ public sealed class OwnerConsoleEpicViewTests
         });
     }
 
-    private sealed class Fixture : IDisposable
+    internal sealed class Fixture : IDisposable
     {
         internal const string Plan = "Purpose: show the whole epic plan with owner decisions and phases.\nPhase one: render the plan of record with enough detail to require wrapping at the available window width while keeping every word accessible.\nNext: review with Miles. Last reviewed: 2026-10-08.";
         internal readonly OwnerConsoleHarness Harness = new();
@@ -795,7 +798,7 @@ public sealed class OwnerConsoleEpicViewTests
         public void Dispose() { View.Dispose(); App.Dispose(); }
     }
 
-    private sealed class Source : IOwnerConsoleEpicSource
+    internal sealed class Source : IOwnerConsoleEpicSource
     {
         internal IOrchestratorStateQueries State = null!;
         internal int ListCalls;
@@ -864,14 +867,14 @@ public sealed class OwnerConsoleEpicViewTests
         }
     }
 
-    private sealed class Clock : TimeProvider
+    internal sealed class Clock : TimeProvider
     {
         internal DateTimeOffset Current = Now;
         public override DateTimeOffset GetUtcNow() => Current;
         public override TimeZoneInfo LocalTimeZone => TimeZoneInfo.CreateCustomTimeZone("Test", TimeSpan.FromHours(3), "Test", "Test");
     }
 
-    private sealed class Dialogs : IOwnerConsoleDialogs
+    internal sealed class Dialogs : IOwnerConsoleDialogs
     {
         internal readonly List<(string Title, string Text)> Texts = [];
         public Task<bool> ConfirmAsync(string title, string text) => Task.FromResult(false);

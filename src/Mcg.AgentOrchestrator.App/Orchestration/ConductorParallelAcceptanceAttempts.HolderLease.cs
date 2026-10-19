@@ -16,22 +16,36 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
     private bool ReservesHolderLease(ConductorParallelAcceptanceAttempt attempt)
     {
         var binding = AcceptanceHolderBinding.For(attempt);
-        if (attempt.OwnerProcessStartedAt is { } started && attempt.OwnerExecutablePath is { } image)
+        AcceptanceHolderObservation observation;
+        try
         {
-            HolderLease.ValidateRecordedHolder(binding, new(attempt.OwnerProcessId, started, image));
-            _ = HolderLease.ReconcileUnclaimed(binding, new(attempt.OwnerProcessId, started, image));
+            if (attempt.OwnerProcessStartedAt is { } started && attempt.OwnerExecutablePath is { } image)
+            {
+                HolderLease.ValidateRecordedHolder(binding, new(attempt.OwnerProcessId, started, image));
+                _ = HolderLease.ReconcileUnclaimed(binding, new(attempt.OwnerProcessId, started, image));
+            }
+            observation = HolderLease.Observe(binding);
+            if (observation.CanAdopt) _ = HolderLease.Adopt(binding, _generationIdentity);
         }
-        var observation = HolderLease.Observe(binding);
-        if (observation.CanAdopt) _ = HolderLease.Adopt(binding, _generationIdentity);
+        catch (Exception ex) when (AcceptanceHolderLeaseFault.From(ex, binding) is { } fault)
+        {
+            RecordHolderHold(attempt, fault);
+            return true;
+        }
         if (observation.ReservesCapacity)
         {
-            if (!observation.CanAdopt) RecordHolderHold(attempt, observation.Reason);
+            if (observation.Fault is { } fault) RecordHolderHold(attempt, fault);
+            else if (!observation.CanAdopt) RecordHolderHold(attempt, observation.Reason);
             return true;
         }
         if (attempt.Outcome != ConductorParallelAcceptanceAttemptOutcome.Running) return false;
         // A terminal holder artifact is insufficient until the attempt itself is terminalized.
         using var writer = _tryAcquireAttemptWriterLease(Path.GetDirectoryName(attempt.MetadataPath)!, TimeSpan.Zero);
-        if (writer is null) return true;
+        if (writer is null)
+        {
+            RecordHolderHold(attempt, "attempt-writer-lease-busy");
+            return true;
+        }
         lock (MetadataWriteGate)
         {
             var current = ReadCanonicalAttempt(attempt.MetadataPath, attempt.GoalId);
@@ -59,10 +73,18 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
             RecordHolderHold(attempt, "legacy-tree-settlement-unavailable");
             return true;
         }
+        if (attempt.Outcome != ConductorParallelAcceptanceAttemptOutcome.Running &&
+            LegacyAcceptanceHolderSettlement.HasTerminalReceipt(AcceptanceHolderBinding.For(attempt),
+                attempt.OwnerProcessId, attempt.OwnerProcessStartedAt, attempt.OwnerExecutablePath, attempt.StartedAt))
+            return false;
         // Holder settlement is independent of result publication. Terminalize under the
         // existing writer boundary before exposing capacity, preserving any published verdict.
         using var writer = _tryAcquireAttemptWriterLease(Path.GetDirectoryName(attempt.MetadataPath)!, TimeSpan.Zero);
-        if (writer is null) return true;
+        if (writer is null)
+        {
+            RecordHolderHold(attempt, "attempt-writer-lease-busy");
+            return true;
+        }
         lock (MetadataWriteGate)
         {
             var current = ReadCanonicalAttempt(attempt.MetadataPath, attempt.GoalId);
@@ -122,6 +144,9 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
             ? "legacy-holder-absent-or-settled" : null;
     }
 
+    private void RecordHolderHold(ConductorParallelAcceptanceAttempt attempt, AcceptanceHolderLeaseFault fault) =>
+        RecordHolderHold(attempt, fault.Format());
+
     private void RecordHolderHold(ConductorParallelAcceptanceAttempt attempt, string reason)
     {
         if (_holderHolds.TryGetValue(attempt.AttemptId, out var previous) && previous == reason) return;
@@ -147,16 +172,26 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
                 continue;
             }
             var binding = AcceptanceHolderBinding.For(attempt);
-            if (HolderLease.Read(binding).Generation != _generationIdentity)
+            try
             {
-                // Another live conductor still owns this holder. Its durable lease already fences admission.
-                if (!HolderLease.Adopt(binding, _generationIdentity)) continue;
+                if (attempt.OwnerProcessStartedAt is { } started && attempt.OwnerExecutablePath is { } image)
+                    HolderLease.ValidateRecordedHolder(binding, new(attempt.OwnerProcessId, started, image));
+                if (HolderLease.Read(binding).Generation != _generationIdentity)
+                {
+                    // Another live conductor still owns this holder. Its durable lease already fences admission.
+                    if (!HolderLease.Adopt(binding, _generationIdentity)) continue;
+                }
+                if (HolderLease.Detach(binding, _generationIdentity)) continue;
+                var unclaimedIdentity = attempt.OwnerProcessStartedAt is { } holderStarted && attempt.OwnerExecutablePath is { } holderImage
+                    ? new SpawnProcessIdentity(attempt.OwnerProcessId, holderStarted, holderImage) : null;
+                if (!HolderLease.Cancel(binding, _generationIdentity, "detach-not-provable", unclaimedIdentity))
+                    throw new InvalidOperationException($"Acceptance detach/cancel settlement unproven: {attempt.AttemptId}.");
             }
-            if (HolderLease.Detach(binding, _generationIdentity)) continue;
-            var unclaimedIdentity = attempt.OwnerProcessStartedAt is { } started && attempt.OwnerExecutablePath is { } image
-                ? new SpawnProcessIdentity(attempt.OwnerProcessId, started, image) : null;
-            if (!HolderLease.Cancel(binding, _generationIdentity, "detach-not-provable", unclaimedIdentity))
-                throw new InvalidOperationException($"Acceptance detach/cancel settlement unproven: {attempt.AttemptId}.");
+            catch (Exception ex) when (AcceptanceHolderLeaseFault.From(ex, binding) is { } fault)
+            {
+                RecordHolderHold(attempt, fault);
+                continue;
+            }
             using var writer = _tryAcquireAttemptWriterLease(Path.GetDirectoryName(attempt.MetadataPath)!, TimeSpan.Zero);
             if (writer is null)
                 throw new InvalidOperationException($"Acceptance cancel terminal publication blocked: {attempt.AttemptId}.");

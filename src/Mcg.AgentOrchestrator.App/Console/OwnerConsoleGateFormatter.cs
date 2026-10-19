@@ -15,31 +15,35 @@ internal static class OwnerConsoleGateFormatter
         if (!gate.Live) return "gate: idle" + (gate.IdleAge is { } age ? $" {(int)age.TotalMinutes}m" : "");
         var members = string.Join("+", gate.Members.Take(3).Select(member => member.Id[..Math.Min(4, member.Id.Length)]));
         if (gate.Members.Count > 3) members += "+" + (gate.Members.Count - 3);
-        return $"gate: {gate.Kind} {members} {gate.DoneCount}/{gate.TotalCount} {Remaining(gate.RemainingSeconds)}";
+        return $"gate: {gate.Kind} {members} {gate.DoneCount}/{gate.TotalCount} {(gate.Failing ? "FAILING" : Remaining(gate.RemainingSeconds))}";
     }
 
-    internal static IReadOnlyList<string> Lines(OwnerConsoleGateProgress? gate)
-    {
-        if (gate is null) return ["gate: unavailable"];
-        if (!gate.Live) return [StatusSegment(gate)];
-        return new[] { $"GATE {gate.Kind} | elapsed {(int)gate.Elapsed.TotalMinutes}m",
-            string.Join(" + ", gate.Members.Select(member => member.Id + (member.Title.Length == 0 ? "" : " " + member.Title))),
-            ProgressLine(gate) }.Concat(gate.Lanes.Select(LaneLine)).ToArray();
-    }
+    internal static IReadOnlyList<string> Lines(OwnerConsoleGateProgress? gate) => OwnerConsoleGateLayout.Lines(gate, OwnerConsoleEpicFormatter.DefaultWidth, false);
 
     internal static string LaneLine(OwnerConsoleGateLane lane)
     {
-        var marker = lane.State switch
-        {
-            OwnerConsoleGateLaneState.Running => '>', OwnerConsoleGateLaneState.Queued => '.',
-            OwnerConsoleGateLaneState.Cached => '=', OwnerConsoleGateLaneState.Done => lane.Outcome switch
-            { "passed" => '+', "failed" => 'x', _ => '*' },
-            _ => throw new ArgumentOutOfRangeException(nameof(lane))
-        };
+        var marker = Marker(lane);
         var median = lane.MedianSeconds is { } seconds ? $"{seconds:0.#}s" + (lane.IsEstimate ? " estimate" : "") : "?";
         var quiet = lane.State == OwnerConsoleGateLaneState.Running && lane.QuietSeconds is > 300
             ? $" quiet {(int)(lane.QuietSeconds.Value / 60)}m" : "";
         var outcome = lane.State == OwnerConsoleGateLaneState.Done ? lane.Outcome is "passed" or "failed" ? lane.Outcome : "done" : "";
-        return $"{marker} {lane.Name} {(int)lane.Elapsed.TotalSeconds}s / {median} {lane.Location} {outcome}".TrimEnd() + quiet;
+        var name = lane.IsAttribution ? AttributionName(lane) : lane.Name;
+        return $"{marker} {name} {(int)lane.Elapsed.TotalSeconds}s / {median} {lane.Location} {outcome}".TrimEnd() + quiet;
+    }
+
+    internal static char Marker(OwnerConsoleGateLane lane) => lane.State switch
+    {
+        OwnerConsoleGateLaneState.Running => '>', OwnerConsoleGateLaneState.Queued => '.',
+        OwnerConsoleGateLaneState.Cached => '=', OwnerConsoleGateLaneState.Done => lane.Outcome switch
+        { "passed" => '+', "failed" => 'x', _ => '*' },
+        _ => throw new ArgumentOutOfRangeException(nameof(lane))
+    };
+
+    internal static string AttributionName(OwnerConsoleGateLane lane)
+    {
+        var target = lane.Target ?? lane.Name;
+        var prefix = target.StartsWith("reviewer focused evidence: ", StringComparison.Ordinal)
+            ? "reviewer focused evidence: " : "reviewer mapped project evidence: ";
+        return "confirming failure: " + (target.StartsWith(prefix, StringComparison.Ordinal) ? target[prefix.Length..] : target);
     }
 }

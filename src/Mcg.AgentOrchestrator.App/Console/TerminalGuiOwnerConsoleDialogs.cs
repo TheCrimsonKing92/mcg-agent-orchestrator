@@ -8,6 +8,7 @@ namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 internal sealed class TerminalGuiOwnerConsoleDialogs(IApplication app, CancellationToken token) : IOwnerConsoleDialogs
 {
     private readonly int _uiThread = Environment.CurrentManagedThreadId;
+    public int? TextWidth => OwnerConsoleDialogWidth.TextColumns(app.Screen.Width);
 
     public Task<bool> ConfirmAsync(string title, string text) => OnUiAsync(() =>
     {
@@ -84,9 +85,11 @@ internal sealed class TerminalGuiOwnerConsoleDialogs(IApplication app, Cancellat
         close.Accepting += (_, args) => { args.Handled = true; app.RequestStop(dialog); };
         dialog.AddButton(close);
         var buttons = new Dictionary<char, Button>();
-        foreach (var (key, label) in new[] { ('q', "Open question (q)"), ('f', "Last failure (f)"), ('e', "Epic (e)") })
+        foreach (var row in OwnerConsoleDialogBindings.GoalDetail.Where(row => row.Command != "quit"))
         {
-            var button = new Button { Text = label };
+            var key = row.Key!.Value;
+            var binding = OwnerConsoleBindings.ForDialogKey(OwnerConsoleScope.GoalDetail, key, row.Ctrl)!;
+            var button = new Button { Text = OwnerConsoleDialogBindings.Label(binding) };
             button.Accepting += async (_, args) => { args.Handled = true; await ActAsync(() => goal.HandleKeyAsync(key)); };
             buttons.Add(key, button); dialog.AddButton(button);
         }
@@ -109,7 +112,9 @@ internal sealed class TerminalGuiOwnerConsoleDialogs(IApplication app, Cancellat
         {
             if (app.TopRunnableView != dialog) return;
             var character = char.ToLowerInvariant((char)key.AsRune.Value);
-            if (buttons.TryGetValue(character, out var button) && button.Visible && !key.IsCtrl && !key.IsAlt)
+            var binding = OwnerConsoleBindings.ForDialogKey(OwnerConsoleScope.GoalDetail, character, key.IsCtrl);
+            if (!key.IsAlt && binding is not null && (binding.Command == "quit" ||
+                buttons.TryGetValue(character, out var button) && button.Visible))
             { key.Handled = true; await ActAsync(() => goal.HandleKeyAsync(character)); }
             else if (dialog.Body.HasFocus) dialog.HandleKey(key);
         }

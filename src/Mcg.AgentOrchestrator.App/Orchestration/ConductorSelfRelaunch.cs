@@ -81,7 +81,6 @@ internal sealed record ConductorSelfRelaunchResult(
 internal static partial class ConductorSelfRelaunch
 {
     private static readonly TimeSpan DefaultBuildTimeout = TimeSpan.FromMinutes(10);
-    private static readonly TimeSpan DefaultSelfCheckTimeout = TimeSpan.FromSeconds(30);
 
     internal static Func<ConductorSelfRelaunchRequest, ConductorSelfRelaunchResult> Create(
         ConductorSelfRelaunchOptions options,
@@ -169,14 +168,17 @@ internal static partial class ConductorSelfRelaunch
     internal static ConductorPreparedSuccessor PrepareSuccessor(
         ConductorSuccessorStagingOptions options,
         CancellationToken cancellationToken = default,
-        Action<string, string, CancellationToken>? beforeSelfCheck = null)
+        Action<string, string, CancellationToken>? beforeSelfCheck = null,
+        ConductorSelfCheckProbe.SuccessorProbeRunner? probeRunner = null,
+        Action<string>? recordEvent = null)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var buildTimeout = options.BuildTimeout <= TimeSpan.Zero
             ? DefaultBuildTimeout
             : options.BuildTimeout;
         var selfCheckTimeout = options.SelfCheckTimeout <= TimeSpan.Zero
-            ? DefaultSelfCheckTimeout
+            ? ConductorSelfCheckProbe.ResolveTimeout(Environment.GetEnvironmentVariable(
+                ConductorSelfCheckProbe.SelfCheckTimeoutEnvironmentVariable))
             : options.SelfCheckTimeout;
 
         var gitHeadResult = RunProcess(
@@ -258,8 +260,12 @@ internal static partial class ConductorSelfRelaunch
             Path.GetFileName(appDllPath),
             gitHead);
         beforeSelfCheck?.Invoke(successorDll, gitHead, cancellationToken);
-        var selfCheck = RunProcess(
-            options.DotnetPath,
+        var probe = ConductorSelfCheckProbe.Probe(
+            probeRunner ?? ((arguments, workingDirectory, timeout, token) =>
+            {
+                var result = RunProcess(options.DotnetPath, arguments, workingDirectory, timeout, token);
+                return new(result.ExitCode, result.Stdout, result.Stderr, result.TimedOut);
+            }),
             [
                 successorDll,
                 ConductorSuccessorSelfCheck.SubcommandName,
@@ -272,9 +278,11 @@ internal static partial class ConductorSelfRelaunch
             ],
             options.RepositoryRoot,
             selfCheckTimeout,
+            recordEvent,
             cancellationToken);
-        EnsureSucceeded("self-check", "probe successor startup contract", selfCheck);
-        var readiness = selfCheck.Stdout
+        if (probe.Result.ExitCode != 0 || probe.Result.TimedOut)
+            throw new ConductorSelfRelaunchPreparationException("self-check", ConductorSelfCheckProbe.FormatFailure(probe));
+        var readiness = probe.Result.Stdout
             .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .LastOrDefault(line => line.StartsWith("LOOP_START ", StringComparison.Ordinal));
         if (readiness is null ||

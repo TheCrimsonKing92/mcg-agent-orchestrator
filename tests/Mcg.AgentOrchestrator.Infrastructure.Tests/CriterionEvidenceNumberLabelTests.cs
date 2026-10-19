@@ -40,7 +40,7 @@ public sealed class CriterionEvidenceNumberLabelTests
         Assert.Equal(6, obligation.CriterionIndex);
         Assert.Equal(7, obligation.CriterionNumber);
         Assert.Equal("criterion 7 (v2) criterion-v2-6", obligation.DisplayLabel);
-        var output = InfrastructureTestSupport.CaptureConsole(() => ConsoleViews.PrintGoal(restored));
+        var output = InfrastructureTestSupport.CaptureConsole(() => GoalTextView.PrintGoal(restored));
         Assert.Contains(output.Split(Environment.NewLine), line =>
             line.StartsWith("  - criterion 7 (v2) criterion-v2-6: owner=", StringComparison.Ordinal));
     }

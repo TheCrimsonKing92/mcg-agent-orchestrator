@@ -8,7 +8,8 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
     IOwnerDigestSummary summary, TimeProvider clock, IOwnerConsoleEpicSource? epics = null,
     AnswerIntentStatusTracker? answerTracking = null, OwnerQuestionResolutionReader? resolutions = null,
     IOwnerConsoleNotifier? notifier = null, OwnerConsoleNotificationSettings? notifications = null,
-    Func<OwnerFleetViewModel>? fleet = null, OwnerGoalDetailQuery? goalDetail = null) : IDisposable
+    Func<OwnerFleetViewModel>? fleet = null, Func<string, OwnerLandingsPage>? landings = null,
+    OwnerGoalDetailQuery? goalDetail = null) : IDisposable
 {
     private readonly OwnerGoalDetailQuery _goalDetail = goalDetail ?? new OwnerGoalDetailQuery(state, tail);
     private readonly object _notificationGate = new();
@@ -42,8 +43,11 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
     internal string BellStatusText { get { lock (_notificationGate) return _bellTiers.StatusText; } }
     internal bool QuitRequested { get; private set; }
     private string? _requestedEpicId;
+    private string? _requestedGateGoalId;
     internal string? TakeRequestedEpicId()
     { var id = _requestedEpicId; _requestedEpicId = null; return id; }
+    internal string? TakeRequestedGateGoalId()
+    { var id = _requestedGateGoalId; _requestedGateGoalId = null; return id; }
     internal async Task ShowActivityMeaningAsync(OwnerConsoleActivityItem item, OwnerConsoleScreenOperation? operation = null,
         CancellationToken cancellationToken = default)
     {
@@ -153,12 +157,14 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
             decision => ShowDecisionAsync(decision, operation, cancellationToken), dialogs.ShowTextAsync, cancellationToken);
         await dialogs.ShowGoalAsync(dialog);
         _requestedEpicId = dialog.RequestedEpicId;
+        _requestedGateGoalId = dialog.RequestedGateGoalId;
     }
 
     private async Task<OwnerConsoleGoalDialog.Content?> ComposeGoalAsync(string goalId, CancellationToken token)
     {
         var output = new OwnerConsoleCapturedOutput();
-        var goal = await OwnerConsoleGoalDetailFormatter.ComposeAsync(_goalDetail, goalId, output, token, clock.LocalTimeZone).ConfigureAwait(false);
+        var goal = await OwnerConsoleGoalDetailFormatter.ComposeAsync(_goalDetail, goalId, output, token,
+            clock.LocalTimeZone, () => Model?.Gate).ConfigureAwait(false);
         if (goal is null) return null;
         var resolved = resolutions is null ? [] : await resolutions.ListForGoalAsync(goalId, token).ConfigureAwait(false);
         var lines = output.Text.Replace("\r", "").TrimEnd('\n').Split('\n').ToList();
@@ -172,7 +178,8 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
         var openQuestion = Model?.Decisions.Where(item => item.GoalId == goalId).OrderBy(item => item.Number).FirstOrDefault();
         var epicId = epics is null ? null : await epics.FindGoalEpicAsync(goalId, token).ConfigureAwait(false);
         var failure = goal.RetainedAcceptanceFailure is { } recorded ? OwnerConsoleGoalLanding.FailureText(recorded, clock.LocalTimeZone) : null;
-        return new(string.Join(Environment.NewLine, lines), choiceLines, resolved, openQuestion, failure, epicId);
+        var gateGoalId = Model?.Gate?.ForMember(goalId) is not null ? goalId : null;
+        return new(string.Join(Environment.NewLine, lines), choiceLines, resolved, openQuestion, failure, epicId, gateGoalId);
     }
 
     private async Task AnswerAsync(bool accept, OwnerConsoleScreenOperation? operation, CancellationToken cancellationToken,
@@ -247,11 +254,13 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
         var output = new OwnerConsoleCapturedOutput();
         string? goalId = null;
         string? fleetText = null;
+        OwnerLandingsPage? landingsPage = null;
         var control = new OwnerConsoleControlCommands(conductor, digest, output, clock);
         if (!await RunDependencyAsync(line, ExecuteAsync, operation, cancellationToken)) return;
         cancellationToken.ThrowIfCancellationRequested();
         if (goalId is not null) { await ShowGoalDetailAsync(goalId, operation, cancellationToken); return; }
         if (fleetText is not null) { await dialogs.ShowTextAsync("Fleet", fleetText); return; }
+        if (landingsPage is not null) { await ShowLandingsAsync(landingsPage, operation, cancellationToken); return; }
         await dialogs.ShowTextAsync("Command result", output.Text);
 
         async Task ExecuteAsync(CancellationToken stepToken)
@@ -267,7 +276,12 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
                 case "fleet":
                     if (parts.Length != 1) output.WriteLine("usage: fleet");
                     else if (fleet is null) output.WriteLine("fleet view unavailable in this session");
-                    else fleetText = OwnerFleetDiagram.Render(fleet());
+                    else fleetText = OwnerFleetDiagram.Render(fleet(), OwnerConsoleDialogWidth.ForDiagram(dialogs.TextWidth));
+                    break;
+                case "landings":
+                    if (parts.Length > 2) output.WriteLine(OwnerLandingsQuery.Usage);
+                    else if (landings is null) output.WriteLine("landings view unavailable in this session");
+                    else landingsPage = landings(parts.Length == 2 ? parts[1] : "");
                     break;
                 case "bell":
                     var arguments = parts.Skip(1).Select(part => part.ToLowerInvariant()).ToArray();
@@ -299,6 +313,19 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
                     output.WriteLine("valid commands: " + OwnerConsoleKeyHints.CommandPrompt);
                     break;
             }
+        }
+    }
+
+    private async Task ShowLandingsAsync(OwnerLandingsPage page, OwnerConsoleScreenOperation? operation,
+        CancellationToken cancellationToken)
+    {
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var chosen = await dialogs.ShowPageAsync("Landings", page.Text, page.ChoiceLines);
+            if (chosen is not { } index || index < 0 || index >= page.ChoiceGoalIds.Count) return;
+            await ShowGoalDetailAsync(page.ChoiceGoalIds[index], operation, cancellationToken);
+            if (_requestedEpicId is not null || _requestedGateGoalId is not null) return;
         }
     }
 

@@ -27,4 +27,5 @@ public sealed partial record AcceptanceCohortReceipt
 public static class AcceptanceCohortAttributionSources
 {
     public const string FocusedPass = "focused-pass";
+    public const string NoFailingTestIdentities = "no-failing-test-identities";
 }

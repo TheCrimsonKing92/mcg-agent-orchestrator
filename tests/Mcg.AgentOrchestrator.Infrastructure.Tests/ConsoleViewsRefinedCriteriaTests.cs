@@ -15,7 +15,7 @@ public sealed class ConsoleViewsRefinedCriteriaTests
             [],
             []));
 
-        var output = InfrastructureTestSupport.CaptureConsole(() => ConsoleViews.PrintGoal(goal));
+        var output = InfrastructureTestSupport.CaptureConsole(() => GoalTextView.PrintGoal(goal));
 
         Xunit.Assert.Contains("Refined acceptance criteria (1):", output, StringComparison.Ordinal);
         Xunit.Assert.DoesNotContain("WARNING: refined acceptance criteria count", output, StringComparison.Ordinal);
@@ -40,7 +40,7 @@ public sealed class ConsoleViewsRefinedCriteriaTests
             [],
             []));
 
-        var output = InfrastructureTestSupport.CaptureConsole(() => ConsoleViews.PrintGoal(goal));
+        var output = InfrastructureTestSupport.CaptureConsole(() => GoalTextView.PrintGoal(goal));
 
         Xunit.Assert.Contains("Brief acceptance criteria (2):", output, StringComparison.Ordinal);
         Xunit.Assert.Contains("  2. Second declared criterion.", output, StringComparison.Ordinal);

@@ -1470,6 +1470,9 @@ internal sealed partial class GoalRefinementService
     {
         foreach (var line in body.Split(["\r\n", "\n"], StringSplitOptions.None))
         {
+            if (line.StartsWith("Goal objective:", StringComparison.OrdinalIgnoreCase))
+                break;
+
             if (line.StartsWith("Fork kind:", StringComparison.OrdinalIgnoreCase))
                 return line["Fork kind:".Length..].Trim();
         }
@@ -1727,7 +1730,7 @@ internal sealed partial class GoalRefinementService
 
     private static bool IsFeasibilityClarification(CollaborationItem item) =>
         item.Type == CollaborationItemType.Clarification &&
-        item.Body.Contains($"Fork kind: {AcceptanceCriterionFeasibility.ForkKind}", StringComparison.OrdinalIgnoreCase);
+        string.Equals(ExtractForkKindFromBody(item.Body), AcceptanceCriterionFeasibility.ForkKind, StringComparison.OrdinalIgnoreCase);
 
     private static bool IsDismissedResolution(string? resolution) =>
         string.IsNullOrWhiteSpace(resolution) ||

@@ -17,7 +17,8 @@ internal sealed class OwnerConsoleSession(
     IOwnerConsoleDigestReport? digestReport = null,
     ChangeStreamFileReader? changes = null,
     AnswerIntentStatusTracker? answerTracking = null,
-    Func<OwnerFleetViewModel>? fleet = null) : IDisposable
+    Func<OwnerFleetViewModel>? fleet = null,
+    Func<int?>? terminalWidth = null) : IDisposable
 {
     private readonly AnswerIntentStatusTracker _answerTracking = answerTracking ?? new(answers.ReadStatusAsync, clock);
     public void Dispose() => _answerTracking.Dispose();
@@ -79,6 +80,8 @@ internal sealed class OwnerConsoleSession(
                 await RefreshQuestionsAsync(cancellationToken);
             else
             {
+                if (record.ChangeKind is ChangeStreamRecord.OwnerDecisionAnswered or ChangeStreamRecord.OwnerDecisionRetired)
+                    await RefreshQuestionsAsync(cancellationToken);
                 var id = record.GoalId;
                 if (id.Length != 32)
                 {
@@ -130,7 +133,7 @@ internal sealed class OwnerConsoleSession(
             {
                 try
                 {
-                    foreach (var row in OwnerFleetDiagram.Render(fleet()).Split('\n')) output.WriteLine(row);
+                    foreach (var row in OwnerFleetDiagram.Render(fleet(), OwnerConsoleDialogWidth.ForDiagram(terminalWidth?.Invoke())).Split('\n')) output.WriteLine(row);
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
                 { Announce($"fleet unavailable: {ex.Message}"); }

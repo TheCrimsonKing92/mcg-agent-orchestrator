@@ -606,7 +606,7 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
     }
 
     public async Task<int> ArchiveTerminalGoalSnapshotsAsync(
-        DateTimeOffset cutoff, CancellationToken cancellationToken = default)
+        DateTimeOffset cutoff, long maxSnapshotBytes = 134_217_728, CancellationToken cancellationToken = default)
     {
         var write = await BeginWriteAsync(ResolveOperationTag(nameof(ArchiveTerminalGoalSnapshotsAsync)), cancellationToken);
         await using var conn = write.Connection;
@@ -614,7 +614,7 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
         {
             // Already-migrated databases do not replay the core schema migration.
             await RunNonQueryAsync(conn, GoalSnapshotArchiveSchemaSql, cancellationToken);
-            var count = await SnapshotArchive.ArchiveAsync(conn, cutoff, cancellationToken);
+            var count = await SnapshotArchive.ArchiveAsync(conn, cutoff, maxSnapshotBytes, cancellationToken);
             await RunNonQueryAsync(conn, "COMMIT", cancellationToken);
             write.Telemetry.Emit("commit");
             return count;
@@ -2116,6 +2116,8 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
                 stored.CurrentHold,
                 current.CurrentHold),
             Priority = PickTickOwned(baseline.Priority, stored.Priority, current.Priority),
+            Isolation = PickTickOwned(baseline.Isolation, stored.Isolation, current.Isolation),
+            PriorityScheduling = PickTickOwned(baseline.PriorityScheduling, stored.PriorityScheduling, current.PriorityScheduling),
             EffectiveAcceptanceCriteriaCorrections = PickStoreOwnedList(
                 baseline.EffectiveAcceptanceCriteriaCorrections,
                 stored.EffectiveAcceptanceCriteriaCorrections,

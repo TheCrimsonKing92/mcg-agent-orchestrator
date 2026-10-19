@@ -217,7 +217,8 @@ public sealed class CliAttentionShowAgentReadEnvelopeContractTests : CliTaskQuer
                     id = item.Id, type = item.Type.ToString(), goalId = item.GoalId, status = "Raised",
                     subject = item.Subject, body = item.Body, correlationKey = item.CorrelationKey,
                     raisedAt = item.RaisedAt.UtcDateTime.ToString("O", CultureInfo.InvariantCulture)
-                }).ToArray()
+                }).ToArray(),
+                providerHolds = Array.Empty<object>()
             }, new JsonSerializerOptions(JsonSerializerDefaults.Web));
             using var bare = JsonDocument.Parse(Run(["attention", "--json"], seed.Workspace, seed.Kernel));
             Assert.Equal("mcg.attention", bare.RootElement.GetProperty("schema").GetString());

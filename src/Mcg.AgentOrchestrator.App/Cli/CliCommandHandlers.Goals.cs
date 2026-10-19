@@ -209,7 +209,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             var record = new GoalIntakeRequestStore(context.Workspace.SqliteStatePath).Get(parts[1])
                 ?? throw new InvalidOperationException(
                     $"GOAL_INTAKE_REQUEST_NOT_FOUND requestKey={parts[1]}");
-            ConsoleViews.PrintGoalIntakeReceipt(record);
+            GoalIntakeReceiptTextView.PrintGoalIntakeReceipt(record);
             return false;
         }
 
@@ -299,8 +299,8 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             var objective = parts.Count > 1 ? parts[1] : "Create a Windows-based agent orchestrator";
             var prototypeKernel = new AgentOrchestratorKernel();
             var prototypeGoal = GoalLifecycleCommands.CreateAndActivateGoal(prototypeKernel, context.Agents, objective);
-            ConsoleViews.PrintGoal(prototypeGoal);
-            ConsoleViews.PrintTimeline(prototypeGoal);
+            GoalTextView.PrintGoal(prototypeGoal);
+            TaskTimelineTextView.PrintTimeline(prototypeGoal);
             return false;
 
         case "goal":
@@ -362,7 +362,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 ApplySourceBacklogItemLink(context, context.CurrentGoal, runSourceBacklogLink);
                 context.FinalizeGoalCreation(context.CurrentGoal);
                 EpicAtCreation.AssignAfterCommit(context.Workspace, PortfolioMemberKind.Goal, context.CurrentGoal.Id.Value, runEpicId);
-                ConsoleViews.PrintGoal(context.CurrentGoal);
+                GoalTextView.PrintGoal(context.CurrentGoal);
                 var runParts = new List<string> { "run-goal", context.CurrentGoal.Id.Value[..8] };
                 AppendGoalAliasFlags(parts, runParts, includeRoleAgentFlags: false, "--run", "--brief-file", "--text-file", "--pipeline");
                 return TryExecuteGoalCommand("run-goal", runParts, context);
@@ -390,7 +390,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             ApplySourceBacklogItemLink(context, context.CurrentGoal, goalSourceBacklogLink);
             context.FinalizeGoalCreation(context.CurrentGoal);
             EpicAtCreation.AssignAfterCommit(context.Workspace, PortfolioMemberKind.Goal, context.CurrentGoal.Id.Value, goalEpicId);
-            ConsoleViews.PrintGoal(context.CurrentGoal);
+            GoalTextView.PrintGoal(context.CurrentGoal);
             return true;
 
         case "simple-goal":
@@ -423,7 +423,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             }
             context.FinalizeGoalCreation(context.CurrentGoal);
             EpicAtCreation.AssignAfterCommit(context.Workspace, PortfolioMemberKind.Goal, context.CurrentGoal.Id.Value, simpleEpicId);
-            ConsoleViews.PrintGoal(context.CurrentGoal);
+            GoalTextView.PrintGoal(context.CurrentGoal);
             if (HasCliConfirmation(parts, "--dispatch"))
             {
                 var dispatchParts = new List<string> { "subscription-dispatch", "1", "--confirm-dispatch-start" };
@@ -953,7 +953,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 context.Kernel,
                 context.CurrentGoal,
                 GetOptionalArgument(parts, "--tasks-only"));
-            ConsoleViews.PrintGoal(
+            GoalTextView.PrintGoal(
                 context.CurrentGoal,
                 ResolveGoalFriendlyLabel(context.CurrentGoal, context.Workspace.BacklogStorePath),
                 ResolveGoalStatusText(context.Workspace, context.CurrentGoal),
@@ -1379,7 +1379,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
         case "delegate":
             context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, parts.Count > 1 ? parts[1] : null);
             var delegation = context.Kernel.ActivateGoal(context.CurrentGoal.Id, context.Agents);
-            ConsoleViews.PrintDelegationPlan(context.CurrentGoal, delegation);
+            TaskTextView.PrintDelegationPlan(context.CurrentGoal, delegation);
             return delegation.Assignments.Count > 0;
 
         case "land":
@@ -1484,6 +1484,8 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
 
                 Action<BatchTickSummary>? onTick = ConductorTickPusher.CreateStoreCallback(context.Workspace.RunEventStorePath);
 
+                var agentRoster = AgentRosterReloader.ForConductLoop(context.Workspace, context.Agents);
+                context.Agents = agentRoster.View;
                 var loopDriver = new ConductorDriver(
                     context.Kernel,
                     context.Workspace,
@@ -1561,11 +1563,10 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                         new RepositoryIntegrityProbe(context.Workspace.ExecutionDirectory, new IcaclsIntegrityLabeler())));
                 var programHealthMonitor = ConductorProgramHealthMonitor.ForWorkspace(context.Workspace, conductEventLogWriter);
                 var maintenanceCadence = RunEventMaintenanceCadenceRunner.ForWorkspace(context.Workspace);
-                var remoteExecutorProbe = new ConductorRemoteExecutorProbe(
-                    AcceptancePartitionVerdictCache.ResolveHostStateRoot(context.Workspace.ExecutionDirectory),
-                    RemoteLaneExecutorConfiguration.ResolveStorePath(context.Workspace.ExecutionDirectory),
-                    TimeProvider.System, GoalAcceptanceVerifier.RunRemoteLaneTransportAsync,
-                    RemoteExecutorOccupancy.DefaultStartTime, conductEventLogWriter);
+                var remoteExecutorProbe = new ConductorRemoteExecutorProbe(AcceptancePartitionVerdictCache.ResolveHostStateRoot(context.Workspace.ExecutionDirectory),
+                    RemoteLaneExecutorConfiguration.ResolveStorePath(context.Workspace.ExecutionDirectory), TimeProvider.System,
+                    GoalAcceptanceVerifier.RunRemoteLaneTransportAsync, RemoteExecutorOccupancy.DefaultStartTime, conductEventLogWriter);
+                var executorToolsDeploy = ConductorExecutorToolsDeploy.ForWorkspace(context.Workspace, conductEventLogWriter);
                 var stateLogCheck = StateLogDivergenceCheckRunner.ForWorkspace(context.Workspace);
                 var failureClustersDaily = FailureClustersDailyRunner.ForWorkspace(context.Workspace);
                 var operatorIntents = OperatorIntentCoordinator.CreateDefault(context.Workspace);
@@ -1574,13 +1575,12 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 var parkedGoalSafetyNetTick = 0;
                 var scheduledLoadHold = context.InitialConductLoopLoadHold;
                 var suppressGoalRefinementForMaxDurationDeferral = false;
-                var maxDurationDeferralCeiling = AcceptanceGateEngineSettings
-                    .Load(context.Workspace.ExecutionDirectory)
-                    .ResolveCheckTimeout(null);
+                var maxDurationDeferralCeiling = AcceptanceGateEngineSettings.Load(context.Workspace.ExecutionDirectory).ResolveCheckTimeout(null);
                 TerminalGoalSweepResult reconcileSweep(
                     AgentOrchestratorKernel loopKernel,
                     IReadOnlySet<string> checkpointHeldGoalIds)
                 {
+                    agentRoster.Refresh();
                     loopReaper.BeginRefreshCycle();
                     intentGoalReloadObservations.Clear();
                     // Refresh tracked goals from persisted state before every tick, then ingest newly
@@ -1590,8 +1590,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     try
                     {
                         evictedGoalStatuses.Clear();
-                        var trackedGoalIds = loopKernel.Goals
-                            .Select(goal => goal.Id.Value)
+                        var trackedGoalIds = loopKernel.Goals.Select(goal => goal.Id.Value)
                             .ToArray();
                         var trackedGoalIdSet = trackedGoalIds.ToHashSet(StringComparer.Ordinal);
                         var actionableGoalIds = operatorIntents.ListActionableGoalIds()
@@ -1736,8 +1735,9 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     ConductorTickStepLedger.Measure("state-log-check", () => stateLogCheck.OnTick());
                     ConductorTickStepLedger.Measure("failure-clusters", () => failureClustersDaily.OnTick());
                     ConductorTickStepLedger.Measure("host-health", () => hostHealthMonitor.Evaluate());
-                    ConductorTickStepLedger.Measure("program-health", () => programHealthMonitor.Evaluate(loopKernel.Goals.Select(goal => (goal.Id, goal.Status)).ToArray(), terminalSweepCache.ObservedMainSha));
+                    ConductorTickStepLedger.Measure("program-health", () => programHealthMonitor.Evaluate(loopKernel.Goals.Select(goal => (goal.Id, goal.Status)).ToArray(), terminalSweepCache.ObservedMainSha, (goals, now) => ConductorInvariantObservationReader.ForWorkspace(context.Workspace).Read(goals, now)));
                     ConductorTickStepLedger.Measure("remote-executor-probe", () => remoteExecutorProbe.Evaluate());
+                    ConductorTickStepLedger.Measure("executor-tools-deploy", () => executorToolsDeploy.Evaluate());
                     ConductorTickStepLedger.Measure("remote-git-mirror", () => RemoteGitMirror.TryStartBackgroundProcessing(loopKernel, context.Workspace.ExecutionDirectory, integrationBranch: context.Workspace.IntegrationBranch));
                     return terminalSweep;
                 }
@@ -1795,7 +1795,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                             readAdoptionCensus: WorkerAdoptionCensus.CreateDefault(context.Workspace.SqliteStatePath),
                             adoptInheritedWorkers: WorkerAdoptionTransfer.CreateDefault(context.Workspace.SqliteStatePath,
                                 goalIds => context.ReloadKernel(goalIds))),
-                        blockedRecheckHeartbeatInterval: reconcileSweepOptions.HeartbeatInterval, countLiveGroupedGates: loopDriver.CountLiveGroupedGateAttempts,
+                        blockedRecheckHeartbeatInterval: reconcileSweepOptions.HeartbeatInterval, countLiveGroupedGates: () => loopDriver.CountLiveGroupedGateAttempts(relaunchBlockingOnly: true),
                         workspace: context.Workspace).WithSteward(ConductorStewardHost.CreateDefault(context.Workspace))
                         .WithUnintendedExitDiagnostics(conductorDiagnosticPath, conductorOutputLogPath)
                         .WithJudgePanel(ConductorJudgePanelHost.CreateDefault(context.Workspace))
@@ -1834,9 +1834,9 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 }
                 finally
                 {
-                    maintenanceCadence.WaitForCurrentRunAsync().GetAwaiter().GetResult();
-                    stateLogCheck.WaitForCurrentRunAsync().GetAwaiter().GetResult();
-                    failureClustersDaily.WaitForCurrentRunAsync().GetAwaiter().GetResult();
+                    LoopExitMaintenanceJoin.JoinAsync(
+                        maintenanceCadence, stateLogCheck, failureClustersDaily,
+                        conductEventLogWriter).GetAwaiter().GetResult();
                 }
             }
             CliArgumentParser.RequirePartCount(parts, 2, "conduct <goal-id-prefix> [--policy <Conservative|Permissive|Manual>]");

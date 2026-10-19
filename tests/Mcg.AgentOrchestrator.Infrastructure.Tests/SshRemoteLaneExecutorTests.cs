@@ -173,7 +173,7 @@ public sealed class SshRemoteLaneExecutorTests
         if (fault == "missing-exit") status.Remove("exitCode");
         await fake.PollOnce(new(status));
         var error = Assert.Throws<RemoteLaneTransportException>(() => handle.TryGetResult());
-        if (fault == "fetch-failed") Assert.StartsWith(message, error.Message);
+        if (fault is "fetch-failed" or "unsafe-name") Assert.StartsWith(message, error.Message);
         else Assert.Equal(message, error.Message);
         Assert.Equal(fault == "fetch-failed" ? 5 : 4, fake.Calls.Count);
     }

@@ -8,7 +8,7 @@ internal sealed record RemoteLaneStep(string Name, int? ExitCode, bool? TimedOut
     DateTimeOffset StartedAt, DateTimeOffset EndedAt, string StderrTail,
     string? StdoutPath = null, string? StderrPath = null);
 internal sealed record RemoteLanePollSummary(int PollCount, int FailedPollCount, string? LastState,
-    DateTimeOffset? LastHeartbeatChangeAt, RemoteLaneStep? LastFailedPoll);
+    DateTimeOffset? LastHeartbeatChangeAt, RemoteLaneStep? LastFailedPoll, RemoteLaneQueueWait? QueueWait = null);
 internal sealed record RemoteLaneAttemptDetail(IReadOnlyList<RemoteLaneStep> Steps,
     RemoteLanePollSummary? Poll, IReadOnlyList<RemoteLaneStep> Fetches, JsonElement? LastStatus,
     string? RunnerLogPath, string? ExceptionMessage,

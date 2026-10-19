@@ -11,20 +11,25 @@ internal sealed class AcceptanceLaneCarryShadow
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower };
     private static readonly string[] TierNames = ["optimistic", "mid", "conservative"];
+    private const string BaselinesPhase = "baselines", ScanPhase = "scan", DiffPhase = "diff",
+        IndexPhase = "index", LanesPhase = "lanes", WritePhase = "write";
     private readonly object _gate = new();
     private readonly Dictionary<string, Observation> _observations = new(StringComparer.Ordinal);
     private readonly string _worktreePath, _goalId, _attemptId, _candidateTree;
     private readonly Func<string, string, string, IReadOnlyList<string>> _resolveChangedFiles;
+    private readonly Func<long> _budgetTimestamp;
     private bool _completed;
 
     internal AcceptanceLaneCarryShadow(string worktreePath, string goalId, string attemptId, string candidateTree,
-        Func<string, string, string, IReadOnlyList<string>>? resolveChangedFiles = null)
+        Func<string, string, string, IReadOnlyList<string>>? resolveChangedFiles = null,
+        Func<long>? budgetTimestamp = null)
     {
         _worktreePath = worktreePath;
         _goalId = goalId;
         _attemptId = attemptId;
         _candidateTree = candidateTree;
         _resolveChangedFiles = resolveChangedFiles ?? ResolveChangedFilesFromGit;
+        _budgetTimestamp = budgetTimestamp ?? Stopwatch.GetTimestamp;
     }
 
     internal static IReadOnlyList<string> ResolveChangedFilesFromGit(string root, string baseline, string candidate)
@@ -82,10 +87,12 @@ internal sealed class AcceptanceLaneCarryShadow
 
     internal void Complete()
     {
-        var watch = Stopwatch.StartNew();
+        long start = 0;
+        string? path = null;
         string? temporaryPath = null;
         try
         {
+            start = _budgetTimestamp();
             Observation[] observations;
             lock (_gate)
             {
@@ -96,31 +103,31 @@ internal sealed class AcceptanceLaneCarryShadow
             var startedAt = DateTimeOffset.UtcNow;
             var root = Path.Combine(AcceptancePartitionVerdictCache.ResolveHostStateRoot(_worktreePath),
                 ".orchestrator", "lane-carry-shadow");
-            var path = Path.Combine(root, SafeName(_goalId), $"{SafeName(_attemptId)}.json");
-            var (baselines, skipped) = ReadBaselines(root, path, startedAt, watch);
-            CheckBudget(watch);
+            path = Path.Combine(root, SafeName(_goalId), $"{SafeName(_attemptId)}.json");
+            var (baselines, skipped) = ReadBaselines(root, path, startedAt, start);
+            CheckBudget(BaselinesPhase, start);
             var sources = ScanSources(observations.Length > 0);
-            CheckBudget(watch);
+            CheckBudget(ScanPhase, start);
             var diffs = new Dictionary<string, IReadOnlyList<string>?>(StringComparer.Ordinal);
             foreach (var tree in observations.Select(row => baselines.GetValueOrDefault(row.FilterHash)?.Tree)
                          .OfType<string>().Distinct(StringComparer.Ordinal))
             {
-                CheckBudget(watch);
+                CheckBudget(DiffPhase, start);
                 try { diffs[tree] = _resolveChangedFiles(_worktreePath, tree, _candidateTree); }
                 catch (Exception ex)
                 {
                     diffs[tree] = null;
                     Log($"baseline-tree-missing:{ex.GetType().Name}");
                 }
-                CheckBudget(watch);
+                CheckBudget(DiffPhase, start);
             }
             var sourceIndex = BuildSourceIndex(diffs.Values.OfType<IReadOnlyList<string>>()
-                .SelectMany(files => files).Any(AcceptanceLaneCarryShadowReach.IsSource), watch);
+                .SelectMany(files => files).Any(AcceptanceLaneCarryShadowReach.IsSource), start);
             var changes = new Dictionary<string, AcceptanceLaneCarryShadowReach.ChangeSet>(StringComparer.Ordinal);
             foreach (var (tree, files) in diffs.Where(pair => pair.Value is not null))
             {
                 changes[tree] = AcceptanceLaneCarryShadowReach.Prepare(files!, sourceIndex);
-                CheckBudget(watch);
+                CheckBudget(IndexPhase, start);
             }
             var lanes = new List<Lane>();
             foreach (var observation in observations)
@@ -152,21 +159,34 @@ internal sealed class AcceptanceLaneCarryShadow
                 };
                 lanes.Add(new(observation.FilterHash, observation.Outcome, observation.Classes, unresolved.ToArray(),
                     status, baseline?.Attempt, baseline?.Tree, tiers));
-                CheckBudget(watch);
+                CheckBudget(LanesPhase, start);
             }
             var summary = TierNames.ToDictionary(tier => tier,
                 tier => new Summary(lanes.Count, lanes.Count(lane => lane.Tiers[tier].WouldCarry),
                     lanes.Count(lane => lane.Tiers[tier].FalseCarry)), StringComparer.Ordinal);
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-            CheckBudget(watch);
+            CheckBudget(WritePhase, start);
             var record = new ShadowRecord(_goalId, _attemptId, _candidateTree, DateTimeOffset.UtcNow,
-                watch.ElapsedMilliseconds, skipped, lanes, summary);
+                ElapsedMs(start), skipped, lanes, summary);
             temporaryPath = $"{path}.{Guid.NewGuid():N}.tmp";
             File.WriteAllText(temporaryPath, JsonSerializer.Serialize(record, JsonOptions));
-            CheckBudget(watch);
+            CheckBudget(WritePhase, start);
             File.Move(temporaryPath, path, overwrite: true);
         }
-        catch (BudgetExceededException) { Log("budget-exceeded"); }
+        catch (BudgetExceededException ex)
+        {
+            Log($"budget-exceeded:{ex.Phase}");
+            try
+            {
+                var record = new BudgetExceededRecord(_goalId, _attemptId, _candidateTree,
+                    DateTimeOffset.UtcNow, ElapsedMs(start), ex.Phase, []);
+                Directory.CreateDirectory(Path.GetDirectoryName(path!)!);
+                temporaryPath ??= $"{path}.{Guid.NewGuid():N}.tmp";
+                File.WriteAllText(temporaryPath, JsonSerializer.Serialize(record, JsonOptions));
+                File.Move(temporaryPath, path!, overwrite: true);
+            }
+            catch (Exception failure) { Log($"completion:{failure.GetType().Name}"); }
+        }
         catch (Exception ex) { Log($"completion:{ex.GetType().Name}"); }
         finally
         {
@@ -190,18 +210,18 @@ internal sealed class AcceptanceLaneCarryShadow
         }
     }
 
-    private Dictionary<string, AcceptanceLaneCarryShadowReach.Source> BuildSourceIndex(bool needed, Stopwatch watch)
+    private Dictionary<string, AcceptanceLaneCarryShadowReach.Source> BuildSourceIndex(bool needed, long start)
     {
         var sources = new Dictionary<string, AcceptanceLaneCarryShadowReach.Source>(StringComparer.Ordinal);
         var root = Path.Combine(_worktreePath, "src");
         if (!needed || !Directory.Exists(root)) return sources;
         foreach (var path in EnumerateSourceFiles(root))
         {
-            CheckBudget(watch);
+            CheckBudget(IndexPhase, start);
             sources[Path.GetRelativePath(_worktreePath, path).Replace('\\', '/')] =
                 AcceptanceLaneCarryShadowReach.IndexSource(File.ReadAllText(path));
         }
-        CheckBudget(watch);
+        CheckBudget(IndexPhase, start);
         return sources;
     }
 
@@ -216,8 +236,8 @@ internal sealed class AcceptanceLaneCarryShadow
         }
     }
 
-    private static (Dictionary<string, Baseline> Baselines, int Skipped) ReadBaselines(
-        string root, string currentPath, DateTimeOffset before, Stopwatch watch)
+    private (Dictionary<string, Baseline> Baselines, int Skipped) ReadBaselines(
+        string root, string currentPath, DateTimeOffset before, long start)
     {
         var baselines = new Dictionary<string, Baseline>(StringComparer.Ordinal);
         var skipped = 0;
@@ -225,7 +245,7 @@ internal sealed class AcceptanceLaneCarryShadow
         var newest = new PriorityQueue<string, (long Time, string Path)>();
         foreach (var path in Directory.EnumerateFiles(root, "*.json", SearchOption.AllDirectories))
         {
-            CheckBudget(watch);
+            CheckBudget(BaselinesPhase, start);
             if (path.Equals(currentPath, StringComparison.OrdinalIgnoreCase)) continue;
             try
             {
@@ -236,7 +256,7 @@ internal sealed class AcceptanceLaneCarryShadow
         }
         foreach (var file in newest.UnorderedItems)
         {
-            CheckBudget(watch);
+            CheckBudget(BaselinesPhase, start);
             try
             {
                 using var document = JsonDocument.Parse(File.ReadAllText(file.Element));
@@ -265,9 +285,12 @@ internal sealed class AcceptanceLaneCarryShadow
         return new(reached, carry, carry && outcome == "failed");
     }
 
-    private static void CheckBudget(Stopwatch watch)
+    private long ElapsedMs(long start) => (long)Stopwatch.GetElapsedTime(start, _budgetTimestamp()).TotalMilliseconds;
+
+    private void CheckBudget(string phase, long start)
     {
-        if (watch.Elapsed > TimeSpan.FromSeconds(10)) throw new BudgetExceededException();
+        if (Stopwatch.GetElapsedTime(start, _budgetTimestamp()) > TimeSpan.FromSeconds(10))
+            throw new BudgetExceededException(phase);
     }
 
     private static string SafeName(string value) => string.Concat(value.Select(character =>
@@ -278,7 +301,10 @@ internal sealed class AcceptanceLaneCarryShadow
         catch (Exception) { }
     }
 
-    private sealed class BudgetExceededException : Exception;
+    private sealed class BudgetExceededException(string phase) : Exception
+    {
+        internal string Phase => phase;
+    }
     private sealed record Observation(string FilterHash, string Outcome, string[] Classes, string[] Unresolved);
     private sealed record Baseline(string Tree, string Attempt, DateTimeOffset Completed);
     private sealed record Tier(bool Reached, bool WouldCarry, bool FalseCarry);
@@ -287,4 +313,6 @@ internal sealed class AcceptanceLaneCarryShadow
     private sealed record Summary(int LaneCount, int WouldCarryCount, int FalseCarryCount);
     private sealed record ShadowRecord(string GoalId, string AttemptId, string CandidateTree, DateTimeOffset CompletedAt,
         long ElapsedMs, int SkippedBaselineFiles, IReadOnlyList<Lane> Lanes, Dictionary<string, Summary> Summary);
+    private sealed record BudgetExceededRecord(string GoalId, string AttemptId, string CandidateTree,
+        DateTimeOffset CompletedAt, long ElapsedMs, string BudgetExceededPhase, IReadOnlyList<Lane> Lanes);
 }

@@ -85,13 +85,6 @@ public sealed record ControlPlaneBoardSnapshot(
     int EscalatedLanes,
     DateTimeOffset ObservedAt);
 
-public sealed record ControlPlaneBacklogDigestItem(
-    string Id,
-    string Title,
-    BacklogItemStatus Status,
-    DateTimeOffset UpdatedAt,
-    string? SourceGoalId);
-
 public sealed record ControlPlaneDeliveryPolicy(
     int DailyDecisionBudget = 6,
     int SystemicMergeThreshold = 3,
@@ -152,17 +145,6 @@ public sealed record ControlPlaneDeliveryBatchResult(
 {
     public int Count(ControlPlaneDeliveryChannel channel, ControlPlaneDeliveryOperationKind kind) =>
         Operations.Count(operation => operation.Channel == channel && operation.Kind == kind);
-}
-
-public sealed record ControlPlaneReplayReport(
-    int Decisions,
-    int Board,
-    int Digest,
-    int Suppressed,
-    IReadOnlyList<ControlPlaneDeliveryOperation> Operations)
-{
-    public string FormatCounts() =>
-        $"#decisions={Decisions} #board={Board} #digest={Digest} suppressed={Suppressed}";
 }
 
 public static class ControlPlaneMuteControl

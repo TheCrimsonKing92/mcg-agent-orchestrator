@@ -54,6 +54,7 @@ internal sealed partial class ConductorBatchLoop
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
         {
+            RecordActivationAdmissionFailure();
             return new ActiveParallelAcceptanceReservations([], [], [], [], ex);
         }
     }
@@ -163,14 +164,18 @@ internal sealed partial class ConductorBatchLoop
     {
         try
         {
-            return BuildLiveAcceptanceCensus(
+            var liveGates = GateLoadContextProbe.CaptureLiveGateOccupants();
+            var census = BuildLiveAcceptanceCensus(
                 activeAttempts,
                 activeAttemptIds,
                 activeCohorts,
-                GateLoadContextProbe.CaptureLiveGateOccupants());
+                liveGates);
+            RecordActivationAdmissionCensus(census.OccupiedCount, liveGates.Count(gate => gate.CountsAsAcceptanceOccupant));
+            return census;
         }
         catch (Exception ex) when (ex is GateLoadContextProbe.LoadProbeUnavailableException or IOException or UnauthorizedAccessException)
         {
+            RecordActivationAdmissionFailure();
             RecordParallelAcceptanceProgress(
                 $"ADMISSION tick={tick} detail=live-census-unavailable error={SanitizeReason(ex.Message)}",
                 changedGoalLines);
@@ -298,27 +303,5 @@ internal sealed partial class ConductorBatchLoop
     private static string FormatParallelAcceptanceCandidateUnavailableDetail(Exception exception) =>
         SanitizeReason(exception.Message);
 
-    internal static IReadOnlyList<Goal> OrderParallelAcceptanceEligibleGoals(IReadOnlyList<Goal> eligible) =>
-        eligible
-            .OrderBy(ParallelAcceptanceVerifiedAt)
-            .ThenBy(goal => goal.Timeline.FirstOrDefault()?.OccurredAt ?? DateTimeOffset.MinValue)
-            .ThenBy(goal => goal.Id.Value, StringComparer.Ordinal)
-            .ToArray();
-
-    private static DateTimeOffset ParallelAcceptanceVerifiedAt(Goal goal)
-    {
-        var lastVerification = goal.Tasks
-            .Select(task => task.LastVerification?.CompletedAt)
-            .Where(completedAt => completedAt.HasValue)
-            .Select(completedAt => completedAt!.Value)
-            .DefaultIfEmpty(goal.Timeline.FirstOrDefault()?.OccurredAt ?? DateTimeOffset.MinValue)
-            .Max();
-        return goal.Timeline
-            .Where(evt =>
-                evt.Kind == ProgressKind.GoalPolicyDecision &&
-                evt.Message.Contains("Verified", StringComparison.OrdinalIgnoreCase))
-            .Select(evt => evt.OccurredAt)
-            .DefaultIfEmpty(lastVerification)
-            .Min();
-    }
+    internal static IReadOnlyList<Goal> OrderParallelAcceptanceEligibleGoals(IReadOnlyList<Goal> eligible) => GoalSchedulingOrder.ForAcceptance(eligible);
 }

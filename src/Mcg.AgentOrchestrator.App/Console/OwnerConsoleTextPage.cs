@@ -15,6 +15,7 @@ internal sealed class OwnerConsoleTextPage
     internal IReadOnlyList<int> SourceLines { get; private set; } = [];
     internal IReadOnlyList<string> Visible => Lines.Skip(Offset).Take(_height).ToArray();
     internal int Offset { get; private set; }
+    internal OwnerConsoleOverflow Overflow => OwnerConsoleOverflow.Of(Lines.Count, Offset, _height);
     internal int Selected { get; private set; }
     internal int? Choice => _choiceLines.ToList().IndexOf(SourceLines.Count == 0 ? -1 : SourceLines[Selected]) is var index && index >= 0 ? index : null;
 

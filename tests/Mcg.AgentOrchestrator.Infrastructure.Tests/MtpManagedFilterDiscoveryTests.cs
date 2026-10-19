@@ -1,7 +1,7 @@
 using System.Text.Json;
 using static MtpTestRunnerScriptTests;
 
-[Xunit.Collection("IsolatedProcessSpawning")]
+[Xunit.Collection("IsolatedProcessSpawningShardB")]
 public sealed class MtpManagedFilterDiscoveryTests
 {
     [Xunit.Fact]

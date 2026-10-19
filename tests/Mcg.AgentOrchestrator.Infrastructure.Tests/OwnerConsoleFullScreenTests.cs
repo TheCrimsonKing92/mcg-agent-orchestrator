@@ -191,10 +191,10 @@ public sealed class OwnerConsoleFullScreenTests
         await view.HandleKeyAsync(new Key(':'));
         Assert.True(view.CommandLine.HasFocus);
         foreach (var command in OwnerConsoleKeyHints.Commands) Assert.Contains(command.Command, view.HintText);
-        var expectedCommands = OwnerConsoleKeyHints.Commands.Select(command => command.Command).ToArray();
+        var expectedCommands = OwnerConsoleBindings.PromptEntries.ToArray();
         var hintCommands = view.HintText.Split("commands: ", StringSplitOptions.None)[1].Split(" | ", StringSplitOptions.None);
         Assert.Equal(expectedCommands, hintCommands);
-        Assert.Contains("epics", hintCommands);
+        Assert.Contains("[e] epics", hintCommands);
         view.CommandLine.Text = "frobnicate";
         view.Render(model);
         Assert.Equal("frobnicate", view.CommandLine.Text);
@@ -216,7 +216,7 @@ public sealed class OwnerConsoleFullScreenTests
         var outputCommands = commandLine[commandPrefix.Length..].Split(" | ", StringSplitOptions.None);
         Assert.Equal(expectedCommands, outputCommands);
         Assert.Equal(hintCommands, outputCommands);
-        Assert.Contains("epics", outputCommands);
+        Assert.Contains("[e] epics", outputCommands);
         Assert.Equal(paneHint, view.HintText);
         Assert.Equal(string.Empty, harness.Output.Text);
     }

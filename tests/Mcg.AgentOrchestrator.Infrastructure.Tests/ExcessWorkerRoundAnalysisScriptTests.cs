@@ -5,7 +5,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 using Microsoft.Data.Sqlite;
 using Microsoft.VisualBasic.FileIO;
 
-[Xunit.Collection("IsolatedProcessSpawning")]
+[Xunit.Collection("IsolatedProcessSpawningShardC")]
 public sealed class ExcessWorkerRoundAnalysisScriptTests
 {
     [Xunit.Fact]

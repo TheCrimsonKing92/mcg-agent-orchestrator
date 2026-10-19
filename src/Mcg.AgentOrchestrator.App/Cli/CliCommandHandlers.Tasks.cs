@@ -161,10 +161,10 @@ internal static void RenderGoalScopedTaskMutation(GoalScopedTaskMutationOutcome 
         case GoalScopedTaskMutationRenderKind.None:
             break;
         case GoalScopedTaskMutationRenderKind.Goal:
-            ConsoleViews.PrintGoal(outcome.Goal);
+            GoalTextView.PrintGoal(outcome.Goal);
             break;
         case GoalScopedTaskMutationRenderKind.Task:
-            ConsoleViews.PrintTask(outcome.Goal, outcome.Task ?? throw new InvalidOperationException("Task render requires a task."));
+            TaskTextView.PrintTask(outcome.Goal, outcome.Task ?? throw new InvalidOperationException("Task render requires a task."));
             break;
         case GoalScopedTaskMutationRenderKind.NoteAcknowledgement:
             Console.WriteLine($"Note added to task {(outcome.Task ?? throw new InvalidOperationException("Note render requires a task.")).Id}");
@@ -331,12 +331,12 @@ private static bool? TryExecuteTaskCommand(string command, IReadOnlyList<string>
 
         case "task":
             var taskTarget = ResolveCommandTaskTarget(parts, context, "task <task-number|task-id-prefix>|<goal-prefix> <task-number|task-id-prefix>|--goal <goal-prefix> <task-number|task-id-prefix>");
-            ConsoleViews.PrintTask(context.CurrentGoal!, taskTarget.Task);
+            TaskTextView.PrintTask(context.CurrentGoal!, taskTarget.Task);
             return false;
 
         case "tasks":
             context.CurrentGoal = OrchestratorEntityResolver.RequireGoal(context.CurrentGoal);
-            ConsoleViews.PrintTaskQueryResult(context.CurrentGoal, context.Kernel.QueryTasks(context.CurrentGoal.Id, CliArgumentParser.ParseTaskQuery(parts.Skip(1))));
+            GoalTextView.PrintTaskQueryResult(context.CurrentGoal, context.Kernel.QueryTasks(context.CurrentGoal.Id, CliArgumentParser.ParseTaskQuery(parts.Skip(1))));
             return false;
 
         case "add-task":
@@ -366,7 +366,7 @@ private static bool? TryExecuteTaskCommand(string command, IReadOnlyList<string>
                 beforeRole: beforeRoleValue is null
                     ? null
                     : CliArgumentParser.ParseAgentRole(beforeRoleValue));
-            ConsoleViews.PrintTask(context.CurrentGoal, addedTask);
+            TaskTextView.PrintTask(context.CurrentGoal, addedTask);
             return true;
 
         case "verification-plan":
@@ -379,7 +379,7 @@ private static bool? TryExecuteTaskCommand(string command, IReadOnlyList<string>
             }
 
             context.Kernel.SetTaskVerificationPlan(context.CurrentGoal!.Id, planTask.Id, parts[planTarget.NextIndex]);
-            ConsoleViews.PrintTask(context.CurrentGoal!, planTask);
+            TaskTextView.PrintTask(context.CurrentGoal!, planTask);
             return true;
 
         case "brief":
@@ -390,12 +390,12 @@ private static bool? TryExecuteTaskCommand(string command, IReadOnlyList<string>
 
         case "timeline":
             context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, parts.Count > 1 ? parts[1] : null);
-            ConsoleViews.PrintTimeline(context.CurrentGoal);
+            TaskTimelineTextView.PrintTimeline(context.CurrentGoal);
             return false;
 
         case "task-timeline":
             var timelineTarget = ResolveCommandTaskTarget(parts, context, "task-timeline <task-number>|<goal-prefix> <task-number>|--goal <goal-prefix> <task-number>");
-            ConsoleViews.PrintTaskTimeline(context.CurrentGoal!, timelineTarget.Task);
+            TaskTimelineTextView.PrintTaskTimeline(context.CurrentGoal!, timelineTarget.Task);
             return false;
 
         case "goal-events":
@@ -409,7 +409,7 @@ private static bool? TryExecuteTaskCommand(string command, IReadOnlyList<string>
             return false;
 
         case "pending":
-            ConsoleViews.PrintPendingHumanInput(context.Kernel);
+            TaskTextView.PrintPendingHumanInput(context.Kernel);
             return false;
 
         case "run":
@@ -466,7 +466,7 @@ private static bool? TryExecuteTaskCommand(string command, IReadOnlyList<string>
                 context.Kernel,
                 context.CurrentGoal.Id,
                 GoalObjectivePlanner.BuildCapabilityWarnings(retryMessage));
-            ConsoleViews.PrintTask(context.CurrentGoal!, retryTask);
+            TaskTextView.PrintTask(context.CurrentGoal!, retryTask);
             return true;
 
         case "reassign-agent":
@@ -508,7 +508,7 @@ private static bool? TryExecuteTaskCommand(string command, IReadOnlyList<string>
             Console.WriteLine(
                 $"AGENT_REASSIGNMENT_ACKNOWLEDGED task={reassignTarget.Task.Id.Value} " +
                 $"agent={targetAgent.Id.Value} harness={targetAgent.Subscription?.WorkerProfileName ?? "api"} effect={routingEffect}");
-            ConsoleViews.PrintTask(context.CurrentGoal!, reassignTarget.Task);
+            TaskTextView.PrintTask(context.CurrentGoal!, reassignTarget.Task);
             return true;
 
         case "re-delegate":
@@ -518,7 +518,7 @@ private static bool? TryExecuteTaskCommand(string command, IReadOnlyList<string>
             var redelegateTask = redelegateTarget.Task;
             EnsurePolicyAllows(context, context.CurrentGoal!, redelegatePolicy, AutonomyAction.ProviderFailover, command);
             context.Kernel.RedelegateTask(context.CurrentGoal!.Id, redelegateTask.Id, context.Agents);
-            ConsoleViews.PrintTask(context.CurrentGoal!, redelegateTask);
+            TaskTextView.PrintTask(context.CurrentGoal!, redelegateTask);
             return true;
 
         case "note":
@@ -542,7 +542,7 @@ private static bool? TryExecuteTaskCommand(string command, IReadOnlyList<string>
             var dispatchTask = dispatchTarget.Task;
             var dispatch = new TaskDispatchRecord(parts[dispatchTarget.NextIndex], parts[dispatchTarget.NextIndex + 1], context.Workspace.ResolveExecutionDirectory(context.CurrentGoal!.Id), DateTimeOffset.UtcNow);
             context.Kernel.RecordTaskDispatch(context.CurrentGoal!.Id, dispatchTask.Id, dispatch);
-            ConsoleViews.PrintTask(context.CurrentGoal!, dispatchTask);
+            TaskTextView.PrintTask(context.CurrentGoal!, dispatchTask);
             return true;
 
         case "verify":
@@ -560,7 +560,7 @@ private static bool? TryExecuteTaskCommand(string command, IReadOnlyList<string>
                 .GetAwaiter()
                 .GetResult();
             context.Kernel.RecordTaskVerification(context.CurrentGoal!.Id, verifyTask.Id, verification);
-            ConsoleViews.PrintTask(context.CurrentGoal!, verifyTask);
+            TaskTextView.PrintTask(context.CurrentGoal!, verifyTask);
             return true;
 
         case "verify-manual":
@@ -574,7 +574,7 @@ private static bool? TryExecuteTaskCommand(string command, IReadOnlyList<string>
                 context.Workspace.RootDirectory,
                 DateTimeOffset.UtcNow);
             context.Kernel.RecordTaskVerification(context.CurrentGoal!.Id, manualTask.Id, manualVerification);
-            ConsoleViews.PrintTask(context.CurrentGoal!, manualTask);
+            TaskTextView.PrintTask(context.CurrentGoal!, manualTask);
             return true;
 
         case "verifications":
@@ -588,7 +588,7 @@ private static bool? TryExecuteTaskCommand(string command, IReadOnlyList<string>
             RequireRemainingArgument(parts, progressTarget.NextIndex + 1, progressUsage);
             var progressTask = progressTarget.Task;
             context.Kernel.ReportTaskProgress(context.CurrentGoal!.Id, progressTask.Id, CliArgumentParser.ParseReportableStatus(parts[progressTarget.NextIndex]), ResolveTextArgument(parts, progressTarget.NextIndex + 1, progressUsage, "--text-file"));
-            ConsoleViews.PrintGoal(context.CurrentGoal!);
+            GoalTextView.PrintGoal(context.CurrentGoal!);
             return true;
 
         case "ask":
@@ -597,7 +597,7 @@ private static bool? TryExecuteTaskCommand(string command, IReadOnlyList<string>
             var askTask = askTarget.Task;
             var request = context.Kernel.RequestHumanInput(context.CurrentGoal!.Id, askTask.Id, parts[askTarget.NextIndex]);
             Console.WriteLine($"Human input requested: {request.Id}");
-            ConsoleViews.PrintGoal(context.CurrentGoal!);
+            GoalTextView.PrintGoal(context.CurrentGoal!);
             return true;
 
         case "ask-goal":
@@ -605,7 +605,7 @@ private static bool? TryExecuteTaskCommand(string command, IReadOnlyList<string>
             context.CurrentGoal = OrchestratorEntityResolver.RequireGoal(context.CurrentGoal);
             var goalRequest = context.Kernel.RequestHumanInput(context.CurrentGoal.Id, null, parts[1]);
             Console.WriteLine($"Human input requested: {goalRequest.Id}");
-            ConsoleViews.PrintGoal(context.CurrentGoal);
+            GoalTextView.PrintGoal(context.CurrentGoal);
             return true;
 
         case "answer":
@@ -619,7 +619,7 @@ private static bool? TryExecuteTaskCommand(string command, IReadOnlyList<string>
                 ResolveTextArgument(answerParts, inlineIndex: 2, answerUsage, "--text-file"),
                 answerGateIds);
             context.CurrentGoal = context.Kernel.GetGoal(resolvedRequest.GoalId);
-            ConsoleViews.PrintGoal(context.CurrentGoal);
+            GoalTextView.PrintGoal(context.CurrentGoal);
             return true;
 
         case "supersede":
@@ -671,7 +671,7 @@ private static bool? TryExecuteTaskCommand(string command, IReadOnlyList<string>
             Console.WriteLine(
                 $"Superseded clarification {supersededId}. " +
                 $"Authoritative answer: {authoritativeText}");
-            ConsoleViews.PrintGoal(context.CurrentGoal);
+            GoalTextView.PrintGoal(context.CurrentGoal);
             return true;
 
         case "gate-satisfied":
@@ -697,7 +697,7 @@ private static bool? TryExecuteTaskCommand(string command, IReadOnlyList<string>
                     gateEvidence);
                 context.CurrentGoal = context.Kernel.GetGoal(gateRequest.GoalId);
             }
-            ConsoleViews.PrintGoal(context.CurrentGoal);
+            GoalTextView.PrintGoal(context.CurrentGoal);
             return true;
 
         default:
@@ -795,7 +795,7 @@ private static void RunApiTask(CliExecutionContext context, TaskSpec task)
     var diffProvider = GoalWorktreeDiffProvider.Create(context.Workspace.ExecutionDirectory);
     var runner = new AgentTaskRunner(context.Kernel, context.Agents, context.Providers, goalDiffProvider: diffProvider);
     var result = runner.RunAsync(context.CurrentGoal!.Id, task.Id).GetAwaiter().GetResult();
-    ConsoleViews.PrintTask(result.Goal, result.Task);
+    TaskTextView.PrintTask(result.Goal, result.Task);
 }
 
 private static void EnsureExplicitApiRunAllowed(TaskSpec task, AgentDefinition agent)

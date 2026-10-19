@@ -535,7 +535,7 @@ public static partial class WorkerProfileDispatcher
             claudeAuthProbe,
             sandbox,
             commandExists,
-            providerHoldScope: kernel.Goals, cascadeTesterCheapFirst: cascadeTesterCheapFirst, cascadeCheapModelAlias: cascadeCheapModelAlias, cascadeMechanicalReworkCheap: cascadeMechanicalReworkCheap, orchestratorSkillDirectory: orchestratorSkillDirectory, integrationBranch: integrationBranch, targetHome: targetHome);
+            providerHoldScope: kernel.ProviderHoldScope, cascadeTesterCheapFirst: cascadeTesterCheapFirst, cascadeCheapModelAlias: cascadeCheapModelAlias, cascadeMechanicalReworkCheap: cascadeMechanicalReworkCheap, orchestratorSkillDirectory: orchestratorSkillDirectory, integrationBranch: integrationBranch, targetHome: targetHome);
         ThrowIfPreflightBlocked(preflight);
         return PrepareTask(
             kernel,
@@ -693,7 +693,7 @@ public static partial class WorkerProfileDispatcher
             }
 
             WorkerSubscriptionPreflightFindings.AddProviderBudgetExhaustionFinding(
-                findings, providerHoldScope ?? [goal], dispatchProviderName, claudeCredentialSelection?.DirectoryPath);
+                findings, providerHoldScope ?? [goal], dispatchProviderName, claudeCredentialSelection?.DirectoryPath, goal, task, now);
 
             if (DispatchFailureClassifier.RequiresSubscriptionLimitReview(task))
             {
@@ -1041,9 +1041,9 @@ public static partial class WorkerProfileDispatcher
             return;
         }
 
-        if (!inspection.IsDirty)
+        if (!inspection.IsDirty || ConductorConflictIntegrationMarker.Admits(task, workingDirectory))
         {
-            findings.Add("ok: worktree clean before dispatch");
+            findings.Add(inspection.IsDirty ? "ok: worktree holds the conductor-admitted integration merge" : "ok: worktree clean before dispatch");
             return;
         }
 
@@ -1187,7 +1187,7 @@ public static partial class WorkerProfileDispatcher
                 claudeAuthProbe: taskClaudeAuthProbe,
                 sandboxOptions: sandbox,
                 commandExists: commandExists,
-                providerHoldScope: kernel.Goals, cascadeTesterCheapFirst: cascadeTesterCheapFirst, cascadeCheapModelAlias: cascadeCheapModelAlias, cascadeMechanicalReworkCheap: cascadeMechanicalReworkCheap, orchestratorSkillDirectory: orchestratorSkillDirectory, integrationBranch: integrationBranch, targetHome: targetHome);
+                providerHoldScope: kernel.ProviderHoldScope, cascadeTesterCheapFirst: cascadeTesterCheapFirst, cascadeCheapModelAlias: cascadeCheapModelAlias, cascadeMechanicalReworkCheap: cascadeMechanicalReworkCheap, orchestratorSkillDirectory: orchestratorSkillDirectory, integrationBranch: integrationBranch, targetHome: targetHome);
             if (!preflight.Allowed)
             {
                 TryResolveMissingArtifactDependency(kernel, goal, selection.Task, preflight);

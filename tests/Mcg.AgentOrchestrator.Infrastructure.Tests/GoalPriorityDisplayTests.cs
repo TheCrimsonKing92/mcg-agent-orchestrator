@@ -22,8 +22,8 @@ public sealed class GoalPriorityDisplayTests
     {
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal("Priority detail");
-        Assert.DoesNotContain("Priority:", InfrastructureTestSupport.CaptureConsole(() => ConsoleViews.PrintGoal(goal)));
+        Assert.DoesNotContain("Priority:", InfrastructureTestSupport.CaptureConsole(() => GoalTextView.PrintGoal(goal)));
         kernel.SetGoalPriority(goal.Id, GoalPriority.Critical, "test", "setup");
-        Assert.Contains("Priority: Critical", InfrastructureTestSupport.CaptureConsole(() => ConsoleViews.PrintGoal(goal)));
+        Assert.Contains("Priority: Critical", InfrastructureTestSupport.CaptureConsole(() => GoalTextView.PrintGoal(goal)));
     }
 }

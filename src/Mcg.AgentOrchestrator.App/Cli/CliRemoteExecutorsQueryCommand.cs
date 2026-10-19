@@ -50,6 +50,8 @@ internal static class CliRemoteExecutorsQueryCommand
             foreach (var lane in row.Lanes)
                 Console.WriteLine(FormattableString.Invariant($"lane\t{Cell(row.ExecutorId)}\t{Cell(lane.Lane)}\t{lane.Samples}\t{Seconds(lane.MedianSeconds)}\t{Seconds(lane.LastSeconds)}\t{Seconds(lane.SoloMedianSeconds)}\t{Seconds(lane.ConcurrentMedianSeconds)}"));
         }
+        if (RemoteShadowAgreementSummary.Read(RemoteExecutorHealthLedger.ResolveStorePath(workspace.RootDirectory), since) is { } counts)
+            Console.WriteLine(RemoteShadowAgreementSummary.Format(counts));
     }
     private static string Seconds(double? value) => value?.ToString("R", CultureInfo.InvariantCulture) ?? "null";
     private static string Cell(string? value) => value?.Replace('\t', ' ').Replace('\r', ' ').Replace('\n', ' ') ?? "";

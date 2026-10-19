@@ -116,14 +116,14 @@ public sealed class OwnerConsoleFullScreenPaneTests
         using IApplication app = Terminal.Gui.App.Application.Create();
         using var view = new OwnerConsoleFullScreenView(app, Controller(harness, dialogs), () => Task.CompletedTask);
         view.Render(await Model(harness));
-        const string common = "  Home/End first/last  PgUp/PgDn page  Tab/Shift+Tab pane  : command  ? help  q quit";
+        const string common = "  Home/End first/last  PgUp/PgDn page  Tab/Shift+Tab pane  e epics  / filter  l landings  g gate  : command  ? help  q quit";
         Assert.Equal("Enter detail" + common, view.HintText);
         await view.HandleKeyAsync(Key.Tab);
         Assert.Equal(OwnerConsolePane.Board, view.FocusedPane);
         Assert.Equal("Enter goal detail" + common, view.HintText);
         await view.HandleKeyAsync(Key.Tab);
         Assert.Equal(OwnerConsolePane.Activity, view.FocusedPane);
-        Assert.Equal("Up/Down scroll  Enter what this means" + common, view.HintText);
+        Assert.Equal("Following latest  Up/Down scroll  Enter what this means" + common, view.HintText);
         await view.HandleKeyAsync(Key.Tab);
         Assert.Equal(OwnerConsolePane.Decisions, view.FocusedPane);
         Assert.Equal("Enter detail" + common, view.HintText);
@@ -300,7 +300,7 @@ public sealed class OwnerConsoleFullScreenPaneTests
         harness.AddGoal("11111111-first", "First", AgentRole.Developer);
         var dialogs = new Dialogs();
         var controller = Controller(harness, dialogs);
-        foreach (var item in OwnerConsoleKeyHints.Commands.Where(item => item.Command != "epics")) // The full-screen view handles epics, not the controller.
+        foreach (var item in OwnerConsoleBindings.All.Where(item => item.Owner == OwnerConsoleCommandOwner.Controller).Select(item => (Command: item.Usage, Description: item.CommandHelp)))
         {
             await controller.RunCommandAsync(item.Command.Replace("<id-prefix>", "11111111", StringComparison.Ordinal));
             Assert.DoesNotContain("unknown command", dialogs.Texts[^1].Text);
@@ -355,7 +355,7 @@ public sealed class OwnerConsoleFullScreenPaneTests
 
         await view.HandleKeyAsync(Key.Tab);
         Assert.Equal(OwnerConsolePane.Board, view.FocusedPane);
-        Assert.Equal("Enter goal detail  Home/End first/last  PgUp/PgDn page  Tab/Shift+Tab pane  : command  ? help  q quit", view.HintText);
+        Assert.Equal("Enter goal detail  Home/End first/last  PgUp/PgDn page  Tab/Shift+Tab pane  e epics  / filter  l landings  g gate  : command  ? help  q quit", view.HintText);
         Assert.DoesNotContain("a accept default", view.HintText);
         Assert.DoesNotContain("r answer", view.HintText);
     }
@@ -401,9 +401,9 @@ public sealed class OwnerConsoleFullScreenPaneTests
         // Bindings handled in OwnerConsoleEpicDialog.HandleKeyAsync, by mode.
         foreach (var binding in new[] { "Epic list Up:", "Epic list Down:", "Epic list Enter:", "Epic list Esc:",
             "Epic detail Up:", "Epic detail Down:", "Epic detail PgUp:", "Epic detail PgDn:", "Epic detail Esc:",
-            "Epic view w (list and detail):", "Epic view r (list and detail):" })
+            "Epic view w (list and detail):", "Epic view Ctrl+R (list and detail):" })
             Assert.Single(lines.Where(line => line.StartsWith(binding, StringComparison.Ordinal)));
-        Assert.Contains("failed load", lines.Single(line => line.StartsWith("Epic view r", StringComparison.Ordinal)));
+        Assert.Contains("Reload", lines.Single(line => line.StartsWith("Epic view Ctrl+R", StringComparison.Ordinal)));
         Assert.Contains("e: Open the epic view (any pane).", lines);
         Assert.Contains(":epics: Open the epic view (same as e).", lines);
         Assert.Contains("Tab: Next pane (DECISIONS, BOARD, ACTIVITY).", lines);
