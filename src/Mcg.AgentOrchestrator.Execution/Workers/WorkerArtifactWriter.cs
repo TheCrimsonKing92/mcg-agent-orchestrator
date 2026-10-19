@@ -596,7 +596,7 @@ internal sealed partial class WorkerArtifactWriter
         var toolchain = TargetToolchainDetector.Detect(workingDirectory);
         var brokerNote = TargetToolchainDetector.GetBrokerBuildTestNote(toolchain);
         var brokerCommandHint = TargetToolchainDetector.GetBrokerCommandHint(toolchain, goalPrefix, attemptName);
-        var developerBuildOnly = task.RequiredRole == AgentRole.Developer &&
+        var developerBuildOnly = toolchain == Toolchain.Dotnet && task.RequiredRole == AgentRole.Developer &&
             !BuildRoleVisibility("deterministic-verification.md").Contains(task.RequiredRole.ToString(), StringComparer.Ordinal);
         var lines = new List<string>
         {

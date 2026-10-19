@@ -99,6 +99,31 @@ public sealed class WorkerWorkflowBrokerRoleDeliveryTests : WorkerDispatchTestSu
         Assert.Contains("tests belong to the acceptance gate", task, StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public void GoDeveloperActionsRetainNativeCommands(bool includeDotnetProject, bool retry)
+    {
+        using var fixture = Prepare(AgentRole.Developer, retry, includeDotnetProject, includeGoModule: true);
+        Assert.True(File.Exists(Path.Combine(fixture.WorkingDirectory, "go.mod")));
+        Assert.Equal(includeDotnetProject, File.Exists(Path.Combine(fixture.WorkingDirectory, "Fixture.csproj")));
+        var broker = fixture.ReadDelivered("workflow-brokers.md");
+        var actions = ReadActions(broker);
+
+        Assert.Contains("build-test-selection", actions.Keys);
+        var command = Assert.Single(actions["build-test-selection"].Split('\n')
+            .Where(line => line.StartsWith("  Suggested command shape:", StringComparison.Ordinal)));
+        Assert.Equal("  Suggested command shape: `go test ./...`", command);
+        Assert.DoesNotContain("build-only", actions.Keys);
+        Assert.Contains("static-policy-checks", actions.Keys);
+        Assert.Contains("acceptance-evidence", actions.Keys);
+        Assert.Contains("diff-summary", actions.Keys);
+        Assert.DoesNotContain("Invoke-WorkerBuildCheck", broker, StringComparison.Ordinal);
+        Assert.DoesNotContain("Invoke-IsolatedDotnet", broker, StringComparison.Ordinal);
+    }
+
     private static Dictionary<string, string> ReadActions(string broker)
     {
         var start = broker.IndexOf("## Available Broker Actions\n", StringComparison.Ordinal);
@@ -115,7 +140,8 @@ public sealed class WorkerWorkflowBrokerRoleDeliveryTests : WorkerDispatchTestSu
         .SelectMany(match => match.Groups["paths"].Value.Split(" plus ", StringSplitOptions.TrimEntries))
         .ToArray();
 
-    private static DeliveryFixture Prepare(AgentRole role, bool retry)
+    private static DeliveryFixture Prepare(AgentRole role, bool retry,
+        bool includeDotnetProject = true, bool includeGoModule = false)
     {
         var root = CreateTempDirectory();
         try
@@ -124,7 +150,12 @@ public sealed class WorkerWorkflowBrokerRoleDeliveryTests : WorkerDispatchTestSu
             Directory.CreateDirectory(workingDirectory);
             Git("init", "--initial-branch=main");
             File.WriteAllText(Path.Combine(workingDirectory, "fixture.txt"), "broker fixture");
-            Git("add", "fixture.txt");
+            if (includeDotnetProject)
+                File.WriteAllText(Path.Combine(workingDirectory, "Fixture.csproj"),
+                    "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>");
+            if (includeGoModule)
+                File.WriteAllText(Path.Combine(workingDirectory, "go.mod"), "module example.invalid/broker\n\ngo 1.21\n");
+            Git("add", ".");
             Git("-c", "user.name=Broker Tests", "-c", "user.email=broker@example.invalid", "commit", "--quiet", "-m", "fixture");
             var head = Git("rev-parse", "HEAD").Trim();
             // A real dirty file makes the diff artifact distinguishable from a boilerplate file.
