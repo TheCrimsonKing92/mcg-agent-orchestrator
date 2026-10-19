@@ -2,8 +2,13 @@ namespace Mcg.AgentOrchestrator.Core;
 
 public sealed record GateTestObligation(
     string Id, int BriefVersion, IReadOnlyList<string> Selectors,
-    string? RequestingTaskId, string Question, DateTimeOffset RecordedAt)
+    string? RequestingTaskId, string Question, DateTimeOffset RecordedAt,
+    PlannerEvidenceIdentity? PlannerIdentity = null, PlannerEvidencePayload? PlannerEvidence = null)
 {
+    public bool HasSameIdentity(GateTestObligation other) => PlannerIdentity is null && other.PlannerIdentity is null
+        ? Id == other.Id && BriefVersion == other.BriefVersion
+        : PlannerIdentity is not null && PlannerIdentity == other.PlannerIdentity;
+
     public static bool IsAcceptanceGateOwner(string? owner) =>
         string.Equals(owner?.Trim(), "acceptance-gate", StringComparison.OrdinalIgnoreCase) ||
         string.Equals(owner?.Trim(), "acceptance", StringComparison.OrdinalIgnoreCase);

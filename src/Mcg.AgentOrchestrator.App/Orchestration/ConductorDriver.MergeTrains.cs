@@ -50,7 +50,7 @@ internal sealed partial class ConductorDriver
         foreach (var member in selection.Members)
             if (!goalsById.ContainsKey(member.GoalId))
                 throw new InvalidOperationException($"Selected merge train goal {member.GoalId.Value} is not in the current Ready batch.");
-        var originalBindings = selection.BindMembers();
+        var originalBindings = selection.BindMembers(id => goalsById[id].AuthoritativeBrief.Version);
         var attemptId = $"merge-train-attempt-{Guid.NewGuid():N}";
         var allEjections = new List<MergeTrainEjection>();
         MergeTrainReceipt? lastRecordedReceipt = null;

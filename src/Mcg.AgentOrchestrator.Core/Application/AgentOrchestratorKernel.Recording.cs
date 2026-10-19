@@ -109,6 +109,20 @@ public sealed partial class AgentOrchestratorKernel
             verification = verification with { ProviderFailureKind = providerFailureKind };
         }
 
+        var incomingPlannerBatch = task.RequiredRole == AgentRole.Planner
+            ? verification.PlannerEvidenceBatch ?? AgentOutputDirectives.ParseHumanInputRequest(
+                verification.AuthoritativeStandardOutput ?? verification.StandardOutput, task.RequiredRole)
+            : null;
+        if (incomingPlannerBatch is not null &&
+            (incomingPlannerBatch.IsMalformed || incomingPlannerBatch.Directives.Any(item => item.PlannerEvidence is not null)) &&
+            verification.DispatchAttemptAt is { } plannerAttemptAt && plannerAttemptAt != task.LastDispatch.DispatchedAt)
+        {
+            Append(goal, taskId, ProgressKind.TaskNote, "Ignored stale Planner evidence dispatch completion; current attempt is unchanged.");
+            return;
+        }
+        if (incomingPlannerBatch is not null)
+            verification = verification with { PlannerEvidenceBatch = incomingPlannerBatch };
+
         // An old process may finish after a retry with the identical command and directory.
         // Reject it before assigning current candidate context, recording findings or verdicts.
         if (task.RequiredRole is AgentRole.Reviewer or AgentRole.Tester &&
@@ -198,7 +212,38 @@ public sealed partial class AgentOrchestratorKernel
                 $"worker_result_log={verification.StandardOutputPath ?? "unavailable"} reason=missing-or-unparseable-worker-result");
         }
 
-        var parsedHumanInput = AgentOutputDirectives.ParseHumanInputRequest(verification.StandardOutput, task.RequiredRole);
+        var parsedHumanInput = verification.PlannerEvidenceBatch ?? AgentOutputDirectives.ParseHumanInputRequest(
+            verification.AuthoritativeStandardOutput ?? verification.StandardOutput, task.RequiredRole);
+        if (parsedHumanInput.IsMalformed)
+        {
+            RejectPlannerEvidence(goal, task, verification, parsedHumanInput.Diagnostic!);
+            return;
+        }
+        if (parsedHumanInput.Directives.Any(item => item.PlannerEvidence is not null))
+        {
+            var evidenceDispatch = verification.DispatchAttemptAt is { } at
+                ? task.DispatchHistory.LastOrDefault(item => item.DispatchedAt == at) : null;
+            if (verification.DispatchAttemptAt is not null && evidenceDispatch is null)
+            {
+                RejectPlannerEvidence(goal, task, verification, "Planner evidence has unknown dispatch provenance; replan.");
+                return;
+            }
+            int? briefVersion = evidenceDispatch?.BriefSnapshot is not null ? evidenceDispatch.BriefVersion : null;
+            if (evidenceDispatch is not null && evidenceDispatch.DispatchedAt != task.LastDispatch!.DispatchedAt)
+            {
+                RejectPlannerEvidence(goal, task, verification, "Planner evidence completion belongs to an obsolete dispatch; replan.");
+                return;
+            }
+            var diagnostic = RecordPlannerEvidenceBatch(goal, task, parsedHumanInput, briefVersion, out var blocked);
+            if (diagnostic is not null)
+            {
+                RejectPlannerEvidence(goal, task, verification, diagnostic);
+                return;
+            }
+            if (blocked) return;
+            parsedHumanInput = new(null, null);
+            verification = verification with { HumanInputQuestion = null };
+        }
         var humanInputQuestion = verification.HumanInputQuestion ?? parsedHumanInput.Directive?.Question;
         if (humanInputQuestion is not null)
         {
@@ -216,7 +261,7 @@ public sealed partial class AgentOrchestratorKernel
             var fingerprint = verification.HumanInputQuestionFingerprint
                 ?? parsedHumanInput.Directive?.QuestionFingerprint
                 ?? HumanInputRequest.BuildQuestionFingerprint(rawQuestion);
-            if (kind == HumanWaitKind.ProspectiveAcceptanceEvidence && GateTestObligation.IsAcceptanceGateOwner(owner))
+            if (kind == HumanWaitKind.ProspectiveAcceptanceEvidence && GateTestObligation.IsAcceptanceGateOwner(owner) && testNames is { Count: > 0 })
             {
                 var obligation = new GateTestObligation(fingerprint, goal.AuthoritativeBrief.Version,
                     testNames?.ToArray() ?? [], task.Id.Value, rawQuestion, _clock.UtcNow);
@@ -2140,6 +2185,7 @@ public sealed partial class AgentOrchestratorKernel
 
     private bool TryCompleteTaskWithPassingVerification(Goal goal, TaskSpec task, string message)
     {
+        if (IsObsoletePlannerEvidenceRound(goal, task)) return false;
         if (task.Status == WorkTaskStatus.Completed ||
             task.LastVerification is not { Succeeded: true } ||
             !WorkerResultBlockers.AssessSubscriptionVerification(task, task.LastVerification).AllowsCompletion ||
@@ -2156,6 +2202,7 @@ public sealed partial class AgentOrchestratorKernel
                 request.GoalId == goal.Id &&
                 request.TaskId == task.Id &&
                 !request.IsCompleted &&
+                request.IsCurrentForBrief(goal.AuthoritativeBrief.Version) &&
                 HumanWaitPolicyDefaults.BlocksActiveWork(request.Kind)))
         {
             return false;

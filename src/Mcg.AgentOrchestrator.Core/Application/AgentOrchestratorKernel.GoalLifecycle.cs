@@ -578,12 +578,7 @@ public sealed partial class AgentOrchestratorKernel
             throw new InvalidOperationException($"Task '{taskId}' is already running; refresh or cancel it before retrying.");
         }
 
-        if (task.Status == WorkTaskStatus.WaitingForHuman ||
-            _humanInputRequests.Values.Any(request =>
-                request.GoalId == goalId &&
-                request.TaskId == taskId &&
-                !request.IsCompleted &&
-                HumanWaitPolicyDefaults.BlocksActiveWork(request.Kind)))
+        if (HasCurrentBlockingHumanInput(goal, task))
         {
             throw new InvalidOperationException($"Task '{taskId}' is waiting for human input; answer it before retrying.");
         }
@@ -703,7 +698,7 @@ public sealed partial class AgentOrchestratorKernel
         if (_humanInputRequests.Values.Any(candidate =>
                 candidate.GoalId == goal.Id &&
                 !candidate.IsCompleted &&
-                HumanWaitPolicyDefaults.BlocksActiveWork(candidate.Kind)))
+                candidate.IsCurrentForBrief(goal.AuthoritativeBrief.Version) && HumanWaitPolicyDefaults.BlocksActiveWork(candidate.Kind)))
         {
             return false;
         }
@@ -817,12 +812,7 @@ public sealed partial class AgentOrchestratorKernel
             throw new ArgumentException("Retry message cannot be empty.", nameof(message));
         }
 
-        if (task.Status == WorkTaskStatus.WaitingForHuman ||
-            _humanInputRequests.Values.Any(request =>
-                request.GoalId == goalId &&
-                request.TaskId == taskId &&
-                !request.IsCompleted &&
-                HumanWaitPolicyDefaults.BlocksActiveWork(request.Kind)))
+        if (HasCurrentBlockingHumanInput(goal, task))
         {
             throw new InvalidOperationException($"Task '{taskId}' is waiting for human input; answer it before retrying.");
         }
@@ -1311,7 +1301,7 @@ public sealed partial class AgentOrchestratorKernel
             if (_humanInputRequests.Values.Any(request =>
                     request.GoalId == goal.Id &&
                     !request.IsCompleted &&
-                    HumanWaitPolicyDefaults.BlocksActiveWork(request.Kind)) ||
+                    request.IsCurrentForBrief(goal.AuthoritativeBrief.Version) && HumanWaitPolicyDefaults.BlocksActiveWork(request.Kind)) ||
                 !HasHumanInputResolvedAfterLatestParkDecision(goal))
             {
                 continue;
@@ -1833,7 +1823,7 @@ public sealed partial class AgentOrchestratorKernel
         bool recordDuplicateSuppression = true,
         string? evidenceOwner = null,
         PlannerEvidenceStoreReference? storeReference = null,
-        IReadOnlyList<string>? testNames = null)
+        IReadOnlyList<string>? testNames = null, PlannerEvidenceIdentity? plannerIdentity = null, PlannerEvidencePayload? plannerEvidence = null)
     {
         var goal = GetGoal(goalId);
         if (HumanWaitPolicyDefaults.BlocksActiveWork(kind))
@@ -1854,10 +1844,14 @@ public sealed partial class AgentOrchestratorKernel
                     candidate.GoalId == goalId &&
                     candidate.TaskId == taskId &&
                     candidate.Kind == kind &&
-                    string.Equals(candidate.QuestionFingerprint, effectiveQuestionFingerprint, StringComparison.Ordinal))
+                    (plannerIdentity is null && candidate.PlannerIdentity is null
+                        ? string.Equals(candidate.QuestionFingerprint, effectiveQuestionFingerprint, StringComparison.Ordinal)
+                        : plannerIdentity is not null && candidate.PlannerIdentity == plannerIdentity))
                 .OrderBy(candidate => candidate.RequestedAt)
                 .ThenBy(candidate => candidate.Id.Value, StringComparer.Ordinal)
                 .ToList();
+            if (plannerIdentity is not null && matches.Any(candidate => !plannerEvidence!.SemanticallyEquals(candidate.PlannerEvidence)))
+                throw new InvalidOperationException("Conflicting stored Planner evidence payload; request a new brief before changing the requirement.");
             var open = matches.FirstOrDefault(candidate => !candidate.IsCompleted);
             if (open is not null)
             {
@@ -1941,7 +1935,7 @@ public sealed partial class AgentOrchestratorKernel
                 blockerFingerprint,
                 evidenceOwner: evidenceOwner,
                 storeReference: storeReference,
-                testNames: testNames);
+                testNames: testNames, plannerIdentity: plannerIdentity, plannerEvidence: plannerEvidence);
             _humanInputRequests.Add(request.Id, request);
 
             HoldTaskForExistingHumanInput(goal, taskId, request.Kind);
@@ -1956,7 +1950,7 @@ public sealed partial class AgentOrchestratorKernel
         var matches = _humanInputRequests.Values
             .Where(candidate =>
                 candidate.GoalId == goal.Id &&
-                string.Equals(candidate.QuestionFingerprint, request.QuestionFingerprint, StringComparison.Ordinal))
+                candidate.HasSameIdentity(request))
             .OrderBy(candidate => candidate.RequestedAt)
             .ThenBy(candidate => candidate.Id.Value, StringComparer.Ordinal)
             .ToArray();
@@ -2117,6 +2111,8 @@ public sealed partial class AgentOrchestratorKernel
         {
             var request = HumanInputSubmission.GetPendingRequest(_humanInputRequests, requestId);
             var goal = GetGoal(request.GoalId);
+            if (request.PlannerIdentity is not null && origin != HumanInputAnswerOrigin.Operator)
+                throw new UnauthorizedAccessException("Typed Planner human-input evidence requires an authorized explicit Operator answer.");
             var answeredAt = _clock.UtcNow;
             if (HumanInputSubmission.TryCompleteGateEvidence(request, goal, answer, answeredAt,
                     gatedDeliverableIds, origin, supersedeSiblings, _eventWriter, () => RefreshGoalStatus(goal)))
@@ -2137,7 +2133,7 @@ public sealed partial class AgentOrchestratorKernel
                     candidate.TaskId == request.TaskId &&
                     candidate.Kind == request.Kind &&
                     !candidate.IsCompleted &&
-                    string.Equals(candidate.QuestionFingerprint, request.QuestionFingerprint, StringComparison.Ordinal))
+                    candidate.HasSameIdentity(request))
                 .OrderBy(candidate => candidate.RequestedAt)
                 .ToList();
             foreach (var sibling in siblings)
@@ -2157,9 +2153,27 @@ public sealed partial class AgentOrchestratorKernel
                         candidate.GoalId == goal.Id &&
                         candidate.TaskId == task.Id &&
                         !candidate.IsCompleted &&
+                        candidate.IsCurrentForBrief(goal.AuthoritativeBrief.Version) &&
                         HumanWaitPolicyDefaults.BlocksActiveWork(candidate.Kind)))
                 {
-                    if (ShouldRequeueAnsweredTesterBlocker(goal, task, request, answer))
+                    if (request.PlannerIdentity is not null && task.RequiredRole == AgentRole.Planner &&
+                        task.Status == WorkTaskStatus.Failed && task.LastVerification is { Succeeded: false })
+                    {
+                        Append(goal, task.Id, ProgressKind.TaskNote,
+                            "Planner answer recorded; the rejected Planner round remains failed and requires a planning retry.");
+                    }
+                    else if (request.PlannerIdentity is { } identity &&
+                        identity.BriefVersion != goal.AuthoritativeBrief.Version &&
+                        task.RequiredRole == AgentRole.Planner &&
+                        task.Status is WorkTaskStatus.WaitingForHuman or WorkTaskStatus.Failed &&
+                        (task.LastDispatch is null || task.LastDispatch.BriefVersion != goal.AuthoritativeBrief.Version) &&
+                        task.LastProcess is not { IsRunning: true })
+                    {
+                        task.SetStatus(WorkTaskStatus.Failed);
+                        Append(goal, task.Id, ProgressKind.TaskFailed,
+                            $"Historical Planner answer retained for brief v{identity.BriefVersion}; retry planning against current brief v{goal.AuthoritativeBrief.Version}.");
+                    }
+                    else if (ShouldRequeueAnsweredTesterBlocker(goal, task, request, answer))
                         answeredTesterToRequeue = task;
                     else
                         RestoreTaskAfterHumanInput(goal, task);
@@ -2201,7 +2215,7 @@ public sealed partial class AgentOrchestratorKernel
                     candidate.GoalId == goal.Id &&
                     candidate.Id != request.Id &&
                     candidate.Kind == request.Kind &&
-                    string.Equals(candidate.QuestionFingerprint, request.QuestionFingerprint, StringComparison.Ordinal))
+                    candidate.HasSameIdentity(request))
                 .OrderBy(candidate => candidate.RequestedAt)
                 .ThenBy(candidate => candidate.Id.Value, StringComparer.Ordinal)
                 .ToArray();
@@ -2259,7 +2273,7 @@ public sealed partial class AgentOrchestratorKernel
                         candidate.GoalId == goal.Id &&
                         candidate.TaskId == task.Id &&
                         !candidate.IsCompleted &&
-                        HumanWaitPolicyDefaults.BlocksActiveWork(candidate.Kind)))
+                        candidate.IsCurrentForBrief(goal.AuthoritativeBrief.Version) && HumanWaitPolicyDefaults.BlocksActiveWork(candidate.Kind)))
                 {
                     RestoreTaskAfterHumanInput(goal, task);
                 }
@@ -2372,6 +2386,13 @@ public sealed partial class AgentOrchestratorKernel
 
     private void RestoreTaskAfterHumanInput(Goal goal, TaskSpec task)
     {
+        if (IsObsoletePlannerEvidenceRound(goal, task) && task.LastProcess is not { IsRunning: true })
+        {
+            task.ClearLatestVerification();
+            task.SetStatus(WorkTaskStatus.Assigned);
+            Append(goal, task.Id, ProgressKind.TaskNote, "Historical Planner evidence retained; planning must run against the current brief.");
+            return;
+        }
         if (TryCompleteTaskWithPassingVerification(goal, task, "Task completed after required human input was answered."))
         {
             return;
@@ -2744,7 +2765,8 @@ public sealed partial class AgentOrchestratorKernel
     public IReadOnlyList<HumanInputRequest> GetPendingHumanInput(GoalId goalId)
     {
         return _humanInputRequests.Values
-            .Where(request => request.GoalId == goalId && !request.IsCompleted)
+            .Where(request => request.GoalId == goalId && !request.IsCompleted &&
+                request.IsCurrentForBrief(GetGoal(goalId).AuthoritativeBrief.Version))
             .OrderBy(request => request.RequestedAt)
             .ToList();
     }

@@ -9,11 +9,21 @@ public sealed record HumanInputDirective(
     HumanWaitKind Kind = HumanWaitKind.SpecClarification,
     string? EvidenceOwner = null,
     PlannerEvidenceStoreReference? StoreReference = null,
-    IReadOnlyList<string>? TestNames = null);
+    IReadOnlyList<string>? TestNames = null,
+    PlannerEvidencePayload? PlannerEvidence = null);
 
 public sealed record HumanInputDirectiveParseResult(HumanInputDirective? Directive, string? Diagnostic)
 {
     public bool IsMalformed => !string.IsNullOrWhiteSpace(Diagnostic);
+    // Singular callers must never accidentally consume the first item of a batch.
+    public IReadOnlyList<HumanInputDirective> Directives { get; init; } = Directive is null ? [] : [Directive];
+    public int EvidenceLineCount { get; init; }
+
+    public bool Equals(HumanInputDirectiveParseResult? other) => other is not null &&
+        Directive == other.Directive && Diagnostic == other.Diagnostic && EvidenceLineCount == other.EvidenceLineCount &&
+        Directives.SequenceEqual(other.Directives);
+
+    public override int GetHashCode() => HashCode.Combine(Directive, Diagnostic, EvidenceLineCount);
 }
 
 public static class AgentOutputDirectives
@@ -32,7 +42,8 @@ public static class AgentOutputDirectives
             {
                 fullOutput = fullOutput[..receiptStart];
             }
-            var fullDirective = ParseHumanInputRequest(fullOutput, role).Directive;
+            var fullDirective = ParseHumanInputRequest(fullOutput, role).Directives
+                .SingleOrDefault(item => string.Equals(item.Question, question, StringComparison.Ordinal));
             if (fullDirective is { Kind: HumanWaitKind.ProspectiveAcceptanceEvidence } &&
                 string.Equals(fullDirective.Question, question, StringComparison.Ordinal))
                 return fullDirective.TestNames;
@@ -73,7 +84,11 @@ public static class AgentOutputDirectives
                 "Start mapping lines with the bare criterion number followed by a period; no heading, bullet or bold prefix. " +
                 "After `plan=`, write a non-empty one-sentence summary on that same line; detail bullets that follow must not begin with a digit and a period. " +
                 "An undecidable criterion does not block other criteria and requires `blockers: none` when no operator action is needed. " +
+                "For a single evidence requirement: " +
                 "For evidence that exists only in an unreadable store, emit exactly one `PLANNER_EVIDENCE_REQUEST:` JSON directive with criterion_index, evidence_key, availability=retrievable, store, needed, and reason. " +
+                "For independent requirements, repeat that JSON-object line once per requirement (at most 16 lines and 65536 combined UTF-8 payload bytes); preserve each criterion_index and evidence_key. " +
+                "Mix historical prerequisites and future Acceptance/Operator evidence in the same batch. Emit none only alone; do not mix substantive HUMAN_INPUT with evidence directives. " +
+                "The host binds goal, task and dispatch brief version; never supply a brief version. A selectorless acceptance item requires an explicit authorized answer. " +
                 "In that directive criterion_index is the 1-based criterion number used on the mapping lines, so the first criterion is 1; this differs from the 0-based criterion_index of criteria_verdicts. " +
                 "For an orchestrator record, add store_ref as <kind>:<locator>[#<selector>]. " +
                 "For evidence that was never recorded, prefer an undecidable mapping; if operator action is still required, use availability=never-recorded and omit store. " +
@@ -168,84 +183,43 @@ public static class AgentOutputDirectives
 
     public static HumanInputDirectiveParseResult ParseHumanInputRequest(string output, AgentRole? role = null)
     {
+        var receiptStart = output.IndexOf("<!-- MCG_DURABLE_PLANNER_PLAN:BEGIN -->", StringComparison.Ordinal);
+        if (receiptStart >= 0) output = output[..receiptStart];
         var lines = output.Split(["\r\n", "\n"], StringSplitOptions.None);
-        var evidenceRequests = lines
-            .Select(line => line.Trim())
+        var evidenceLines = lines.Select(line => line.Trim())
             .Where(line => line.StartsWith("PLANNER_EVIDENCE_REQUEST:", StringComparison.OrdinalIgnoreCase))
-            .ToArray();
-        if (evidenceRequests.Length > 1)
+            .Select(line => line["PLANNER_EVIDENCE_REQUEST:".Length..].Trim()).ToArray();
+        var question = lines.Select(line => TryReadDirective(line.Trim(), "HUMAN_INPUT:") ??
+            TryReadDirective(line.Trim(), "HUMAN INPUT:")).FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));
+        if (evidenceLines.Length == 0)
+            return new(question is null ? null : new HumanInputDirective(question,
+                HumanInputRequest.BuildQuestionFingerprint(question)), null);
+        if (role is not null && role != AgentRole.Planner || evidenceLines.Length > 1 && role != AgentRole.Planner)
+            return new(null, "PLANNER_EVIDENCE_REQUEST is valid only for the Planner role");
+        if (evidenceLines.Length > 16 || evidenceLines.Sum(value => (long)System.Text.Encoding.UTF8.GetByteCount(value)) > 65536)
+            return MalformedEvidenceRequest("batch exceeds 16 lines or 65536 UTF-8 payload bytes; split the requirements in a new planning round");
+        var requests = new List<HumanInputDirective>();
+        foreach (var json in evidenceLines)
         {
-            if (role == AgentRole.Planner)
+            var parsed = ParsePlannerEvidenceRequest(json);
+            if (parsed.IsMalformed) return parsed;
+            if (parsed.Directive is null)
             {
-                var requests = new List<HumanInputDirective>();
-                var entries = new List<string>();
-                foreach (var evidenceRequest in evidenceRequests)
-                {
-                    var json = evidenceRequest["PLANNER_EVIDENCE_REQUEST:".Length..].Trim();
-                    var parsed = ParsePlannerEvidenceRequest(json);
-                    if (parsed.IsMalformed || parsed.Directive is null)
-                    {
-                        return MalformedEvidenceRequest("exactly one evidence request may be emitted per round");
-                    }
-
-                    requests.Add(parsed.Directive);
-                    // The directive retains fingerprints, not the raw evidence key. Keep the
-                    // validated payload's identity and requested evidence in the merged record.
-                    using var document = JsonDocument.Parse(json);
-                    var root = document.RootElement;
-                    entries.Add($"{entries.Count + 1}) {root.GetProperty("evidence_key").GetString()!.Trim()}: " +
-                        root.GetProperty("needed").GetString()!.Trim());
-                }
-
-                var merged = PlannerEvidenceRequestMerger.TryMerge(requests);
-                if (merged?.Directive is { } directive)
-                {
-                    return merged with
-                    {
-                        Directive = directive with
-                        {
-                            Question = directive.Question + " Merged evidence requests: " + string.Join("; ", entries) + "."
-                        }
-                    };
-                }
+                if (evidenceLines.Length > 1)
+                    return MalformedEvidenceRequest("exactly one evidence request may be emitted per round");
+                continue;
             }
-
-            return MalformedEvidenceRequest("exactly one evidence request may be emitted per round");
+            requests.Add(parsed.Directive);
         }
-
-        if (evidenceRequests.Length == 1)
-        {
-            if (role is not null && role != AgentRole.Planner)
-            {
-                return new HumanInputDirectiveParseResult(
-                    null,
-                    "PLANNER_EVIDENCE_REQUEST is valid only for the Planner role");
-            }
-
-            var evidenceRequest = evidenceRequests[0];
-            var parsed = ParsePlannerEvidenceRequest(evidenceRequest["PLANNER_EVIDENCE_REQUEST:".Length..].Trim());
-            if (parsed.Directive is not null || parsed.IsMalformed)
-            {
-                return parsed;
-            }
-        }
-
-        foreach (var line in lines)
-        {
-            var trimmed = line.Trim();
-            var question = TryReadDirective(trimmed, "HUMAN_INPUT:")
-                ?? TryReadDirective(trimmed, "HUMAN INPUT:");
-            if (!string.IsNullOrWhiteSpace(question))
-            {
-                return new HumanInputDirectiveParseResult(
-                    new HumanInputDirective(question, HumanInputRequest.BuildQuestionFingerprint(question)),
-                    null);
-            }
-        }
-
-        return new HumanInputDirectiveParseResult(null, null);
+        if (question is not null && requests.Count > 0)
+            return MalformedEvidenceRequest("substantive HUMAN_INPUT and Planner evidence are ambiguous; use evidence lines for every requirement");
+        var validated = PlannerEvidenceRequestMerger.TryMerge(requests)!;
+        if (validated.IsMalformed) return validated;
+        if (requests.Count == 0 && question is not null)
+            return new(new HumanInputDirective(question, HumanInputRequest.BuildQuestionFingerprint(question)), null);
+        if (requests.Count == 0) return new(null, null);
+        return validated with { EvidenceLineCount = evidenceLines.Length };
     }
-
     internal static HumanInputDirectiveParseResult ParsePlannerEvidenceRequest(string json)
     {
         if (json.StartsWith("none", StringComparison.OrdinalIgnoreCase) &&
@@ -263,6 +237,9 @@ public static class AgentOutputDirectives
             }
 
             var root = document.RootElement;
+            if (root.TryGetProperty("brief_version", out _) || root.TryGetProperty("BriefVersion", out _) ||
+                root.TryGetProperty("goal_id", out _) || root.TryGetProperty("task_id", out _))
+                return MalformedEvidenceRequest("goal, task and brief version are host-bound; omit worker provenance claims");
             if (root.TryGetProperty("criterion_index", out var criterionIndexProperty) &&
                 criterionIndexProperty.ValueKind == JsonValueKind.Number &&
                 criterionIndexProperty.TryGetInt32(out var nonPositiveIndex) &&
@@ -348,12 +325,15 @@ public static class AgentOutputDirectives
                     "availability must be retrievable, never-recorded, or post-implementation");
             }
 
+            evidenceOwner = GateTestObligation.IsAcceptanceGateOwner(evidenceOwner) ? "acceptance-gate" : evidenceOwner;
+            var payload = new PlannerEvidencePayload(criterionIndex, evidenceKey, availability.ToLowerInvariant(),
+                evidenceOwner, needed, reason, hasStore ? store : null, storeReference, testNames);
             var question =
                 $"Planner evidence request for criterion {criterionIndex}: {needed}. " +
                 $"Availability: {availabilityText}. Reason: {reason}";
             var fingerprint = HumanInputRequest.BuildPlannerEvidenceFingerprint(criterionIndex, evidenceKey);
             return new HumanInputDirectiveParseResult(
-                new HumanInputDirective(question, fingerprint, fingerprint, kind, evidenceOwner, storeReference, testNames),
+                new HumanInputDirective(question, fingerprint, fingerprint, kind, evidenceOwner, storeReference, testNames, payload),
                 null);
         }
         catch (JsonException error)

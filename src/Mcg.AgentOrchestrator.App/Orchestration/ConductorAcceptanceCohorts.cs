@@ -31,7 +31,7 @@ internal sealed record ConductorAcceptanceCohortSelection(
     IReadOnlyList<GateReadyCandidateProjection> Members,
     IReadOnlyList<ConductorAcceptanceCohortPairExclusion> Exclusions)
 {
-    internal IReadOnlyList<AcceptanceCohortMemberBinding> BindMembers() =>
+    internal IReadOnlyList<AcceptanceCohortMemberBinding> BindMembers(Func<GoalId, int?>? briefVersion = null) =>
         Members.Select(member => new AcceptanceCohortMemberBinding(
             member.GoalId,
             member.BranchRevision,
@@ -41,7 +41,7 @@ internal sealed record ConductorAcceptanceCohortSelection(
             member.ChangeRiskTier,
             member.AutoPromotionDisposition,
             member.MergeEvidence.Status.ToString(),
-            member.MergeEvidence.Reason.ToString())).ToArray();
+            member.MergeEvidence.Reason.ToString(), briefVersion?.Invoke(member.GoalId))).ToArray();
 }
 
 internal enum ConductorAcceptanceHeldConflictKind

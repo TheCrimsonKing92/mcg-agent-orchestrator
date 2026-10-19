@@ -217,7 +217,7 @@ public sealed partial class TaskSpec
                     LastVerification.HumanInputStoreReference,
                     LastVerification.EvidenceSource,
                     LastVerification.DispatchAttemptAt,
-                    LastVerification.FindingEvidenceRequestDispositions),
+                    LastVerification.FindingEvidenceRequestDispositions, LastVerification.PlannerEvidenceBatch, LastVerification.OrchestratorFailureReason),
             _verificationHistory
                 .Select(verification => new TaskVerificationSnapshot(
                     verification.Command,
@@ -254,7 +254,7 @@ public sealed partial class TaskSpec
                     verification.HumanInputStoreReference,
                     verification.EvidenceSource,
                     verification.DispatchAttemptAt,
-                    verification.FindingEvidenceRequestDispositions))
+                    verification.FindingEvidenceRequestDispositions, verification.PlannerEvidenceBatch, verification.OrchestratorFailureReason))
                 .ToList(),
             LastDispatch is null
                 ? null
@@ -399,7 +399,7 @@ public sealed partial class TaskSpec
                     HumanInputStoreReference: verification.HumanInputStoreReference,
                     EvidenceSource: verification.EvidenceSource,
                     DispatchAttemptAt: verification.DispatchAttemptAt,
-                    FindingEvidenceRequestDispositions: verification.FindingEvidenceRequestDispositions));
+                    FindingEvidenceRequestDispositions: verification.FindingEvidenceRequestDispositions, PlannerEvidenceBatch: verification.PlannerEvidenceBatch, OrchestratorFailureReason: verification.OrchestratorFailureReason));
             }
         }
 
@@ -446,7 +446,7 @@ public sealed partial class TaskSpec
                 HumanInputStoreReference: snapshot.LastVerification.HumanInputStoreReference,
                 EvidenceSource: snapshot.LastVerification.EvidenceSource,
                 DispatchAttemptAt: snapshot.LastVerification.DispatchAttemptAt,
-                FindingEvidenceRequestDispositions: snapshot.LastVerification.FindingEvidenceRequestDispositions);
+                FindingEvidenceRequestDispositions: snapshot.LastVerification.FindingEvidenceRequestDispositions, PlannerEvidenceBatch: snapshot.LastVerification.PlannerEvidenceBatch, OrchestratorFailureReason: snapshot.LastVerification.OrchestratorFailureReason);
             var historyIndex = task._verificationHistory.FindLastIndex(
                 verification => verification.HasSameRoundIdentity(latestVerification));
             if (historyIndex < 0)

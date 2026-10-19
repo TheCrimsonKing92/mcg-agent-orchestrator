@@ -161,6 +161,7 @@ public static class CohortAcceptanceStoreSetup
                 ON cohort_invalidations(cohort_id, invalidated_at);
             """;
         command.ExecuteNonQuery();
+        EnsureColumn(connection, "cohort_members", "brief_version", "INTEGER NULL");
         EnsureColumn(connection, "cohort_members", "risk_tier", "TEXT NOT NULL DEFAULT 'DocsOnly'");
         EnsureColumn(connection, "cohort_members", "promotion_disposition", "TEXT NOT NULL DEFAULT 'Auto'");
         EnsureColumn(connection, "cohort_members", "merge_status", "TEXT NOT NULL DEFAULT 'Clean'");

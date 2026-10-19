@@ -72,6 +72,8 @@ internal static partial class CliCommandHandlers
         return kernel.HumanInputRequests
             .Where(request => goalId is null || request.GoalId == goalId)
             .Where(request => includeHistory || !request.IsCompleted)
+            .Where(request => includeHistory || request.PlannerIdentity is null ||
+                request.PlannerIdentity.BriefVersion == kernel.GetGoal(request.GoalId).AuthoritativeBrief.Version)
             .Where(request => includeHistory || IsLiveAttentionGoal(kernel, request.GoalId))
             .OrderBy(request => request.CreatedAt)
             .ToList();
@@ -400,9 +402,9 @@ internal static partial class CliCommandHandlers
                     if (goalPrefix is null)
                     {
                         var showWaits = HumanWaitsForAttention(context.Kernel, null, includeHistory);
-                        if (showWaits.Count > 0)
+                        if (showWaits.Count > 0 || context.Kernel.Goals.Any(goal => goal.GateTestObligations.Count > 0))
                         {
-                            ConsoleViews.PrintHumanWaits(showWaits, DateTimeOffset.UtcNow, includeHistory);
+                            ConsoleViews.PrintHumanWaits(showWaits, DateTimeOffset.UtcNow, includeHistory, context.Kernel.Goals);
                             if (includeHistory)
                             {
                                 var allItems = store.ListAsync().GetAwaiter().GetResult();
@@ -431,8 +433,8 @@ internal static partial class CliCommandHandlers
                         .Where(item => string.Equals(item.GoalId, goal.Id.Value, StringComparison.OrdinalIgnoreCase))
                         .ToList();
                     var waitsForGoal = HumanWaitsForAttention(context.Kernel, goal.Id, includeHistory);
-                    if (waitsForGoal.Count > 0)
-                        ConsoleViews.PrintHumanWaits(waitsForGoal, DateTimeOffset.UtcNow, includeHistory);
+                    if (waitsForGoal.Count > 0 || goal.GateTestObligations.Count > 0)
+                        ConsoleViews.PrintHumanWaits(waitsForGoal, DateTimeOffset.UtcNow, includeHistory, [goal]);
 
                     if (includeHistory)
                     {
@@ -503,9 +505,10 @@ internal static partial class CliCommandHandlers
                 var migratedHumanWaits = context.IsReadOnlyQuery ? 0 : context.Kernel.SweepParkedGoalHumanWaits();
                 var migratedCollaborationItems = context.IsReadOnlyQuery ? 0 : ResolveParkedAttentionItems(context.Kernel, store);
                 var waits = HumanWaitsForAttention(context.Kernel, null, includeHistory: false);
-                if (waits.Count > 0)
+                if (waits.Count > 0 || context.Kernel.Goals.Any(goal => goal.GateTestObligations
+                        .Any(item => item.BriefVersion == goal.AuthoritativeBrief.Version)))
                 {
-                    ConsoleViews.PrintHumanWaits(waits, DateTimeOffset.UtcNow);
+                    ConsoleViews.PrintHumanWaits(waits, DateTimeOffset.UtcNow, goals: context.Kernel.Goals);
                     return migratedHumanWaits > 0 || migratedCollaborationItems > 0;
                 }
 

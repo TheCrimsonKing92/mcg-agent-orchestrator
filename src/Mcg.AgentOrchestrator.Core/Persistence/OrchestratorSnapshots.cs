@@ -202,7 +202,8 @@ public sealed record TaskVerificationSnapshot(
     PlannerEvidenceStoreReference? HumanInputStoreReference = null,
     VerificationEvidenceSource EvidenceSource = VerificationEvidenceSource.Unspecified,
     DateTimeOffset? DispatchAttemptAt = null,
-    IReadOnlyList<FindingEvidenceRequestDisposition>? FindingEvidenceRequestDispositions = null)
+    IReadOnlyList<FindingEvidenceRequestDisposition>? FindingEvidenceRequestDispositions = null, HumanInputDirectiveParseResult? PlannerEvidenceBatch = null,
+    string? OrchestratorFailureReason = null)
 {
     public string StandardOutput { get; init; } = VerificationTextBounds.BoundText(StandardOutput, StandardOutputPath);
 
@@ -335,7 +336,9 @@ public sealed record HumanInputRequestSnapshot(
     long SuppressionRevision = 0,
     string? EvidenceOwner = null,
     PlannerEvidenceStoreReference? StoreReference = null,
-    IReadOnlyList<string>? TestNames = null);
+    IReadOnlyList<string>? TestNames = null,
+    PlannerEvidenceIdentity? PlannerIdentity = null,
+    PlannerEvidencePayload? PlannerEvidence = null);
 
 public static class VerificationTextBounds
 {

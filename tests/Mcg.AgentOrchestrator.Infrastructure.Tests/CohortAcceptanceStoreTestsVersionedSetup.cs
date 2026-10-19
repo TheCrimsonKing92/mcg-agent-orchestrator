@@ -152,7 +152,7 @@ public sealed class CohortAcceptanceStoreTestsVersionedSetup : IDisposable
     }
 
     [Theory]
-    [InlineData(1)]
+    [InlineData(2)]
     [InlineData(99)]
     public void Setup_PartiallyRecorded_PreservesExistingVersionAndRecordsMissingNames(int version)
     {
@@ -275,7 +275,9 @@ public sealed class CohortAcceptanceStoreTestsVersionedSetup : IDisposable
     {
         var member = Members[ordinal];
         Execute(connection, """
-            INSERT INTO cohort_members VALUES($id, $ordinal, $goal, $branch, $candidate,
+            INSERT INTO cohort_members(cohort_id, member_ordinal, goal_id, branch_revision, candidate_revision,
+                landing_paths_json, resource_keys_json, risk_tier, promotion_disposition, merge_status, merge_reason, landed)
+            VALUES($id, $ordinal, $goal, $branch, $candidate,
                 $paths, $resources, 'DocsOnly', 'Auto', 'Clean', 'NoConflictsDetected', 0);
             """, ("$id", cohortId), ("$ordinal", ordinal), ("$goal", member.GoalId.Value),
             ("$branch", member.BranchRevision), ("$candidate", member.CandidateRevision),
@@ -296,11 +298,29 @@ public sealed class CohortAcceptanceStoreTestsVersionedSetup : IDisposable
         INSERT INTO store_schema_versions VALUES($name, $version, 'original');
         """, ("$name", name), ("$version", version));
 
+    [Fact]
+    public void Setup_VersionOne_AddsNullableBriefBindingWithoutGuessingProvenance()
+    {
+        CohortAcceptanceStoreSetup.Setup(Db);
+        using (var connection = Open(SqliteOpenMode.ReadWrite))
+        {
+            Execute(connection, "ALTER TABLE cohort_members DROP COLUMN brief_version; UPDATE store_schema_versions SET version=1 WHERE store_name='cohort-acceptance';");
+            SeedRows(connection, Identity.Value);
+            InsertMember(connection, Identity.Value, 1);
+        }
+        CohortAcceptanceStoreSetup.Setup(Db);
+        using var restored = Open();
+        Assert.Equal(2, StoreSchemaVersions.Read(restored, "cohort-acceptance"));
+        Assert.Equal(2L, Scalar(restored, "SELECT count(*) FROM cohort_members WHERE brief_version IS NULL"));
+        AssertVersions(restored, 1);
+        var receipt = new CohortAcceptanceStore(Db).TryReadReceipt(Identity.Value)!;
+        Assert.All(receipt.Identity.Members, member => Assert.Null(member.BriefVersion));
+    }
     private static void AssertVersions(SqliteConnection connection, int expected)
     {
         Assert.Equal(StoreNames.Order(StringComparer.Ordinal), ReadStrings(connection,
             "SELECT store_name FROM store_schema_versions ORDER BY store_name"));
-        Assert.All(StoreNames, name => Assert.Equal(expected, StoreSchemaVersions.Read(connection, name)));
+        Assert.All(StoreNames, name => Assert.Equal(expected == 1 && name == "cohort-acceptance" ? 2 : expected, StoreSchemaVersions.Read(connection, name)));
     }
 
     private SqliteConnection Open(SqliteOpenMode mode = SqliteOpenMode.ReadOnly)
@@ -345,7 +365,7 @@ public sealed class CohortAcceptanceStoreTestsVersionedSetup : IDisposable
 
     private static string Rows(SqliteConnection connection, string table, string filter = "")
     {
-        var columns = ReadStrings(connection, $"SELECT name FROM pragma_table_info('{table}') ORDER BY cid");
+        var columns = ReadStrings(connection, $"SELECT name FROM pragma_table_info('{table}') ORDER BY cid").Where(column => column != "brief_version").ToArray();
         var expressions = columns.Select(column => $"typeof([{column}]) || ':' || hex([{column}])");
         using var command = connection.CreateCommand();
         command.CommandText = $"SELECT {string.Join(",", expressions)} FROM [{table}] {filter}";

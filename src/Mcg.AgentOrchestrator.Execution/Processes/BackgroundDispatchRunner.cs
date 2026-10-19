@@ -1283,6 +1283,8 @@ public sealed partial class BackgroundDispatchRunner
         var resourceAccounting = capturedResourceAccounting;
         var goal = kernel.GetGoal(goalId);
         var humanInputDirective = AgentOutputDirectives.ParseHumanInputRequest(authoritativeStandardOutput, task.RequiredRole);
+        if (humanInputDirective.Directives.Any(item => item.PlannerEvidence is not null) && fullStandardOutput.Content is null)
+            humanInputDirective = new(null, "Cannot validate Planner evidence without the complete authoritative worker decision stream; replan.");
         var hasRoleCapability = DispatchRoleOutputCapabilities.TryGet(task.RequiredRole, out var dispatchRoleCapability);
         var requiresTerminalContract = task.RequiredRole is AgentRole.Reviewer or AgentRole.Tester &&
             DispatchFailureClassifier.IsSubscriptionProviderCliDispatch(task);
@@ -1355,7 +1357,7 @@ public sealed partial class BackgroundDispatchRunner
                 ? goal.RefinedSpec?.AcceptanceCriteria ?? []
                 : null;
             var capturedPlannerOutput = PlannerOutputContract.ReadCapturedOutputTail(processRecord.StandardOutputPath);
-            var evidenceRequest = AgentOutputDirectives.ParseHumanInputRequest(authoritativeStandardOutput, AgentRole.Planner);
+            var evidenceRequest = humanInputDirective;
             PlannerOutputContractResult plannerContract;
             if (evidenceRequest.IsMalformed)
             {
@@ -1501,7 +1503,7 @@ public sealed partial class BackgroundDispatchRunner
             hasRoleCapability,
             dispatchRoleCapability,
             relevantChangeEvidenceAvailable,
-            humanInputDirective.Directive is not null || humanInputDirective.IsMalformed,
+            humanInputDirective.Directives.Count > 0 || humanInputDirective.IsMalformed,
             !string.IsNullOrWhiteSpace(orchestratorFailureReason)));
         if (completedWorktreeInspection is { IsAvailable: true, Evidence: var worktreeEvidence })
         {
@@ -1884,7 +1886,7 @@ public sealed partial class BackgroundDispatchRunner
             HasCommittedChanges: hasCommittedChanges,
             HeartbeatStandardOutputBytes: heartbeatStdoutBytes,
             ProviderFailureKind: providerFailureKind,
-            HumanInputQuestion: humanInputQuestion,
+            HumanInputQuestion: humanInputQuestion, PlannerEvidenceBatch: humanInputDirective,
             DispatchStartedAt: processRecord.StartedAt,
             ChildProcessId: completed.ChildProcessId,
             ChildExitCode: completed.ChildExitCode,
