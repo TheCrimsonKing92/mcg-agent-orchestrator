@@ -40,7 +40,7 @@ internal static class OrchestratorArtifactRegistry
         Source("pre-review-evidence-attempts", "App/Orchestration/OwnedChildAttemptCoordinatorFactory.cs"),
         Source("grouped-gate-attempts", "App/Orchestration/OwnedChildAttemptCoordinatorFactory.cs"),
         Source("merge-train-evidence", "Execution/Persistence/MergeTrainAcceptanceStore.cs",
-            note: "TRX copies of train receipts that cannot back a landing are reclaimed by MergeTrainEvidenceRetention 14 days after the receipt completes once every member goal is Completed, Cancelled or Superseded; landing-evidence trains and gate-verdict.json are kept."),
+            note: "TRX copies of train receipts that cannot back a landing are reclaimed by MergeTrainEvidenceRetention 14 days after the receipt completes, and those of finalized landings by LandedMergeTrainEvidenceRetention 3 days after, once every member goal is Completed, Cancelled or Superseded; unlanded passing trains, prepared landings and gate-verdict.json are kept."),
         Source("cohort-acceptance.db.artifacts", "Execution/Persistence/CohortAcceptanceStore.cs", literal: ".artifacts",
             note: "TRX copies of cohort receipts that cannot back a landing are reclaimed by CohortAcceptanceEvidenceRetention 14 days after the receipt completes once every member goal is Completed, Cancelled or Superseded; landing-evidence receipts, judge-panel trigger receipts and gate-verdict.json are kept."),
         Source("goal-operations", "App/Orchestration/GoalOperationJournal.cs"),

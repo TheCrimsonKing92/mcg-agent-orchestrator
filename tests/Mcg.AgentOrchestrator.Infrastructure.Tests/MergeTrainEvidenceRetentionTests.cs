@@ -7,7 +7,7 @@ public sealed class MergeTrainEvidenceRetentionTests
 {
     private const string CancelledId = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     private static readonly string[] SourceNames = ["z.trx", "a.trx"];
-    private const string RegistryNote = "TRX copies of train receipts that cannot back a landing are reclaimed by MergeTrainEvidenceRetention 14 days after the receipt completes once every member goal is Completed, Cancelled or Superseded; landing-evidence trains and gate-verdict.json are kept.";
+    private const string RegistryNote = "TRX copies of train receipts that cannot back a landing are reclaimed by MergeTrainEvidenceRetention 14 days after the receipt completes, and those of finalized landings by LandedMergeTrainEvidenceRetention 3 days after, once every member goal is Completed, Cancelled or Superseded; unlanded passing trains, prepared landings and gate-verdict.json are kept.";
 
     [Fact]
     public void OldRedTrainReclaimsOrderedTrxCopiesAndKeepsReceiptVerdictAndOtherFiles()

@@ -232,6 +232,17 @@ public sealed class MergeTrainAcceptanceStore
             .ThenBy(receipt => receipt.ReceiptId, StringComparer.Ordinal).ToArray();
     }
 
+    public IReadOnlySet<string> ReadFinalizedLandingTrainIds()
+    {
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT train_id FROM merge_train_landings WHERE state='finalized';";
+        using var reader = command.ExecuteReader();
+        var trainIds = new HashSet<string>(StringComparer.Ordinal);
+        while (reader.Read()) trainIds.Add(reader.GetString(0));
+        return trainIds;
+    }
+
     public IReadOnlyList<MergeTrainReceipt> ReadPassedReceiptsForGoal(GoalId goalId)
     {
         using var connection = Open();
