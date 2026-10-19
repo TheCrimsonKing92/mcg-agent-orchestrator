@@ -19,6 +19,7 @@ internal sealed partial class OperatorIntentCoordinator
 
     private readonly IOperatorIntentStore _store;
     internal OperatorGateCancellation? GateCancellation { get; init; }
+    internal CohortMemberReopenedGateAbandonment? ReopenedMemberGateAbandonment { get; init; }
     private readonly Func<DateTimeOffset> _utcNow;
     private readonly Func<GoalId, string?>? _goalHeadResolver;
     private readonly Func<GoalId, string, string?>? _policyChangeFingerprintResolver;
@@ -72,6 +73,8 @@ internal sealed partial class OperatorIntentCoordinator
         var collaboration = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
         var solo = new ConductorParallelAcceptanceAttemptCoordinator(
             Path.Combine(workspace.OrchestratorDirectory, "acceptance-gate-attempts"), workspace.IntegrationBranch, workspace.ExecutionDirectory);
+        var grouped = OwnedChildAttemptCoordinatorFactory.CreateGroupedGate(workspace, null);
+        var events = new ConductEventLogWriter(workspace.ConductEventsLogPath);
         var refinement = new GoalRefinementService(
             new InMemoryModelProviderRegistry([]), ModelFunctionCatalog.Empty, collaboration,
             new SpecRefinerPrecedentStore(workspace.SpecRefinerPrecedentsPath));
@@ -100,8 +103,8 @@ internal sealed partial class OperatorIntentCoordinator
                 }
             })
         {
-            GateCancellation = new(solo, OwnedChildAttemptCoordinatorFactory.CreateGroupedGate(workspace, null),
-                new ConductEventLogWriter(workspace.ConductEventsLogPath)),
+            GateCancellation = new(solo, grouped, events),
+            ReopenedMemberGateAbandonment = new(grouped, events),
             CancelLatestProcess = (kernel, goalId, taskId) =>
                 OperatorCancelAwareDispatchRunner.ForWorkspace(workspace).CancelLatestProcess(kernel, goalId, taskId),
             CancelCompletionBuild = (kernel, goalId, taskId, target) =>
