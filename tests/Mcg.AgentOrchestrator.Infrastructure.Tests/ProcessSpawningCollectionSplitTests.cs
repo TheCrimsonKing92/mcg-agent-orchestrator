@@ -111,7 +111,6 @@ public sealed class ProcessSpawningCollectionSplitTests
             Xunit.Assert.Equal(
                 type.Name switch
                 {
-                    nameof(ConductorDriverTestsFindingEvidenceReuse) => "IsolatedProcessSpawningShardA",
                     nameof(MtpManagedFilterDiscoveryTests) or nameof(MtpNoBuildReceiptIdentityTests) => "IsolatedProcessSpawningShardB",
                     nameof(WorkerDispatchTestsModelSelection) or nameof(CliHelpTests) or nameof(ExcessWorkerRoundAnalysisScriptTests) => "IsolatedProcessSpawningShardC",
                     _ => ParallelCollection
