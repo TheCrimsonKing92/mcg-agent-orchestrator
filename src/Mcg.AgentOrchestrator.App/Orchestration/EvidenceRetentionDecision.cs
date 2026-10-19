@@ -11,7 +11,8 @@ internal enum EvidenceArtifactFamily
     MtpTestRuns,
     RunEvents,
     DiagnosticDumps,
-    MergeTrainEvidence
+    MergeTrainEvidence,
+    CohortAcceptanceEvidence
 }
 
 internal enum EvidenceRetentionAction
