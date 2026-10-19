@@ -5,7 +5,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 using static ConductorDriverTests;
 
 // Each case owns its temporary repository and artifacts; the fixture supplies the isolated dotnet root.
-[Xunit.Collection("IsolatedProcessSpawning")]
+[Xunit.Collection("IsolatedProcessSpawningRemainderB")]
 public sealed class WorkerBuildCheckRecoveryDecisionTests
 {
     private const string FirstError = "src/Feature.cs(12,4): error CS0103: The name 'missing' does not exist [App.csproj]";

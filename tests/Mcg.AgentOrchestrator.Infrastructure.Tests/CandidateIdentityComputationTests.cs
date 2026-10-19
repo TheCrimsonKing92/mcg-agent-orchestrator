@@ -1,6 +1,6 @@
 using Mcg.AgentOrchestrator.Infrastructure;
 
-[Xunit.Collection("IsolatedProcessSpawning")]
+[Xunit.Collection("IsolatedProcessSpawningRemainderB")]
 public sealed class CandidateIdentityComputationTests
 {
     [Xunit.Fact]

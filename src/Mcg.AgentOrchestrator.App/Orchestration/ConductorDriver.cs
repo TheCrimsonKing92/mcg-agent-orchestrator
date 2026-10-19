@@ -233,7 +233,7 @@ internal sealed partial class ConductorDriver
         Func<GoalId, TaskId, InterruptedDispatchStateRead>? readCurrentInterruptedDispatchState = null,
         bool runAcceptanceAttemptsInCurrentProcess = false,
         Action<GoalSnapshot>? recordDurableGoalBaseline = null,
-        GoalWorktreeCleanupHooks? cleanupHooks = null)
+        GoalWorktreeCleanupHooks? cleanupHooks = null, Func<DateTimeOffset>? utcNow = null)
     {
         var dir = workspace.ExecutionDirectory;
         _executionDirectory = dir;
@@ -309,7 +309,7 @@ internal sealed partial class ConductorDriver
         _getEvidenceMutationLease = goal => evidenceMutationLeaseStore.TryGetAcceptanceLease(
             goal.Id.Value,
             EvidenceMutationLeaseDuration);
-        _utcNow = () => DateTimeOffset.UtcNow;
+        _utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
         IDisposable? AcquireEvidenceMutationLease(Goal goal, string operation)
         {
             _tryRecoverTerminalDeveloperIntegrationLease(goal);

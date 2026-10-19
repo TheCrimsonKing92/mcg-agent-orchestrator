@@ -1,7 +1,7 @@
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
-[Xunit.Collection("IsolatedProcessSpawning")]
+[Xunit.Collection("IsolatedProcessSpawningRemainderB")]
 public sealed class DeveloperDeferredNoChangeDispatchTests : WorkerDispatchTestSupport
 {
     [Xunit.Fact]
