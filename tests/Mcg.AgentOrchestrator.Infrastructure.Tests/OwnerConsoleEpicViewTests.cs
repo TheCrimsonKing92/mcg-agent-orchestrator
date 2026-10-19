@@ -732,6 +732,39 @@ public sealed class OwnerConsoleEpicViewTests
         });
     }
 
+    [Fact]
+    public async Task Dispose_HeldIgnoringRead_DrainsAndUnsubscribes()
+    {
+        using var fixture = new Fixture();
+        using var dialog = new OwnerConsoleEpicDialog(fixture.Controller, action => action(), CancellationToken.None);
+        var pending = fixture.Source.HoldNextLoad();
+        var opening = dialog.OpenAsync(OwnerConsolePane.Board);
+        await fixture.Source.LoadStarted.Task.WaitAsync(TestContext.Current.CancellationToken);
+        dialog.Dispose();
+        await opening.WaitAsync(TestContext.Current.CancellationToken);
+        Assert.False(pending.Task.IsCompleted);
+        var calls = fixture.Source.Calls;
+        fixture.Controller.Apply(fixture.Model);
+        Assert.Equal(calls, fixture.Source.Calls);
+        fixture.Source.Release(pending, null);
+        Assert.False(dialog.IsOpen);
+    }
+
+    [Fact]
+    public async Task Dispose_QueuedPublication_CannotTouchWidgets()
+    {
+        using var fixture = new Fixture();
+        var callbacks = new Queue<Action>();
+        using var dialog = new OwnerConsoleEpicDialog(fixture.Controller, callbacks.Enqueue, CancellationToken.None);
+        await dialog.OpenAsync(OwnerConsolePane.Board).WaitAsync(TestContext.Current.CancellationToken);
+        var callback = Assert.Single(callbacks);
+        var lines = dialog.Lines.ToArray();
+        dialog.Dispose();
+        callback();
+        Assert.Equal(lines, dialog.Lines);
+        Assert.False(dialog.IsOpen);
+    }
+
     internal sealed class Fixture : IDisposable
     {
         internal const string Plan = "Purpose: show the whole epic plan with owner decisions and phases.\nPhase one: render the plan of record with enough detail to require wrapping at the available window width while keeping every word accessible.\nNext: review with Miles. Last reviewed: 2026-10-08.";
