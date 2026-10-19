@@ -225,6 +225,7 @@ internal static partial class StorageRetentionMaintenance
                 SweepWorkerArtifacts(logDirectory, goals, now, decisions);
                 SweepOperatorLogs(logDirectory, now, reclaim, decisions);
                 ConductorDiagnosticDumpRetention.Sweep(logDirectory, now, decisions);
+                MergeTrainEvidenceRetention.Sweep(orchestratorDirectory, goals, now, decisions);
                 var retainedMtpAttemptOwnerKeys = SweepMtpResults(
                     mtpResultsRoot,
                     orchestratorDirectory,
