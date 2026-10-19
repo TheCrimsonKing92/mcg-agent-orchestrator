@@ -625,6 +625,8 @@ public sealed partial class AgentOrchestratorKernel
             }
             RecordEffectiveAcceptanceCriteriaCorrections(goal, taskId, ProgressKind.TaskRetried, retryMessage, correctionSource);
             Append(goal, taskId, ProgressKind.TaskRetried, retryMessage);
+            if (TerminalContractRepairStreak.OperatorRetryResetNote(task, correctionSource) is { } resetNote)
+                Append(goal, taskId, ProgressKind.TaskNote, resetNote);
         }
         if (invalidateDownstream)
         {

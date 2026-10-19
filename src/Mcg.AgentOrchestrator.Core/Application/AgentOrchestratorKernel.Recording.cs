@@ -350,12 +350,7 @@ public sealed partial class AgentOrchestratorKernel
         if (outcome.Kind == DispatchOutcomeKind.VerificationIncomplete)
         {
             task.RecordCompletionVerdict(false, TaskOutcomeRules.VerificationTerminalContractIncomplete.Token);
-            var repairs = task.VerificationHistory.Reverse()
-                .TakeWhile(record => record.CompletionVerdictRule == TaskOutcomeRules.VerificationTerminalContractIncomplete.Token ||
-                    DispatchFailureClassifier.IsProviderInterruptionFailure(record) ||
-                    (WorkerResultBlockers.TryGetTestsStatus(record, out var status) &&
-                     status == WorkerResultBlockers.TestsStatus.Inconclusive))
-                .Count();
+            var repairs = TerminalContractRepairStreak.Count(goal.Timeline, task);
             if (repairs <= VerificationContractRepairLimit)
             {
                 task.RecordRetry(_clock.UtcNow, retryCause: RetryCause.ProviderInterruption);

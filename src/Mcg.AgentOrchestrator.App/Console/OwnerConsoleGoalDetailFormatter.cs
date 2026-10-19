@@ -5,12 +5,18 @@ namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 
 internal static class OwnerConsoleGoalDetailFormatter
 {
-    internal static async Task<Goal?> ComposeAsync(IOrchestratorStateQueries state, IGoalEventTail tail,
+    internal static Task<Goal?> ComposeAsync(IOrchestratorStateQueries state, IGoalEventTail tail,
         string id, IOwnerConsoleOutput output, CancellationToken token, TimeZoneInfo? zone = null,
         Func<OwnerConsoleGateProgress?>? gate = null)
+        => ComposeAsync(new OwnerGoalDetailQuery(state, tail, gate), id, output, token, zone);
+
+    internal static async Task<Goal?> ComposeAsync(OwnerGoalDetailQuery query, string id,
+        IOwnerConsoleOutput output, CancellationToken token, TimeZoneInfo? zone = null,
+        Func<OwnerConsoleGateProgress?>? gate = null)
     {
-        var detail = await new OwnerGoalDetailQuery(state, tail, gate).LoadAsync(id, token);
+        var detail = await query.LoadAsync(id, token);
         if (detail is null) { output.WriteLine("goal state unavailable"); return null; }
+        if (gate is not null) detail = detail with { Gate = gate()?.ForMember(id) };
         Render(detail, output, zone ?? TimeZoneInfo.Local);
         return detail.Goal;
     }

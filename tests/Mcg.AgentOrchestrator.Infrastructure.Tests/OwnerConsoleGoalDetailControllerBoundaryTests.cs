@@ -1,0 +1,161 @@
+using System.Text.Json;
+using System.Text.RegularExpressions;
+using Mcg.AgentOrchestrator.App.OwnerConsole;
+using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Infrastructure;
+
+// Parallel-safe: per-test kernel and fakes; source reads use the verified repository root.
+public sealed class OwnerConsoleGoalDetailControllerBoundaryTests
+{
+    [Fact]
+    public async Task ShowGoalDetail_InjectedQuery_MatchesExistingFormatterText()
+    {
+        var harness = new OwnerConsoleHarness();
+        var goal = harness.Kernel.CreateGoal(new GoalId("11111111-detail"), "# Readable detail\nLong objective",
+            [new(TaskId.New(), "Build", AgentRole.Developer), new(TaskId.New(), "Review", AgentRole.Reviewer)]);
+        harness.Kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        var snapshot = harness.Kernel.ExportSnapshot();
+        harness.Kernel.ReplaceWithSnapshot(snapshot with { Goals = snapshot.Goals.Select(item => item with
+        {
+            CurrentHold = new GoalHoldSnapshot("hold", "owner-review-hold",
+                "waiting_for_approval {metadata} evidence=[raw]", harness.Clock.GetUtcNow())
+        }).ToArray() });
+        goal = harness.Kernel.Goals.Single();
+        var recordedTail = new RecordedTail(Enumerable.Range(0, 12).Select(index => JsonSerializer.Serialize(new
+        {
+            timestamp = DateTimeOffset.UnixEpoch.AddSeconds(index), eventType = "TaskDispatched",
+            taskId = goal.Tasks[0].Id.Value, message = "{\"eventKind\":\"secret\"}",
+            detail = new { secret = "unreadable" }
+        })).ToArray());
+        var throwingState = new ThrowingState();
+        var throwingTail = new ThrowingTail();
+        var dialogs = new Dialogs();
+        using var controller = new OwnerConsoleScreenController(harness.Questions, harness.Answers, dialogs,
+            throwingState, throwingTail, harness.Conductor, harness.DigestReport, harness.Digest, harness.Clock,
+            goalDetail: new OwnerGoalDetailQuery(harness.State, recordedTail));
+
+        await controller.ShowGoalDetailAsync(goal.Id.Value, cancellationToken: TestContext.Current.CancellationToken);
+
+        var output = new OwnerConsoleHarness.FakeOutput();
+        await OwnerConsoleGoalDetailFormatter.ComposeAsync(harness.State, recordedTail, goal.Id.Value,
+            output, TestContext.Current.CancellationToken, harness.Clock.LocalTimeZone);
+        var expected = string.Join(Environment.NewLine, output.Text.Replace("\r", "").TrimEnd('\n').Split('\n'));
+        var text = Assert.Single(dialogs.Texts);
+        Assert.Equal(expected, text);
+        Assert.Contains("Status:", text);
+        Assert.Contains("Tasks:", text);
+        Assert.Contains("Recent events:", text);
+        Assert.Contains("Waiting on: waiting for your approval", text);
+        Assert.Contains("Developer started", text);
+        Assert.Equal(0, throwingState.Calls);
+        Assert.Equal(0, throwingTail.Calls);
+    }
+
+    [Fact]
+    public async Task ShowGoalDetail_UnknownGoal_ShowsUnavailableWithoutReadingRawStores()
+    {
+        var harness = new OwnerConsoleHarness();
+        var throwingState = new ThrowingState();
+        var throwingTail = new ThrowingTail();
+        var dialogs = new Dialogs();
+        using var controller = new OwnerConsoleScreenController(harness.Questions, harness.Answers, dialogs,
+            throwingState, throwingTail, harness.Conductor, harness.DigestReport, harness.Digest, harness.Clock,
+            goalDetail: new OwnerGoalDetailQuery(harness.State, new RecordedTail([])));
+
+        await controller.ShowGoalDetailAsync("unknown-goal", cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal("goal state unavailable", Assert.Single(dialogs.Texts));
+        Assert.Equal(0, throwingState.Calls);
+        Assert.Equal(0, throwingTail.Calls);
+    }
+
+    [Fact]
+    public void ComposeGoal_Source_UsesOnlyQueryForDetailReads()
+    {
+        var source = File.ReadAllText(Path.Combine(VerifiedRepositoryRoot.Find(), "src",
+            "Mcg.AgentOrchestrator.App", "Console", "OwnerConsoleScreenController.cs"));
+        var method = ExtractComposeGoal(source);
+
+        Assert.Empty(DetailReadViolations(method));
+        Assert.DoesNotContain("ComposeAsync(state, tail", source, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void DetailReadGuard_OldStoreCall_ReportsBothRawStores()
+    {
+        var violations = DetailReadViolations(
+            "OwnerConsoleGoalDetailFormatter.ComposeAsync(state, tail, goalId, output, cancellation, zone)");
+
+        Assert.Contains("state", violations);
+        Assert.Contains("tail", violations);
+    }
+
+    private static string ExtractComposeGoal(string source)
+    {
+        const string signature = "private async Task<OwnerConsoleGoalDialog.Content?> ComposeGoalAsync(";
+        const string nextMethod = "private async Task AnswerAsync";
+        var start = source.IndexOf(signature, StringComparison.Ordinal);
+        Assert.True(start >= 0, "ComposeGoalAsync signature was not found.");
+        var end = source.IndexOf(nextMethod, start, StringComparison.Ordinal);
+        Assert.True(end > start, "AnswerAsync anchor after ComposeGoalAsync was not found.");
+        return source[start..end];
+    }
+
+    private static IReadOnlyList<string> DetailReadViolations(string method)
+    {
+        var violations = new List<string>();
+        if (!method.Contains("_goalDetail", StringComparison.Ordinal)) violations.Add("missing _goalDetail");
+        // ComposeGoalAsync has no literals or comments containing these whole-word identifiers.
+        foreach (var identifier in new[] { "state", "tail" })
+            if (Regex.IsMatch(method, $@"\b{identifier}\b")) violations.Add(identifier);
+        foreach (var member in new[] { "LoadGoalsAsync", "ListGoalMetadataAsync", "ReadLast(" })
+            if (method.Contains(member, StringComparison.Ordinal)) violations.Add(member);
+        return violations;
+    }
+
+    private sealed class ThrowingState : IOrchestratorStateQueries
+    {
+        internal int Calls;
+        private InvalidOperationException UnexpectedRead()
+        {
+            Calls++;
+            return new InvalidOperationException("Goal detail must use the injected query.");
+        }
+
+        public Task<AgentOrchestratorKernel> LoadGoalsAsync(IReadOnlyCollection<GoalId> goalIds,
+            CancellationToken cancellationToken = default) => throw UnexpectedRead();
+        public Task<IReadOnlyList<GoalSummary>> ListGoalMetadataAsync(
+            CancellationToken cancellationToken = default) => throw UnexpectedRead();
+        public Task<IReadOnlyList<GoalSummary>> ListGoalMetadataAsync(bool includeTerminalCreatedAt,
+            CancellationToken cancellationToken = default) => throw UnexpectedRead();
+        public Task<IReadOnlyList<HumanInputRequestSnapshot>> ListOpenHumanInputRequestsAsync(
+            CancellationToken cancellationToken = default) => throw UnexpectedRead();
+        public Task<IReadOnlyList<TerminalOwnerQuestionHold>> ListTerminalOwnerQuestionHoldsAsync(
+            IReadOnlyCollection<GoalId> goalIds, CancellationToken cancellationToken = default) => throw UnexpectedRead();
+        public Task<IReadOnlyList<GoalSummary>> ListGoalIdStatusesAsync(
+            CancellationToken cancellationToken = default) => throw UnexpectedRead();
+    }
+
+    private sealed class ThrowingTail : IGoalEventTail
+    {
+        internal int Calls;
+        public IReadOnlyList<string> ReadLast(string id, int count)
+        {
+            Calls++;
+            throw new InvalidOperationException("Goal detail must use the injected query.");
+        }
+    }
+
+    private sealed class RecordedTail(string[] lines) : IGoalEventTail
+    {
+        public IReadOnlyList<string> ReadLast(string id, int count) => lines.TakeLast(count).ToArray();
+    }
+
+    private sealed class Dialogs : IOwnerConsoleDialogs
+    {
+        internal readonly List<string> Texts = [];
+        public Task ShowTextAsync(string title, string text) { Texts.Add(text); return Task.CompletedTask; }
+        public Task<bool> ConfirmAsync(string title, string text) => throw new InvalidOperationException();
+        public Task<string?> PromptTextAsync(string title, string text) => throw new InvalidOperationException();
+    }
+}
