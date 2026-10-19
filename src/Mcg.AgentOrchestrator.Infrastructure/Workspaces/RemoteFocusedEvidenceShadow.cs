@@ -138,8 +138,14 @@ internal sealed class RemoteFocusedEvidenceShadow : IAsyncDisposable
             token.ThrowIfCancellationRequested();
             var submission = await _executor!.SubmitAsync(run.Request, token).ConfigureAwait(false);
             if (submission.Handle is not { } handle)
-                return new(submission.FailureReason == "transport-unavailable"
-                    ? RemoteLaneOutcomeCode.TransportUnavailable : RemoteLaneOutcomeCode.Unreachable,
+                return new(submission.FailureReason switch
+                {
+                    "transport-unavailable" => RemoteLaneOutcomeCode.TransportUnavailable,
+                    "executor-busy" => RemoteLaneOutcomeCode.ExecutorBusy,
+                    "executor-tools-mismatch" => RemoteLaneOutcomeCode.ExecutorToolsMismatch,
+                    "executor-tools-unverified" => RemoteLaneOutcomeCode.ExecutorToolsUnverified,
+                    _ => RemoteLaneOutcomeCode.Unreachable
+                },
                     Reason: submission.FailureReason);
             if (!run.Attach(handle)) return new(RemoteLaneOutcomeCode.CancelledAfterGrace);
             var heartbeat = run.Started;
@@ -256,6 +262,7 @@ internal sealed class RemoteFocusedEvidenceShadow : IAsyncDisposable
                     request.AttemptId, request.Lane, observation.Code,
                     observation.Code is RemoteLaneOutcomeCode.Accepted or RemoteLaneOutcomeCode.CancelledAfterGrace or
                         RemoteLaneOutcomeCode.ShadowSkippedNoExecutor or RemoteLaneOutcomeCode.PreemptedByGate or
+                        RemoteLaneOutcomeCode.ExecutorToolsMismatch or RemoteLaneOutcomeCode.ExecutorBusy or
                         RemoteLaneOutcomeCode.NotEligibleExclusiveResource ? null : "executor",
                     Binding(request), observed is null ? null : new(observed.ExecutorId, observed.Lane,
                         observed.VerifyingCommitSha, observed.ObservedTreeSha, observed.MainSha, observed.FilterHash,

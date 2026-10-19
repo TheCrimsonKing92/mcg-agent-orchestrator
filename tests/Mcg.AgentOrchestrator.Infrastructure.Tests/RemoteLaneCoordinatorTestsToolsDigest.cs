@@ -6,9 +6,9 @@ using Check = Mcg.AgentOrchestrator.Infrastructure.GoalAcceptanceVerifier.Accept
 public sealed class RemoteLaneCoordinatorTestsToolsDigest
 {
     [Xunit.Theory]
-    [Xunit.InlineData("executor-tools-mismatch", "ExecutorToolsMismatch")]
-    [Xunit.InlineData("executor-tools-unverified", "ExecutorToolsUnverified")]
-    public async Task ToolsRefusal_RecordsExecutorFaultAndReleasesSlotsUntilLease(string reason, string code)
+    [Xunit.InlineData("executor-tools-mismatch", "ExecutorToolsMismatch", null)]
+    [Xunit.InlineData("executor-tools-unverified", "ExecutorToolsUnverified", "executor")]
+    public async Task ToolsRefusal_RecordsExecutorFaultAndReleasesSlotsUntilLease(string reason, string code, string? expectedOwner)
     {
         await using var fake = new FakeSshRemoteLaneTransport();
         var entry = new RemoteLaneExecutorEntry("one", 60, Slots: 2);
@@ -42,13 +42,13 @@ public sealed class RemoteLaneCoordinatorTestsToolsDigest
         var row = Assert.Single(RemoteExecutorHealthLedger.ReadAll(ledger));
         Assert.Equal(Enum.Parse<RemoteLaneOutcomeCode>(code), row.Outcome);
         Assert.Equal(reason, row.Reason);
-        Assert.Equal("executor", row.FaultOwner);
+        Assert.Equal(expectedOwner, row.FaultOwner);
         Assert.NotNull(row.Attempt);
         Assert.Equal(step, Assert.Single(row.Attempt.Steps));
         using (var json = JsonDocument.Parse(Assert.Single(File.ReadAllLines(ledger))))
         {
             Assert.Equal(reason, json.RootElement.GetProperty("outcome").GetString());
-            Assert.Equal("executor", json.RootElement.GetProperty("fault_owner").GetString());
+            Assert.Equal(expectedOwner, json.RootElement.GetProperty("fault_owner").GetString());
         }
         using (var slot0 = RemoteExecutorOccupancy.TryClaimExclusive(fake.Root, entry.Id, 0))
         using (var slot1 = RemoteExecutorOccupancy.TryClaimExclusive(fake.Root, entry.Id, 1))

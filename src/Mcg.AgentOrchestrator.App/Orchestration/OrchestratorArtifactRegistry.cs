@@ -77,6 +77,7 @@ internal static class OrchestratorArtifactRegistry
         Source("lane-flakes.jsonl", "Infrastructure/Workspaces/AcceptanceLaneFlakeLedger.cs"),
         Source("remote-executor-health.jsonl", "Infrastructure/Workspaces/RemoteExecutorHealthLedger.cs"),
         Source("remote-executor-probe.jsonl", "Infrastructure/Workspaces/RemoteExecutorProbeLedger.cs"),
+        Source("executor-tools-deploy", "App/Orchestration/ExecutorToolsMainSource.cs"),
         Source("tick-cpu.jsonl", "Infrastructure/Workspaces/TickCpuLedger.cs"),
         Source("remote-lane-executors.json", "Infrastructure/Workspaces/RemoteLaneExecutorConfiguration.cs"),
         Source("prompt-rollout-watches.jsonl", "App/Orchestration/PromptRolloutWatchStore.cs"),

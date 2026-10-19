@@ -414,7 +414,7 @@ internal sealed class RemoteLaneCoordinator : IDisposable
             request.AttemptId, request.Lane, code,
             code is RemoteLaneOutcomeCode.Accepted or RemoteLaneOutcomeCode.NotEligibleExclusiveResource or
                 RemoteLaneOutcomeCode.ExecutorBusy or RemoteLaneOutcomeCode.OfferSkippedNoExecutor or
-                RemoteLaneOutcomeCode.ShadowPreemptRequested ? null : "executor",
+                RemoteLaneOutcomeCode.ExecutorToolsMismatch or RemoteLaneOutcomeCode.ShadowPreemptRequested ? null : "executor",
             new(request.ExecutorId, request.Lane, request.VerifyingCommitSha, request.CandidateTreeSha,
                 request.MainSha, request.FilterHash, request.ManifestIdentity),
             result is null ? null : new(result.ExecutorId, result.Lane, result.VerifyingCommitSha, result.ObservedTreeSha,

@@ -232,6 +232,7 @@ internal static class RemoteFirstFocusedEvidence
                 RemoteExecutorHealthLedger.Append(RemoteExecutorHealthLedger.ResolveStorePath(worktreePath), new(clock.GetUtcNow(),
                     request.ExecutorId, request.AttemptId, request.Lane, code,
                     code is RemoteLaneOutcomeCode.Accepted or RemoteLaneOutcomeCode.NotEligibleExclusiveResource or
+                        RemoteLaneOutcomeCode.ExecutorToolsMismatch or RemoteLaneOutcomeCode.ExecutorBusy or
                         RemoteLaneOutcomeCode.ShadowSkippedNoExecutor or RemoteLaneOutcomeCode.CancelledAfterGrace ? null : "executor",
                     new(request.ExecutorId, request.Lane, request.VerifyingCommitSha, request.CandidateTreeSha, request.MainSha, request.FilterHash, request.ManifestIdentity),
                     result is null ? null : new(result.ExecutorId, result.Lane, result.VerifyingCommitSha, result.ObservedTreeSha, result.MainSha, result.FilterHash, result.ManifestIdentity),

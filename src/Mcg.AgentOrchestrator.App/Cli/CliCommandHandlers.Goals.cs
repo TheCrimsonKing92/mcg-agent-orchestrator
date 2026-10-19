@@ -1563,11 +1563,10 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                         new RepositoryIntegrityProbe(context.Workspace.ExecutionDirectory, new IcaclsIntegrityLabeler())));
                 var programHealthMonitor = ConductorProgramHealthMonitor.ForWorkspace(context.Workspace, conductEventLogWriter);
                 var maintenanceCadence = RunEventMaintenanceCadenceRunner.ForWorkspace(context.Workspace);
-                var remoteExecutorProbe = new ConductorRemoteExecutorProbe(
-                    AcceptancePartitionVerdictCache.ResolveHostStateRoot(context.Workspace.ExecutionDirectory),
-                    RemoteLaneExecutorConfiguration.ResolveStorePath(context.Workspace.ExecutionDirectory),
-                    TimeProvider.System, GoalAcceptanceVerifier.RunRemoteLaneTransportAsync,
-                    RemoteExecutorOccupancy.DefaultStartTime, conductEventLogWriter);
+                var remoteExecutorProbe = new ConductorRemoteExecutorProbe(AcceptancePartitionVerdictCache.ResolveHostStateRoot(context.Workspace.ExecutionDirectory),
+                    RemoteLaneExecutorConfiguration.ResolveStorePath(context.Workspace.ExecutionDirectory), TimeProvider.System,
+                    GoalAcceptanceVerifier.RunRemoteLaneTransportAsync, RemoteExecutorOccupancy.DefaultStartTime, conductEventLogWriter);
+                var executorToolsDeploy = ConductorExecutorToolsDeploy.ForWorkspace(context.Workspace, conductEventLogWriter);
                 var stateLogCheck = StateLogDivergenceCheckRunner.ForWorkspace(context.Workspace);
                 var failureClustersDaily = FailureClustersDailyRunner.ForWorkspace(context.Workspace);
                 var operatorIntents = OperatorIntentCoordinator.CreateDefault(context.Workspace);
@@ -1737,7 +1736,8 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     ConductorTickStepLedger.Measure("failure-clusters", () => failureClustersDaily.OnTick());
                     ConductorTickStepLedger.Measure("host-health", () => hostHealthMonitor.Evaluate());
                     ConductorTickStepLedger.Measure("program-health", () => programHealthMonitor.Evaluate(loopKernel.Goals.Select(goal => (goal.Id, goal.Status)).ToArray(), terminalSweepCache.ObservedMainSha, (goals, now) => ConductorInvariantObservationReader.ForWorkspace(context.Workspace).Read(goals, now)));
-                    ConductorTickStepLedger.Measure("remote-executor-probe", () => remoteExecutorProbe.Evaluate());
+                ConductorTickStepLedger.Measure("remote-executor-probe", () => remoteExecutorProbe.Evaluate());
+                ConductorTickStepLedger.Measure("executor-tools-deploy", () => executorToolsDeploy.Evaluate());
                     ConductorTickStepLedger.Measure("remote-git-mirror", () => RemoteGitMirror.TryStartBackgroundProcessing(loopKernel, context.Workspace.ExecutionDirectory, integrationBranch: context.Workspace.IntegrationBranch));
                     return terminalSweep;
                 }

@@ -32,6 +32,8 @@ internal static class ConductEventOperatorClassifier
             "invariant-breach" when StartsWithToken("INVARIANT_CLEARED") => Outcome,
             "remote-executor-health" when StartsWithToken("REMOTE_EXECUTOR_WARNING") => Decision,
             "remote-executor-health" when StartsWithToken("REMOTE_EXECUTOR_RECOVERED") => Outcome,
+            "executor-tools-deploy" when StartsWithToken("EXECUTOR_TOOLS_DEPLOY") && HasToken("outcome=failed") => Decision,
+            "executor-tools-deploy" when StartsWithToken("EXECUTOR_TOOLS_DEPLOY") && HasToken("outcome=deployed") => Outcome,
             "state-log-divergence" when StartsWithToken("STATE_LOG_DIVERGENCE") =>
                 ClassifyStateLogDivergence(tokens),
             "host-health" when StartsWithToken("HOST_HEALTH_FOREGROUND_LOCK_ARMED") => Decision,
