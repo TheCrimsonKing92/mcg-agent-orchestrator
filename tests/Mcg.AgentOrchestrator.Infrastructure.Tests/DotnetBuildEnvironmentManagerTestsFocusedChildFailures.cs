@@ -5,7 +5,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 using Xunit;
 using Fixture = DotnetBuildEnvironmentManagerFocusedChildFixture;
 
-[Collection(TestCollections.DotnetBuildEnvironmentManagerFocusedRunner)]
+[Xunit.Collection(TestCollections.DotnetBuildSlots)]
 public sealed class DotnetBuildEnvironmentManagerTestsFocusedChildFailures
 {
     public static bool IsWindows => OperatingSystem.IsWindows();
