@@ -5,13 +5,15 @@ description: Handle Windows and .NET build/test hygiene for mcg-agent-orchestrat
 
 # .NET Windows Build Hygiene
 
-Use this skill when building, testing, or diagnosing this repository on Windows.
+Use this skill when building, testing, or diagnosing this repository on Windows. Follow your role's execution limits; defer prohibited tests to acceptance.
 
 ## Command Discipline
 
 - Use `.\scripts\Invoke-WorkerBuildCheck.ps1 <project.csproj> [project.csproj...]` as the normal Developer/Tester build command. It retains complete per-project output in the isolated goal artifacts area and returns a bounded project/error summary. Do not use raw `dotnet build` for routine verification when this helper can express the target.
 - Prefer `scripts/Invoke-TestSummary.ps1 -Target <test-project> -Filter 'FullyQualifiedName~<class>'` with narrow filters over full-suite runs until a change is ready. Do not run raw `dotnet test`, which launches the generated native test apphost on Windows.
-- Each shell command runs under a bounded wall-time budget: keep every build/test command comfortably under ~2 minutes. Build once with `Invoke-WorkerBuildCheck.ps1`, then run `Invoke-TestSummary.ps1` with `-NoBuild` and a narrow `-Filter` in slices; never bundle a build and a broad or full-suite run into one command (that combination has been killed at ~124s with no results). A command that is killed or produces no TRX is inconclusive — an environment/plumbing outcome — so re-run a narrower slice; do not report it as a test failure.
+- Follow the [operator runbook's Codex harness timeout floor](../../../docs/operator-runbook.md): choose the outer collection budget from the invoked helper's documented/internal maximum plus startup and result-reconciliation margin. A helper phase bound does not bound the whole operation.
+- Resume the same yielded session while it runs; do not restart or cancel it merely because a collection window expires. Inspect bounded process evidence and retained receipts before claiming a hang. Cancellation, an outer timeout, or a missing final receipt (including TRX) is inconclusive; report terminal build/test failure only from a completed operation's result.
+- Build once with `Invoke-WorkerBuildCheck.ps1`, then, when your role permits tests, use `Invoke-TestSummary.ps1` with `-NoBuild` and a narrow `-Filter` in slices. Keep build and broad test runs separate; preserve required verification and conductor gates.
 - Quote filters containing `|`, for example `-Filter 'FullyQualifiedName~AgentCatalog|FullyQualifiedName~WorkerDispatch'`.
 - Use minimal verbosity first; expand output only for failing tests.
 - Run commands from the relevant worktree, not the shared root, when validating a goal branch.
