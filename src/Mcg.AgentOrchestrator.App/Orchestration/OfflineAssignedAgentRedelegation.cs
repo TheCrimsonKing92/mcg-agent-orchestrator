@@ -19,7 +19,8 @@ internal static class OfflineAssignedAgentRedelegation
         return latestAssignment is { Kind: ProgressKind.TaskRedelegated } &&
             latestAssignment.Message.StartsWith("Reassigned ", StringComparison.Ordinal) &&
             !latestAssignment.Message.Contains("repaired stale", StringComparison.OrdinalIgnoreCase) &&
-            !latestAssignment.Message.Contains(Marker, StringComparison.Ordinal);
+            !latestAssignment.Message.Contains(Marker, StringComparison.Ordinal) &&
+            !latestAssignment.Message.Contains(ProviderSignInFailover.Marker, StringComparison.Ordinal);
     }
 
     internal static Result Apply(AgentOrchestratorKernel kernel, Goal goal,
