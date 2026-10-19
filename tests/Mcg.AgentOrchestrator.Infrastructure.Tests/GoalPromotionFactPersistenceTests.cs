@@ -29,7 +29,7 @@ public sealed class GoalPromotionFactPersistenceTests
             Assert.Equal(original, Assert.Single(await Read(fixture.Path)).PromotionFact);
         }
         fixture.Execute("UPDATE goals SET updated_at = '2000-01-01T00:00:00.0000000+00:00'");
-        Assert.Equal(1, await fixture.Repository.ArchiveTerminalGoalSnapshotsAsync(At));
+        Assert.Equal(1, await fixture.Repository.ArchiveTerminalGoalSnapshotsAsync(snapshot.Timeline.Max(e => e.OccurredAt).AddMilliseconds(1)));
         Assert.Equal(1L, fixture.Scalar("SELECT COUNT(*) FROM goal_snapshot_archive"));
         Assert.Equal(1L, fixture.Scalar("SELECT json_extract(snapshot_json, '$.IsMetadataOnly') FROM goals"));
         Assert.Equal(original, Assert.Single(await Read(fixture.Path)).PromotionFact);

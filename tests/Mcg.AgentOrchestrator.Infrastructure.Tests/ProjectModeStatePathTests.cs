@@ -154,7 +154,11 @@ public sealed class ProjectModeStatePathTests
         var parameters = new DispatchProcessHost.DispatchRunParameters(
             "unused", fixture.Target, "unused.out", "unused.err", "unused.exit", null, false);
         DispatchProcessHost.PrepareSharedSandboxState(parameters);
-        Assert.Equal(before, File.ReadAllBytes(fixture.ExcludePath));
+        var after = File.ReadAllBytes(fixture.ExcludePath);
+        Assert.True(after.AsSpan().StartsWith(before));
+        Assert.DoesNotContain(File.ReadAllLines(fixture.ExcludePath), line => line.Trim() == ".mcg-sandbox/");
+        foreach (var entry in OrchestratorWorktreeGitExclude.DispatchArtifactEntries)
+            AssertEntryOnce(fixture.ExcludePath, entry);
     }
 
     [Fact]

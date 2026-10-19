@@ -306,7 +306,17 @@ public sealed class GoalSnapshotArchiveTests
         var old = new[] { MakeSnapshot(1, GoalStatus.Completed), MakeSnapshot(2, GoalStatus.Cancelled), MakeSnapshot(3, GoalStatus.Superseded) };
         var active = MakeSnapshot(4, GoalStatus.Active);
         var recent = MakeSnapshot(5, GoalStatus.Completed);
+        recent = recent with
+        {
+            Timeline = [.. recent.Timeline, new ProgressEventSnapshot(recent.Id, null,
+                ProgressKind.GoalPolicyDecision, "Recent terminal evidence", Cutoff.AddDays(1))]
+        };
         var boundary = MakeSnapshot(6, GoalStatus.Cancelled);
+        boundary = boundary with
+        {
+            Timeline = [.. boundary.Timeline, new ProgressEventSnapshot(boundary.Id, null,
+                ProgressKind.GoalPolicyDecision, "Boundary terminal evidence", Cutoff)]
+        };
         var otherNonTerminal = new[] { MakeSnapshot(7, GoalStatus.Draft), MakeSnapshot(8, GoalStatus.Verified), MakeSnapshot(9, GoalStatus.Failed) };
         await fixture.Repository.SaveGoalSnapshotsAsync([.. old, active, recent, boundary, .. otherNonTerminal]);
         foreach (var snapshot in old.Append(active).Concat(otherNonTerminal))

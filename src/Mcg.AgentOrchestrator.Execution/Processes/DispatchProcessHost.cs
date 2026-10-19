@@ -1043,13 +1043,11 @@ public static class DispatchProcessHost
             OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
     }
 
-    // Appends ".mcg-sandbox/" to the worktree's local git exclude (.git/info/exclude, resolved via
-    // rev-parse so linked worktrees resolve correctly). Local-only and untracked, so it confines the
-    // sandbox scratch without dirtying the goal branch. Idempotent.
+    // Hides the sandbox and dispatch's root artifact files through the local git exclude,
+    // resolved via rev-parse for linked worktrees. Local-only and idempotent.
     private static void ExcludeSandboxFromGit(string worktree)
     {
-        LocalGitExclude.TryAppendEntries(worktree, [".mcg-sandbox/"],
-            (existing, _) => existing.Contains(".mcg-sandbox", StringComparison.Ordinal));
+        OrchestratorWorktreeGitExclude.Apply(worktree);
     }
 
     internal static IWorkerIntegrityLabeler? IntegrityLabelerOverrideForTests;
