@@ -360,4 +360,3 @@ public sealed class ActivationRemoteLaneTailAdoptionScenarioTests
     }
     private static TaskCompletionSource Signal() => new(TaskCreationOptions.RunContinuationsAsynchronously);
 }
-
