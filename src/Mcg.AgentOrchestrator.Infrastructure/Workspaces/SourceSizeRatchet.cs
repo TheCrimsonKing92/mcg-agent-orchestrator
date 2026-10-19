@@ -574,7 +574,7 @@ internal static class SourceSizeRatchet
             // finding deferral. After integrating main b8da8f673, measured 9309 lines in the same 28 partials; no headroom.
             // Goal 171a09ca records gate-owned Planner requests as typed obligations at the dispatch intake;
             // measured increase is exactly 10 lines (9319 total), with the same 28 partials and no headroom.
-            new SourceClassCeiling("AgentOrchestratorKernel", 9335, 28), // Persist bounded provider hold substitution with its routing event.
+            new SourceClassCeiling("AgentOrchestratorKernel", 9332, 28), // Persist bounded provider hold substitution with its routing event.
             // Goal d6033045 extracted the pre-admission receipt pass to PassedMergeTrainReceiptAdmission; goal 1d0f2317
             // adds one admission predicate to exclude stream-complete children before slot reservation. Measured 9255.
             // Goal 679eee57 added a one-line tick call to the separately owned ConductorExperimentWatch (+1); goal 80de5cb2 extracted
