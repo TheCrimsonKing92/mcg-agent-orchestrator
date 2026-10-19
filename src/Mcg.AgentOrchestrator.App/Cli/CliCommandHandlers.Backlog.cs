@@ -217,6 +217,8 @@ private static bool? TryExecuteBacklogCommand(string command, IReadOnlyList<stri
             var store = BacklogStore.OpenReadOnly(context.Workspace.BacklogStorePath);
             var item = store.GetByIdPrefixAsync(parts[1]).GetAwaiter().GetResult()
                 ?? throw new InvalidOperationException($"No backlog item found with id prefix '{parts[1]}'.");
+            if (HasCliConfirmation(parts, "--json"))
+            { Console.WriteLine(BacklogShowAgentReadView.Serialize(BacklogShowAgentReadView.Read(context, store, item))); return false; }
             Console.WriteLine($"Id:      {item.Id}");
             Console.WriteLine($"Title:   {item.Title}");
             Console.WriteLine($"Status:  {item.Status}");
@@ -420,7 +422,7 @@ private static Goal? FindAuthoritativeSourceGoalForRead(
         : context.Kernel.Goals.FirstOrDefault(goal => goal.Id.Value == claim.OwnerGoalId);
 }
 
-private static SourceBacklogClaimSnapshot? ResolveSourceBacklogClaimForRead(
+internal static SourceBacklogClaimSnapshot? ResolveSourceBacklogClaimForRead(
     CliExecutionContext context,
     string backlogItemId,
     out LegacySourceBacklogOwnerAmbiguousException? ambiguity)
@@ -438,7 +440,7 @@ private static SourceBacklogClaimSnapshot? ResolveSourceBacklogClaimForRead(
     }
 }
 
-private static string ResolveBacklogShowGoalLandingState(CliExecutionContext context, Goal goal)
+internal static string ResolveBacklogShowGoalLandingState(CliExecutionContext context, Goal goal)
 {
     var journal = GoalOperationJournal.Read(context.Workspace.ExecutionDirectory, goal.Id);
     var workspaceExists = context.Worktrees.TryResolve(context.Workspace.ExecutionDirectory, goal.Id) is not null;
@@ -483,7 +485,7 @@ private static BacklogDependencyTarget ResolveBacklogDependencyTarget(
         : new BacklogDependencyTarget(goalMatches[0].Id.Value, BacklogDependencyTargetKind.Goal);
 }
 
-private static string RenderBacklogDependencyState(
+internal static string RenderBacklogDependencyState(
     CliExecutionContext context,
     BacklogStore store,
     BacklogDependency dependency)
@@ -574,9 +576,6 @@ internal static string RenderBacklogListSuffix(BacklogItem item)
         .ToArray();
     return related.Length == 0 ? "" : " " + string.Join(' ', related);
 }
-
-private static Goal? FindLinkedGoal(IReadOnlyDictionary<string, Goal> goalsByBacklogItem, string backlogItemId) =>
-    goalsByBacklogItem.TryGetValue(backlogItemId, out var goal) ? goal : null;
 
 private static bool IsBacklogListingStatus(string? status) =>
     status is not null &&

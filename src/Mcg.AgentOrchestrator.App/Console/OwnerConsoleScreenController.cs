@@ -8,7 +8,7 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
     IOwnerDigestSummary summary, TimeProvider clock, IOwnerConsoleEpicSource? epics = null,
     AnswerIntentStatusTracker? answerTracking = null, OwnerQuestionResolutionReader? resolutions = null,
     IOwnerConsoleNotifier? notifier = null, OwnerConsoleNotificationSettings? notifications = null,
-    Func<OwnerFleetViewModel>? fleet = null, Func<string, string>? landings = null) : IDisposable
+    Func<OwnerFleetViewModel>? fleet = null, Func<string, OwnerLandingsPage>? landings = null) : IDisposable
 {
     private readonly object _notificationGate = new();
     private readonly IOwnerConsoleNotifier _notifier = notifier ?? new NullOwnerConsoleNotifier();
@@ -252,13 +252,13 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
         var output = new OwnerConsoleCapturedOutput();
         string? goalId = null;
         string? fleetText = null;
-        string? landingsText = null;
+        OwnerLandingsPage? landingsPage = null;
         var control = new OwnerConsoleControlCommands(conductor, digest, output, clock);
         if (!await RunDependencyAsync(line, ExecuteAsync, operation, cancellationToken)) return;
         cancellationToken.ThrowIfCancellationRequested();
         if (goalId is not null) { await ShowGoalDetailAsync(goalId, operation, cancellationToken); return; }
         if (fleetText is not null) { await dialogs.ShowTextAsync("Fleet", fleetText); return; }
-        if (landingsText is not null) { await dialogs.ShowTextAsync("Landings", landingsText); return; }
+        if (landingsPage is not null) { await ShowLandingsAsync(landingsPage, operation, cancellationToken); return; }
         await dialogs.ShowTextAsync("Command result", output.Text);
 
         async Task ExecuteAsync(CancellationToken stepToken)
@@ -279,7 +279,7 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
                 case "landings":
                     if (parts.Length > 2) output.WriteLine(OwnerLandingsQuery.Usage);
                     else if (landings is null) output.WriteLine("landings view unavailable in this session");
-                    else landingsText = landings(parts.Length == 2 ? parts[1] : "");
+                    else landingsPage = landings(parts.Length == 2 ? parts[1] : "");
                     break;
                 case "bell":
                     var arguments = parts.Skip(1).Select(part => part.ToLowerInvariant()).ToArray();
@@ -311,6 +311,19 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
                     output.WriteLine("valid commands: " + OwnerConsoleKeyHints.CommandPrompt);
                     break;
             }
+        }
+    }
+
+    private async Task ShowLandingsAsync(OwnerLandingsPage page, OwnerConsoleScreenOperation? operation,
+        CancellationToken cancellationToken)
+    {
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var chosen = await dialogs.ShowPageAsync("Landings", page.Text, page.ChoiceLines);
+            if (chosen is not { } index || index < 0 || index >= page.ChoiceGoalIds.Count) return;
+            await ShowGoalDetailAsync(page.ChoiceGoalIds[index], operation, cancellationToken);
+            if (_requestedEpicId is not null || _requestedGateGoalId is not null) return;
         }
     }
 

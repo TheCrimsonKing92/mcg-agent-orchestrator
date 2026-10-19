@@ -120,7 +120,7 @@ public sealed class CliAttentionAgentReadEnvelopeContractTests : CliTaskQueryTes
         Assert.Equal(TimeSpan.Zero, DateTimeOffset.ParseExact(timestamp, "O", CultureInfo.InvariantCulture).Offset);
         Assert.EndsWith("Z", timestamp);
         var payload = envelope.GetProperty("payload");
-        Assert.Equal(new[] { "waits", "items" }, payload.EnumerateObject().Select(property => property.Name));
+        Assert.Equal(new[] { "waits", "items", "providerHolds" }, payload.EnumerateObject().Select(property => property.Name));
         return payload;
     }
 

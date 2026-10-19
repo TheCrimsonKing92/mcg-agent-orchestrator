@@ -16,6 +16,7 @@ internal sealed partial class ConductorBoardFillHost
     private readonly Func<string?> _mainHead;
     private readonly Func<string?> _staleMainHead;
     private readonly Func<IReadOnlyList<string>>? _preferredOrder;
+    private readonly StalledEpicAttention? _stalledEpics;
     private readonly BoardFillTrackedEditsHold _trackedEditsHold;
     private readonly IBoardFillPremiseVerifier? _verifier;
     private readonly CancellationTokenSource _shutdown = new();
@@ -36,7 +37,8 @@ internal sealed partial class ConductorBoardFillHost
         Func<ConductorAutonomyPolicy> policy, ConductEventLogWriter events, Func<DateTimeOffset>? utcNow = null,
         IBoardFillPremiseVerifier? verifier = null, BoardFillFilingSeams? filing = null,
         Func<string?>? mainHead = null, Func<(bool Clean, AuthorDraftTrackedEdits? Edits)>? trackedEdits = null,
-        Func<string?>? staleMainHead = null, Func<IReadOnlyList<string>>? preferredOrder = null)
+        Func<string?>? staleMainHead = null, Func<IReadOnlyList<string>>? preferredOrder = null,
+        StalledEpicAttention? stalledEpics = null)
     {
         _store = store;
         _draft = draft;
@@ -50,6 +52,7 @@ internal sealed partial class ConductorBoardFillHost
         _mainHead = mainHead ?? (() => null);
         _staleMainHead = staleMainHead ?? _mainHead;
         _preferredOrder = preferredOrder;
+        _stalledEpics = stalledEpics;
         _trackedEditsHold = new(store, events, trackedEdits ?? (() => (false, null)));
     }
 
@@ -61,6 +64,7 @@ internal sealed partial class ConductorBoardFillHost
         var errors = policy.Validate();
         if (errors.Count != 0) throw new InvalidOperationException(string.Join("; ", errors));
         var now = _utcNow();
+        _stalledEpics?.Service(now);
         _kernel = kernel;
         if (!_recovered)
         {

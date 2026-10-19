@@ -7,6 +7,7 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 internal sealed partial class ConductorDriver
 {
     internal ProviderHoldFailedGoalRedispatch? ProviderHoldRedispatch { get; set; }
+    internal ProviderSignInFailover? SignInFailover { get; set; }
     internal Func<Goal, FailedGoalRecoveryDecision, string?, AttributedFailureRouteDecision>? InconclusiveRedRoute { get; set; }
 
     private ConductorAdvanceResult ExecuteFailedGoalRecovery(
@@ -88,8 +89,8 @@ internal sealed partial class ConductorDriver
         }
         if (decision.Action == FailedGoalRecoveryAction.Escalate &&
             IsFailedGoalRecoveryContextCurrent(goal, policy, state, decision, out _) &&
-            (ProviderHoldRedispatch ?? ProviderHoldFailedGoalRedispatch.ForWorkspace(_cohortKernel, _cohortWorkspace, policy))
-                ?.TryRedispatch(goal, facts, _retryTask) == true)
+            ((ProviderHoldRedispatch ?? ProviderHoldFailedGoalRedispatch.ForWorkspace(_cohortKernel, _cohortWorkspace, policy))?.TryRedispatch(goal, facts, _retryTask) == true ||
+             (SignInFailover ?? ProviderSignInFailover.ForWorkspace(_cohortKernel, _cohortWorkspace))?.TryFailover(goal, decision, _retryTask) == true))
         {
             ApplyPendingFailedGoalNotes(goal, pendingNotes);
             return ExecuteDispatchAndStart(GetCurrentGoal(goal), goalPrefix, policy, GoalLifecycleState.WorkspaceReady);
@@ -191,7 +192,6 @@ internal sealed partial class ConductorDriver
                         new ConductorAdvanceOutcome.Held(currentState, reconcileHeldReason)
                         { Decision = FailedGoalRecoveryDecisionRecords.StaleRecoveryFacts(decision.Identity, reconcileHeldReason) });
                 }
-
                 facts = BuildFailedGoalRecoveryFacts(goal, policy, currentState);
                 decision = FailedGoalRecoveryPolicy.Evaluate(facts);
                 if (decision.Action != FailedGoalRecoveryAction.ReconcileExitedDispatch)

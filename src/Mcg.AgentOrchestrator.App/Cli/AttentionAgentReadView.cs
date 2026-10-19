@@ -7,7 +7,8 @@ namespace Mcg.AgentOrchestrator.App.Cli;
 internal static class AttentionAgentReadView
 {
     internal static string Render(IReadOnlyList<HumanInputRequest> waits,
-        IReadOnlyList<CollaborationItem> items, TimeProvider? time = null) =>
+        IReadOnlyList<CollaborationItem> items, TimeProvider? time = null,
+        IReadOnlyList<ProviderUsageHoldRow>? providerHolds = null) =>
         AgentReadEnvelope.Serialize(AgentReadEnvelope.AttentionSchema, AgentReadEnvelope.AttentionSchemaVersion,
             new
             {
@@ -35,6 +36,7 @@ internal static class AttentionAgentReadView
                     body = item.Body,
                     correlationKey = item.CorrelationKey,
                     raisedAt = item.RaisedAt.UtcDateTime.ToString("O", CultureInfo.InvariantCulture)
-                }).ToArray()
+                }).ToArray(),
+                providerHolds = (providerHolds ?? []).Select(ProviderUsageHoldJson.Row).ToArray()
             }, new JsonSerializerOptions(JsonSerializerDefaults.Web), time);
 }

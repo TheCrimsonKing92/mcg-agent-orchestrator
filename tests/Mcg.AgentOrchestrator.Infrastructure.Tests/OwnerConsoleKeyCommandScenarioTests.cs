@@ -202,7 +202,7 @@ public sealed class OwnerConsoleKeyCommandScenarioTests
             if (answerable) Harness.Questions.Items.Add(new("q1", "11111111-first", OwnerQuestionKind.HumanInput, "Ship?", ProposedDefault: "ship"));
             _controller = new(Harness.Questions, Harness.Answers, Dialogs, Harness.State, Harness.Tail,
                 Harness.Conductor, Harness.DigestReport, Harness.Digest, Harness.Clock,
-                landings: argument => { Landings.Add(argument); return "delivered rows"; });
+                landings: argument => { Landings.Add(argument); return OwnerLandingsPage.Plain("delivered rows"); });
             View = new(_app, _controller, () => Task.CompletedTask, clock: Harness.Clock, diagnostics: diagnostics);
         }
 

@@ -61,7 +61,7 @@ internal static class ConductorStatusSnapshotReader
                 .Select(item => new GoalId(item.Id)).ToArray();
             var kernel = repository.LoadGoalsAsync(ids).GetAwaiter().GetResult();
             var goals = kernel.Goals.Where(goal => !goal.IsTerminal).OrderBy(goal => goal.Id.Value).ToArray();
-            providerHolds = ProviderUsageHoldView.Read(kernel.Goals.Where(goal =>
+            providerHolds = ProviderUsageHoldReader.Read(repository, kernel.Goals.Where(goal =>
                 !goal.IsTerminal || goal.Status == GoalStatus.Failed).ToArray(), now ?? DateTimeOffset.UtcNow);
             var observations = goals.Select(goal =>
             {
