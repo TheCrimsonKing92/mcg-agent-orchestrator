@@ -325,6 +325,8 @@ public sealed class OwnerConsoleActivityFollowScenarioTests
 
         // Reuse identical inputs throughout: only the render clock crosses the boundary.
         var model = following.Controller.Model!;
+        // Scene.Render supplies no LastConductEvent, independently of its activity rows.
+        Assert.Null(model.Status.LastEventAge);
         foreach (var scene in scenes) scene.View.Render(model);
         await inspecting.View.HandleKeyAsync(Key.PageDown);
         AssertFollowing(following);
@@ -345,7 +347,7 @@ public sealed class OwnerConsoleActivityFollowScenarioTests
             {
                 var scene = presentation.Scene;
                 scene.View.Render(model);
-                Assert.Equal($"conductor: running | active: 12 | decisions: 12 | last event: 0s | landed today: 0 | bell: on | refreshed {instant:HH:mm:ss}",
+                Assert.Equal($"conductor: running | active: 12 | decisions: 12 | last event: unknown | landed today: 0 | bell: on | refreshed {instant:HH:mm:ss}",
                     scene.View.StatusText);
                 Assert.Equal(presentation.Lines, scene.View.ActivityLines);
                 Assert.Equal(presentation.Selected, scene.View.ActivityPane.SelectedItem);
