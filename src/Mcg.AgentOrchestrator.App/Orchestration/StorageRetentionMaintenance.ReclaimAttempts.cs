@@ -2,7 +2,7 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal static partial class StorageRetentionMaintenance
 {
-    private static bool IsReclaimableTerminalStatus(Mcg.AgentOrchestrator.Core.GoalStatus status) =>
+    internal static bool IsReclaimableTerminalStatus(Mcg.AgentOrchestrator.Core.GoalStatus status) =>
         status is Mcg.AgentOrchestrator.Core.GoalStatus.Completed or
             Mcg.AgentOrchestrator.Core.GoalStatus.Cancelled or
             Mcg.AgentOrchestrator.Core.GoalStatus.Superseded;
