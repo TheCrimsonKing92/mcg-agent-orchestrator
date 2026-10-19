@@ -11,15 +11,16 @@ internal static class OwnerLandingsQuery
     private const string Unavailable = "acceptance evidence unavailable";
 
     internal sealed record Row(string GoalId, string Title, DateTimeOffset LocalLandingTime,
-        string Revision, string Kind, string Acceptance);
+        string Revision, string Kind, string Acceptance, string? Epic = null);
     internal sealed record Result(bool InvalidWindow, string WindowDescription,
         IReadOnlyList<Row> Rows, int UndatedCount);
 
     internal static Result Load(IOrchestratorStateQueries state, string orchestratorDirectory,
-        TimeProvider clock, string windowArgument)
+        TimeProvider clock, string windowArgument, IOwnerGoalEpicLookup? epics = null)
     {
         var days = windowArgument.Trim() switch { "" => 7, "today" => 1, "30" => 30, _ => 0 };
         if (days == 0) return new(true, "", [], 0);
+        epics ??= new PortfolioGoalEpicLookup(Path.Combine(orchestratorDirectory, "portfolio.db"));
         var now = clock.GetUtcNow();
         var zone = clock.LocalTimeZone;
         var firstDate = TimeZoneInfo.ConvertTime(now, zone).Date.AddDays(1 - days);
@@ -46,7 +47,8 @@ internal static class OwnerLandingsQuery
             };
             rows.Add(new(goal.Id, OwnerGoalTitle.From(goal.Objective), local,
                 Prefix(fact.PromotedMainRevision, 9), kind,
-                ReadAcceptance(orchestratorDirectory, goal.Id, fact.CandidateRevision, zone)));
+                ReadAcceptance(orchestratorDirectory, goal.Id, fact.CandidateRevision, zone),
+                ReadEpic(epics, goal.Id)));
         }
         return new(false, days == 1 ? "today" : $"the last {days} local calendar days",
             rows.OrderByDescending(row => row.LocalLandingTime)
@@ -59,7 +61,8 @@ internal static class OwnerLandingsQuery
         var lines = new List<string>();
         foreach (var row in result.Rows)
         {
-            lines.Add($"{Prefix(row.GoalId, 8)}  {Time(row.LocalLandingTime)}  {row.Revision}  {row.Kind}  current title: {row.Title}");
+            var epic = row.Epic is null ? "" : $"  current epic: {row.Epic}";
+            lines.Add($"{Prefix(row.GoalId, 8)}  {Time(row.LocalLandingTime)}  {row.Revision}  {row.Kind}{epic}  current title: {row.Title}");
             lines.Add("  " + row.Acceptance);
         }
         if (result.Rows.Count == 0) lines.Add($"No landings recorded in {result.WindowDescription}.");
@@ -68,11 +71,22 @@ internal static class OwnerLandingsQuery
     }
 
     internal static string Text(IOrchestratorStateQueries state, string orchestratorDirectory,
-        TimeProvider clock, string windowArgument)
+        TimeProvider clock, string windowArgument, IOwnerGoalEpicLookup? epics = null)
     {
-        try { return string.Join("\n", Render(Load(state, orchestratorDirectory, clock, windowArgument))); }
+        try { return string.Join("\n", Render(Load(state, orchestratorDirectory, clock, windowArgument, epics))); }
         catch (Exception ex) when (ex is not OperationCanceledException)
         { return "landings unavailable: " + ex.Message; }
+    }
+
+    private static string? ReadEpic(IOwnerGoalEpicLookup epics, string goalId)
+    {
+        try
+        {
+            var title = epics.GetTitleAsync(goalId, CancellationToken.None).GetAwaiter().GetResult()
+                ?.Replace("\r\n", " ").Replace('\r', ' ').Replace('\n', ' ').Trim();
+            return string.IsNullOrWhiteSpace(title) ? null : title;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException) { return null; }
     }
 
     private static string ReadAcceptance(string directory, string goalId, string candidate, TimeZoneInfo zone)
