@@ -2,7 +2,7 @@ using Mcg.AgentOrchestrator.App.Application;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
-[Xunit.Collection("IsolatedProcessSpawning")]
+[Xunit.Collection("IsolatedProcessSpawningRemainderB")]
 public sealed class DeveloperStaleFindingNoChangeDispatchTests : WorkerDispatchTestSupport
 {
     // Verbatim WORKER_RESULT from the measured cda5e26a round.

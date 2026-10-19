@@ -1,7 +1,7 @@
 using static MtpTestRunnerScriptTests;
 
 // Real managed discovery shares the repository's isolated process-spawning collection.
-[Xunit.Collection("IsolatedProcessSpawning")]
+[Xunit.Collection("IsolatedProcessSpawningRemainderB")]
 public sealed class AcceptanceMtpFilterResponseFileManagedTests
 {
     [Fact]

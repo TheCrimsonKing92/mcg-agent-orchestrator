@@ -1,7 +1,7 @@
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
-[Xunit.Collection("IsolatedProcessSpawning")]
+[Xunit.Collection("IsolatedProcessSpawningRemainderB")]
 public sealed class DeveloperStructuredNoChangeDeclarationTests : WorkerDispatchTestSupport
 {
     // Verbatim c0cfa8ae/2c4a4681 final WORKER_RESULT supplied by the operator on 2026-10-05.
