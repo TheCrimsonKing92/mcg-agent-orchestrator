@@ -41,7 +41,8 @@ internal static class OrchestratorArtifactRegistry
         Source("grouped-gate-attempts", "App/Orchestration/OwnedChildAttemptCoordinatorFactory.cs"),
         Source("merge-train-evidence", "Execution/Persistence/MergeTrainAcceptanceStore.cs",
             note: "TRX copies of train receipts that cannot back a landing are reclaimed by MergeTrainEvidenceRetention 14 days after the receipt completes once every member goal is Completed, Cancelled or Superseded; landing-evidence trains and gate-verdict.json are kept."),
-        Source("cohort-acceptance.db.artifacts", "Execution/Persistence/CohortAcceptanceStore.cs", literal: ".artifacts"),
+        Source("cohort-acceptance.db.artifacts", "Execution/Persistence/CohortAcceptanceStore.cs", literal: ".artifacts",
+            note: "TRX copies of cohort receipts that cannot back a landing are reclaimed by CohortAcceptanceEvidenceRetention 14 days after the receipt completes once every member goal is Completed, Cancelled or Superseded; landing-evidence receipts, judge-panel trigger receipts and gate-verdict.json are kept."),
         Source("goal-operations", "App/Orchestration/GoalOperationJournal.cs"),
         Source("author-drafts", "App/Orchestration/AuthorBriefDraftService.cs"),
         Source("author-rounds", "App/Orchestration/ConductorAuthorHost.cs"),
@@ -158,7 +159,7 @@ internal static class OrchestratorArtifactRegistry
     {
         var retention = pattern switch
         {
-            "acceptance-gate-attempts" or "pre-review-evidence-attempts" or "prompts" or "merge-train-evidence" => RetentionKind.ReclaimAfterGoalTerminalPlusDays,
+            "acceptance-gate-attempts" or "pre-review-evidence-attempts" or "prompts" or "merge-train-evidence" or "cohort-acceptance.db.artifacts" => RetentionKind.ReclaimAfterGoalTerminalPlusDays,
             "logs" => RetentionKind.KeepDays,
             "goal-events" or "goal-operations" => RetentionKind.KeepForever,
             _ when pattern.EndsWith(".db", StringComparison.Ordinal) || pattern.EndsWith(".json", StringComparison.Ordinal) => RetentionKind.KeepForever,
@@ -166,7 +167,7 @@ internal static class OrchestratorArtifactRegistry
         };
         TimeSpan? age = pattern switch
         {
-            "acceptance-gate-attempts" or "pre-review-evidence-attempts" or "merge-train-evidence" => StorageRetentionMaintenance.AcceptanceArtifactMaxAge,
+            "acceptance-gate-attempts" or "pre-review-evidence-attempts" or "merge-train-evidence" or "cohort-acceptance.db.artifacts" => StorageRetentionMaintenance.AcceptanceArtifactMaxAge,
             "logs" or "prompts" => StorageRetentionMaintenance.WorkerDeletionAge,
             _ => null
         };
