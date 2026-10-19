@@ -549,7 +549,8 @@ internal static class SourceSizeRatchet
             // seam; gate read-model behavior is separately owned. Measured 8685 lines in the same 28 partials.
             // Goal bd3c0539 adds three lane progress call lines across existing partials.
             // Measured 8683 lines in the same 28 partials after integrating main at 6dff3b77a.
-            new SourceClassCeiling("GoalAcceptanceVerifier", 8683, 28),
+            // Goal 3651d0e4: the offer-context call site binds the remote-lane occupancy owner.
+            new SourceClassCeiling("GoalAcceptanceVerifier", 8686, 28),
             // Goal d647b5f3 extracts premise-invalid clarification construction to PremiseInvalidClarification.
             // Goal 439c80ae extracts Reviewer evidence brief projection to ReviewerEvidenceBriefSection;
             // measured 9319 total lines across the existing 27 partial files, with no extra headroom.
