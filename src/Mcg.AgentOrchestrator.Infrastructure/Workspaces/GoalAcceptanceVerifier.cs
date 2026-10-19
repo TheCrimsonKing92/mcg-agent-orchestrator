@@ -1340,6 +1340,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         }
         if (!_coverageHasIndependentChecks && independentChecks.Length == 0 && laneChecks.Length > 0)
             SignalStructuralCoveragePrechecksPassed();
+        await using var earlyRemoteOffer = StartRemoteLaneEarlyOffer(batchChecks, cacheContext, goalId,
+            stableSlotIndex, stableSlotLease, maxConcurrentShards, cancellationToken);
         if (CanOverlapNonPartitionDotnetTests(batchChecks, stableSlotIndex, stableSlotLease,
                 dotnetTestBuildPhase, maxConcurrentShards))
             return await RunOverlappedDotnetTestBatchAsync(batchChecks, cacheContext, worktreePath,
@@ -1404,9 +1406,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             }
         }
 
-        return new CheckBatchResult(
-            cacheContext?.ApplySharedApparatusInvalidation(results) ?? results,
-            retried);
+        return new CheckBatchResult(cacheContext?.ApplySharedApparatusInvalidation(results) ?? results, retried);
     }
 
     internal static string ResolveInfrastructureShardResultsDirectory(
