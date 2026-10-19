@@ -10,15 +10,20 @@ public sealed class GoalSnapshotArchive(JsonSerializerOptions serializerOptions)
 {
     // The caller initializes the schema and owns the connection and transaction covering the entire eligible set.
     public async Task<int> ArchiveAsync(
-        SqliteConnection connection, DateTimeOffset cutoff, CancellationToken cancellationToken = default)
+        SqliteConnection connection, DateTimeOffset cutoff, long maxSnapshotBytes = 134_217_728,
+        CancellationToken cancellationToken = default)
     {
-        var ids = new List<string>();
+        ArgumentOutOfRangeException.ThrowIfLessThan(maxSnapshotBytes, 1L);
+        var candidates = new List<(string Id, long Bytes)>();
         await using (var select = connection.CreateCommand())
         {
             select.CommandText = $"""
-                SELECT id FROM goals
+                WITH candidates AS MATERIALIZED (
+                SELECT id, CASE WHEN json_valid(snapshot_json) THEN (
+                    SELECT MAX(julianday(json_extract(e.value, '$.OccurredAt')))
+                    FROM json_each(goals.snapshot_json, '$.Timeline') AS e
+                ) END AS terminal, length(snapshot_json) AS bytes FROM goals
                 WHERE status IN ('{GoalStatus.Completed}', '{GoalStatus.Cancelled}', '{GoalStatus.Superseded}')
-                  AND updated_at < $cutoff
                   AND CASE WHEN json_valid(snapshot_json)
                       THEN COALESCE(json_extract(snapshot_json, '$.IsMetadataOnly'), 0) = 0
                         AND json_extract(snapshot_json, '$.CurrentHold') IS NULL
@@ -29,18 +34,24 @@ public sealed class GoalSnapshotArchive(JsonSerializerOptions serializerOptions)
                         )
                       ELSE 0 END
                   AND NOT EXISTS (SELECT 1 FROM goal_snapshot_archive WHERE goal_id = goals.id)
-                ORDER BY id
+                )
+                SELECT id, terminal, bytes FROM candidates
+                WHERE terminal IS NOT NULL AND terminal < julianday($cutoff)
+                ORDER BY terminal ASC, id ASC
                 """;
             select.Parameters.AddWithValue("$cutoff", cutoff.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture));
             await using var reader = await select.ExecuteReaderAsync(cancellationToken);
             while (await reader.ReadAsync(cancellationToken))
-                ids.Add(reader.GetString(0));
+                candidates.Add((reader.GetString(0), reader.GetInt64(2)));
         }
 
         var archived = 0;
+        long archivedBytes = 0;
         var archivedAt = DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture);
-        foreach (var id in ids)
+        foreach (var (id, bytes) in candidates)
         {
+            if (archivedBytes >= maxSnapshotBytes)
+                break;
             cancellationToken.ThrowIfCancellationRequested();
             await using var read = connection.CreateCommand();
             read.CommandText = "SELECT snapshot_json FROM goals WHERE id = $id";
@@ -74,7 +85,10 @@ public sealed class GoalSnapshotArchive(JsonSerializerOptions serializerOptions)
             update.CommandText = "UPDATE goals SET snapshot_json = $stub WHERE id = $id";
             update.Parameters.AddWithValue("$id", id);
             update.Parameters.AddWithValue("$stub", JsonSerializer.Serialize(stub, serializerOptions));
-            archived += await update.ExecuteNonQueryAsync(cancellationToken);
+            var updated = await update.ExecuteNonQueryAsync(cancellationToken);
+            archived += updated;
+            if (updated > 0)
+                archivedBytes += bytes;
         }
         return archived;
     }

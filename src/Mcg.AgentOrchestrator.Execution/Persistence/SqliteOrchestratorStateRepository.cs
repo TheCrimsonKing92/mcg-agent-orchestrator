@@ -606,7 +606,7 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
     }
 
     public async Task<int> ArchiveTerminalGoalSnapshotsAsync(
-        DateTimeOffset cutoff, CancellationToken cancellationToken = default)
+        DateTimeOffset cutoff, long maxSnapshotBytes = 134_217_728, CancellationToken cancellationToken = default)
     {
         var write = await BeginWriteAsync(ResolveOperationTag(nameof(ArchiveTerminalGoalSnapshotsAsync)), cancellationToken);
         await using var conn = write.Connection;
@@ -614,7 +614,7 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
         {
             // Already-migrated databases do not replay the core schema migration.
             await RunNonQueryAsync(conn, GoalSnapshotArchiveSchemaSql, cancellationToken);
-            var count = await SnapshotArchive.ArchiveAsync(conn, cutoff, cancellationToken);
+            var count = await SnapshotArchive.ArchiveAsync(conn, cutoff, maxSnapshotBytes, cancellationToken);
             await RunNonQueryAsync(conn, "COMMIT", cancellationToken);
             write.Telemetry.Emit("commit");
             return count;
