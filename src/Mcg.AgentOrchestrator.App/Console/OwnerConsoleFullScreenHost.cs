@@ -143,7 +143,8 @@ internal static class OwnerConsoleFullScreenHost
                     notifier: new SystemOwnerConsoleNotifier(new WindowsOwnerConsoleSoundOutput(), notifications, File.Exists),
                     notifications: notifications,
                     fleet: () => OwnerFleetViewModelBuilder.Load(workspace, new ConductorLeaseLiveness(workspace.OrchestratorDirectory)),
-                    landings: argument => OwnerLandingsPage.Load(state, workspace.OrchestratorDirectory, clock, argument));
+                    landings: argument => OwnerLandingsPage.Load(state, workspace.OrchestratorDirectory, clock, argument),
+                    goalDetail: new OwnerGoalDetailQuery(state, new GoalEventFileTail(workspace.GoalLifecycleEventsDirectory)));
                 view = new(app, controller, () => RefreshAsync(), token, clock, OwnerConsoleLoopOptions.Default, diagnostics);
                 boardIds = board.Board.Select(row => row.GoalId).ToArray();
                 view.Render(board);
