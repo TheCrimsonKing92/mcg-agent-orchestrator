@@ -39,7 +39,8 @@ internal static class OrchestratorArtifactRegistry
         Source("acceptance-gate-attempts", "Infrastructure/Workspaces/GoalAcceptanceVerifier.cs"),
         Source("pre-review-evidence-attempts", "App/Orchestration/OwnedChildAttemptCoordinatorFactory.cs"),
         Source("grouped-gate-attempts", "App/Orchestration/OwnedChildAttemptCoordinatorFactory.cs"),
-        Source("merge-train-evidence", "Execution/Persistence/MergeTrainAcceptanceStore.cs"),
+        Source("merge-train-evidence", "Execution/Persistence/MergeTrainAcceptanceStore.cs",
+            note: "TRX copies of train receipts that cannot back a landing are reclaimed by MergeTrainEvidenceRetention 14 days after the receipt completes once every member goal is Completed, Cancelled or Superseded; landing-evidence trains and gate-verdict.json are kept."),
         Source("cohort-acceptance.db.artifacts", "Execution/Persistence/CohortAcceptanceStore.cs", literal: ".artifacts"),
         Source("goal-operations", "App/Orchestration/GoalOperationJournal.cs"),
         Source("author-drafts", "App/Orchestration/AuthorBriefDraftService.cs"),
@@ -157,7 +158,7 @@ internal static class OrchestratorArtifactRegistry
     {
         var retention = pattern switch
         {
-            "acceptance-gate-attempts" or "pre-review-evidence-attempts" or "prompts" => RetentionKind.ReclaimAfterGoalTerminalPlusDays,
+            "acceptance-gate-attempts" or "pre-review-evidence-attempts" or "prompts" or "merge-train-evidence" => RetentionKind.ReclaimAfterGoalTerminalPlusDays,
             "logs" => RetentionKind.KeepDays,
             "goal-events" or "goal-operations" => RetentionKind.KeepForever,
             _ when pattern.EndsWith(".db", StringComparison.Ordinal) || pattern.EndsWith(".json", StringComparison.Ordinal) => RetentionKind.KeepForever,
@@ -165,7 +166,7 @@ internal static class OrchestratorArtifactRegistry
         };
         TimeSpan? age = pattern switch
         {
-            "acceptance-gate-attempts" or "pre-review-evidence-attempts" => StorageRetentionMaintenance.AcceptanceArtifactMaxAge,
+            "acceptance-gate-attempts" or "pre-review-evidence-attempts" or "merge-train-evidence" => StorageRetentionMaintenance.AcceptanceArtifactMaxAge,
             "logs" or "prompts" => StorageRetentionMaintenance.WorkerDeletionAge,
             _ => null
         };
