@@ -596,6 +596,8 @@ internal sealed partial class WorkerArtifactWriter
         var toolchain = TargetToolchainDetector.Detect(workingDirectory);
         var brokerNote = TargetToolchainDetector.GetBrokerBuildTestNote(toolchain);
         var brokerCommandHint = TargetToolchainDetector.GetBrokerCommandHint(toolchain, goalPrefix, attemptName);
+        var developerBuildOnly = task.RequiredRole == AgentRole.Developer &&
+            !BuildRoleVisibility("deterministic-verification.md").Contains(task.RequiredRole.ToString(), StringComparer.Ordinal);
         var lines = new List<string>
         {
             "# Workflow Brokers",
@@ -603,27 +605,52 @@ internal sealed partial class WorkerArtifactWriter
             "Use deterministic broker artifacts before rediscovering common workflow steps in the prompt. If a broker artifact is missing, stale, or reports a failure, report that as a blocker in WORKER_RESULT instead of guessing.",
             string.Empty,
             "## Available Broker Actions",
-            "- build-test-selection",
-            "  Artifact: deterministic-verification.md",
-            $"  Use for: choosing focused tests, identifying required checks, and {brokerNote}.",
-            $"  Suggested command shape: `{brokerCommandHint}`",
-            $"  Current recommendation: {testImpactPlan.Summary}",
-            $"  Current commands: {(testImpactCommands.Length == 0 ? "(none)" : string.Join(" ; ", testImpactCommands))}",
-            "  Failure handling: failing required checks are actionable verification failures; include the command and exit evidence.",
-            "- static-policy-checks",
-            "  Artifact: deterministic-verification.md",
-            "  Use for: required verification policy, generated-path risk, worker-result contract checks, and manifest presence.",
-            $"  Current policy: {verificationPolicy.Summary}",
-            "  Failure handling: required policy failures block acceptance until fixed or explicitly explained.",
+        };
+        if (developerBuildOnly)
+        {
+            var buildInvocation = OrchestratorBuildEvidenceCheck.FormatScriptInvocation(OrchestratorBuildEvidenceCheck.ResolveScriptPath());
+            lines.AddRange([
+                "- build-only",
+                "  Artifact: current-task.md",
+                "  Use for: complete-scope build-only verification. Follow the required Invoke-WorkerBuildCheck instructions in current-task.md for every project whose sources you changed before writing WORKER_RESULT.",
+                $"  Suggested command shape: `{buildInvocation} <project.csproj> [project.csproj...]`",
+                "  Evidence: Report the build result in WORKER_RESULT and name deferred test classes for the conductor.",
+                "  Verification ownership: Automated test execution and formal verification evidence for build-test-selection, static-policy-checks, and acceptance-evidence belong to the conductor verification/Reviewer pipeline. Do not execute tests or retrieve role-forbidden artifacts.",
+                "  Failure handling: missing, stale, or failed required build artifacts are blockers; include the command and exit evidence."
+            ]);
+        }
+        else
+        {
+            lines.AddRange([
+                "- build-test-selection",
+                "  Artifact: deterministic-verification.md",
+                $"  Use for: choosing focused tests, identifying required checks, and {brokerNote}.",
+                $"  Suggested command shape: `{brokerCommandHint}`",
+                $"  Current recommendation: {testImpactPlan.Summary}",
+                $"  Current commands: {(testImpactCommands.Length == 0 ? "(none)" : string.Join(" ; ", testImpactCommands))}",
+                "  Failure handling: failing required checks are actionable verification failures; include the command and exit evidence.",
+                "- static-policy-checks",
+                "  Artifact: deterministic-verification.md",
+                "  Use for: required verification policy, generated-path risk, worker-result contract checks, and manifest presence.",
+                $"  Current policy: {verificationPolicy.Summary}",
+                "  Failure handling: required policy failures block acceptance until fixed or explicitly explained.",
+            ]);
+        }
+        lines.AddRange([
             "- diff-summary",
             "  Artifact: diff-summary.md",
             "  Use for: existing workspace changes, changed files, diff stat, and generated-output noise checks.",
             "  Failure handling: unexpected dirty files are blockers unless they are part of the assigned task.",
-            "- acceptance-evidence",
-            "  Artifact: deterministic-verification.md plus current-task.md",
-            "  Use for: acceptance manifest status, verification history, model-fit evidence, and WORKER_RESULT completeness.",
-            "  Failure handling: missing acceptance evidence should become an explicit blocker or a verify command, not a silent pass.",
-        };
+        ]);
+        if (!developerBuildOnly)
+        {
+            lines.AddRange([
+                "- acceptance-evidence",
+                "  Artifact: deterministic-verification.md plus current-task.md",
+                "  Use for: acceptance manifest status, verification history, model-fit evidence, and WORKER_RESULT completeness.",
+                "  Failure handling: missing acceptance evidence should become an explicit blocker or a verify command, not a silent pass.",
+            ]);
+        }
         if (_targetHome.IsOrchestratorHome)
         {
             lines.AddRange([
