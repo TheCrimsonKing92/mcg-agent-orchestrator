@@ -11,6 +11,7 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
     Func<OwnerFleetViewModel>? fleet = null, Func<string, OwnerLandingsPage>? landings = null,
     OwnerGoalDetailQuery? goalDetail = null) : IDisposable
 {
+    private readonly OwnerEpicDetailQuery _epicDetail = new(epics, clock);
     private readonly OwnerGoalDetailQuery _goalDetail = goalDetail ?? new OwnerGoalDetailQuery(state, tail);
     private readonly object _notificationGate = new();
     private readonly IOwnerConsoleNotifier _notifier = notifier ?? new NullOwnerConsoleNotifier();
@@ -21,21 +22,9 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
 
     internal event Action? ModelApplied;
 
-    internal async Task<OwnerConsoleEpicViewModel?> LoadEpicViewAsync(OwnerConsoleEpicWindow window,
-        string? detailId, CancellationToken cancellationToken)
-    {
-        if (epics is null) return null;
-        var since = OwnerConsoleEpicViewModel.Cutoff(window, clock.GetUtcNow());
-        if (detailId is not null)
-        {
-            var snapshot = await epics.LoadDetailAsync(detailId, since, cancellationToken).ConfigureAwait(false);
-            cancellationToken.ThrowIfCancellationRequested();
-            return new(window, since, [snapshot.Row],
-                OwnerConsoleEpicViewModel.BuildDetail(snapshot.Row, snapshot.Since, snapshot.Goals), clock.GetLocalNow());
-        }
-        var rows = await epics.LoadAsync(since, cancellationToken).ConfigureAwait(false);
-        return new(window, since, rows, LoadedAt: clock.GetLocalNow());
-    }
+    internal Task<OwnerConsoleEpicViewModel?> LoadEpicViewAsync(OwnerConsoleEpicWindow window,
+        string? detailId, CancellationToken cancellationToken) =>
+        _epicDetail.LoadAsync(window, detailId, cancellationToken);
 
     internal OwnerConsoleViewModel? Model { get; private set; }
     internal string? SelectedDecisionId { get; private set; }

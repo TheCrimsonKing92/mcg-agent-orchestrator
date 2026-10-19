@@ -9,28 +9,18 @@ namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 internal sealed class OwnerConsoleEpicDialog : FrameView
 {
     private readonly OwnerConsoleScreenController _controller;
-    private readonly Action<Action> _invoke;
-    private readonly CancellationToken _hostToken;
+    private readonly OwnerEpicLoadSession _loads;
     private readonly Label _header = new() { Width = Dim.Fill(), Height = 1 };
     private readonly ListView _body = new() { Y = 1, Width = Dim.Fill(), Height = Dim.Fill(2) };
     private readonly Label _hint = new() { Y = Pos.AnchorEnd(2), Width = Dim.Fill(), Height = 2 };
-    private readonly object _gate = new();
-    private CancellationTokenSource? _session;
-    private CancellationTokenSource? _request;
     private OwnerConsoleEpicViewModel? _model;
     private string? _failure;
     private string? _loadingDetailTitle;
     private bool _refreshing;
     private bool _disposed;
-    private bool _dirty;
     private bool _formatting;
-    private int _revision;
-    private long _generation;
-    private long _refreshVersion;
-    private long _publishedRefreshVersion;
     private int _scroll;
     private int _selectedIndex;
-    private TaskCompletionSource? _loading;
 
     internal bool IsOpen { get; private set; }
     internal bool ShowingDetail { get; private set; }
@@ -58,13 +48,12 @@ internal sealed class OwnerConsoleEpicDialog : FrameView
     private string HintWithRetry => ShowingDetail ? OwnerConsoleEpicFormatter.DetailHint(LoadState == OwnerConsoleEpicLoadState.Failed) :
         OwnerConsoleEpicFormatter.ListHint(LoadState == OwnerConsoleEpicLoadState.Failed);
     internal ListView BodyPane => _body;
-    internal Task LastLoad { get; private set; } = Task.CompletedTask;
+    internal Task LastLoad => _loads.LastLoad;
 
     internal OwnerConsoleEpicDialog(OwnerConsoleScreenController controller, Action<Action> invoke, CancellationToken token)
     {
         _controller = controller;
-        _invoke = invoke;
-        _hostToken = token;
+        _loads = new(controller.LoadEpicViewAsync, invoke, ApplyLoad, token);
         Title = "Epics";
         Width = Dim.Fill();
         Height = Dim.Fill();
@@ -79,13 +68,12 @@ internal sealed class OwnerConsoleEpicDialog : FrameView
     {
         if (_disposed || IsOpen) return;
         ReturnPane = returnPane;
-        _session = CancellationTokenSource.CreateLinkedTokenSource(_hostToken);
+        _loads.Open();
         IsOpen = true;
         ShowingDetail = epicId is not null;
         if (epicId is not null) SelectedEpicId = epicId;
         _loadingDetailTitle = null;
         _scroll = 0;
-        _revision++;
         BeginLoading();
         Visible = true;
         _body.SetFocus();
@@ -105,7 +93,6 @@ internal sealed class OwnerConsoleEpicDialog : FrameView
                 ShowingDetail = false;
                 _loadingDetailTitle = null;
                 _scroll = 0;
-                _revision++;
                 BeginLoading();
                 await ReloadAsync();
                 return false;
@@ -121,13 +108,11 @@ internal sealed class OwnerConsoleEpicDialog : FrameView
                 OwnerConsoleEpicWindow.Week => OwnerConsoleEpicWindow.AllTime,
                 _ => OwnerConsoleEpicWindow.Day
             };
-            _revision++;
             BeginLoading();
             await ReloadAsync();
         }
         else if (binding?.Command == "reload")
         {
-            _revision++;
             BeginLoading();
             await ReloadAsync();
         }
@@ -152,7 +137,6 @@ internal sealed class OwnerConsoleEpicDialog : FrameView
                 ShowingDetail = true;
                 _loadingDetailTitle = _model.Epics[_selectedIndex].Epic.Title;
                 _scroll = 0;
-                _revision++;
                 BeginLoading();
                 await ReloadAsync();
             }
@@ -164,7 +148,7 @@ internal sealed class OwnerConsoleEpicDialog : FrameView
 
     private void BeginLoading()
     {
-        lock (_gate) _request?.Cancel();
+        _loads.Select(TimeWindow, ShowingDetail ? SelectedEpicId : null);
         LoadState = OwnerConsoleEpicLoadState.Loading;
         _failure = null;
         _refreshing = _model is not null;
@@ -174,105 +158,29 @@ internal sealed class OwnerConsoleEpicDialog : FrameView
 
     internal Task ReloadAsync()
     {
-        lock (_gate)
+        if (_disposed || !IsOpen) return LastLoad;
+        if (LoadState == OwnerConsoleEpicLoadState.Loaded)
         {
-            if (_disposed || !IsOpen) return LastLoad;
-            if (LoadState == OwnerConsoleEpicLoadState.Loaded)
-            {
-                _refreshing = true;
-                Format();
-            }
-            _dirty = true;
-            _refreshVersion++;
-            if (_loading is not null) return LastLoad;
-            // A new load cycle supersedes queued callbacks from an idle cycle.
-            // Notifications during a read request another read without invalidating its content.
-            _generation++;
-            _loading = new(TaskCreationOptions.RunContinuationsAsynchronously);
-            LastLoad = _loading.Task;
-            _ = ReloadLoopAsync();
-            return LastLoad;
+            _refreshing = true;
+            Format();
         }
+        return _loads.RefreshAsync();
     }
 
-    private async Task ReloadLoopAsync()
+    private void ApplyLoad(OwnerEpicLoadResult result)
     {
-        while (true)
+        _failure = result.Failure;
+        _refreshing = result.Refreshing;
+        LoadState = result.State;
+        if (result.State != OwnerConsoleEpicLoadState.Failed) _model = result.Model;
+        if (result.Model is { } model)
         {
-            int revision;
-            long generation;
-            long refreshVersion;
-            OwnerConsoleEpicWindow window;
-            string? detailId;
-            CancellationToken token;
-            CancellationTokenSource request;
-            lock (_gate)
-            {
-                if (_disposed || !IsOpen || !_dirty)
-                {
-                    _loading!.TrySetResult();
-                    _loading = null;
-                    return;
-                }
-                _dirty = false;
-                revision = _revision;
-                generation = _generation;
-                refreshVersion = _refreshVersion;
-                window = TimeWindow;
-                detailId = ShowingDetail ? SelectedEpicId : null;
-                request = CancellationTokenSource.CreateLinkedTokenSource(_session!.Token);
-                _request = request;
-                token = request.Token;
-            }
-            try
-            {
-                var model = await _controller.LoadEpicViewAsync(window, detailId, token).WaitAsync(token).ConfigureAwait(false);
-                _invoke(() =>
-                {
-                    lock (_gate)
-                    {
-                        if (_disposed || !IsOpen || _hostToken.IsCancellationRequested || token.IsCancellationRequested || revision != _revision || generation != _generation || refreshVersion <= _publishedRefreshVersion) return;
-                        _publishedRefreshVersion = refreshVersion;
-                        _failure = null;
-                        _refreshing = refreshVersion != _refreshVersion;
-                        _model = model;
-                        LoadState = model is null ? OwnerConsoleEpicLoadState.Unavailable : OwnerConsoleEpicLoadState.Loaded;
-                        if (model is null)
-                        {
-                            Format();
-                            return;
-                        }
-                        var index = Array.FindIndex(model.Epics.ToArray(), row => row.Epic.Id == SelectedEpicId);
-                        _selectedIndex = model.Epics.Count == 0 ? 0 : index >= 0 ? index : Math.Clamp(_selectedIndex, 0, model.Epics.Count - 1);
-                        SelectedEpicId = model.Epics.Count == 0 ? null : model.Epics[_selectedIndex].Epic.Id;
-                        if (ShowingDetail && model.SelectedDetail is null) ShowingDetail = false;
-                        Format();
-                    }
-                });
-            }
-            catch (OperationCanceledException) when (token.IsCancellationRequested) { }
-            catch (Exception ex)
-            {
-                _invoke(() =>
-                {
-                    lock (_gate)
-                    {
-                        if (_disposed || !IsOpen || _hostToken.IsCancellationRequested || token.IsCancellationRequested || revision != _revision || generation != _generation || refreshVersion <= _publishedRefreshVersion) return;
-                        _publishedRefreshVersion = refreshVersion;
-                        _failure = ex.Message;
-                        _refreshing = false;
-                        LoadState = OwnerConsoleEpicLoadState.Failed;
-                        Format();
-                    }
-                });
-            }
-            finally
-            {
-                lock (_gate)
-                    if (ReferenceEquals(_request, request)) _request = null;
-                request.Dispose();
-            }
+            var index = Array.FindIndex(model.Epics.ToArray(), row => row.Epic.Id == SelectedEpicId);
+            _selectedIndex = model.Epics.Count == 0 ? 0 : index >= 0 ? index : Math.Clamp(_selectedIndex, 0, model.Epics.Count - 1);
+            SelectedEpicId = model.Epics.Count == 0 ? null : model.Epics[_selectedIndex].Epic.Id;
+            if (ShowingDetail && model.SelectedDetail is null) ShowingDetail = false;
         }
+        Format();
     }
 
     private void Format()
@@ -332,28 +240,20 @@ internal sealed class OwnerConsoleEpicDialog : FrameView
 
     private void Close()
     {
-        CancellationTokenSource? session;
-        lock (_gate)
-        {
-            IsOpen = false;
-            _dirty = false;
-            _revision++;
-            _model = null;
-            _failure = null;
-            _refreshing = false;
-            session = _session;
-            _session = null;
-        }
+        _loads.Close();
+        IsOpen = false;
+        _model = null;
+        _failure = null;
+        _refreshing = false;
         Visible = false;
         _controller.ModelApplied -= ModelApplied;
-        session?.Cancel();
-        session?.Dispose();
     }
 
     protected override void Dispose(bool disposing)
     {
         if (disposing)
         {
+            _loads.Dispose();
             Close();
             _disposed = true;
         }

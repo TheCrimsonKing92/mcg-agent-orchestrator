@@ -37,6 +37,7 @@ internal static class OperatorIntentGoalApplication
                 lines.Add(
                     $"ACCEPTANCE_INVALIDATED goal={ShortGoalId(goal.Id.Value)} attempt_staled={invalidation.AttemptInvalidated.ToString().ToLowerInvariant()} goal_reopened={invalidation.GoalReopened.ToString().ToLowerInvariant()}");
             }
+            lines.AddRange(intents.ReopenedMemberGateAbandonment?.Apply(goal) ?? []);
         }
 
         lines.AddRange(result.ProgressLines);

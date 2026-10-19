@@ -595,16 +595,22 @@ internal sealed class ConductorGroupedGateAttemptCoordinator
     }
 
     internal bool CancelForOperator(ConductorGroupedGateAttempt attempt, string intentId) =>
+        StopRunningAttempt(attempt, $"operator-gate-cancel:{intentId}", $"refused:operator-cancelled intent={intentId}");
+
+    internal bool AbandonForReopenedMember(ConductorGroupedGateAttempt attempt, string goalId, string intentId) =>
+        StopRunningAttempt(attempt, $"cohort-member-reopened:{intentId}", $"refused:cohort-member-reopened goal={goalId} intent={intentId}");
+
+    private bool StopRunningAttempt(ConductorGroupedGateAttempt attempt, string holderReason, string detail) =>
         WithMetadataLock(attempt.MetadataPath, () =>
         {
             var current = Read(attempt.MetadataPath);
             if (current.ReconciledAt is not null || current.Outcome != "Running" ||
                 File.Exists(current.ResultPath) || File.Exists(current.ExitCodePath)) return false;
-            if (!StopHolder(current, $"operator-gate-cancel:{intentId}")) return false;
+            if (!StopHolder(current, holderReason)) return false;
             Save(current with
             {
                 ReconciledAt = _utcNow(), Outcome = "Reconciled",
-                Detail = $"refused:operator-cancelled intent={intentId}"
+                Detail = detail
             });
             return true;
         });
