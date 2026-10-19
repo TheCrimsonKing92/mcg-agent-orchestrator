@@ -10,6 +10,7 @@ public sealed class ActivationRemoteLaneTailAdoptionScenarioTests
     public async Task FreshRemoteTail_AdoptsOnlyAfterTrainTerminalAndReleased()
     {
         await using var remote = new RemoteRun();
+        using var liveProbe = ReadHeartbeatFiles(remote);
         await using var scenario = new Scenario();
         await remote.StartAsync();
         await scenario.StartAsync();
@@ -40,6 +41,7 @@ public sealed class ActivationRemoteLaneTailAdoptionScenarioTests
     public async Task MissingOccupancyOrExpiredLease_RevertsAsAdmissionStalled(bool expireLease)
     {
         await using var remote = new RemoteRun(bindOccupancy: expireLease);
+        using var liveProbe = ReadHeartbeatFiles(remote);
         await using var scenario = new Scenario();
         await remote.StartAsync();
         await scenario.StartAsync();
@@ -80,6 +82,7 @@ public sealed class ActivationRemoteLaneTailAdoptionScenarioTests
     public void Heartbeat_DoesNotDuplicateTrain_AndFocusedEvidenceIsNotLive(string runClass, int live)
     {
         using var remote = new RemoteRun();
+        using var liveProbe = ReadHeartbeatFiles(remote);
         var baseline = Census([]);
         var writer = new RemoteLaneOccupancyHeartbeat(RemoteRun.Goal, 0, remote.Storage, runClass, RemoteRun.RunId);
         writer.Beat("remote", remote.Clock.GetUtcNow(), remote.Clock.GetUtcNow());
@@ -89,6 +92,11 @@ public sealed class ActivationRemoteLaneTailAdoptionScenarioTests
         Assert.Equal(1, baseline.OccupiedCount);
         Assert.Equal(baseline.OccupiedCount, Census(occupants).OccupiedCount);
     }
+
+    // The assembly initializer installs an empty probe; these scenarios need actual file evidence.
+    private static IDisposable ReadHeartbeatFiles(RemoteRun remote) =>
+        GateLoadContextProbe.PushLiveGateOccupantProbe(() =>
+            GateLoadContextProbe.ReadLiveGateOccupants(remote.Storage, remote.Clock.GetUtcNow()));
 
     private static async Task AdvanceAsync(RemoteRun remote, Scenario scenario)
     {
