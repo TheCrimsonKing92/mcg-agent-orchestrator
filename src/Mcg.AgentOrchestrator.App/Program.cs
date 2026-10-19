@@ -238,6 +238,10 @@ if (CliExecutorSettingCommands.IsCommand(startupArgs))
 {
     return ExitCompletedStartupCommand(CliExecutorSettingCommands.Run(startupArgs, workspace));
 }
+if (CliGateCancelCommand.IsCommand(startupArgs))
+{
+    return ExitCompletedStartupCommand(CliGateCancelCommand.Run(startupArgs, workspace));
+}
 
 if (CliEscapeCommands.IsCommand(startupArgs))
 {

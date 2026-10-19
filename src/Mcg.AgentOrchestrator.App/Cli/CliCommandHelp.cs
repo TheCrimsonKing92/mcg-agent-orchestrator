@@ -675,6 +675,10 @@ internal static class CliCommandHelp
     private static readonly CommandHelpEntry ExecutorScreen = new(
         ExecutorScreenUsage, "Screen a candidate on an idle executor and record an advisory receipt.",
         ["--max-candidates", "--executor", "--help", "-h"]);
+    public const string GateCancelUsage = "Usage: gate-cancel <goal-prefix> --text-file <path> [--attempt <attempt-id>] [--idempotency-key <key>] [--operator-actor <actor>] [--actor-kind <human|agent>] [--json]";
+    private static readonly CommandHelpEntry GateCancel = new(
+        GateCancelUsage, "Queue a typed request that stops the goal's live gate attempt without a verdict on the next tick.",
+        ["--text-file", "--attempt", "--idempotency-key", "--operator-actor", "--actor-kind", "--json", "--help", "-h"]);
     private static readonly CommandHelpEntry ExecutorSetSlots = new(
         ExecutorSetSlotsUsage, "Queue an audited host executor slot change for the next tick.",
         ["--operator-actor", "--actor-kind", "--idempotency-key", "--json", "--help", "-h"]);
@@ -1243,6 +1247,11 @@ internal static class CliCommandHelp
         if (args[0].Equals("executor-screen", StringComparison.OrdinalIgnoreCase))
         {
             entry = ExecutorScreen;
+            return true;
+        }
+        if (args[0].Equals("gate-cancel", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = GateCancel;
             return true;
         }
         if (args[0].Equals("executor-set-slots", StringComparison.OrdinalIgnoreCase))
