@@ -158,11 +158,14 @@ public sealed partial class GoalAcceptanceVerifier
         ShardPermitLaneClass != GateShardLaneClass.Gate ? null : cache is null ? _cachelessRemoteLaneCoordinator :
         _remoteLaneCoordinators.TryGetValue(cache, out var remote) ? remote : null;
     private RemoteLaneEarlyOffer.Context CreateRemoteLaneOfferContext(RemoteLaneCoordinator remote,
-        IReadOnlyList<AcceptanceManifestCheck> shards, int concurrency, AcceptancePartitionVerdictCache? cache, GoalId? goal, int slot) =>
-        new(lane => _remoteLaneOfferPlans.GetValue(remote, _ => throw new InvalidOperationException("Remote lane offer plan missing."))
+        IReadOnlyList<AcceptanceManifestCheck> shards, int concurrency, AcceptancePartitionVerdictCache? cache, GoalId? goal, int slot)
+    {
+        remote.Occupancy ??= new(goal?.Value, slot, _storageRoot, GateHeartbeatRunClass.Classify(_executionContext), GateHeartbeatRunClass.ResolveRunId(_executionContext));
+        return new(lane => _remoteLaneOfferPlans.GetValue(remote, _ => throw new InvalidOperationException("Remote lane offer plan missing."))
                 .Decide(lane, shards.All(UsesMicrosoftTestingPlatform) ? concurrency : 1, ReportRemoteLanePolicy).Offer,
             (check, entry) => AcceptanceGateLaneProgress.RemoteStarted(goal, check.Name, entry.Id, slot, _storageRoot, EmitGateProgress),
             check => EngineSettings.ResolveCheckTimeout(check.TimeoutMinutes), cache, _timeProvider);
+    }
     private RemoteLaneEarlyOffer? StartRemoteLaneEarlyOffer(IReadOnlyList<AcceptanceManifestCheck> checks,
         AcceptancePartitionVerdictCache? cache, GoalId? goal, int? slot, DotnetBuildEnvironmentLease? lease,
         int concurrency, CancellationToken token)

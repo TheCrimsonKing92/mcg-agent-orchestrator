@@ -255,9 +255,13 @@ internal static class GateLoadContextProbe
         return checked((int)count.Value!.Value);
     }
 
-    internal static IReadOnlyList<LiveGateOccupant> CaptureLiveGateOccupants()
+    internal static IReadOnlyList<LiveGateOccupant> CaptureLiveGateOccupants() =>
+        CaptureLiveGateOccupants(DotnetBuildEnvironmentManager.CaptureStorageRoot(), DateTimeOffset.UtcNow);
+
+    internal static IReadOnlyList<LiveGateOccupant> CaptureLiveGateOccupants(
+        DotnetBuildStorageRoot storageRoot, DateTimeOffset observedAt)
     {
-        var observed = (LiveGateOccupantProbeOverride.Value ?? ReadLiveGateOccupants)();
+        var observed = LiveGateOccupantProbeOverride.Value is { } probe ? probe() : ReadLiveGateOccupants(storageRoot, observedAt);
         return observed
             .Where(occupant => occupant.HeartbeatAge <= LiveGateHeartbeatFreshness)
             .GroupBy(occupant => occupant.Identity, StringComparer.OrdinalIgnoreCase)
@@ -266,9 +270,13 @@ internal static class GateLoadContextProbe
             .ToArray();
     }
 
-    internal static IReadOnlyList<LiveGateOccupant> ReadLiveGateOccupants()
+    internal static IReadOnlyList<LiveGateOccupant> ReadLiveGateOccupants() =>
+        ReadLiveGateOccupants(DotnetBuildEnvironmentManager.CaptureStorageRoot(), DateTimeOffset.UtcNow);
+
+    internal static IReadOnlyList<LiveGateOccupant> ReadLiveGateOccupants(
+        DotnetBuildStorageRoot storageRoot, DateTimeOffset observedAt)
     {
-        var heartbeatDirectory = Path.GetDirectoryName(GateHeartbeatArtifacts.GetStableSlotPath(0));
+        var heartbeatDirectory = Path.GetDirectoryName(GateHeartbeatArtifacts.GetStableSlotPath(0, storageRoot));
         if (string.IsNullOrWhiteSpace(heartbeatDirectory))
         {
             throw new LoadProbeUnavailableException("gate-heartbeat-directory-unavailable");
@@ -280,7 +288,7 @@ internal static class GateLoadContextProbe
         }
 
         var occupants = new List<LiveGateOccupant>();
-        foreach (var status in GateHeartbeatArtifacts.ReadStableSlots())
+        foreach (var status in GateHeartbeatArtifacts.ReadStableSlots(storageRoot, observedAt))
         {
             var snapshot = status.Snapshot;
             if (!status.IsAvailable ||
