@@ -9,7 +9,8 @@ internal enum EvidenceArtifactFamily
     GoalEvents,
     GoalOperationJournals,
     MtpTestRuns,
-    RunEvents
+    RunEvents,
+    DiagnosticDumps
 }
 
 internal enum EvidenceRetentionAction

@@ -224,6 +224,7 @@ internal static partial class StorageRetentionMaintenance
                         failure.Reason, FailureExceptionType: failure.ExceptionType));
                 SweepWorkerArtifacts(logDirectory, goals, now, decisions);
                 SweepOperatorLogs(logDirectory, now, reclaim, decisions);
+                ConductorDiagnosticDumpRetention.Sweep(logDirectory, now, decisions);
                 var retainedMtpAttemptOwnerKeys = SweepMtpResults(
                     mtpResultsRoot,
                     orchestratorDirectory,
@@ -2211,7 +2212,7 @@ internal static partial class StorageRetentionMaintenance
         return archived;
     }
 
-    private static (bool Success, string? ExceptionType) TryDeleteExclusive(string path)
+    internal static (bool Success, string? ExceptionType) TryDeleteExclusive(string path)
     {
         try
         {
@@ -2232,7 +2233,7 @@ internal static partial class StorageRetentionMaintenance
         try { File.Delete(path); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
     }
 
-    private static long SafeLength(string path)
+    internal static long SafeLength(string path)
     {
         try { return new FileInfo(path).Length; }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return 0; }

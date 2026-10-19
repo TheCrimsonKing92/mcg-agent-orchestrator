@@ -19,7 +19,7 @@ internal static class OrchestratorArtifactRegistry
 
     internal static IReadOnlyList<Entry> Entries { get; } = Array.AsReadOnly<Entry>([
         Source("logs", "App/Orchestration/OrchestratorWorkspace.cs",
-            note: "operator-*.log files are swept at WorkerDeletionAge; conductor-tick-stall *.dmp dumps and other files are not swept."),
+            note: "operator-*.log files are swept at WorkerDeletionAge; conductor-tick-stall *.dmp dumps keep the newest 2 and older dumps past 3 days are reclaimed by ConductorDiagnosticDumpRetention; other files are not swept."),
         Source("prompts", "App/Orchestration/OrchestratorWorkspace.cs"),
         Source("goal-events", "App/Orchestration/OrchestratorWorkspace.cs"),
         Source("spec-refinement-launch-attempts", "App/Orchestration/OrchestratorWorkspace.cs"),
