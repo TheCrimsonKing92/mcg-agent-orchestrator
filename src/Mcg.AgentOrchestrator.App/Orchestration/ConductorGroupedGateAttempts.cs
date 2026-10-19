@@ -594,6 +594,21 @@ internal sealed class ConductorGroupedGateAttemptCoordinator
         return invalidated;
     }
 
+    internal bool CancelForOperator(ConductorGroupedGateAttempt attempt, string intentId) =>
+        WithMetadataLock(attempt.MetadataPath, () =>
+        {
+            var current = Read(attempt.MetadataPath);
+            if (current.ReconciledAt is not null || current.Outcome != "Running" ||
+                File.Exists(current.ResultPath) || File.Exists(current.ExitCodePath)) return false;
+            if (!StopHolder(current, $"operator-gate-cancel:{intentId}")) return false;
+            Save(current with
+            {
+                ReconciledAt = _utcNow(), Outcome = "Reconciled",
+                Detail = $"refused:operator-cancelled intent={intentId}"
+            });
+            return true;
+        });
+
     internal ConductorGroupedGateAttempt Reconcile(
         ConductorGroupedGateAttempt attempt, string detail) =>
         Update(attempt.MetadataPath, current => current with
