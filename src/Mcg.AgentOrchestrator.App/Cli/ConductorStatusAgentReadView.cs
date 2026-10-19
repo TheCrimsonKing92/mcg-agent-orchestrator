@@ -38,7 +38,8 @@ internal static class ConductorStatusAgentReadView
                     {
                         goal = goal.Goal, intents = goal.Intents, latest = RoundTrip(goal.Latest)
                     }).ToArray()
-                }
+                },
+                providerHolds = (snapshot.ProviderHolds ?? []).Select(ProviderUsageHoldJson.Row).ToArray()
             }, new JsonSerializerOptions(JsonSerializerDefaults.Web), time);
 
     private static string? RoundTrip(DateTimeOffset? at) => at?.ToString("O", CultureInfo.InvariantCulture);

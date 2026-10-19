@@ -30,6 +30,20 @@ internal static class OwnerFleetDiagram
             content.Add($"unreadable ledger lines: probes {host.UnreadableProbeLines}");
         }
         Box(content, false, wrapRow: skipRow);
+        foreach (var hold in model.ProviderHolds ?? [])
+        {
+            lines.Add("│" + new string(' ', width - 1));
+            Box([
+                $"Provider {hold.Name}: HELD !",
+                $"binding: {hold.BindingKey}",
+                hold.NextProbeAt is { } nextProbe
+                    ? $"next probe: {Stamp(nextProbe)} attempt {hold.Attempt} ({hold.ResetSource})"
+                    : "next probe: unavailable",
+                $"last probe: {hold.LastProbe ?? "none"}",
+                $"held since: {Stamp(hold.PlacedAt)}",
+                $"source: {hold.Source}"
+            ], true);
+        }
         foreach (var executor in model.Executors)
         {
             lines.Add("│" + new string(' ', width - 1));

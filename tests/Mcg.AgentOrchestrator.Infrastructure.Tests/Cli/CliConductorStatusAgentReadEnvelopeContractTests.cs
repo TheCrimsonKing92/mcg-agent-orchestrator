@@ -155,7 +155,7 @@ public sealed class CliConductorStatusAgentReadEnvelopeContractTests
         Assert.Equal("2026-10-01T12:00:00.0000000Z", Text(root, "generatedAt"));
         var payload = root.GetProperty("payload");
         Names(payload, "conductor", "since", "supervisorBuild", "generation", "latestTick", "goals",
-            "mostRecentLanding", "workerAdoption", "pendingIntents");
+            "mostRecentLanding", "workerAdoption", "pendingIntents", "providerHolds");
         Names(payload.GetProperty("conductor"), "state", "pid");
         Names(payload.GetProperty("since"), "kind", "at", "reason", "previous");
         Names(payload.GetProperty("generation"), "state", "build", "main");
