@@ -131,6 +131,8 @@ internal static partial class WorkerSubscriptionModelResolver
                     e.Kind == ProgressKind.TaskNote && e.Message.StartsWith("Rejected Tester structured finding result:", StringComparison.Ordinal)) ||
                 TryFindWorkerResultGuardrailFailure(AgentRole.Tester, verification, out _))
                 return Full(CascadeRouteMarker.Escalated, "tester-contract-rejected");
+            if (TesterCascadeContractRepairEscalation.ShouldEscalate(newerDispatches, laterEvents))
+                return Full(CascadeRouteMarker.Escalated, TesterCascadeContractRepairEscalation.RuleId);
             if (verification?.CompletionVerdictRule == "provider-model-rejection")
                 return Full(CascadeRouteMarker.Escalated, "cheap-model-rejected");
         }
