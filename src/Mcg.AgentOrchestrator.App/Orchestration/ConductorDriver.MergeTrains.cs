@@ -242,7 +242,7 @@ internal sealed partial class ConductorDriver
                         receiptId,
                         identity,
                         outcome,
-                        DateTimeOffset.UtcNow,
+                        _utcNow(),
                         checked((long)clock.Elapsed.TotalMilliseconds),
                         verification.Checks?.Where(check => !check.Passed && !check.Advisory)
                             .Select(check => check.Name).ToArray() ?? [],

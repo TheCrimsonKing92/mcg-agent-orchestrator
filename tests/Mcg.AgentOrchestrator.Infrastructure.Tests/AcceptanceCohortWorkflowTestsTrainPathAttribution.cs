@@ -9,6 +9,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 // Parallel-safe: each case owns its git repository, worktrees, stores and cleanup hooks.
 public sealed class AcceptanceCohortWorkflowTestsTrainPathAttribution : AcceptanceCohortWorkflowTests
 {
+    private static readonly DateTimeOffset FixedUtcNow = new(2026, 10, 19, 12, 0, 0, TimeSpan.Zero);
     private static readonly string[] Paths =
     [
         "tests/Mcg.AgentOrchestrator.Core.Tests/OldestCulpritTests.cs",
@@ -94,6 +95,15 @@ public sealed class AcceptanceCohortWorkflowTestsTrainPathAttribution : Acceptan
         Assert.Equal(remaining, receipt.Identity.Members.Select(member => member.GoalId));
         Assert.Equal(Paths.Where((_, index) => index != culprit), train.Verifier.ChangedFiles[1]);
         Assert.Equal(remaining.Select(id => id.Value).Order(), train.Result.MemberResults.Keys.Order());
+        var store = new MergeTrainAcceptanceStore(Path.Combine(train.Repo, ".orchestrator", "merge-train-acceptance.db"));
+        var receipts = store.ReadReceiptsSince(DateTimeOffset.MinValue);
+        Assert.Equal(2, receipts.Count);
+        Assert.All(receipts, stored => Assert.Equal(FixedUtcNow, stored.CompletedAt));
+        var failed = Assert.Single(receipts, stored => stored.Outcome == MergeTrainGateOutcome.Failed);
+        Assert.Equal(train.Goals.Select(goal => goal.Id), failed.Identity.Members.Select(member => member.GoalId));
+        var passed = Assert.Single(receipts, stored => stored.Outcome == MergeTrainGateOutcome.Passed);
+        Assert.Equal(receipt.ReceiptId, passed.ReceiptId);
+        Assert.Equal(remaining, passed.Identity.Members.Select(member => member.GoalId));
     }
 
     private void WithTrain(string identity, string message, Action<Scenario> assert)
@@ -123,7 +133,8 @@ public sealed class AcceptanceCohortWorkflowTestsTrainPathAttribution : Acceptan
             }).ToArray();
             var verifier = new SequenceAcceptanceVerifier([Red(repo, identity, message), Passing(repo)]);
             var driver = new ConductorDriver(kernel, OrchestratorWorkspace.ForDirectory(repo), verifier,
-                AgentCatalog.Default().Agents, WorkerProfileCatalog.Default(), cleanupHooks: cleanup.Hooks);
+                AgentCatalog.Default().Agents, WorkerProfileCatalog.Default(), cleanupHooks: cleanup.Hooks,
+                utcNow: () => FixedUtcNow);
             var selection = new ConductorMergeTrainSelection(goals.Select(goal =>
                 Assert.IsType<GateReadyCandidateProjectionResult.Ready>(
                     driver.ProjectGateReadyCandidate(goal, ConductorAutonomyPolicy.Permissive)).Projection).ToArray());
