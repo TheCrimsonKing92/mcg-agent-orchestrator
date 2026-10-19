@@ -373,14 +373,11 @@ public sealed class DotnetBuildEnvironmentManagerTestsFocusedRunner : DotnetBuil
         }
     }
 
-    [Xunit.Fact]
+    public static bool IsWindows => OperatingSystem.IsWindows();
+
+    [Xunit.Fact(Skip = "Requires Windows contained process custody.", SkipUnless = nameof(IsWindows))]
     public async Task FocusedChildProcess_AcceptancePriority_KillsDescendantTree()
     {
-        if (!OperatingSystem.IsWindows())
-        {
-            return;
-        }
-
         var root = CreateTempDirectory();
         var harnessPath = Path.Combine(root, "focused-child-harness.ps1");
         var fixturePath = Path.Combine(root, "focused-child-fixture.ps1");
@@ -388,8 +385,8 @@ public sealed class DotnetBuildEnvironmentManagerTestsFocusedRunner : DotnetBuil
         var descendantIdentityPath = Path.Combine(root, "descendant.json");
         var releasePath = Path.Combine(root, "never-release");
         var priorityPath = Path.Combine(root, "acceptance-priority.lock");
-        Process? harness = null;
-        try
+        await using var owner = new DotnetBuildEnvironmentManagerFocusedChildFixture(root);
+        await owner.RunAsync(async () =>
         {
             var source = ReadIsolatedDotnetScript();
             var identityFunctionStart = source.IndexOf("function Get-FocusedChildProcessIdentity", StringComparison.Ordinal);
@@ -407,6 +404,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsFocusedRunner : DotnetBuil
                 """
                 Set-StrictMode -Version Latest
                 $ErrorActionPreference = "Stop"
+                if (Test-Path -LiteralPath $env:FOCUSED_TREE_RELEASE) { exit 0 }
                 $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
                 $startInfo.FileName = $env:FOCUSED_TREE_SHELL
                 $startInfo.UseShellExecute = $false
@@ -441,6 +439,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsFocusedRunner : DotnetBuil
                 $$"""
                 Set-StrictMode -Version Latest
                 $ErrorActionPreference = "Stop"
+                if (Test-Path -LiteralPath $env:FOCUSED_TREE_RELEASE) { exit 0 }
                 $script:RepositoryRoot = $env:FOCUSED_TREE_ROOT
                 {{focusedChildFunctions}}
                 $result = Invoke-FocusedChildProcess `
@@ -480,21 +479,14 @@ public sealed class DotnetBuildEnvironmentManagerTestsFocusedRunner : DotnetBuil
             startInfo.Environment["FOCUSED_TREE_PRIORITY"] = priorityPath;
             startInfo.Environment["FOCUSED_TREE_RESULT"] = resultPath;
 
-            harness = Process.Start(startInfo) ??
-                throw new InvalidOperationException("Failed to start the focused child-process harness.");
-            var stdoutTask = harness.StandardOutput.ReadToEndAsync();
-            var stderrTask = harness.StandardError.ReadToEndAsync();
-            JsonDocument? publishedDescendantIdentity = null;
-            Assert.True(
-                SpinWait.SpinUntil(
-                    () => TryReadJsonDocument(descendantIdentityPath, out publishedDescendantIdentity),
-                    TimeSpan.FromSeconds(15)),
-                "The focused child fixture did not publish a readable descendant identity.");
-            using var descendantIdentity = publishedDescendantIdentity!;
+            owner.Start(startInfo);
+            var harness = owner.Harness;
+            using var descendantIdentity = owner.RequireIdentity();
             Assert.Equal("confirmed", descendantIdentity.RootElement.GetProperty("identityStatus").GetString());
             Assert.Equal("running-same-identity", GetFocusedChildIdentityState(descendantIdentity.RootElement));
             using var descendantProcess = Process.GetProcessById(
                 descendantIdentity.RootElement.GetProperty("processId").GetInt32());
+            owner.Phase = "acceptance-priority";
             using (var priority = File.Open(priorityPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.ReadWrite))
             {
                 var priorityLocked = false;
@@ -528,28 +520,20 @@ public sealed class DotnetBuildEnvironmentManagerTestsFocusedRunner : DotnetBuil
                 }
             }
 
-            if (harness.ExitCode != 0)
-            {
-                StopFocusedProcessIdentity(descendantIdentityPath);
-            }
-
+            owner.Phase = "stream-drain";
             try
             {
-                await Task.WhenAll(stdoutTask, stderrTask).WaitAsync(TimeSpan.FromSeconds(10));
+                await owner.DrainAsync();
             }
             catch (TimeoutException)
             {
-                var boundedStderr = stderrTask.IsCompletedSuccessfully
-                    ? stderrTask.Result
-                    : "<stderr stream remained open>";
                 Assert.Fail(
                     $"The focused child harness output streams did not close within 10 seconds.{Environment.NewLine}" +
-                    $"harnessExitCode={harness.ExitCode}{Environment.NewLine}stderr={boundedStderr}");
+                    owner.Diagnostics());
             }
 
-            var stdout = await stdoutTask;
-            var stderr = await stderrTask;
-            var diagnostics = $"harnessExitCode={harness.ExitCode}{Environment.NewLine}stdout={stdout}{Environment.NewLine}stderr={stderr}";
+            owner.Phase = "result-assertions";
+            var diagnostics = owner.Diagnostics();
             if (harness.ExitCode != 0)
             {
                 Assert.Fail(diagnostics);
@@ -571,24 +555,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsFocusedRunner : DotnetBuil
                 result.RootElement.GetProperty("ChildProcessId").GetInt32(),
                 descendantIdentity.RootElement.GetProperty("processId").GetInt32());
             Assert.Equal("exited", GetFocusedChildIdentityState(descendantIdentity.RootElement));
-        }
-        finally
-        {
-            if (harness is not null)
-            {
-                StopProcess(harness);
-                harness.Dispose();
-            }
-            StopFocusedProcessIdentity(descendantIdentityPath);
-            try
-            {
-                Directory.Delete(root, recursive: true);
-            }
-            catch
-            {
-                // Best effort when a killed fixture briefly retains an image handle.
-            }
-        }
+        });
     }
 
     [Xunit.Theory]
