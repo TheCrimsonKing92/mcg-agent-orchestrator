@@ -108,7 +108,8 @@ public sealed class WorkerWorkflowBrokerRoleDeliveryTests : WorkerDispatchTestSu
     {
         using var fixture = Prepare(AgentRole.Developer, retry, includeDotnetProject, includeGoModule: true);
         Assert.True(File.Exists(Path.Combine(fixture.WorkingDirectory, "go.mod")));
-        Assert.Equal(includeDotnetProject, File.Exists(Path.Combine(fixture.WorkingDirectory, "Fixture.csproj")));
+        Assert.Equal(includeDotnetProject,
+            File.Exists(Path.Combine(fixture.WorkingDirectory, "src", "Fixture", "Fixture.csproj")));
         var broker = fixture.ReadDelivered("workflow-brokers.md");
         var actions = ReadActions(broker);
 
@@ -151,10 +152,17 @@ public sealed class WorkerWorkflowBrokerRoleDeliveryTests : WorkerDispatchTestSu
             Git("init", "--initial-branch=main");
             File.WriteAllText(Path.Combine(workingDirectory, "fixture.txt"), "broker fixture");
             if (includeDotnetProject)
-                File.WriteAllText(Path.Combine(workingDirectory, "Fixture.csproj"),
+            {
+                // Use the conventional project layout recognized by the existing detector.
+                var projectDirectory = Path.Combine(workingDirectory, "src", "Fixture");
+                Directory.CreateDirectory(projectDirectory);
+                File.WriteAllText(Path.Combine(projectDirectory, "Fixture.csproj"),
                     "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>");
+            }
             if (includeGoModule)
                 File.WriteAllText(Path.Combine(workingDirectory, "go.mod"), "module example.invalid/broker\n\ngo 1.21\n");
+            Assert.Equal(includeGoModule ? Toolchain.Go : includeDotnetProject ? Toolchain.Dotnet : Toolchain.Unknown,
+                TargetToolchainDetector.Detect(workingDirectory));
             Git("add", ".");
             Git("-c", "user.name=Broker Tests", "-c", "user.email=broker@example.invalid", "commit", "--quiet", "-m", "fixture");
             var head = Git("rev-parse", "HEAD").Trim();
