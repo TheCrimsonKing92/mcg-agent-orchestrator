@@ -5,7 +5,15 @@ namespace Mcg.AgentOrchestrator.App.Providers;
 
 public static class ProviderRegistryFactory
 {
-    public static IModelProviderRegistry CreateDefaultProviders()
+    public static IModelProviderRegistry CreateDefaultProviders() =>
+        CreateDefaultProviders(LocalInferenceProbe.IsReachable,
+            OllamaDefaults.ResolveBaseUrl(), LlamaCppDefaults.ResolveBaseUrl(), out _);
+
+    internal static IModelProviderRegistry CreateDefaultProviders(
+        Func<string, bool> probe,
+        string ollamaBaseUrl,
+        string llamaBaseUrl,
+        out bool llamaCppReachable)
     {
         var providers = new List<IModelProvider>();
         var openAiKey = Environment.GetEnvironmentVariable("OPENAI_API_KEY");
@@ -19,16 +27,15 @@ public static class ProviderRegistryFactory
             ? new ScriptedModelProvider("Anthropic")
             : new AnthropicMessagesModelProvider(ProviderHttpClientFactory.CreateAnthropicClient(), anthropicKey, Environment.GetEnvironmentVariable("ANTHROPIC_MODEL") ?? ProviderModelDefaults.Anthropic));
 
-        var ollamaBaseUrl = OllamaDefaults.ResolveBaseUrl();
         var ollamaModel = Environment.GetEnvironmentVariable("OLLAMA_MODEL") ?? ProviderModelDefaults.Ollama;
 
-        providers.Add(IsOllamaReachable(ollamaBaseUrl)
+        providers.Add(probe(OllamaDefaults.BuildOpenAiModelsUrl(ollamaBaseUrl))
             ? new ChatCompletionsModelProvider(ProviderHttpClientFactory.CreateOllamaClient(ollamaBaseUrl), ollamaModel, "Ollama")
             : new ScriptedModelProvider("Ollama"));
 
-        var llamaBaseUrl = LlamaCppDefaults.ResolveBaseUrl();
         var llamaModel = Environment.GetEnvironmentVariable("LLAMA_CPP_MODEL") ?? LlamaCppDefaults.DefaultModelAlias;
-        providers.Add(IsLlamaCppReachable(llamaBaseUrl)
+        llamaCppReachable = probe(LlamaCppDefaults.BuildOpenAiModelsUrl(llamaBaseUrl));
+        providers.Add(llamaCppReachable
             ? new ChatCompletionsModelProvider(ProviderHttpClientFactory.CreateLlamaCppClient(llamaBaseUrl), llamaModel, "LlamaCpp")
             : new ScriptedModelProvider("LlamaCpp"));
 
@@ -51,19 +58,7 @@ public static class ProviderRegistryFactory
         return IsOpenAiCompatibleReachable(LlamaCppDefaults.BuildOpenAiModelsUrl(baseUrl));
     }
 
-    private static bool IsOpenAiCompatibleReachable(string modelsUrl)
-    {
-        try
-        {
-            using var probe = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
-            var response = probe.GetAsync(modelsUrl).GetAwaiter().GetResult();
-            return response.IsSuccessStatusCode;
-        }
-        catch
-        {
-            return false;
-        }
-    }
+    private static bool IsOpenAiCompatibleReachable(string modelsUrl) =>
+        LocalInferenceProbe.IsReachable(modelsUrl);
 }
-
 

@@ -378,12 +378,7 @@ if (IsGoalEventsFollowCommand(startupArgs))
     }
 }
 
-var providers = commandCapability == CliCommandCapability.Execution
-    ? ProviderRegistryFactory.CreateDefaultProviders()
-    : new InMemoryModelProviderRegistry([]);
-var agentFallback = commandCapability == CliCommandCapability.Execution && ProviderRegistryFactory.IsLlamaCppReachable()
-    ? AgentCatalog.LlamaCppDefault()
-    : null;
+var (providers, agentFallback) = StartupProviderComposition.Create(commandCapability == CliCommandCapability.Execution);
 var agents = AgentCatalogStore.Load(workspace.AgentCatalogPath, agentFallback).Agents;
 var workerProfiles = WorkerProfileStore.Load(workspace.WorkerProfilePath);
 var operatorCatalog = OperatorChannelStore.Load(workspace.OperatorChannelPath);
