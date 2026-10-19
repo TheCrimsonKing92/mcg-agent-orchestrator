@@ -114,11 +114,42 @@ internal sealed class ConductorExperimentWatch
                             _raised.Remove((record.Id, "stop-rule"));
                     }
                     catch (Exception error) { LogFailure(error); }
-                    try { if (reverts.TryRevert(record, reading, asOf)) continue; }
+                    bool? before = null;
+                    try
+                    {
+                        if (record.Spec.Intervention.Kind == ExperimentInterventionKind.ConfigFlag &&
+                            record.Spec.Intervention.FlagTarget is { } target)
+                            before = flags.Read(target);
+                    }
                     catch (Exception error) { LogFailure(error); }
-                    try { if (keeps.TryKeep(record, reading, asOf)) continue; }
+                    try
+                    {
+                        if (reverts.TryRevert(record, reading, asOf))
+                        {
+                            try { _writer?.Append(ExperimentFlagActionEvent.Kind, null, ExperimentFlagActionEvent.Detail(record, "revert", before), asOf); }
+                            catch (Exception error) { LogFailure(error); }
+                            continue;
+                        }
+                    }
                     catch (Exception error) { LogFailure(error); }
-                    try { toggles.TryToggle(record, hostLedgers, asOf, reading); }
+                    try
+                    {
+                        if (keeps.TryKeep(record, reading, asOf))
+                        {
+                            try { _writer?.Append(ExperimentFlagActionEvent.Kind, null, ExperimentFlagActionEvent.Detail(record, "keep", before), asOf); }
+                            catch (Exception error) { LogFailure(error); }
+                            continue;
+                        }
+                    }
+                    catch (Exception error) { LogFailure(error); }
+                    try
+                    {
+                        if (toggles.TryToggle(record, hostLedgers, asOf, reading))
+                        {
+                            try { _writer?.Append(ExperimentFlagActionEvent.Kind, null, ExperimentFlagActionEvent.Detail(record, "toggle", before), asOf); }
+                            catch (Exception error) { LogFailure(error); }
+                        }
+                    }
                     catch (Exception error) { LogFailure(error); }
                     foreach (var trigger in Triggers)
                     {
