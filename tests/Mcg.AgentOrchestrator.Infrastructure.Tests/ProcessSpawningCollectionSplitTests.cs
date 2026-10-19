@@ -60,7 +60,7 @@ public sealed class ProcessSpawningCollectionSplitTests
                      typeof(MtpNoBuildReceiptIdentityTests)
                  })
         {
-            Xunit.Assert.Equal(ParallelCollection,
+            Xunit.Assert.Equal(type == typeof(OrchestratorSnapshotStatusTimeoutTests) ? ParallelCollection : "IsolatedProcessSpawningShardB",
                 type.GetCustomAttribute<Xunit.CollectionAttribute>(inherit: true)?.Name);
             var selected = AcceptanceLaneMembership.LanesIncluding(resolved, type.FullName!);
             Xunit.Assert.Equal("Process spawning parallel", Xunit.Assert.Single(selected).Name);
@@ -109,7 +109,13 @@ public sealed class ProcessSpawningCollectionSplitTests
 
         Xunit.Assert.All(MovedClasses, type =>
             Xunit.Assert.Equal(
-                ParallelCollection,
+                type.Name switch
+                {
+                    nameof(ConductorDriverTestsFindingEvidenceReuse) => "IsolatedProcessSpawningShardA",
+                    nameof(MtpManagedFilterDiscoveryTests) or nameof(MtpNoBuildReceiptIdentityTests) => "IsolatedProcessSpawningShardB",
+                    nameof(WorkerDispatchTestsModelSelection) or nameof(CliHelpTests) or nameof(ExcessWorkerRoundAnalysisScriptTests) => "IsolatedProcessSpawningShardC",
+                    _ => ParallelCollection
+                },
                 type.GetCustomAttribute<Xunit.CollectionAttribute>(inherit: true)?.Name));
         Xunit.Assert.All(SerialClasses, type =>
             Xunit.Assert.Equal(

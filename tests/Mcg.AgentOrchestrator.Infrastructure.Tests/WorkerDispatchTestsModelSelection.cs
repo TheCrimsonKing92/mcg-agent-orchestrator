@@ -10,7 +10,7 @@ using System.Net.Sockets;
 using System.Text.RegularExpressions;
 using System.Text.Json;
 
-[Xunit.Collection("IsolatedProcessSpawning")]
+[Xunit.Collection("IsolatedProcessSpawningShardC")]
 public sealed class WorkerDispatchTestsModelSelection : WorkerDispatchTestSupport
 {
     [Xunit.Theory]

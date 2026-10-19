@@ -6,7 +6,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 using static ConductorDriverTests;
 
-[Xunit.Collection("IsolatedProcessSpawning")]
+[Xunit.Collection("IsolatedProcessSpawningShardA")]
 public sealed class ConductorDriverTestsFindingEvidenceReuse : IDisposable
 {
     private readonly string _artifactRoot = InfrastructureTestSupport.CreateTempDirectory();
