@@ -1,3 +1,4 @@
+using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -24,7 +25,8 @@ internal static class GoalCreationPreconditionValidator
         if (preparedSnapshot.SourceBacklogItemId is not { } backlogItemId)
             return;
 
-        var backlogItem = new BacklogStore(workspace.BacklogStorePath)
+        var backlogStore = new BacklogStore(workspace.BacklogStorePath);
+        var backlogItem = backlogStore
             .GetByIdPrefixAsync(backlogItemId)
             .GetAwaiter()
             .GetResult();
@@ -100,6 +102,28 @@ internal static class GoalCreationPreconditionValidator
             var dependencyGoal = dependency.TargetKind == BacklogDependencyTargetKind.Goal
                 ? currentKernel.Goals.FirstOrDefault(goal => goal.Id.Value == dependency.PrerequisiteId)
                 : ResolveAuthoritativeGoal(currentKernel, claimStore, dependency.PrerequisiteId);
+            if (dependencyGoal is null && dependency.TargetKind == BacklogDependencyTargetKind.Backlog)
+            {
+                var prerequisite = backlogStore.GetByExactIdAsync(dependency.PrerequisiteId)
+                    .GetAwaiter().GetResult();
+                if (prerequisite is null)
+                {
+                    throw Changed(
+                        "dependency-target-missing",
+                        ("backlogItem", backlogItemId),
+                        ("dependency", dependency.PrerequisiteId));
+                }
+
+                if (BacklogDependencyReadiness.IsSatisfiedWithoutGoal(prerequisite, new(null)))
+                    continue;
+
+                throw Changed(
+                    "dependency-prerequisite-not-done",
+                    ("backlogItem", backlogItemId),
+                    ("dependency", dependency.PrerequisiteId),
+                    ("prerequisiteStatus", prerequisite.Status.ToString()));
+            }
+
             if (dependencyGoal is null)
             {
                 throw Changed(
