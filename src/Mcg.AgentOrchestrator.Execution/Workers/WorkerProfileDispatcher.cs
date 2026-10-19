@@ -155,7 +155,8 @@ public static partial class WorkerProfileDispatcher
         PaidRouteClassification paidRoute = PaidRouteClassification.Unknown,
         // The credential source this dispatch's Claude auth preflight selected and reported. Recorded on
         // the dispatch so the start boundary transports that one decision instead of selecting again.
-        ClaudeCredentialSourceSelection? claudeCredentialSelection = null, DispatchShadowRecorder? shadowRecorder = null, string? orchestratorSkillDirectory = null, string? integrationBranch = null, WorkerTargetHome? targetHome = null)
+        ClaudeCredentialSourceSelection? claudeCredentialSelection = null, DispatchShadowRecorder? shadowRecorder = null, string? orchestratorSkillDirectory = null, string? integrationBranch = null, WorkerTargetHome? targetHome = null,
+        Func<Goal, string?, DeferredNoChangeEvidenceContext>? deferredEvidenceResolver = null)
     {
         integrationBranch = TrunkBranchName.Resolve(integrationBranch);
         EnsureTaskNeedsExecution(task, allowPendingRecordedDispatchRefresh);
@@ -259,7 +260,9 @@ public static partial class WorkerProfileDispatcher
                 workerProfile: profile,
                 priorContextPackageReceipt: priorDispatch?.ContextPackageReceipt,
                 typedSource: briefSource,
-                legacyIngressProgressRecorder: message => kernel.RecordTaskNote(goal.Id, task.Id, message, CriteriaCorrectionSource.WorkerResult));
+                legacyIngressProgressRecorder: message => kernel.RecordTaskNote(goal.Id, task.Id, message, CriteriaCorrectionSource.WorkerResult),
+                deferredEvidence: task.RequiredRole is AgentRole.Tester or AgentRole.Reviewer
+                    ? deferredEvidenceResolver?.Invoke(goal, targetContext?.HeadCommit) : null);
             var deliveryPolicy = contextPackage.ReviewFindingProjection?.Mode ==
                 ReviewFindingHistoryProjectionMode.ContractRepair
                 ? WorkerContextDeliveryPolicy.CompactRepair
@@ -459,7 +462,8 @@ public static partial class WorkerProfileDispatcher
         string workingDirectory,
         DateTimeOffset dispatchedAt,
         CitedPriorEvidenceResolver? citedPriorEvidenceResolver = null,
-        WorkerSandboxOptions? sandboxOptions = null, string? integrationBranch = null)
+        WorkerSandboxOptions? sandboxOptions = null, string? integrationBranch = null,
+        Func<Goal, string?, DeferredNoChangeEvidenceContext>? deferredEvidenceResolver = null)
     {
         var results = new List<WorkerProfileDispatchResult>();
         foreach (var task in goal.Tasks.Where(task => task.Status == WorkTaskStatus.Assigned).ToList())
@@ -473,7 +477,8 @@ public static partial class WorkerProfileDispatcher
                 workingDirectory,
                 dispatchedAt,
                 citedPriorEvidenceResolver: citedPriorEvidenceResolver,
-                sandboxOptions: sandboxOptions, shadowRecorder: DispatchShadowRecorder.Default, integrationBranch: integrationBranch));
+                sandboxOptions: sandboxOptions, shadowRecorder: DispatchShadowRecorder.Default, integrationBranch: integrationBranch,
+                deferredEvidenceResolver: deferredEvidenceResolver));
         }
 
         return results;
@@ -495,7 +500,8 @@ public static partial class WorkerProfileDispatcher
         Func<string, bool>? commandExists = null,
         int? reviewAutoRetryStopRound = null,
         CitedPriorEvidenceResolver? citedPriorEvidenceResolver = null,
-        int plannerSampleCount = 1, bool cascadeTesterCheapFirst = true, string? cascadeCheapModelAlias = null, bool cascadeMechanicalReworkCheap = true, string? orchestratorSkillDirectory = null, string? integrationBranch = null, WorkerTargetHome? targetHome = null)
+        int plannerSampleCount = 1, bool cascadeTesterCheapFirst = true, string? cascadeCheapModelAlias = null, bool cascadeMechanicalReworkCheap = true, string? orchestratorSkillDirectory = null, string? integrationBranch = null, WorkerTargetHome? targetHome = null,
+        Func<Goal, string?, DeferredNoChangeEvidenceContext>? deferredEvidenceResolver = null)
     {
         EnsureTaskNeedsExecution(task);
         var sandbox = sandboxOptions ?? WorkerSandboxOptions.FromEnvironment();
@@ -570,7 +576,8 @@ public static partial class WorkerProfileDispatcher
             sandboxOptions: sandbox,
             plannerSampleCount: plannerSampleCount,
             paidRoute: ClassifyPaidRoute(roleSelection.Model.SubscriptionMode),
-            claudeCredentialSelection: preflight.ClaudeCredentialSelection, shadowRecorder: DispatchShadowRecorder.Default, orchestratorSkillDirectory: orchestratorSkillDirectory, integrationBranch: integrationBranch, targetHome: targetHome);
+            claudeCredentialSelection: preflight.ClaudeCredentialSelection, shadowRecorder: DispatchShadowRecorder.Default, orchestratorSkillDirectory: orchestratorSkillDirectory, integrationBranch: integrationBranch, targetHome: targetHome,
+            deferredEvidenceResolver: deferredEvidenceResolver);
     }
 
     public static WorkerSubscriptionPreflightResult PreflightSubscriptionTask(
@@ -1105,7 +1112,8 @@ public static partial class WorkerProfileDispatcher
         int? reviewAutoRetryStopRound = null,
         CitedPriorEvidenceResolver? citedPriorEvidenceResolver = null,
         WorkerSandboxOptions? sandboxOptions = null,
-        int plannerSampleCount = 1, bool cascadeTesterCheapFirst = true, string? cascadeCheapModelAlias = null, bool cascadeMechanicalReworkCheap = true, string? integrationBranch = null)
+        int plannerSampleCount = 1, bool cascadeTesterCheapFirst = true, string? cascadeCheapModelAlias = null, bool cascadeMechanicalReworkCheap = true, string? integrationBranch = null,
+        Func<Goal, string?, DeferredNoChangeEvidenceContext>? deferredEvidenceResolver = null)
     {
         return PrepareSubscriptionReadyBatch(
             kernel,
@@ -1120,7 +1128,8 @@ public static partial class WorkerProfileDispatcher
             reviewAutoRetryStopRound,
             citedPriorEvidenceResolver,
             sandboxOptions,
-            plannerSampleCount, cascadeTesterCheapFirst: cascadeTesterCheapFirst, cascadeCheapModelAlias: cascadeCheapModelAlias, cascadeMechanicalReworkCheap: cascadeMechanicalReworkCheap, integrationBranch: integrationBranch).Dispatches;
+            plannerSampleCount, cascadeTesterCheapFirst: cascadeTesterCheapFirst, cascadeCheapModelAlias: cascadeCheapModelAlias, cascadeMechanicalReworkCheap: cascadeMechanicalReworkCheap, integrationBranch: integrationBranch,
+            deferredEvidenceResolver: deferredEvidenceResolver).Dispatches;
     }
 
     public static WorkerProfileReadyBatchResult PrepareSubscriptionReadyBatch(
@@ -1140,7 +1149,8 @@ public static partial class WorkerProfileDispatcher
         // Shared Claude auth probe, so a test can supply fixture credential sources instead of this
         // batch reading the operator's real credential store. Production leaves it null and each
         // prepared task below gets its own single resolution.
-        Func<ClaudeCliAuthState>? claudeAuthProbe = null, bool cascadeTesterCheapFirst = true, string? cascadeCheapModelAlias = null, bool cascadeMechanicalReworkCheap = true, string? orchestratorSkillDirectory = null, string? integrationBranch = null, WorkerTargetHome? targetHome = null)
+        Func<ClaudeCliAuthState>? claudeAuthProbe = null, bool cascadeTesterCheapFirst = true, string? cascadeCheapModelAlias = null, bool cascadeMechanicalReworkCheap = true, string? orchestratorSkillDirectory = null, string? integrationBranch = null, WorkerTargetHome? targetHome = null,
+        Func<Goal, string?, DeferredNoChangeEvidenceContext>? deferredEvidenceResolver = null)
     {
         var selections = goal.Tasks
             .Where(task => task.Status == WorkTaskStatus.Assigned)
@@ -1235,7 +1245,8 @@ public static partial class WorkerProfileDispatcher
                 sandboxOptions: sandbox,
                 plannerSampleCount: plannerSampleCount,
                 paidRoute: ClassifyPaidRoute(roleSelection.Model.SubscriptionMode),
-                claudeCredentialSelection: preflight.ClaudeCredentialSelection, shadowRecorder: DispatchShadowRecorder.Default, orchestratorSkillDirectory: orchestratorSkillDirectory, integrationBranch: integrationBranch, targetHome: targetHome));
+                claudeCredentialSelection: preflight.ClaudeCredentialSelection, shadowRecorder: DispatchShadowRecorder.Default, orchestratorSkillDirectory: orchestratorSkillDirectory, integrationBranch: integrationBranch, targetHome: targetHome,
+                deferredEvidenceResolver: deferredEvidenceResolver));
         }
 
         return new WorkerProfileReadyBatchResult(results, blocked);
@@ -1865,7 +1876,8 @@ public static partial class WorkerProfileDispatcher
         WorkerProfile? workerProfile = null,
         WorkerContextPackageReceipt? priorContextPackageReceipt = null,
         TaskBriefSource? typedSource = null,
-        Action<string>? legacyIngressProgressRecorder = null)
+        Action<string>? legacyIngressProgressRecorder = null,
+        DeferredNoChangeEvidenceContext? deferredEvidence = null)
     {
         var targetRole = task.RequiredRole;
         var registryPath = Path.Combine(contextDirectory, "artifact-registry.json");
@@ -1891,7 +1903,8 @@ public static partial class WorkerProfileDispatcher
             ContextDeliveryMode? deliveryMode = null)
         {
             var identity = new LogicalArtifactIdentity(identityValue);
-            bytes = ApplyHumanInputRetractions(bytes, goalHumanInputRequests, clarificationAnswerHistory);
+            if (source != WorkerContextSemanticSource.DeferredNoChangeEvidence)
+                bytes = ApplyHumanInputRetractions(bytes, goalHumanInputRequests, clarificationAnswerHistory);
             var mode = deliveryMode ?? WorkerContextPackageBuilder.SelectDeliveryMode(kind);
             var priorSection = priorContextPackageReceipt?.Sections.FirstOrDefault(section =>
                 section.LogicalIdentity.Equals(identityValue, StringComparison.Ordinal) &&
@@ -2038,6 +2051,7 @@ public static partial class WorkerProfileDispatcher
             ContextArtifactKind.RegisteredContext,
             SerializeSemanticTimeline(timeline, workingDirectory, contextDirectory),
             deliveryMode: hasReviewFindingHistory ? ContextDeliveryMode.OnDemandFile : null);
+        DeferredNoChangeEvidenceContextProjector.AddArtifacts(goal, task, currentCandidateSha, deferredEvidence, AddSource);
         ReviewFindingContextProjection? reviewFindingProjection = null;
         var contractRepairProjectionRequested = task.PendingRetryRoundKind == RetryRoundKind.Mechanical &&
                                                 task.VerificationHistory.LastOrDefault()?.ReviewFindingContractViolation is not null;
@@ -2450,6 +2464,7 @@ public static partial class WorkerProfileDispatcher
         ReviewerChangedFileScope,
         ReviewerMergeConflictScope,
         Timeline,
+        DeferredNoChangeEvidence,
         ReviewFindingHistory,
         InterruptedWorkCheckpoint,
         LastModelOutput,
