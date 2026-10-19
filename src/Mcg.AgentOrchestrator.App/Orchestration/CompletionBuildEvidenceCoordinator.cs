@@ -297,22 +297,8 @@ internal sealed class CompletionBuildEvidenceCoordinator : ICompletionBuildEvide
 
     private void ValidateOrigin(TaskSpec task, GoalId goalId, CompletionBuildEvidenceOperation operation)
     {
-        var dispatch = task.DispatchHistory.SingleOrDefault(d => d.DispatchedAt == operation.DispatchAt);
-        if (!Guid.TryParseExact(operation.Id, "N", out _) || !Enum.IsDefined(operation.Phase) ||
-            operation.IsPending && operation.CustodyReleased ||
-            operation.Phase == CompletionBuildEvidencePhase.Success && operation.BuildExitCode != 0 ||
-            operation.GoalId != goalId.Value || operation.TaskId != task.Id.Value || dispatch is null ||
-            BackgroundDispatchRunner.BuildDispatchId(goalId, task.Id, dispatch) != operation.DispatchId ||
-            operation.WorkerProcess.IsRunning || operation.WorkerProcess.Command != dispatch.Command ||
-            !string.Equals(operation.WorkerProcess.WorkingDirectory, operation.WorktreeRoot, StringComparison.OrdinalIgnoreCase) ||
-            !string.Equals(Path.GetFullPath(dispatch.WorkingDirectory), operation.WorktreeRoot, StringComparison.OrdinalIgnoreCase) ||
-            !string.Equals(Path.GetFullPath(operation.StatePath), Path.GetFullPath(_statePath), StringComparison.OrdinalIgnoreCase) ||
-            !string.Equals(Path.GetFullPath(operation.ExecutionDirectory), Path.GetFullPath(_executionDirectory), StringComparison.OrdinalIgnoreCase) ||
-            operation.Projects.Count == 0 || !NormalizeProjects(operation.Projects).SequenceEqual(operation.Projects) ||
-            string.IsNullOrWhiteSpace(operation.TreeDigest) ||
-            !string.Equals(operation.ResultPath, Path.Combine(DotnetBuildStorageLayout.GoalArtifactsPath(goalId),
-                "completion-build-evidence", operation.Id + ".result.json"), StringComparison.OrdinalIgnoreCase))
-            throw new InvalidOperationException("Completion build operation origin identity is unproven.");
+        if (CompletionBuildOriginPredicates.FirstFailure(task, goalId, operation, _statePath, _executionDirectory) is { } failure)
+            throw new CompletionBuildOriginRejectedException(failure.PredicateName, failure.Observed, failure.Expected);
         if (operation.ChildPid is not null && (operation.ChildStartedAt is null || string.IsNullOrWhiteSpace(operation.ChildImagePath) ||
             !GoalEvidenceOperationOwner.TryParse(operation.LeaseOwner, out var owner) || owner is null ||
             owner.Operation != OperationName || owner.InstanceId != operation.Id || owner.ProcessId != operation.ChildPid))
@@ -529,7 +515,7 @@ internal sealed class CompletionBuildEvidenceCoordinator : ICompletionBuildEvide
         return result.Phase == CompletionBuildEvidencePhase.Success ? 0 : 1;
     }
 
-    private static string[] NormalizeProjects(IEnumerable<string> projects) => projects
+    internal static string[] NormalizeProjects(IEnumerable<string> projects) => projects
         .Select(p => p.Replace('\\', '/').Trim()).Distinct(StringComparer.OrdinalIgnoreCase)
         .OrderBy(p => p, StringComparer.OrdinalIgnoreCase).ToArray();
 
