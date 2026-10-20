@@ -36,7 +36,7 @@ public sealed class DeferredNoChangeContextDeliveryTestsIsolatedProcessSpawning
         Assert.Equal(fixture.Candidate, body.GetProperty("BranchHeadSha").GetString());
         Assert.Equal("Green", body.GetProperty("Availability").GetString());
         Assert.Equal(1, body.GetProperty("CandidateArm").GetProperty("ExecutedTestCount").GetInt32());
-        Assert.Equal("infrastructure-tests:DeferredAlphaTests", body.GetProperty("Selections")[0].GetString());
+        Assert.Equal("Infrastructure.Tests:DeferredAlphaTests", body.GetProperty("Selections")[0].GetString());
         Assert.False(body.GetProperty("NegativeControlExecuted").GetBoolean());
         var trx = body.GetProperty("Trx")[0];
         Assert.Equal(trx.GetProperty("Sha256").GetString(), WorkerContextArtifact.Hash(

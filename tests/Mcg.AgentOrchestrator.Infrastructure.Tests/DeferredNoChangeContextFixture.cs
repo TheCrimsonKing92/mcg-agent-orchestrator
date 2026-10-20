@@ -118,9 +118,26 @@ internal sealed class DeferredNoChangeContextFixture : IDisposable
     {
         InfrastructureTestSupport.CreateMigratedStateRepository(Workspace.SqliteStatePath)
             .SaveAsync(Kernel).GetAwaiter().GetResult();
-        return new GoalDispatchOperations(resolveHome: _ => OrchestratorHome.ForInstallRoot(Path.Combine(DataRoot, "install")))
-            .ProfileDispatchTask(Kernel, Workspace, Goal, task, new WorkerProfile("fixture", "worker --cd {workingDirectory}"),
-                sandboxOptions: new WorkerSandboxOptions(false, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget));
+        // Profile dispatch derives typed-context eligibility from the assigned agent's
+        // subscription metadata. A profile alone leaves provider/model unset.
+        var agents = DefaultAgents().Select(agent => agent with
+        {
+            Model = new ModelProfile("OpenAI", AgentCatalog.OpenAiGpt61SolSubscriptionModelAlias,
+                ModelCapability.Text, SubscriptionMode.ApiKey),
+            ComplexModel = null,
+            ExecutionPolicy = AgentExecutionPolicy.SubscriptionOnly,
+            Subscription = new SubscriptionLaunchProfile("codex-cli", AgentCatalog.OpenAiGpt61SolSubscriptionModelAlias, "low")
+        }).ToArray();
+        var prepared = new GoalDispatchOperations(resolveHome: _ => OrchestratorHome.ForInstallRoot(Path.Combine(DataRoot, "install")))
+            .ProfileDispatchTask(Kernel, Workspace, Goal, task,
+                new WorkerProfile("codex-cli", "codex exec --sandbox {sandboxMode} --cd {workingDirectory}"), agents,
+                sandboxOptions: new WorkerSandboxOptions(false, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget),
+                cascadeTesterCheapFirst: false, cascadeMechanicalReworkCheap: false);
+        Assert.Equal("OpenAI", prepared.Task.LastDispatch!.ProviderName);
+        Assert.Equal(AgentCatalog.OpenAiGpt61SolSubscriptionModelAlias, prepared.Task.LastDispatch.ModelName);
+        Assert.NotNull(prepared.Task.LastDispatch.ContextPackageReceipt);
+        Assert.Null(prepared.Task.LastProcess);
+        return prepared;
     }
 
     internal WorkerContextPackage Package(TaskSpec? task = null, DeferredNoChangeEvidenceContext? context = null, string? candidateSha = null)

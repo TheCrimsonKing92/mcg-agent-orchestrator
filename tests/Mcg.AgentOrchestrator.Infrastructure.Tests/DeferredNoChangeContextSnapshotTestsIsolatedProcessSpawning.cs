@@ -42,7 +42,7 @@ public sealed class DeferredNoChangeContextSnapshotTestsIsolatedProcessSpawning
             Finding("negative", "DeferredAlphaTests", FindingEvidenceNegativeControl.RevertSrc)
         };
         var historical = new FindingEvidenceReceipt("old-red", new string('e', 40),
-            new([new("infrastructure-tests", "DeferredAlphaTests")]), true, false, "historical failure");
+            new([new("Infrastructure.Tests", "DeferredAlphaTests")]), true, false, "historical failure");
         fixture.Kernel.RecordTaskVerification(fixture.Goal.Id, fixture.TesterA.Id,
             new("review", fixture.Worktree, 1, "open evidence requests", "", DateTimeOffset.UtcNow,
                 ReviewedCommit: fixture.Candidate, MergedReviewFindings: findings, FindingEvidenceReceipts: [historical]));
@@ -56,8 +56,8 @@ public sealed class DeferredNoChangeContextSnapshotTestsIsolatedProcessSpawning
         var coverageIdentity = summary.GetProperty("Coverage").GetProperty("LogicalIdentity").GetString();
         var matrix = JsonSerializer.Deserialize<JsonElement>(Assert.Single(package.Artifacts, artifact => artifact.Identity.Value == coverageIdentity).AuthoritativeBytes!);
         var requirements = matrix.GetProperty("Requirements").EnumerateArray().ToDictionary(row => row.GetProperty("StableId").GetString()!);
-        Assert.Equal("infrastructure-tests:DeferredAlphaTests", Assert.Single(requirements["covered"].GetProperty("CoveredSelections").EnumerateArray()).GetString());
-        Assert.Equal("infrastructure-tests:AdditionalTests", Assert.Single(requirements["additional"].GetProperty("OutstandingSelections").EnumerateArray()).GetString());
+        Assert.Equal("Infrastructure.Tests:DeferredAlphaTests", Assert.Single(requirements["covered"].GetProperty("CoveredSelections").EnumerateArray()).GetString());
+        Assert.Equal("Infrastructure.Tests:AdditionalTests", Assert.Single(requirements["additional"].GetProperty("OutstandingSelections").EnumerateArray()).GetString());
         Assert.True(requirements["negative"].GetProperty("NegativeControlRequired").GetBoolean());
         Assert.False(requirements["negative"].GetProperty("NegativeControlExecuted").GetBoolean());
         Assert.Equal(findingBytes, JsonSerializer.SerializeToUtf8Bytes(fixture.TesterA.VerificationHistory));
@@ -142,5 +142,6 @@ public sealed class DeferredNoChangeContextSnapshotTestsIsolatedProcessSpawning
 
     private static ReviewFinding Finding(string id, string selection, FindingEvidenceNegativeControl? negative = null) =>
         new(id, ReviewFindingState.Open, new("tests/DeferredAlphaTests.cs", "DeferredAlphaTests"), "Execution still required",
-            Category: FindingCategory.TestCoverage, EvidenceRequest: new([new("infrastructure-tests", selection)], negative));
+            // Match the canonical ProjectLabel recorded by the real deferred completion path.
+            Category: FindingCategory.TestCoverage, EvidenceRequest: new([new("Infrastructure.Tests", selection)], negative));
 }
