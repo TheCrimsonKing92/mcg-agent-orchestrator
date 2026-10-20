@@ -704,16 +704,8 @@ internal sealed partial class ConductorBatchLoop
                 ? ServiceOperatorIntentBoundary(kernel, driver, onlyGoalId, checkpointHeldGoals,
                     nextTick, persistTick, persistGoalTick, checkpointGoalTick, busyWriteDelay)
                 : new ConductorOperatorIntentBoundary.Result();
-            foreach (var goalId in intentBoundary.AppliedGoalIds)
-            {
-                excludedGoals.Remove(goalId.Value);
-                setAsideGoals.Remove(goalId.Value);
-                selfClearedSetAsideEntries.Remove(goalId.Value);
-                escalatedGoals.Remove(goalId.Value);
-                completedGoals.Remove(goalId.Value);
-                reapedGoals.Remove(goalId.Value);
-                goalProjectionCache.Invalidate(goalId);
-            }
+            intentBoundary.ReadmitAppliedGoals(excludedGoals, setAsideGoals, selfClearedSetAsideEntries,
+                escalatedGoals, completedGoals, reapedGoals, goalProjectionCache);
             intentBoundaryClock.Stop();
             if (_operatorIntents is not null)
                 preTickTimingLines.Add(FormatPhaseTiming(nextTick, "operator-intent", intentBoundaryClock.Elapsed,
@@ -802,16 +794,8 @@ internal sealed partial class ConductorBatchLoop
                     nextTick, persistTick, persistGoalTick, checkpointGoalTick, busyWriteDelay,
                     intentBoundary.DeferredIntents);
                 intentBoundary.IncludeAfterMaintenance(reconciled);
-                foreach (var goalId in reconciled.AppliedGoalIds)
-                {
-                    excludedGoals.Remove(goalId.Value);
-                    setAsideGoals.Remove(goalId.Value);
-                    selfClearedSetAsideEntries.Remove(goalId.Value);
-                    escalatedGoals.Remove(goalId.Value);
-                    completedGoals.Remove(goalId.Value);
-                    reapedGoals.Remove(goalId.Value);
-                    goalProjectionCache.Invalidate(goalId);
-                }
+                reconciled.ReadmitAppliedGoals(excludedGoals, setAsideGoals, selfClearedSetAsideEntries,
+                    escalatedGoals, completedGoals, reapedGoals, goalProjectionCache);
             }
             var actionableIntentGoalIds = intentBoundary.ActionableGoalIds;
             var preWalkIntentLines = intentBoundary.Lines;

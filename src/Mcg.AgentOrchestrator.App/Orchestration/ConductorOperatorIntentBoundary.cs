@@ -42,6 +42,24 @@ internal static class ConductorOperatorIntentBoundary
         public List<OperatorIntentRecord> DeferredIntents { get; } = [];
         public int AwaitingReload { get; set; }
 
+        internal void ReadmitAppliedGoals(
+            ISet<string> excludedGoals, IDictionary<string, BatchSetAsideEntry> setAsideGoals,
+            IDictionary<string, BatchSetAsideEntry> selfClearedSetAsideEntries,
+            ISet<string> escalatedGoals, ISet<string> completedGoals, ISet<string> reapedGoals,
+            GoalProjectionCache goalProjectionCache)
+        {
+            foreach (var goalId in AppliedGoalIds)
+            {
+                excludedGoals.Remove(goalId.Value);
+                setAsideGoals.Remove(goalId.Value);
+                selfClearedSetAsideEntries.Remove(goalId.Value);
+                escalatedGoals.Remove(goalId.Value);
+                completedGoals.Remove(goalId.Value);
+                reapedGoals.Remove(goalId.Value);
+                goalProjectionCache.Invalidate(goalId);
+            }
+        }
+
         internal void IncludeAfterMaintenance(Result reconciled)
         {
             ChangedGoalIds.UnionWith(reconciled.ChangedGoalIds);
