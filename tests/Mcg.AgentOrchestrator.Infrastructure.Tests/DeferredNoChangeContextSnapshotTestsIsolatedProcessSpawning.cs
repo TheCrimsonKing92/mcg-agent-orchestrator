@@ -66,6 +66,53 @@ public sealed class DeferredNoChangeContextSnapshotTestsIsolatedProcessSpawning
     }
 
     [Theory]
+    [InlineData("Infrastructure.Tests")]
+    [InlineData("Mcg.AgentOrchestrator.Infrastructure.Tests")]
+    [InlineData("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj")]
+    [InlineData("tests\\Mcg.AgentOrchestrator.Infrastructure.Tests\\Mcg.AgentOrchestrator.Infrastructure.Tests.csproj")]
+    public void CoverageRecognizesEquivalentSpellingsWithoutExpandingSelectors(string project)
+    {
+        using var fixture = new DeferredNoChangeContextFixture();
+        fixture.Complete();
+        var selectors = new[] { "DeferredAlphaTests", "FullyQualifiedName~DeferredAlphaTests",
+            "FullyQualifiedName~DeferredAlphaTestsVariant", "FullyQualifiedName~DeferredAlpha",
+            "FullyQualifiedName~DeferredAlphaTests|FullyQualifiedName~AdditionalTests" };
+        var findings = selectors.Select((selector, index) => Finding($"selection-{index}", selector) with
+        {
+            EvidenceRequest = new([new(project, selector)])
+        }).Append(Finding("other-project", "DeferredAlphaTests") with
+        {
+            EvidenceRequest = new([new("Core.Tests", "FullyQualifiedName~DeferredAlphaTests")])
+        }).ToArray();
+        fixture.Kernel.RecordTaskVerification(fixture.Goal.Id, fixture.TesterA.Id,
+            new("review", fixture.Worktree, 1, "open evidence requests", "", DateTimeOffset.UtcNow,
+                ReviewedCommit: fixture.Candidate, MergedReviewFindings: findings));
+        var findingBytes = JsonSerializer.SerializeToUtf8Bytes(fixture.TesterA.VerificationHistory);
+
+        var package = fixture.Package();
+
+        var summary = DeferredNoChangeContextFixture.Summary(package);
+        var coverageIdentity = summary.GetProperty("Coverage").GetProperty("LogicalIdentity").GetString();
+        var matrix = JsonSerializer.Deserialize<JsonElement>(Assert.Single(package.Artifacts,
+            artifact => artifact.Identity.Value == coverageIdentity).AuthoritativeBytes!);
+        var requirements = matrix.GetProperty("Requirements").EnumerateArray()
+            .ToDictionary(row => row.GetProperty("StableId").GetString()!);
+        for (var index = 0; index < selectors.Length; index++)
+        {
+            var requirement = requirements[$"selection-{index}"];
+            var expected = $"{project}:{selectors[index]}";
+            var covered = index < 2;
+            Assert.Equal(expected, Assert.Single(requirement.GetProperty("Selections").EnumerateArray()).GetString());
+            Assert.Equal(expected, Assert.Single(requirement.GetProperty(covered ? "CoveredSelections" : "OutstandingSelections").EnumerateArray()).GetString());
+            Assert.Empty(requirement.GetProperty(covered ? "OutstandingSelections" : "CoveredSelections").EnumerateArray());
+        }
+        Assert.Empty(requirements["other-project"].GetProperty("CoveredSelections").EnumerateArray());
+        Assert.Equal("Core.Tests:FullyQualifiedName~DeferredAlphaTests",
+            Assert.Single(requirements["other-project"].GetProperty("OutstandingSelections").EnumerateArray()).GetString());
+        Assert.Equal(findingBytes, JsonSerializer.SerializeToUtf8Bytes(fixture.TesterA.VerificationHistory));
+    }
+
+    [Theory]
     [InlineData(AgentRole.Tester, true)]
     [InlineData(AgentRole.Reviewer, true)]
     [InlineData(AgentRole.Developer, false)]

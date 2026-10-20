@@ -35,7 +35,9 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
                     .GroupBy(item => item.Entry!.ResultPath, StringComparer.OrdinalIgnoreCase)
                     .Select(group => group.Min(item => item.Index)).DefaultIfEmpty(-1).Max();
                 var applicable = locators.Where(item => !string.IsNullOrWhiteSpace(item.Entry!.ResultPath) || item.Index > lastCompletedLocatorIndex)
-                    .GroupBy(item => item.Entry!.ResultPath, StringComparer.OrdinalIgnoreCase).Select(group => group.Last()).ToArray();
+                    .GroupBy(item => item.Entry!.ResultPath, StringComparer.OrdinalIgnoreCase)
+                    .Select(group => (Entry: group.Last().Entry, Index: string.IsNullOrWhiteSpace(group.Key)
+                        ? group.Max(item => item.Index) : group.Min(item => item.Index))).ToArray();
                 if (applicable.Length == 0)
                     captured.Add((CaptureDeferredReceipt(goal, developer.Id, outcome, null, validatedForTests), int.MaxValue));
                 foreach (var item in applicable)
@@ -59,14 +61,19 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
                 DeferredNoChangeEvidenceAvailability.Unavailable, [], [], [], null, null,
                 "deferred-evidence-locator-malformed"), int.MaxValue));
 
-        var current = captured.Where(item => string.Equals(item.Receipt.CandidateSha, currentCandidateSha,
-                StringComparison.OrdinalIgnoreCase))
-            // Missing/started locators have no canonical order. A later timeline barrier is fail-closed.
-            .OrderByDescending(item => item.Receipt.AttemptId is null ? item.TimelineIndex : -1)
-            .ThenByDescending(item => item.Receipt.Ordinal)
+        var candidates = captured.Where(item => string.Equals(item.Receipt.CandidateSha, currentCandidateSha,
+            StringComparison.OrdinalIgnoreCase)).ToArray();
+        var newestAttempt = candidates.Where(item => item.Receipt.AttemptId is not null)
+            .OrderByDescending(item => item.Receipt.Ordinal)
             .ThenByDescending(item => item.Receipt.StartedAt)
             .ThenByDescending(item => item.TimelineIndex)
             .FirstOrDefault();
+        // Attempt metadata orders completed runs. A no-attempt barrier overrides that run only
+        // when recorded later; repeating an old result locator cannot move its first position.
+        var current = candidates.Where(item => item.Receipt.AttemptId is null &&
+                (newestAttempt.Receipt is null || item.TimelineIndex > newestAttempt.TimelineIndex))
+            .OrderByDescending(item => item.TimelineIndex).FirstOrDefault();
+        if (current.Receipt is null) current = newestAttempt;
         return new(goal.Id.Value, currentCandidateSha, captured.Select(item => item.Receipt with
         {
             IsCurrent = !string.IsNullOrWhiteSpace(currentCandidateSha) && ReferenceEquals(item.Receipt, current.Receipt)

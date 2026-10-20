@@ -49,6 +49,7 @@ internal static class DeferredNoChangeEvidenceContextProjector
 
         var covered = context.Receipts.Where(receipt => receipt.IsCurrent && receipt.Availability == DeferredNoChangeEvidenceAvailability.Green)
             .SelectMany(receipt => receipt.Selections).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var coveredKeys = covered.Select(SelectionKey).ToHashSet(StringComparer.OrdinalIgnoreCase);
         var latestFindings = goal.Tasks.Where(owner => owner.RequiredRole is AgentRole.Tester or AgentRole.Reviewer)
             .SelectMany(owner => owner.VerificationHistory)
             .OrderBy(record => record.CompletedAt)
@@ -59,15 +60,15 @@ internal static class DeferredNoChangeEvidenceContextProjector
             .OrderBy(finding => finding.StableId, StringComparer.Ordinal)
             .Select(finding =>
             {
-                // Compare recorded selectors exactly. Expanding a different selector here could
-                // incorrectly claim execution coverage that the canonical request never asserted.
+                // Normalize spelling only for comparison. Keep the recorded request visible and
+                // never expand a selector to sibling classes or a broader Boolean expression.
                 var selections = finding.EvidenceRequest!.Selections
                     .Select(selection => $"{selection.TestProject}:{selection.TestClass}").ToArray();
                 return new
                 {
                     finding.StableId, Selections = selections,
-                    CoveredSelections = selections.Where(covered.Contains).ToArray(),
-                    OutstandingSelections = selections.Where(selection => !covered.Contains(selection)).ToArray(),
+                    CoveredSelections = selections.Where(selection => coveredKeys.Contains(SelectionKey(selection))).ToArray(),
+                    OutstandingSelections = selections.Where(selection => !coveredKeys.Contains(SelectionKey(selection))).ToArray(),
                     NegativeControlRequired = finding.EvidenceRequest.NegativeControl is not null || finding.EvidenceRequest.Mutation is not null,
                     NegativeControlExecuted = false,
                     FindingStateUnchanged = true
@@ -102,5 +103,28 @@ internal static class DeferredNoChangeEvidenceContextProjector
         void Add(string identity, byte[] bytes, ContextDeliveryMode mode) => addSource(
             WorkerProfileDispatcher.WorkerContextSemanticSource.DeferredNoChangeEvidence,
             identity, ContextArtifactKind.RegisteredContext, bytes, [AgentRole.Tester, AgentRole.Reviewer], mode);
+    }
+
+    private static string SelectionKey(string selection)
+    {
+        var separator = selection.LastIndexOf(':');
+        if (separator < 0) return selection;
+        var project = selection[..separator].Replace('\\', '/').Trim();
+        if (project.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase))
+            project = Path.GetFileNameWithoutExtension(project);
+        const string assemblyPrefix = "Mcg.AgentOrchestrator.";
+        if (project.StartsWith(assemblyPrefix, StringComparison.OrdinalIgnoreCase))
+            project = project[assemblyPrefix.Length..];
+        if (project.Equals("Core", StringComparison.OrdinalIgnoreCase) ||
+            project.Equals("Infrastructure", StringComparison.OrdinalIgnoreCase)) project += ".Tests";
+
+        var selector = selection[(separator + 1)..].Trim();
+        const string filterPrefix = "FullyQualifiedName~";
+        if (selector.StartsWith(filterPrefix, StringComparison.OrdinalIgnoreCase))
+        {
+            var name = selector[filterPrefix.Length..].Trim();
+            if (name.Length > 0 && name.All(ch => char.IsLetterOrDigit(ch) || ch is '_' or '.')) selector = name;
+        }
+        return $"{project}:{selector}";
     }
 }

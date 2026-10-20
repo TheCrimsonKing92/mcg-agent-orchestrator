@@ -154,6 +154,48 @@ public sealed class DeferredNoChangeContextAuthorityTestsIsolatedProcessSpawning
         Assert.Equal(original.Id.Value, current.DeveloperTaskId);
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void DeclarationBarrierOnlyOverridesACompletedAttemptWhenRecordedLater(bool barrierFirst)
+    {
+        using var fixture = new DeferredNoChangeContextFixture();
+        var original = fixture.Developer.LastVerification!;
+        var missingDeclaration = new DeferredNoChangeOutcome(fixture.Candidate, ["MissingDeclarationTests"],
+            "NO_CHANGE: candidate already contains the fix.");
+        fixture.Kernel.RecordTaskVerification(fixture.Goal.Id, fixture.Developer.Id, original with
+        {
+            StandardOutput = original.StandardOutput.Replace("DeferredAlphaTests", "MissingDeclarationTests"),
+            StandardError = missingDeclaration.FormatMarker(),
+            CompletedAt = original.CompletedAt.AddTicks(-1)
+        });
+        // Restore the actual declaration that the host completion path will execute.
+        fixture.Kernel.RecordTaskVerification(fixture.Goal.Id, fixture.Developer.Id, original);
+        var barrier = new DeferredNoChangeEvidenceEntry("unusable", fixture.Developer.Id, fixture.Candidate,
+            "none", [], ["MissingDeclarationTests"], null, [], ["MissingDeclarationTests"]);
+        if (barrierFirst) fixture.Mark(barrier);
+        fixture.Complete();
+        var green = fixture.Locator;
+        var attemptId = fixture.Attempt.AttemptId;
+        if (!barrierFirst) fixture.Mark(barrier);
+        // A repeated completion locator must not move the canonical attempt past the barrier.
+        fixture.Mark(green);
+
+        var context = fixture.Capture();
+
+        var current = Assert.Single(context.Receipts, receipt => receipt.IsCurrent);
+        Assert.Equal(barrierFirst ? DeferredNoChangeEvidenceAvailability.Green :
+            DeferredNoChangeEvidenceAvailability.Unavailable, current.Availability);
+        var completed = Assert.Single(context.Receipts, receipt => receipt.AttemptId == attemptId);
+        Assert.Equal(barrierFirst, completed.IsCurrent);
+        Assert.Equal(DeferredNoChangeEvidenceAvailability.Green, completed.Availability);
+        var summary = DeferredNoChangeContextFixture.Summary(fixture.Package(context: context));
+        Assert.Equal(barrierFirst, summary.GetProperty("Receipts")[0].GetProperty("CurrentGreenProof").GetBoolean());
+        if (barrierFirst)
+            Assert.Equal("Infrastructure.Tests:DeferredAlphaTests", Assert.Single(summary.GetProperty("CoveredSelections").EnumerateArray()).GetString());
+        else Assert.Empty(summary.GetProperty("CoveredSelections").EnumerateArray());
+    }
+
     [Fact]
     public void MissingLocatorAndUnusableBeforeRunAreVisibleWithoutDirectoryDiscovery()
     {
