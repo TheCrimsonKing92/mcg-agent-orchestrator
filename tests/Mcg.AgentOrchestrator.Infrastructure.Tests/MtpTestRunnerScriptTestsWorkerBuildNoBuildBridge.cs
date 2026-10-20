@@ -6,6 +6,8 @@ using Mcg.AgentOrchestrator.Infrastructure;
 [Xunit.Collection(TestCollections.ProcessSpawning)]
 public sealed class MtpTestRunnerScriptTestsWorkerBuildNoBuildBridge
 {
+    private readonly Xunit.ITestOutputHelper _output;
+    public MtpTestRunnerScriptTestsWorkerBuildNoBuildBridge(Xunit.ITestOutputHelper output) => _output = output;
     private const string Project = "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj";
 
     [Xunit.Theory]
@@ -14,7 +16,7 @@ public sealed class MtpTestRunnerScriptTestsWorkerBuildNoBuildBridge
     public void RealHelpersReuseWorkerBuildWithoutCompilation(bool fallbackSlot)
     {
         if (!OperatingSystem.IsWindows()) return;
-        using var fixture = new RealBridgeFixture();
+        using var fixture = new RealBridgeFixture(_output);
         // Obtain the repair command from the real no-build failure and execute it verbatim.
         var missing = fixture.Test();
         AssertRejected(missing);
@@ -27,7 +29,7 @@ public sealed class MtpTestRunnerScriptTestsWorkerBuildNoBuildBridge
         using var slot = new FileStream(lockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.ReadWrite);
         if (fallbackSlot) slot.Lock(0, 1);
         TestChildProcessCapture.Result build;
-        try { build = fixture.Shell("-File", repairScript); }
+        try { build = fixture.Repair(repairScript); }
         finally { if (fallbackSlot) slot.Unlock(0, 1); }
         Assert.True(build.ExitCode == 0, build.Stdout + build.Stderr);
         Assert.True(build.Stdout.Contains("PASS build:", StringComparison.Ordinal), build.Stdout + build.Stderr);
@@ -62,6 +64,32 @@ public sealed class MtpTestRunnerScriptTestsWorkerBuildNoBuildBridge
         }
         Assert.Equal(logs.Order(), Directory.GetFiles(artifacts, "*.log", SearchOption.AllDirectories).Order());
         foreach (var pair in logHashes) Assert.Equal(pair.Value, Sha256(pair.Key));
+        fixture.VerifyHostUnchanged();
+    }
+
+    [Xunit.Fact]
+    public void InvalidScopeSourceRejectsBootstrap() => AssertBootstrapRejected(invalidSource: true);
+
+    [Xunit.Fact]
+    public void MissingCandidateDependencyRejectsBootstrap() => AssertBootstrapRejected(invalidSource: false);
+
+    private void AssertBootstrapRejected(bool invalidSource)
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        using var fixture = new RealBridgeFixture(_output, invalidSource: invalidSource, omitDependency: !invalidSource);
+        var missing = fixture.Test();
+        AssertRejected(missing);
+        var repair = Assert.Single(missing.Stdout.Split('\n').Where(line => line.StartsWith("Sanctioned build: ", StringComparison.Ordinal)));
+        var script = Path.Combine(fixture.Root, "repair.ps1");
+        File.WriteAllText(script, repair["Sanctioned build: ".Length..] + "\nexit $LASTEXITCODE\n");
+        var result = fixture.Repair(script, expectSuccess: false);
+        Assert.NotEqual(0, result.ExitCode);
+        Assert.False(File.Exists(fixture.ReceiptPath), "Rejected bootstrap must not publish a successful receipt.");
+        var log = fixture.BootstrapLog();
+        // These prove a compiler rejection, rather than a slot/capacity/launcher failure.
+        Assert.Contains(invalidSource ? "error CS1029" : "error CS0103", log, StringComparison.Ordinal);
+        Assert.Contains(invalidSource ? "BRIDGE_INVALID_SCOPE_SOURCE" : "WorkerBuildProjectScope", log, StringComparison.Ordinal);
+        fixture.VerifyHostUnchanged();
     }
 
     [Xunit.Theory]
@@ -275,12 +303,15 @@ public sealed class MtpTestRunnerScriptTestsWorkerBuildNoBuildBridge
     {
         private readonly string _parent;
         private readonly string _resultsRoot;
+        private readonly WorkerBuildBridgeCandidateBindings _bindings;
+        private readonly Xunit.ITestOutputHelper _output;
         public string Root { get; }
         public string IsolatedRoot { get; }
         public string ReceiptPath => Path.Combine(IsolatedRoot, "goals", "manual", "artifacts", "worker-build-receipt.json");
 
-        public RealBridgeFixture()
+        public RealBridgeFixture(Xunit.ITestOutputHelper output, bool invalidSource = false, bool omitDependency = false)
         {
+            _output = output;
             // A private Git repo outside the goal worktree makes 'manual' slot choice explicit.
             _parent = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Temp", "mcg-bridge-" + Guid.NewGuid().ToString("N"));
             var localAppData = Environment.GetEnvironmentVariable("LOCALAPPDATA");
@@ -294,17 +325,11 @@ public sealed class MtpTestRunnerScriptTestsWorkerBuildNoBuildBridge
             Directory.CreateDirectory(Path.Combine(Root, Path.GetDirectoryName(Project)!));
             Directory.CreateDirectory(Path.Combine(Root, "config"));
             var candidate = MtpTestRunnerScriptTests.RepositoryRoot();
+            _bindings = new WorkerBuildBridgeCandidateBindings(candidate);
             foreach (var file in new[] { "Invoke-WorkerBuildCheck.ps1", "WorkerBuildReceipt.psm1", "MtpTestRunner.psm1", "Invoke-TestSummary.ps1" })
                 File.Copy(Path.Combine(candidate, "scripts", file), Path.Combine(Root, "scripts", file));
-            var scopeDirectory = Path.Combine(Root, "scripts", "WorkerBuildScopeTool");
-            Directory.CreateDirectory(scopeDirectory);
-            File.Copy(Path.Combine(candidate, "scripts", "WorkerBuildScopeTool", "Program.cs"), Path.Combine(scopeDirectory, "Program.cs"));
-            var scopeProject = System.Xml.Linq.XDocument.Load(Path.Combine(candidate, "scripts", "WorkerBuildScopeTool", "WorkerBuildScopeTool.csproj"));
-            scopeProject.Descendants("ProjectReference").Single().SetAttributeValue("Include",
-                Path.Combine(candidate, "src", "Mcg.AgentOrchestrator.Execution", "Mcg.AgentOrchestrator.Execution.csproj"));
-            scopeProject.Save(Path.Combine(scopeDirectory, "WorkerBuildScopeTool.csproj"));
-            foreach (var file in new[] { "Directory.Build.props", "Directory.Build.targets", "global.json" })
-                File.Copy(Path.Combine(candidate, file), Path.Combine(Root, file));
+            var omitted = omitDependency ? typeof(WorkerBuildProjectScope).Assembly.GetName().Name : null;
+            _bindings.WriteFixture(Root, omitted, invalidSource);
             var manager = "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/DotnetBuildEnvironmentManager.cs";
             Directory.CreateDirectory(Path.Combine(Root, Path.GetDirectoryName(manager)!));
             File.Copy(Path.Combine(candidate, manager), Path.Combine(Root, manager));
@@ -333,12 +358,51 @@ public sealed class MtpTestRunnerScriptTestsWorkerBuildNoBuildBridge
             InitializeGit(Root);
         }
 
+        public TestChildProcessCapture.Result Repair(string script, bool expectSuccess = true)
+        {
+            WorkerBuildBridgeBootstrapCapture? observation = null;
+            try
+            {
+                var start = ShellStart("-File", script);
+                Process? child = null;
+                // Establish stream drains and bounded ownership before observer setup can fail.
+                using var capture = TestChildProcessCapture.Start(start, start: info => child = Process.Start(info));
+                observation = new WorkerBuildBridgeBootstrapCapture(Root, child!, _bindings);
+                var result = capture.Complete(TimeSpan.FromMinutes(2));
+                if (expectSuccess && result.ExitCode == 0) observation!.Verify();
+                return result;
+            }
+            finally
+            {
+                try { _bindings.VerifyHostUnchanged(); }
+                finally
+                {
+                    if (observation is not null)
+                    {
+                        _output.WriteLine("BRIDGE_BOOTSTRAP_IDENTITY " + observation.Evidence());
+                        observation.Dispose();
+                    }
+                    if (Directory.Exists(IsolatedRoot))
+                        foreach (var log in Directory.GetFiles(IsolatedRoot, "scope-bootstrap.txt", SearchOption.AllDirectories))
+                            _output.WriteLine("BRIDGE_BOOTSTRAP_LOG " + log + "\n" + File.ReadAllText(log));
+                }
+            }
+        }
+
+        public string BootstrapLog() => File.ReadAllText(Assert.Single(Directory.GetFiles(IsolatedRoot, "scope-bootstrap.txt", SearchOption.AllDirectories)));
+        public void VerifyHostUnchanged() => _bindings.VerifyHostUnchanged();
+
         public TestChildProcessCapture.Result Shell(params string[] args)
+        {
+            // Hang-only guard names process termination, never a performance verdict.
+            return TestChildProcessCapture.Run(ShellStart(args), hangBound: TimeSpan.FromMinutes(2));
+        }
+
+        private ProcessStartInfo ShellStart(params string[] args)
         {
             var start = StartInfo(Root, WorkerShell.Executable, ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", .. args]);
             start.Environment["MCG_DOTNET_ISOLATED_ROOT"] = IsolatedRoot;
-            // Hang-only guard names process termination, never a performance verdict.
-            return TestChildProcessCapture.Run(start, hangBound: TimeSpan.FromMinutes(2));
+            return start;
         }
 
         public TestChildProcessCapture.Result Test() => Shell("-File", Path.Combine(Root, "scripts", "Invoke-TestSummary.ps1"),
