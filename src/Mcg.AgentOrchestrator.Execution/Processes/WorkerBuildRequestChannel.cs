@@ -149,8 +149,7 @@ internal sealed class WorkerBuildRequestChannel : IDisposable
     private static NamedPipeServerStream CreateServer(string name)
     {
         using var identity = WindowsIdentity.GetCurrent();
-        var logon = identity.Groups?.FirstOrDefault(g => g.Value.StartsWith("S-1-5-5-", StringComparison.Ordinal))?.Value
-            ?? throw new UnauthorizedAccessException("Worker build channel requires a logon SID.");
+        var logon = ReadLogonSid(identity.AccessToken);
         // Read/write data and synchronization, deliberately excluding FILE_CREATE_PIPE_INSTANCE (0x4).
         // A user-wide generic-write ACE would let the same-user worker create another server instance.
         var sddl = $"D:P(A;;GA;;;SY)(A;;0x0012019b;;;{logon})S:(ML;;NW;;;LW)";
@@ -166,6 +165,40 @@ internal sealed class WorkerBuildRequestChannel : IDisposable
         finally { _ = LocalFree(sd); }
     }
 
+    private static string ReadLogonSid(SafeAccessTokenHandle token)
+    {
+        // WindowsIdentity.Groups deliberately filters out SE_GROUP_LOGON_ID entries.
+        // Query the token's logon SID directly; never widen the pipe ACE to the user SID.
+        const int tokenLogonSid = 28;
+        const uint logonId = 0xc0000000;
+        _ = GetTokenInformation(token, tokenLogonSid, IntPtr.Zero, 0, out var length);
+        var error = Marshal.GetLastWin32Error();
+        if (error != 122) throw new Win32Exception(error);
+        if (length < Marshal.SizeOf<TokenLogonGroups>())
+            throw new UnauthorizedAccessException("Worker build channel requires a logon SID.");
+        var buffer = Marshal.AllocHGlobal(length);
+        try
+        {
+            if (!GetTokenInformation(token, tokenLogonSid, buffer, length, out _))
+                throw new Win32Exception(Marshal.GetLastWin32Error());
+            var groups = Marshal.PtrToStructure<TokenLogonGroups>(buffer);
+            if (groups.Count != 1 || groups.Group.Sid == IntPtr.Zero ||
+                (groups.Group.Attributes & logonId) != logonId)
+                throw new UnauthorizedAccessException("Worker build channel requires exactly one token logon SID.");
+            var sid = new SecurityIdentifier(groups.Group.Sid);
+            if (!sid.IsWellKnown(WellKnownSidType.LogonIdsSid))
+                throw new UnauthorizedAccessException("Worker build channel token SID is not a logon SID.");
+            return sid.Value;
+        }
+        finally { Marshal.FreeHGlobal(buffer); }
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct SidAndAttributes { public IntPtr Sid; public uint Attributes; }
+    [StructLayout(LayoutKind.Sequential)]
+    private struct TokenLogonGroups { public uint Count; public SidAndAttributes Group; }
+    [DllImport("advapi32.dll", SetLastError = true)]
+    private static extern bool GetTokenInformation(SafeAccessTokenHandle token, int kind, IntPtr buffer, int length, out int needed);
     [StructLayout(LayoutKind.Sequential)]
     private struct SecurityAttributes { public int Length; public IntPtr Descriptor; [MarshalAs(UnmanagedType.Bool)] public bool Inherit; }
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
