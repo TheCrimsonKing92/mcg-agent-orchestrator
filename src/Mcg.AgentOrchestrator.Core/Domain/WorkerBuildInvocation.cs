@@ -4,7 +4,9 @@ namespace Mcg.AgentOrchestrator.Core;
 public enum WorkerBuildPhase
 {
     Requested, Authorized, WaitingForCustody, CustodyAcquired, WaitingForBuildSlot, PreparingLaunch,
-    ChildRegistered, CompilerStarted, Completed
+    ChildRegistered, CompilerStarted, Completed,
+    // Append to preserve numeric values in existing durable observations.
+    BuildSlotAcquired
 }
 
 public enum WorkerBuildOutcome
@@ -63,6 +65,7 @@ public sealed record WorkerBuildInvocation(
             Outcome == WorkerBuildOutcome.CompilerFailure && (started == 0 || CompilerExitCode is null or 0) ||
             Outcome == WorkerBuildOutcome.TimeoutAfterStart && started == 0 ||
             Outcome == WorkerBuildOutcome.CapacityBeforeStart && (children != 0 || started != 0 ||
+                Observations.Any(o => o.Phase == WorkerBuildPhase.BuildSlotAcquired) ||
                 !Observations.Any(o => o.Phase == WorkerBuildPhase.WaitingForBuildSlot)))
             throw new InvalidOperationException("Worker build record lacks observations required by its outcome.");
     }

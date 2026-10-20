@@ -102,6 +102,7 @@ internal sealed class WorkerBuildRequestHost : IWorkerBuildRequestService
             else
             {
                 slot = acquired.Lease;
+                Advance(WorkerBuildPhase.BuildSlotAcquired);
                 var logRoot = Path.Combine(slot.Environment.ArtifactsPath, "worker-host-builds", invocation.Id);
                 Directory.CreateDirectory(logRoot);
                 // Exec adds MSBuildTemp<user>/tmp<guid>.exec.cmd beneath TEMP. cmd.exe
@@ -156,7 +157,7 @@ internal sealed class WorkerBuildRequestHost : IWorkerBuildRequestService
             var outcome = lifetime.IsCancellationRequested || !deadline.IsCancellationRequested || !WorkerBuildInvocationOperations.IsExactProcessAlive(worker)
                 ? WorkerBuildOutcome.Cancelled
                 : started ? WorkerBuildOutcome.TimeoutAfterStart
-                : invocation.Observations.Any(o => o.Phase == WorkerBuildPhase.PreparingLaunch)
+                : slot is not null || invocation.Observations.Any(o => o.Phase == WorkerBuildPhase.PreparingLaunch)
                     ? WorkerBuildOutcome.Interrupted : invocation.Phase == WorkerBuildPhase.WaitingForBuildSlot
                         ? WorkerBuildOutcome.CapacityBeforeStart : WorkerBuildOutcome.ApparatusFailure;
             Complete(outcome, null, "Host observed lifetime cancellation or deadline.");

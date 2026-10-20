@@ -69,9 +69,78 @@ public sealed class WorkerBuildRequestIntegrationTests(ITestOutputHelper output)
         Assert.True(acquisitionObserved);
         Assert.Equal(WorkerBuildOutcome.CapacityBeforeStart, invocation.Outcome);
         Assert.Empty(invocation.Children ?? []);
+        Assert.DoesNotContain(invocation.Observations, o => o.Phase == WorkerBuildPhase.BuildSlotAcquired);
         Assert.DoesNotContain(invocation.Observations, o => o.Phase == WorkerBuildPhase.PreparingLaunch);
         Assert.Null(invocation.CompilerExitCode);
         Assert.True(fixture.Consume().MissingEvidence);
+    }
+
+    [Fact]
+    public async Task DeadlineAfterSlotAcquiredBeforeLaunch_IsInterrupted()
+    {
+        using var fixture = new WorkerBuildRequestFixture();
+        var acquired = false;
+        var invocation = await fixture.RunHelper(i =>
+        {
+            if (i.Phase != WorkerBuildPhase.BuildSlotAcquired || acquired) return;
+            acquired = true;
+            fixture.Time.Advance(TimeSpan.FromMinutes(10));
+        });
+        Assert.True(acquired);
+        Assert.Equal(WorkerBuildOutcome.Interrupted, invocation.Outcome);
+        Assert.Contains(invocation.Observations, o => o.Phase == WorkerBuildPhase.BuildSlotAcquired);
+        Assert.DoesNotContain(invocation.Observations, o => o.Phase == WorkerBuildPhase.PreparingLaunch);
+        Assert.Empty(invocation.Children ?? []);
+        Assert.Null(invocation.CompilerExitCode);
+        Assert.True(invocation.CustodyReleased);
+        Assert.Throws<InvalidOperationException>(() =>
+            (invocation with { Outcome = WorkerBuildOutcome.CapacityBeforeStart }).RequireValid());
+        var consumption = fixture.Consume();
+        Assert.True(consumption.MissingEvidence);
+        Assert.False(consumption.CompilerFailed);
+        Assert.Contains("outcome=Interrupted", consumption.Diagnostic);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task SessionLearnedAfterEnrollment_PreservesLaunchAndConsumption(bool beforeRequest)
+    {
+        using var fixture = new WorkerBuildRequestFixture();
+        Assert.Null(fixture.Kernel.GetTask(fixture.GoalId, fixture.TaskId).LastDispatch!.ProviderSessionId);
+        var recorded = false;
+        if (beforeRequest) RecordSession("learned-session");
+        var invocation = await fixture.RunHelper(i =>
+        {
+            if (!beforeRequest && i.Phase == WorkerBuildPhase.ChildRegistered && !recorded)
+                RecordSession("learned-session");
+        });
+        Assert.True(recorded);
+        Assert.Equal(WorkerBuildOutcome.Success, invocation.Outcome);
+        Assert.Equal(fixture.Reference.DispatchId, invocation.DispatchId);
+        Assert.Single(invocation.Children!);
+        Assert.Contains(invocation.Observations, o => o.Phase == WorkerBuildPhase.CompilerStarted);
+        // The terminal consumer must use the same immutable binding as enrollment/launch.
+        RecordSession("updated-session");
+        var consumption = fixture.Consume();
+        Assert.False(consumption.MissingEvidence);
+        Assert.False(consumption.CompilerFailed);
+        var task = fixture.Operations.Load(fixture.GoalId.Value).GetTask(fixture.GoalId, fixture.TaskId);
+        Assert.Equal("updated-session", task.LastDispatch!.ProviderSessionId);
+        var stored = Assert.Single(task.WorkerBuildInvocations);
+        Assert.Equal(invocation.Id, stored.Id);
+        Assert.True(stored.Consumed);
+
+        void RecordSession(string session)
+        {
+            var current = fixture.Operations.Load(fixture.GoalId.Value);
+            current.RecordDispatchProviderSessionId(fixture.GoalId, fixture.TaskId, session);
+            new Mcg.AgentOrchestrator.Infrastructure.SqliteOrchestratorStateRepository(fixture.StatePath)
+                .SaveAsync(current).GetAwaiter().GetResult();
+            Assert.Equal(session, fixture.Operations.Load(fixture.GoalId.Value)
+                .GetTask(fixture.GoalId, fixture.TaskId).LastDispatch!.ProviderSessionId);
+            recorded = true;
+        }
     }
 
     [Fact]

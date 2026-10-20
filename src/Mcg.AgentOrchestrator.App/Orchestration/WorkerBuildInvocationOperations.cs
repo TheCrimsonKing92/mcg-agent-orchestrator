@@ -17,8 +17,13 @@ internal sealed class WorkerBuildInvocationOperations(string statePath, string e
             throw new InvalidOperationException("Host build enrollment requires dispatch-pinned project scope.");
         kernel.RecordWorkerBuildProtocol(goalId, taskId, 1);
         return new(statePath, executionDirectory, goalId.Value, taskId.Value, task.LastDispatch.DispatchedAt,
-            BackgroundDispatchRunner.BuildDispatchId(goalId, taskId, task.LastDispatch), StorageRoot: storageRoot?.RootPath);
+            BuildWorkerDispatchId(goalId, taskId, task.LastDispatch), StorageRoot: storageRoot?.RootPath);
     }
+
+    // Provider sessions are learned from live heartbeats after enrollment. They are
+    // metadata, not worker-build authority; keep the shared dispatch hash unchanged.
+    private static string BuildWorkerDispatchId(GoalId goalId, TaskId taskId, TaskDispatchRecord dispatch) =>
+        BackgroundDispatchRunner.BuildDispatchId(goalId, taskId, dispatch with { ProviderSessionId = null });
 
     internal AgentOrchestratorKernel Load(string goalId) => _repository.LoadGoalsAsync([new GoalId(goalId)]).GetAwaiter().GetResult();
 
@@ -64,7 +69,7 @@ internal sealed class WorkerBuildInvocationOperations(string statePath, string e
         var process = task.LastProcess;
         // This check is the authority-negative-control mutation seam. No worker field can supply it.
         if (dispatch is null || dispatch.WorkerBuildProtocolVersion != 1 || dispatch.DispatchedAt != reference.DispatchAt ||
-            BackgroundDispatchRunner.BuildDispatchId(goal.Id, task.Id, dispatch) != reference.DispatchId ||
+            BuildWorkerDispatchId(goal.Id, task.Id, dispatch) != reference.DispatchId ||
             process is null || process.ProcessId != host.Pid || process.ProcessIdentityStartedAt != host.StartedAt ||
             string.IsNullOrWhiteSpace(process.ProcessIdentityImagePath) ||
             !string.Equals(process.ProcessIdentityImagePath, host.ImagePath, StringComparison.OrdinalIgnoreCase) ||
@@ -82,7 +87,7 @@ internal sealed class WorkerBuildInvocationOperations(string statePath, string e
         var task = current.GetTask(goalId, taskId);
         var dispatch = task.LastDispatch ?? throw new InvalidOperationException("Worker build consumer has no dispatch.");
         var reference = new WorkerBuildHostReference(statePath, executionDirectory, goalId.Value, taskId.Value,
-            dispatch.DispatchedAt, BackgroundDispatchRunner.BuildDispatchId(goalId, taskId, dispatch));
+            dispatch.DispatchedAt, BuildWorkerDispatchId(goalId, taskId, dispatch));
         var invocations = task.WorkerBuildInvocations.Where(i => i.DispatchId == reference.DispatchId).ToArray();
         foreach (var pending in invocations.Where(i => !i.IsTerminal || !i.CustodyReleased)) Reconcile(pending);
         current = Load(goalId.Value);
