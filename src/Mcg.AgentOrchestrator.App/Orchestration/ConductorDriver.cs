@@ -719,7 +719,7 @@ internal sealed partial class ConductorDriver
                 mainHeadSha,
                 testResultPaths,
                 checkAttributions,
-                verification.Passed ? null : CleanTestBaseline.FormatFailureAttestation(baselineReceipt)));
+                verification.Passed ? null : CleanTestBaseline.FormatFailureAttestation(baselineReceipt), verification.AttemptId));
         };
 
         FocusedEvidenceRunResult RunFocusedEvidence(
@@ -1352,6 +1352,8 @@ internal sealed partial class ConductorDriver
 
         if (state == GoalLifecycleState.CleanedUp)
             return MakeResult(goalId, goalPrefix, policy, new ConductorAdvanceOutcome.Done(state));
+
+        if (TryHoldRetainedAttributionPending(goal, goalPrefix, policy) is { } pendingAttribution) return pendingAttribution;
 
         if (TryDecideLifecycleEntry(goal, goalPrefix, policy, state, out var lifecycleEntryResult, out var lifecycleEntryDecision))
             return lifecycleEntryResult;

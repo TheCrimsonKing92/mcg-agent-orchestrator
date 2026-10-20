@@ -12,7 +12,8 @@ internal sealed record AcceptanceVerificationSummary(
     string? MainHeadSha = null,
     IReadOnlyList<string>? TestResultPaths = null,
     IReadOnlyList<AcceptanceCheckAttribution>? CheckAttributions = null,
-    string? BaselineAttestation = null)
+    string? BaselineAttestation = null,
+    string? AttemptId = null)
 {
     public static AcceptanceVerificationSummary PassedWithNoUnmetCriteria { get; } = new(true, []);
 

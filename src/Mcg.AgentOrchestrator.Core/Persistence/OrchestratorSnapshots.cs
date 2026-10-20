@@ -73,7 +73,8 @@ public sealed record AcceptanceFailureSnapshot(
     string? BranchHeadSha = null,
     string? MainHeadSha = null,
     IReadOnlyList<AcceptanceCheckAttribution>? CheckAttributions = null,
-    string? BaselineAttestation = null);
+    string? BaselineAttestation = null,
+    AcceptanceAttributionPending? AttributionPending = null);
 
 public sealed record RefinedSpecSnapshot(
     string BehavioralContract,

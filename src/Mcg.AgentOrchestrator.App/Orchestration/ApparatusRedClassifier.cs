@@ -1,3 +1,5 @@
+using Mcg.AgentOrchestrator.Infrastructure;
+
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 /// <summary>One failing test of a RED, with every input the classification needs already resolved.</summary>
@@ -14,7 +16,9 @@ internal sealed record ApparatusRedFailingTest(
     string? MessageFingerprint = null,
     IReadOnlyList<string>? ReferencedChangedTypes = null,
     bool CandidateRerunNotExecuted = false,
-    string? CandidateRerunInfrastructureSignature = null);
+    string? CandidateRerunInfrastructureSignature = null,
+    AcceptanceConfirmedLaneFailure? ConfirmedLaneFailure = null,
+    AcceptanceTestFailureAttribution? BaselineAttribution = null);
 
 /// <summary>Materialized classification inputs. No I/O happens below this record.</summary>
 internal sealed record ApparatusRedEvidence(
@@ -27,6 +31,9 @@ internal sealed record ApparatusRedEvidence(
 
 internal abstract record ApparatusRedDisposition
 {
+    internal sealed record AttributionPending(
+        IReadOnlyList<ApparatusRedFailingTest> PendingTests, string OtherEvidenceKind) : ApparatusRedDisposition;
+
     /// <summary>Take today's path unchanged: reopen the Developer exactly as before.</summary>
     internal sealed record Genuine(string Reason) : ApparatusRedDisposition;
 
@@ -79,6 +86,7 @@ internal static class ApparatusRedClassifier
         }
 
         var evidenceKinds = new List<string>();
+        var pendingTests = new List<ApparatusRedFailingTest>();
         foreach (var failingTest in evidence.FailingTests)
         {
             if (failingTest.ResolvedSourcePaths.Count == 0)
@@ -107,6 +115,23 @@ internal static class ApparatusRedClassifier
 
             if (failingTest.CandidateRerunFailed)
             {
+                if (failingTest.ConfirmedLaneFailure is not null &&
+                    failingTest.BaselineAttribution is { Origin: AcceptanceTestFailureOrigin.Inherited } inherited &&
+                    !string.IsNullOrWhiteSpace(inherited.Evidence))
+                {
+                    // This identity remains on the existing inherited-result route; it cannot
+                    // turn another identity's unavailable baseline into a candidate introduction.
+                    evidenceKinds.Add("inherited-baseline");
+                    continue;
+                }
+                if (failingTest.ConfirmedLaneFailure is not null && failingTest.HasCrossGoalOccurrence &&
+                    failingTest.BaselineAttribution is { Origin: AcceptanceTestFailureOrigin.Unattributed } baseline &&
+                    !string.IsNullOrWhiteSpace(baseline.Evidence))
+                {
+                    pendingTests.Add(failingTest);
+                    evidenceKinds.Add(CrossGoalEvidenceKind);
+                    continue;
+                }
                 return new ApparatusRedDisposition.Genuine(
                     $"failing test {failingTest.TestIdentity} failed again on the candidate");
             }
@@ -157,6 +182,12 @@ internal static class ApparatusRedClassifier
         var evidenceKind = string.Join(
             "+",
             evidenceKinds.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal));
+        // Finish the census first: any genuine reason wins regardless of identity order. Pending
+        // attribution outranks cross-goal history and its cap, without spending another re-gate.
+        if (pendingTests.Count > 0)
+            return new ApparatusRedDisposition.AttributionPending(
+                pendingTests.OrderBy(test => test.CheckName, StringComparer.Ordinal)
+                    .ThenBy(test => test.TestIdentity, StringComparer.Ordinal).ToArray(), evidenceKind);
         var identities = evidence.FailingTests
             .Select(failingTest => failingTest.TestIdentity)
             .Distinct(StringComparer.Ordinal)

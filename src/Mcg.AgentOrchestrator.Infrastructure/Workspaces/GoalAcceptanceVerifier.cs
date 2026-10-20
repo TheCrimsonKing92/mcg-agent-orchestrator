@@ -200,7 +200,11 @@ public sealed record AcceptanceVerificationResult(
     bool Retried = false,
     string? ArtifactsPath = null,
     IReadOnlyList<AcceptanceCheckResult>? Checks = null,
-    IReadOnlyList<string>? TestResultPaths = null);
+    IReadOnlyList<string>? TestResultPaths = null)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? AttemptId { get; init; }
+}
 
 public enum DotnetShardDisposition
 {
@@ -1596,6 +1600,9 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             fresh = (finalResult, fresh.Retried || finalResult.LaneRerun is not null);
         }
         var attemptIdentity = (_executionContext as AcceptanceAttemptExecutionOwner)?.Identity;
+        fresh = (AcceptanceLaneRerunAttributionReader.Attach(fresh.Result, goalId?.Value,
+            cacheContext?.VerifyingCommitSha ?? attemptIdentity?.VerifyingCommitSha,
+            cacheContext?.MainSha ?? attemptIdentity?.MainSha), fresh.Retried);
         fresh = (AcceptanceAssemblyCleanupAttributionReader.Attach(fresh.Result, goalId?.Value,
             cacheContext?.VerifyingCommitSha ?? attemptIdentity?.VerifyingCommitSha,
             cacheContext?.MainSha ?? attemptIdentity?.MainSha), fresh.Retried);
