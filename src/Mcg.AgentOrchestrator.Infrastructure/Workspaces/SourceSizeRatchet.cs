@@ -195,8 +195,9 @@ internal static class SourceSizeRatchet
             // After integrating main b8da8f673, measured 2710 lines; no extra headroom.
             // Goal 4fce8cbe wires per-run admission telemetry into the existing tick completion and eligibility seams.
             // Goal 568eb0fe keeps the tick alive for parked goals with unreconciled owned attempts;
-            // the existing eligible-empty decision owns whether reconciliation can run.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs", 2696),
+            // the existing eligible-empty decision owns whether reconciliation can run. Its pre-walk
+            // reset preserves admission isolation after batch reconciliation; measured 2698, no headroom.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs", 2698),
             // Goal 354522f1 tick persistence partial measured at 467 lines.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.TickPersistence.cs", 467),
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.DependencyReadmission.cs", 375),

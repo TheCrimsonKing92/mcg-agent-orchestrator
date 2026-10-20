@@ -515,7 +515,11 @@ public sealed class ConductorBatchLoopTestsFaultIsolationEligibility : Conductor
         Assert.DoesNotContain($"GOAL goal={parkedGoal.Id.Value[..8]}", parkedOutput);
         Assert.DoesNotContain("AwaitingHumanInput", parkedOutput, StringComparison.Ordinal);
 
-        kernel = WithGoalStatus(kernel, parkedGoal.Id, GoalStatus.Active);
+        kernel.UnparkGoal(parkedGoal.Id, "operator resumed");
+        kernel = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot());
+        Assert.Equal(GoalStatus.Active, kernel.GetGoal(parkedGoal.Id).Status);
+        Assert.Equal(new GoalExplicitDisposition(2, GoalExplicitDispositionAction.Unpark),
+            kernel.GetGoal(parkedGoal.Id).ExplicitDisposition);
         advancedGoalIds.Clear();
         escalationReasons.Clear();
 

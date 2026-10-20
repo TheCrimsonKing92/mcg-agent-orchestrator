@@ -1147,6 +1147,8 @@ internal sealed partial class ConductorBatchLoop
             var perGoalPhaseTimingLines = new List<string>();
             driver.PhaseTimingSink = line => perGoalPhaseTimingLines.Add($"PHASE_TIMING tick={totalTicks} {line}");
             var goalWalkTimings = new List<GoalWalkTiming>();
+            // Batch reconciliation needs tick context; its admission observations must not leak into the walk.
+            driver.BeginTick(kernel, totalTicks);
             var goalWalkClock = StartDiagnosticTimer();
             var goalWalkCpuStart = ReadProcessCpu();
             var glanceDurationStats = _progressiveReviewGlances is null
