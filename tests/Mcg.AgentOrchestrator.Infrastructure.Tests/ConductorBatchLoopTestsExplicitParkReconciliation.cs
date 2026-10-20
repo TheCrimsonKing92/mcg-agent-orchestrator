@@ -7,6 +7,9 @@ using Mcg.AgentOrchestrator.Infrastructure;
 [Collection(TestCollections.DotnetBuildSlots)]
 public sealed class ConductorBatchLoopTestsExplicitParkReconciliation : ConductorBatchLoopTests
 {
+    // Hang-only failsafe for draining the held terminal attempt across ticks.
+    private const int TerminalReconciliationHangFailsafeMilliseconds = 30_000;
+
     public ConductorBatchLoopTestsExplicitParkReconciliation(ITestOutputHelper output) : base(output) { }
 
     [Fact]
@@ -159,7 +162,7 @@ public sealed class ConductorBatchLoopTestsExplicitParkReconciliation : Conducto
             Assert.Equal(1, f.Acceptances);
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = TerminalReconciliationHangFailsafeMilliseconds)]
     [Trait("Category", "CrossTick")]
     public async Task Batch_TerminalAfterVisiblePark_DrainsWithoutAdmission()
     {
