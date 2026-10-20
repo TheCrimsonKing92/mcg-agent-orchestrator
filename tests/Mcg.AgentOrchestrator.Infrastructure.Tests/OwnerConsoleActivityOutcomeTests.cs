@@ -200,20 +200,22 @@ public sealed class OwnerConsoleActivityOutcomeTests
 
     internal sealed class Scene : IDisposable
     {
-        internal readonly OwnerConsoleHarness Harness = new();
+        internal readonly OwnerConsoleHarness Harness;
         internal readonly DialogCapture Dialogs = new();
         internal readonly IApplication App = Terminal.Gui.App.Application.Create();
         internal readonly OwnerConsoleViewModelBuilder Builder;
         internal readonly OwnerConsoleScreenController Controller;
         internal readonly OwnerConsoleFullScreenView View;
         internal Scene(IGoalEventTail? tail = null, Func<OwnerConductEvent, OwnerActivityTestEvidence?>? evidence = null,
-            Func<OwnerConsoleHarness, IOwnerQuestionSource>? questions = null, OwnerConsoleInputDiagnostics? diagnostics = null)
+            Func<OwnerConsoleHarness, IOwnerQuestionSource>? questions = null, OwnerConsoleInputDiagnostics? diagnostics = null,
+            OwnerConsoleTestClock? clock = null)
         {
+            Harness = new(clock ?? new OwnerConsoleTestClock());
             var source = questions?.Invoke(Harness) ?? Harness.Questions;
             Builder = new(Harness.State, source, Harness.Liveness, new Epics(), Harness.Clock, evidence);
             Controller = new(source, Harness.Answers, Dialogs, Harness.State, tail ?? Harness.Tail,
                 Harness.Conductor, Harness.DigestReport, Harness.Digest, Harness.Clock);
-            View = new(App, Controller, () => Task.CompletedTask, diagnostics: diagnostics);
+            View = OwnerConsoleActivitySceneView.Create(App, Controller, Harness.Clock, diagnostics);
         }
         internal void AddGoals()
         {
