@@ -84,17 +84,15 @@ public static class AgentOutputDirectives
                 "Start mapping lines with the bare criterion number followed by a period; no heading, bullet or bold prefix. " +
                 "After `plan=`, write a non-empty one-sentence summary on that same line; detail bullets that follow must not begin with a digit and a period. " +
                 "An undecidable criterion does not block other criteria and requires `blockers: none` when no operator action is needed. " +
-                "For a single evidence requirement: " +
-                "For evidence that exists only in an unreadable store, emit exactly one `PLANNER_EVIDENCE_REQUEST:` JSON directive with criterion_index, evidence_key, availability=retrievable, store, needed, and reason. " +
-                "For independent requirements, repeat that JSON-object line once per requirement (at most 16 lines and 65536 combined UTF-8 payload bytes); preserve each criterion_index and evidence_key. " +
-                "Mix historical prerequisites and future Acceptance/Operator evidence in the same batch. Emit none only alone; do not mix substantive HUMAN_INPUT with evidence directives. " +
-                "The host binds goal, task and dispatch brief version; never supply a brief version. A selectorless acceptance item requires an explicit authorized answer. " +
+                "Repeat `PLANNER_EVIDENCE_REQUEST:` JSON-object lines per criterion_index/evidence_key (max 16 lines/65536 UTF-8 payload bytes total). " +
+                "Mix historical/future Acceptance/Operator items; none only alone; no substantive HUMAN_INPUT. " +
+                "Each object requires criterion_index, evidence_key, availability, needed, and reason. " +
                 "In that directive criterion_index is the 1-based criterion number used on the mapping lines, so the first criterion is 1; this differs from the 0-based criterion_index of criteria_verdicts. " +
                 "For an orchestrator record, add store_ref as <kind>:<locator>[#<selector>]. " +
-                "For evidence that was never recorded, prefer an undecidable mapping; if operator action is still required, use availability=never-recorded and omit store. " +
-                "Evidence needed to decide or plan now is a blocking prerequisite; evidence that can only be produced after the candidate exists is prospective acceptance evidence. " +
-                "For the latter, use availability=post-implementation with owner and omit store; retain the exact criterion obligation without claiming the check was executed. " +
-                "For evidence the acceptance gate produces from test runs, use owner=acceptance-gate and list the test class, Class.Method, or exact theory row names in a non-empty tests array. " +
+                "Unreadable store: availability=retrievable plus store. Never-recorded: prefer undecidable; operator action requires availability=never-recorded, no store. " +
+                "Prerequisites block now; future obligations: availability=post-implementation plus owner, no store, never claim execution. " +
+                "Gate tests: owner=acceptance-gate; non-empty tests array of class, Class.Method or exact theory rows. Selectorless acceptance: authorized explicit answer; Operator checks stay independent. " +
+                "Host alone binds goal/task/dispatch brief version. Invalid batch/identity conflicts or out-of-range criteria reject all; fix diagnostics and replan. " +
                 "backticked verification commands with TEST-VERIFIABLE or REAL-WORLD-DEPENDENT, and explicit stop conditions. " +
                 "Cited repository paths must exist unless explicitly marked as a new file to create. " +
                 "Cite every path as a concrete repository-relative file, never a wildcard pattern, and before finishing confirm each cited path exists, for example with `git ls-files <path>`, unless it is marked as a new file. " +

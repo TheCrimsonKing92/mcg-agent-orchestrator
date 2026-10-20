@@ -40,6 +40,30 @@ public sealed class PlannerEvidenceApiBatchTests
         Assert.Contains(goal.Timeline, item => item.Message.Contains("obsolete dispatch brief", StringComparison.Ordinal));
     }
 
+    [Fact]
+    public async Task UnrefinedGoal_RejectsVersionedEvidenceWithActionableDiagnostic()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var planner = new TaskSpec(TaskId.New(), "Plan the implementation", AgentRole.Planner);
+        var goal = kernel.CreateGoal("Evidence requires authoritative criteria", [planner]);
+        var agents = DefaultAgents();
+        kernel.ActivateGoal(goal.Id, agents);
+        // A single valid object still needs criteria when the API host binds a brief version.
+        var provider = new ControlledProvider(output: Batch.Split('\n')[0]);
+        var runner = new AgentTaskRunner(kernel, agents, new InMemoryModelProviderRegistry([provider]));
+
+        Assert.Null(goal.RefinedSpec);
+        await runner.RunAsync(goal.Id, planner.Id, TestContext.Current.CancellationToken);
+
+        Assert.Equal(1, provider.Calls);
+        Assert.NotNull(planner.LastExecution);
+        Assert.Empty(kernel.HumanInputRequests);
+        Assert.Empty(goal.GateTestObligations);
+        Assert.Equal(WorkTaskStatus.Failed, planner.Status);
+        Assert.Contains(goal.Timeline, item => item.TaskId == planner.Id && item.Message ==
+            "Typed Planner evidence requires authoritative acceptance criteria for range validation; refine the brief and replan.");
+    }
+
     private static (AgentOrchestratorKernel, Goal, TaskSpec, IReadOnlyList<AgentDefinition>) Create()
     {
         var kernel = new AgentOrchestratorKernel();
@@ -51,7 +75,7 @@ public sealed class PlannerEvidenceApiBatchTests
         return (kernel, goal, planner, agents);
     }
 
-    private sealed class ControlledProvider(Action? duringCall = null) : IModelProvider
+    private sealed class ControlledProvider(Action? duringCall = null, string output = Batch) : IModelProvider
     {
         public string ProviderName => "OpenAI";
         internal int Calls { get; private set; }
@@ -59,7 +83,7 @@ public sealed class PlannerEvidenceApiBatchTests
         {
             Calls++;
             duringCall?.Invoke();
-            return Task.FromResult(new ModelResponse(Batch, new ModelUsage(1, 1), "stop"));
+            return Task.FromResult(new ModelResponse(output, new ModelUsage(1, 1), "stop"));
         }
     }
 }
