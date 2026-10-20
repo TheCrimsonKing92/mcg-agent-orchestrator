@@ -4055,8 +4055,8 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
         var kernel = new AgentOrchestratorKernel();
         var task = new TaskSpec(
             TaskId.New(),
-            "Update DispatchFailureClassifier behavior.",
-            AgentRole.Developer,
+            "Verify dependent DispatchFailureClassifier behavior.",
+            AgentRole.Tester,
             "Run focused dependent tests.");
         var goal = kernel.CreateGoal("Select dependent integration tests", [task]);
 
