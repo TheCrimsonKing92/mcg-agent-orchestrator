@@ -472,7 +472,8 @@ public sealed partial class BackgroundDispatchRunner
             OwnedProcessIds: sampleLaunches.Select(launch => launch.Process.Id).Prepend(process.Id).ToArray(),
             ChildExitRecordPath: childExitRecordPath,
             NonBlockingProcessIds: sampleLaunches.Select(launch => launch.Process.Id).ToArray(),
-            ProcessIdentityStartedAt: dispatchHostIdentity?.StartedAt);
+            ProcessIdentityStartedAt: dispatchHostIdentity?.StartedAt,
+            ProcessIdentityImagePath: dispatchHostIdentity?.ImagePath);
 
         try
         {

@@ -66,6 +66,8 @@ internal sealed class WorkerBuildInvocationOperations(string statePath, string e
         if (dispatch is null || dispatch.WorkerBuildProtocolVersion != 1 || dispatch.DispatchedAt != reference.DispatchAt ||
             BackgroundDispatchRunner.BuildDispatchId(goal.Id, task.Id, dispatch) != reference.DispatchId ||
             process is null || process.ProcessId != host.Pid || process.ProcessIdentityStartedAt != host.StartedAt ||
+            string.IsNullOrWhiteSpace(process.ProcessIdentityImagePath) ||
+            !string.Equals(process.ProcessIdentityImagePath, host.ImagePath, StringComparison.OrdinalIgnoreCase) ||
             !string.Equals(Path.GetFullPath(dispatch.WorkingDirectory), Path.GetFullPath(process.WorkingDirectory), StringComparison.OrdinalIgnoreCase) ||
             task.Status == WorkTaskStatus.Cancelled || goal.Status is GoalStatus.Cancelled or GoalStatus.Superseded ||
             requireRunning && (task.Status != WorkTaskStatus.Running || !process.IsRunning || goal.Status != GoalStatus.Active))

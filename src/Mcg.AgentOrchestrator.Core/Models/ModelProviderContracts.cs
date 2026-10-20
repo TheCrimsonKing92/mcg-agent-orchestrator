@@ -506,7 +506,8 @@ public sealed record TaskProcessRecord(
     string? ExitArtifactReason = null,
     bool WasGracefullyDetachedByConductor = false,
     IReadOnlyList<int>? NonBlockingProcessIds = null,
-    DateTimeOffset? ProcessIdentityStartedAt = null)
+    DateTimeOffset? ProcessIdentityStartedAt = null,
+    string? ProcessIdentityImagePath = null)
 {
     public bool IsRunning => CompletedAt is null && ExitCode is null;
 

@@ -328,7 +328,8 @@ public sealed partial class TaskSpec
                     LastProcess.ExitArtifactReason,
                     LastProcess.WasGracefullyDetachedByConductor,
                     LastProcess.NonBlockingProcessIds,
-                    LastProcess.ProcessIdentityStartedAt),
+                    LastProcess.ProcessIdentityStartedAt,
+                    LastProcess.ProcessIdentityImagePath),
             VerificationPlan,
             SubscriptionRetryAfter,
             SubscriptionLimitReviewNote,
@@ -581,7 +582,8 @@ public sealed partial class TaskSpec
                 snapshot.LastProcess.ExitArtifactReason,
                 snapshot.LastProcess.WasGracefullyDetachedByConductor,
                 snapshot.LastProcess.NonBlockingProcessIds,
-                snapshot.LastProcess.ProcessIdentityStartedAt));
+                snapshot.LastProcess.ProcessIdentityStartedAt,
+                snapshot.LastProcess.ProcessIdentityImagePath));
         }
 
         task.SetSubscriptionRetryAfter(snapshot.SubscriptionRetryAfter);

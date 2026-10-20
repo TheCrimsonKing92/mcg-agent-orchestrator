@@ -69,16 +69,77 @@ public sealed class WorkerBuildRequestAuthorityTests
     }
 
     [Theory]
-    [InlineData("pid")]
-    [InlineData("start")]
-    public void WrongOrReusedHostProcessCannotAuthorizeConsumption(string control)
+    [InlineData("pid", true)]
+    [InlineData("start", true)]
+    [InlineData("image", true)]
+    [InlineData("pid", false)]
+    [InlineData("start", false)]
+    [InlineData("image", false)]
+    public void WrongOrReusedHostProcessCannotAuthorizeLaunchOrConsumption(string control, bool requireRunning)
     {
         using var fixture = new WorkerBuildRequestFixture();
         using var current = Process.GetCurrentProcess();
         var identity = WorkerBuildRequestChannel.ReadIdentity(current);
-        identity = control == "pid" ? identity with { Pid = identity.Pid + 1 } : identity with { StartedAt = identity.StartedAt.AddSeconds(-1) };
+        identity = control switch
+        {
+            "pid" => identity with { Pid = identity.Pid + 1 },
+            "start" => identity with { StartedAt = identity.StartedAt.AddSeconds(-1) },
+            _ => identity with { ImagePath = Path.Combine(fixture.Root, "unrelated.exe") }
+        };
         Assert.Throws<UnauthorizedAccessException>(() => WorkerBuildInvocationOperations.RequireOrigin(
-            fixture.Kernel, fixture.Reference, identity, requireRunning: true));
+            fixture.Operations.Load(fixture.GoalId.Value), fixture.Reference, identity, requireRunning));
+    }
+
+    [Fact]
+    public void MissingPersistedHostImageCannotAuthorizeAnEnrolledDispatch()
+    {
+        using var fixture = new WorkerBuildRequestFixture();
+        var process = fixture.Kernel.GetTask(fixture.GoalId, fixture.TaskId).LastProcess!;
+        fixture.Kernel.RecordTaskProcessStarted(fixture.GoalId, fixture.TaskId,
+            process with { ProcessIdentityImagePath = null });
+        fixture.Save();
+        Assert.Throws<UnauthorizedAccessException>(() => fixture.Host());
+    }
+
+    [Fact]
+    public void UnstartedSuppressionCannotReplaceCanonicalHostImage()
+    {
+        using var fixture = new WorkerBuildRequestFixture();
+        var task = fixture.Kernel.GetTask(fixture.GoalId, fixture.TaskId);
+        var process = task.LastProcess!;
+        var unrelated = process with { CompletedAt = DateTimeOffset.UtcNow,
+            ProcessIdentityImagePath = Path.Combine(fixture.Root, "unrelated.exe") };
+        Assert.Throws<InvalidOperationException>(() => fixture.Kernel.DiscardUnstartedDispatch(
+            fixture.GoalId, fixture.TaskId, unrelated, "fixture suppression"));
+        Assert.Same(process, task.LastProcess);
+        Assert.Equal(WorkTaskStatus.Running, task.Status);
+        Assert.Equal(0, task.WorkerBuildCheckRecoveryCount);
+    }
+
+    [Theory]
+    [InlineData("pid")]
+    [InlineData("start")]
+    [InlineData("image")]
+    public async Task ChangedCanonicalHostCannotConsumeGenuineCompilation(string component)
+    {
+        using var fixture = new WorkerBuildRequestFixture();
+        var invocation = await fixture.RunHelper();
+        Assert.Equal(WorkerBuildOutcome.Success, invocation.Outcome);
+        var process = fixture.Kernel.GetTask(fixture.GoalId, fixture.TaskId).LastProcess!;
+        var replacement = component switch
+        {
+            "pid" => process with { ProcessId = process.ProcessId + 1 },
+            "start" => process with { ProcessIdentityStartedAt = process.ProcessIdentityStartedAt!.Value.AddSeconds(-1) },
+            _ => process with { ProcessIdentityImagePath = Path.Combine(fixture.Root, "unrelated.exe") }
+        };
+        fixture.Kernel.RecordTaskProcessStarted(fixture.GoalId, fixture.TaskId, replacement);
+        fixture.Save();
+        Assert.Throws<UnauthorizedAccessException>(() => fixture.Consume());
+        var retained = Assert.Single(fixture.Operations.Load(fixture.GoalId.Value)
+            .GetTask(fixture.GoalId, fixture.TaskId).WorkerBuildInvocations);
+        Assert.Equal(invocation.Id, retained.Id);
+        Assert.Equal(WorkerBuildOutcome.Success, retained.Outcome);
+        Assert.False(retained.Consumed);
     }
 
     [Fact]

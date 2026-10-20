@@ -62,7 +62,8 @@ internal sealed class WorkerBuildRequestFixture : IDisposable
         var hostIdentity = WorkerBuildRequestChannel.ReadIdentity(host);
         if (!managedHost) Kernel.RecordTaskProcessStarted(GoalId, TaskId, new TaskProcessRecord(host.Id, command, RepositoryRoot,
             Path.Combine(Root, "host.out.log"), Path.Combine(Root, "host.err.log"), Path.Combine(Root, "host.exit.txt"),
-            at, null, null, ProcessIdentityStartedAt: hostIdentity.StartedAt));
+            at, null, null, ProcessIdentityStartedAt: hostIdentity.StartedAt,
+            ProcessIdentityImagePath: hostIdentity.ImagePath));
         var intents = new SqliteOperatorIntentStore(Path.Combine(Root, ".orchestrator", "operator-intents.db"), Root);
         var admission = intents.CaptureAdmission(GoalId.Value, TaskId.Value) with { DispatchedAt = at };
         intents.BindPreparedAdmission(admission, at);

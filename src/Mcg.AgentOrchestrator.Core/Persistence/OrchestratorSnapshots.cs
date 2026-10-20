@@ -289,7 +289,8 @@ public sealed record TaskProcessSnapshot(
     string? ExitArtifactReason = null,
     bool WasGracefullyDetachedByConductor = false,
     IReadOnlyList<int>? NonBlockingProcessIds = null,
-    DateTimeOffset? ProcessIdentityStartedAt = null);
+    DateTimeOffset? ProcessIdentityStartedAt = null,
+    string? ProcessIdentityImagePath = null);
 
 public sealed record TaskProcessResourceAccountingSnapshot(
     long CpuMilliseconds,
