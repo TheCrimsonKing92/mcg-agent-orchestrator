@@ -107,16 +107,17 @@ internal sealed class DeferredNoChangeContextFixture : IDisposable
     internal DeferredNoChangeEvidenceContext Capture(string? candidate = null) => Reader.CaptureDeferredEvidenceContext(Goal, candidate ?? Candidate);
     internal async Task Reload()
     {
-        var path = Workspace.SqliteStatePath;
-        await new SqliteOrchestratorStateRepository(path).SaveAsync(Kernel);
-        Kernel = await new SqliteOrchestratorStateRepository(path).LoadGoalsAsync([Goal.Id]);
+        var repository = InfrastructureTestSupport.CreateMigratedStateRepository(Workspace.SqliteStatePath);
+        await repository.SaveAsync(Kernel);
+        Kernel = await repository.LoadGoalsAsync([Goal.Id]);
     }
 
     internal TaskSpec AddTester() => Kernel.AddTask(Goal.Id, AgentRole.Tester, "Inspect completed evidence", DefaultAgents(), beforeRole: AgentRole.Reviewer);
 
     internal WorkerProfileDispatchResult Prepare(TaskSpec task)
     {
-        new SqliteOrchestratorStateRepository(Workspace.SqliteStatePath).SaveAsync(Kernel).GetAwaiter().GetResult();
+        InfrastructureTestSupport.CreateMigratedStateRepository(Workspace.SqliteStatePath)
+            .SaveAsync(Kernel).GetAwaiter().GetResult();
         return new GoalDispatchOperations(resolveHome: _ => OrchestratorHome.ForInstallRoot(Path.Combine(DataRoot, "install")))
             .ProfileDispatchTask(Kernel, Workspace, Goal, task, new WorkerProfile("fixture", "worker --cd {workingDirectory}"),
                 sandboxOptions: new WorkerSandboxOptions(false, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget));
