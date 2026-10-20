@@ -306,7 +306,7 @@ public sealed partial class AgentOrchestratorKernel
                     continue;
                 }
 
-                var requestId = BuildRepairedHumanInputRequestId(goal.Id, task.Id, requested);
+                var requestId = RepairedHumanInputRequestIdentity.Create(goal.Id, task.Id, requested);
                 if (_humanInputRequests.TryAdd(
                     requestId,
                     new HumanInputRequest(
@@ -330,16 +330,6 @@ public sealed partial class AgentOrchestratorKernel
                 RefreshGoalStatus(goal);
             }
         }
-    }
-
-    private static HumanInputRequestId BuildRepairedHumanInputRequestId(
-        GoalId goalId,
-        TaskId taskId,
-        ProgressEvent requested)
-    {
-        var seed = $"{goalId.Value}\n{taskId.Value}\n{requested.OccurredAt:O}\n{requested.Message}";
-        var hash = System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(seed));
-        return new HumanInputRequestId(Convert.ToHexString(hash).ToLowerInvariant()[..32]);
     }
 
     private bool TrackTerminalGoalMetadata(TerminalGoalMetadata metadata)

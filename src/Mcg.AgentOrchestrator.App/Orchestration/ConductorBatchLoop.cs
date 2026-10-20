@@ -682,7 +682,7 @@ internal sealed partial class ConductorBatchLoop
             var intentBoundary = pendingSelfRelaunch is null
                 ? ServiceOperatorIntentBoundary(kernel, driver, onlyGoalId, checkpointHeldGoals,
                     nextTick, persistTick, persistGoalTick, checkpointGoalTick, busyWriteDelay)
-                : new OperatorIntentBoundaryResult();
+                : new ConductorOperatorIntentBoundary.Result();
             foreach (var goalId in intentBoundary.AppliedGoalIds)
             {
                 excludedGoals.Remove(goalId.Value);
@@ -2008,7 +2008,45 @@ internal sealed partial class ConductorBatchLoop
         return onlyGoalId is null ? "none" : ShortGoalId(onlyGoalId);
     }
 
-    private static string ShortGoalId(string goalId) =>
+    private IReadOnlySet<string> ProtectedOperatorIntentGoalIds(
+        AgentOrchestratorKernel kernel, Dictionary<string, GoalSnapshotCheckpointResult> checkpointHeldGoals) =>
+        checkpointHeldGoals.Keys.Concat(kernel.Goals
+                .Where(goal => _operatorIntents?.HasPendingCompletion(goal.Id.Value) == true)
+                .Select(goal => goal.Id.Value))
+            .ToHashSet(StringComparer.Ordinal);
+
+    private ConductorOperatorIntentBoundary.Result ServiceOperatorIntentBoundary(
+        AgentOrchestratorKernel kernel, ConductorDriver driver, string? onlyGoalId,
+        Dictionary<string, GoalSnapshotCheckpointResult> checkpointHeldGoals,
+        int tick, Action<AgentOrchestratorKernel>? persistTick,
+        Action<AgentOrchestratorKernel, IReadOnlyCollection<GoalId>>? persistGoalTick,
+        Func<AgentOrchestratorKernel, IReadOnlyCollection<GoalId>, IReadOnlyList<GoalSnapshotCheckpointResult>>? checkpointGoalTick,
+        Action<TimeSpan>? busyWriteDelay)
+    {
+        var result = ConductorOperatorIntentBoundary.Apply(
+            kernel, driver, onlyGoalId, checkpointHeldGoals, _operatorIntents,
+            _prepareOperatorIntentTarget, _goalReloadObservation);
+        if (result.ChangedGoalIds.Count == 0) return result;
+        var requested = result.ChangedGoalIds.ToArray();
+        if (checkpointGoalTick is not null)
+            result.DurableGoalIds.UnionWith(ApplyCheckpointOutcomes(
+                checkpointGoalTick(kernel, requested), requested, checkpointHeldGoals, tick,
+                "operator-intent", result.Lines));
+        else if (persistGoalTick is not null)
+        {
+            PersistGoalTickOrThrow(persistGoalTick, kernel, requested, tick, result.Lines, busyWriteDelay);
+            result.DurableGoalIds.UnionWith(requested);
+        }
+        else if (TryPersistTick(persistTick, kernel, tick, ResolveGoalContext(requested, onlyGoalId),
+                     "operator-intent", result.Lines, busyWriteDelay))
+            result.DurableGoalIds.UnionWith(requested);
+
+        if (result.DurableGoalIds.Count > 0)
+            CompletePersistedOperatorIntents(result.DurableGoalIds, result.Lines);
+        return result;
+    }
+
+    internal static string ShortGoalId(string goalId) =>
         goalId.Length <= 8 ? goalId : goalId[..8];
 
     private static bool RecordChangedDisposition(

@@ -6,14 +6,16 @@ public sealed class OperatorIntentGoalApplicationBoundaryTests
     public void TickDelegatesToSharedApplicationWithoutReverseDependency()
     {
         var root = FindRepositoryRoot();
-        var loopPath = Path.Combine(root, "src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.OperatorIntentBoundary.cs");
+        var loopPath = Path.Combine(root, "src/Mcg.AgentOrchestrator.App/Orchestration/ConductorOperatorIntentBoundary.cs");
         var applicationPath = Path.Combine(root, "src/Mcg.AgentOrchestrator.App/Orchestration/OperatorIntentGoalApplication.cs");
         Assert.True(File.Exists(loopPath), $"Missing source: {loopPath}");
         Assert.True(File.Exists(applicationPath), $"Missing source: {applicationPath}");
 
         var loop = File.ReadAllText(loopPath);
         Assert.Contains("OperatorIntentGoalApplication.ApplyPending(", loop, StringComparison.Ordinal);
-        Assert.DoesNotContain("_operatorIntents.ExecutePending(", loop, StringComparison.Ordinal);
+        Assert.DoesNotContain(".ExecutePending(", loop, StringComparison.Ordinal);
+        var tickPath = Path.Combine(root, "src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs");
+        Assert.Contains("ConductorOperatorIntentBoundary.Apply(", File.ReadAllText(tickPath), StringComparison.Ordinal);
         Assert.DoesNotContain("ConductorBatchLoop", File.ReadAllText(applicationPath), StringComparison.Ordinal);
     }
 

@@ -952,7 +952,7 @@ internal static partial class CliPersistentStateRunner
         AgentOrchestratorKernel LoadLoopKernel() => LoadLoopKernelForGoals([]);
 
         AgentOrchestratorKernel LoadOperatorIntentTargets(IReadOnlyCollection<GoalId> goalIds)
-            => LoadConductLoopOperatorIntentTargets(stateRepository, goalIds, tickBaselines);
+            => ConductLoopTargetLoader.LoadOperatorIntentTargets(stateRepository, goalIds, tickBaselines);
 
         AgentOrchestratorKernel LoadLoopKernelForGoals(IReadOnlyCollection<string> trackedGoalIds)
         {
@@ -963,7 +963,7 @@ internal static partial class CliPersistentStateRunner
                     .Distinct(StringComparer.Ordinal)
                     .ToArray(),
                 workspace.ExecutionDirectory);
-            CaptureMissingConductLoopTickBaselines(tickBaselines, loaded);
+            ConductLoopTargetLoader.CaptureMissingTickBaselines(tickBaselines, loaded);
             return loaded;
         }
         var startupStopPath = workspace.ConductorStopFilePath;
@@ -1214,16 +1214,6 @@ internal static partial class CliPersistentStateRunner
                 result.PersistedHumanInputRequests);
         }
         return true;
-    }
-
-    internal static void CaptureMissingConductLoopTickBaselines(
-        IDictionary<string, GoalSnapshot> tickBaselines,
-        AgentOrchestratorKernel loadedKernel)
-    {
-        ArgumentNullException.ThrowIfNull(tickBaselines);
-        ArgumentNullException.ThrowIfNull(loadedKernel);
-        foreach (var goal in loadedKernel.ExportSnapshot().Goals)
-            tickBaselines.TryAdd(goal.Id, goal);
     }
 
     internal static void PersistCriticalGoalSnapshotsOrThrow(
@@ -1507,16 +1497,6 @@ internal static partial class CliPersistentStateRunner
 
     private static string SanitizeConductToken(string value) =>
         value.Replace(' ', '_').Replace('\t', '_').Replace('\n', '_').Replace('\r', '_');
-
-    internal static AgentOrchestratorKernel LoadConductLoopOperatorIntentTargets(
-        IOrchestratorStateQueries repository, IReadOnlyCollection<GoalId> goalIds,
-        IDictionary<string, GoalSnapshot> tickBaselines)
-    {
-        var loaded = repository.LoadGoalsAsync(goalIds).GetAwaiter().GetResult();
-        foreach (var snapshot in loaded.ExportSnapshot().Goals)
-            tickBaselines[snapshot.Id] = snapshot;
-        return loaded;
-    }
 
     internal static AgentOrchestratorKernel LoadConductLoopKernel(
         ITransactionalOrchestratorStateRepository stateRepository,

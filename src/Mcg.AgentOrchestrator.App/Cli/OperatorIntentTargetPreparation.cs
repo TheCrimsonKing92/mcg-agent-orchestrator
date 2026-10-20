@@ -5,7 +5,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Cli;
 
-internal static partial class CliCommandHandlers
+internal static class OperatorIntentTargetPreparation
 {
     internal static bool PrepareOperatorIntentTarget(
         CliExecutionContext context, AgentOrchestratorKernel kernel, GoalId goalId,
