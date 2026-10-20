@@ -20,7 +20,13 @@ internal static class StatusAgentReadView
                     status = task.Status.ToString(),
                     role = task.RequiredRole.ToString(),
                     description = OutputTextPreview.CreateSummary(task.Description).Text,
-                    agent = task.AssignedAgentId is null ? null : CliIdentifierText.ShortId(task.AssignedAgentId.Value)
+                    agent = task.AssignedAgentId is null ? null : CliIdentifierText.ShortId(task.AssignedAgentId.Value),
+                    workerBuildInvocations = task.WorkerBuildInvocations.Select(i => new
+                    {
+                        invocation = i.Id, dispatch = i.DispatchId, candidate = i.TreeDigest,
+                        phase = i.Phase.ToString(), outcome = i.Outcome?.ToString(),
+                        consumed = i.Consumed, custodyReleased = i.CustodyReleased
+                    }).ToArray()
                 }).ToArray()
             }, new JsonSerializerOptions(JsonSerializerDefaults.Web), time);
 }

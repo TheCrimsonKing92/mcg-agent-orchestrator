@@ -1,5 +1,31 @@
 # Operator Runbook
 
+## Host-owned worker build requests
+
+New Developer/Tester dispatches enroll in worker-build protocol 1 before their start gate opens. The sanctioned `Invoke-WorkerBuildCheck.ps1` adapter submits project/configuration selections to that dispatch host's local named pipe. `.orchestrator-context/worker-build-channel.json` is a locator, never authorization or evidence. The host checks the connected OS peer against its owned worker job and derives goal/task/dispatch authority from canonical state. Requests cannot name an executable, store, process to stop, or lease owner.
+
+`status --agent` exposes `workerBuildInvocations` with invocation, dispatch, candidate, phase, outcome, consumed and custody-release fields. Durable history lives in task snapshots in the existing state database. Worker output and worker-editable receipts do not certify protocol-1 builds. Pre-protocol dispatches retain their existing legacy receipt limits; completion-only operations retain `WorkerNotRunning` and their separate identity.
+
+The phases are Requested, Authorized, WaitingForCustody, CustodyAcquired, WaitingForBuildSlot, PreparingLaunch, ChildRegistered, CompilerStarted and Completed. Custody is the existing goal-evidence lease; build capacity is the ordinary first-free byte-range slot lock. They are separate observations. The host registers suspended child PID/start/image before resume, verifies current dispatch admission and candidate/scope again at resume and completion, and records terminal state before acknowledging the adapter. LowIL compiler tokens are lowered and confirmed before any candidate code runs; compiler environment selection omits provider credentials.
+
+| Outcome | Host observation |
+| --- | --- |
+| Success | Every scoped build process exited zero; candidate/scope still match |
+| CompilerFailure | An owned, resumed build process exited nonzero |
+| CapacityBeforeStart | Build-slot acquisition ended with no compiler launch |
+| TimeoutAfterStart | Host deadline fired after an observed owned compiler start |
+| Cancelled | Worker lifetime or operator authorization ended; owned termination confirmed |
+| StaleCandidate | Candidate content or scope no longer matches the invocation |
+| Interrupted / ApparatusFailure | Launch, supervision or reconciliation could not establish a build verdict |
+
+An adapter disconnect is transport loss: the host retains supervision through its deadline or worker exit. Reusing an idempotency key with the same immutable payload returns the existing invocation; changing that payload rejects it. Terminal invocations never relaunch. Consumption checks the current canonical dispatch, candidate and project coverage and records application once. A stale snapshot cannot erase a host observation or clear consumption.
+
+After dispatch-host death, normal exited-dispatch reconciliation checks the recorded process identities, confirms children are terminal, records Interrupted (or attributable operator cancellation), and releases only the matching custody owner. Unknown liveness retains the obligation and custody; investigate the exact recorded identities using `repo-process-info` before recovery. Do not force-unlock, rewrite receipts, or repeat a worker build to hide an unresolved invocation. Recovery-count and checkpoint limits are unchanged.
+
+Source trace: `GoalDispatchOperationsStart` → `BackgroundDispatchRunner.TryStartLatestDispatch` enrolls and transports `WorkerBuildHostReference`; `Program` → `DispatchProcessHost.Run` installs `WorkerBuildRequestHost`; `WorkerBuildRequestChannel.ServeAsync` admits OS peers; `WorkerBuildRequestHost.Execute` owns custody, ordinary slots, suspended child registration/resume and terminal persistence; `WorkerBuildInvocationOperations.Store` uses expected-version canonical transactions; `Consume` validates applicability and applies once. Worker exit closes the channel; `CancelLatestProcess` and `ExitedDispatchReconciliationExecutor` reconcile host-death obligations. `TaskSpec` and snapshot merging preserve monotonic invocation history independently of worker-attempt progress.
+
+Acceptance must execute `WorkerBuildRequestIntegrationTests`, `WorkerBuildRequestAuthorityTests`, `WorkerBuildRequestRecoveryTests`, the existing completion/legacy/slot compatibility selections, the [authority negative control](negative-controls/35bcb7de-worker-build-authority.md), and normal full acceptance. Independent cross-family implementation review remains required. Post-activation organic observation remains pending in backlog `ebd739048ebd470ba03e71893df1d5b3`; fixture evidence cannot close it. The historical `ce387eac` timeout cause remains undetermined.
+
 On a new Windows host, run `.\mcg-orchestrator.cmd host-exclusions --apply` once from an elevated PowerShell as the same user account that runs the orchestrator. Run `host-exclusions` without a switch to inspect the required roots first; it changes nothing. New orchestrator roots must be created through `OrchestratorTempRoot`, `DotnetBuildEnvironmentManager` root resolution, `TempRootJanitor` low-integrity root resolution, or the `GoalAcceptanceVerifier` root-name members and included by `HostScanExclusionRoots`, so this verb lists the roots that the creating code owns.
 
 Repository scripts, diagnostic probes, and evidence utilities use PowerShell and .NET. Do not use Python for this work or introduce a Python installation requirement for repository users.

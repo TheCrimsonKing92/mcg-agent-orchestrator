@@ -2001,6 +2001,23 @@ public sealed partial class AgentOrchestratorKernel
         GetTask(goalId, taskId).RecordCompletionBuildEvidence(operation);
     }
 
+    public void RecordWorkerBuildProtocol(GoalId goalId, TaskId taskId, int version) =>
+        GetTask(goalId, taskId).SetWorkerBuildProtocol(version);
+
+    public void RecordWorkerBuildInvocation(GoalId goalId, TaskId taskId, WorkerBuildInvocation invocation)
+    {
+        if (invocation.GoalId != goalId.Value)
+            throw new InvalidOperationException("Worker build invocation belongs to another goal.");
+        GetTask(goalId, taskId).RecordWorkerBuildInvocation(invocation);
+    }
+
+    public void ReconcileWorkerBuildInvocations(GoalId goalId, TaskId taskId, IReadOnlyList<WorkerBuildInvocation> canonical)
+    {
+        if (canonical.Any(i => i.GoalId != goalId.Value))
+            throw new InvalidOperationException("Canonical worker build history belongs to another goal.");
+        GetTask(goalId, taskId).ReconcileWorkerBuildInvocations(canonical);
+    }
+
     public void RecordTaskProcessRefreshed(
         GoalId goalId,
         TaskId taskId,
