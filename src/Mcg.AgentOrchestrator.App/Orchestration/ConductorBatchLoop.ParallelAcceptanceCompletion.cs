@@ -262,7 +262,6 @@ internal sealed partial class ConductorBatchLoop
 
         try
         {
-            run = run with { Acceptance = run.Acceptance with { AttemptId = attempt.AttemptId } };
             return PassedAcceptanceReceiptReplay.Complete(driver, run, policy, attempt,
                 out evidenceMutationLeaseHeld);
         }

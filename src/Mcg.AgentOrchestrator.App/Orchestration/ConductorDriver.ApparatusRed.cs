@@ -116,7 +116,7 @@ internal sealed partial class ConductorDriver
             ApparatusRedDisposition.BoundExhausted bound =>
                 EscalateApparatusRedBound(goal, goalPrefix, policy, reading, bound),
             ApparatusRedDisposition.AttributionPending pending =>
-                HoldAttributionPending(goal, goalPrefix, policy, acceptance, pending),
+                AcceptanceAttributionPendingHandler.Hold(goal, goalPrefix, policy, acceptance, pending, _recordAcceptanceFailure, RecordEscalation),
             ApparatusRedDisposition.Genuine genuine =>
                 RecordApparatusRedGenuine(goal, acceptance, genuine)
         };

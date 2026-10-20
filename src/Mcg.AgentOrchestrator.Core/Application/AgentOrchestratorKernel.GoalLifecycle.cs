@@ -926,9 +926,6 @@ public sealed partial class AgentOrchestratorKernel
         goal.ClearAcceptanceFailure();
     }
 
-    public void RetainAcceptanceAttributionPending(GoalId goalId, AcceptanceAttributionPending pending) =>
-        GetGoal(goalId).RetainAcceptanceAttributionPending(pending);
-
     public bool RestoreVerifiedForClassifiedAcceptanceFailure(GoalId goalId, string reason)
     {
         var goal = GetGoal(goalId);

@@ -3,11 +3,14 @@ using Mcg.AgentOrchestrator.Core.Conductor;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
-internal sealed partial class ConductorDriver
+// Owns retention and presentation of pending attribution; the driver supplies its existing sinks.
+internal static class AcceptanceAttributionPendingHandler
 {
-    private ConductorAdvanceResult HoldAttributionPending(Goal goal, string goalPrefix,
+    internal static ConductorAdvanceResult Hold(Goal goal, string goalPrefix,
         ConductorAutonomyPolicy policy, AcceptanceVerificationSummary acceptance,
-        ApparatusRedDisposition.AttributionPending disposition)
+        ApparatusRedDisposition.AttributionPending disposition,
+        Action<Goal, IReadOnlyList<string>, string?, string?, IReadOnlyList<AcceptanceCheckAttribution>?, string?> recordFailure,
+        Action<Goal, GoalLifecycleState, string> recordEscalation)
     {
         var proof = disposition.PendingTests[0].ConfirmedLaneFailure!.Attribution;
         var pending = new AcceptanceAttributionPending(proof.CandidateSha, proof.MainSha, proof.AttemptId,
@@ -26,22 +29,21 @@ internal sealed partial class ConductorDriver
         // the existing acceptance-retry command can resolve precisely its landing escalation.
         if (goal.LatestAcceptanceFailure is not { } failure || failure.BranchHeadSha != proof.CandidateSha ||
             failure.MainHeadSha != proof.MainSha)
-            _recordAcceptanceFailure(goal, acceptance.FailedChecks is { Count: > 0 } failedChecks
+            recordFailure(goal, acceptance.FailedChecks is { Count: > 0 } failedChecks
                 ? failedChecks : acceptance.RequiredUnmetCriteria.Select(check => check.Name).ToArray(),
                 proof.CandidateSha, proof.MainSha, acceptance.CheckAttributions, acceptance.BaselineAttestation);
-        var kernel = _cohortKernel ?? _conductorTickKernel;
-        if (kernel is not null) kernel.RetainAcceptanceAttributionPending(goal.Id, pending);
-        else goal.RetainAcceptanceAttributionPending(pending);
-        return RetainedAttributionPendingHold(goal, goalPrefix, policy, pending);
+        goal.RetainAcceptanceAttributionPending(pending);
+        return RetainedHold(goal, goalPrefix, policy, pending, recordEscalation);
     }
 
-    private ConductorAdvanceResult? TryHoldRetainedAttributionPending(Goal goal, string goalPrefix,
-        ConductorAutonomyPolicy policy) => goal.Status == GoalStatus.AcceptanceFailed &&
+    internal static ConductorAdvanceResult? TryHoldRetained(Goal goal, string goalPrefix,
+        ConductorAutonomyPolicy policy, Action<Goal, GoalLifecycleState, string> recordEscalation) => goal.Status == GoalStatus.AcceptanceFailed &&
         goal.LatestAcceptanceFailure?.AttributionPending is { } pending
-            ? RetainedAttributionPendingHold(goal, goalPrefix, policy, pending) : null;
+            ? RetainedHold(goal, goalPrefix, policy, pending, recordEscalation) : null;
 
-    private ConductorAdvanceResult RetainedAttributionPendingHold(Goal goal, string goalPrefix,
-        ConductorAutonomyPolicy policy, AcceptanceAttributionPending pending)
+    private static ConductorAdvanceResult RetainedHold(Goal goal, string goalPrefix,
+        ConductorAutonomyPolicy policy, AcceptanceAttributionPending pending,
+        Action<Goal, GoalLifecycleState, string> recordEscalation)
     {
         var evidence = AcceptanceApparatusDispositionPolicy.AttributionPendingHold(goal.Id.Value, "pending", pending).Facts;
         var reason = $"{AcceptanceAttributionPending.EvidenceKind}: candidate={pending.CandidateSha} main={pending.MainSha} " +
@@ -50,8 +52,8 @@ internal sealed partial class ConductorDriver
             $"Receipts: {evidence.ReceiptReferences}. Other apparatus evidence: {pending.OtherEvidenceKind}. " +
             "Supply attributable baseline evidence or a relevant verified repair, then run " +
             $"acceptance-retry {goalPrefix} <reason> --confirm-acceptance-retry. No automatic gate or Developer retry is admitted.";
-        RecordEscalation(goal, GoalLifecycleState.AcceptanceFailed, reason);
-        return MakeResult(goal.Id.Value, goalPrefix, policy,
+        recordEscalation(goal, GoalLifecycleState.AcceptanceFailed, reason);
+        return new ConductorAdvanceResult(goal.Id.Value, goalPrefix, policy.Name,
             new ConductorAdvanceOutcome.Held(GoalLifecycleState.AcceptanceFailed, reason, StableIdentity: pending.Identity)
             { Decision = AcceptanceApparatusDispositionPolicy.AttributionPendingHold(goal.Id.Value, reason, pending).ToRecord() });
     }
