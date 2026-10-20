@@ -447,14 +447,14 @@ internal sealed partial class ConductorDriver
 
         acceptance = NormalizeNamedFailedChecksForRetry(acceptance);
         var currentGoal = GetCurrentGoal(candidate.Goal);
-        if (currentGoal.Status == GoalStatus.Parked && acceptance.Passed)
+        var decision = LandingGoalStateGuardPolicy.Evaluate(new(currentGoal.Status, null, null, acceptance.Passed));
+        if (decision.Action == LandingGoalStateGuardAction.Hold)
             return MakeResult(currentGoal.Id.Value, candidate.GoalPrefix, policy,
-                new ConductorAdvanceOutcome.Held(GoalLifecycleState.Verified, "Goal is parked; landing remains held."));
+                new ConductorAdvanceOutcome.Held(GoalLifecycleState.Verified, decision.Reason) { Decision = decision.ToRecord() });
         if (!acceptance.Passed || acceptance.UnmetCriteria.Count > 0)
         {
             return CompleteLandingAfterAcceptance(candidate.Goal, candidate.GoalPrefix, policy, acceptance);
         }
-
         return CompleteParallelLandingAfterPreMergeRebase(candidate, policy, acceptance);
     }
 

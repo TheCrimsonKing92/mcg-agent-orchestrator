@@ -2,6 +2,7 @@ using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
+using System.Text.Json;
 
 // The existing collection owns batch fairness statics; all I/O remains test-local and injected.
 [Collection(TestCollections.DotnetBuildSlots)]
@@ -29,7 +30,10 @@ public sealed class ConductorBatchLoopTestsExplicitParkReconciliation : Conducto
         Assert.Equal(GoalSnapshotSaveDisposition.Saved, saved.Disposition);
         Assert.Equal(GoalStatus.Parked, (await f.Repository.LoadGoalAsync(f.Goal.Id))!.Status);
         await f.Reload();
-        f.ReconcileRed(f.Driver());
+        var replay = f.ReconcileRed(f.Driver());
+        AssertGuardHold(replay, GoalLifecycleState.WorkspaceReady, 1, "acceptance-retry-already-prepared",
+            "Acceptance retry is already prepared; terminal replay admits no new work.",
+            new(null, GoalStatus.Active, true, false));
         f.AssertFailure();
         Assert.Equal(0, f.Dispatches + f.Acceptances + f.Landings);
         await f.Unpark();
@@ -37,7 +41,10 @@ public sealed class ConductorBatchLoopTestsExplicitParkReconciliation : Conducto
         driver = f.Driver();
         driver.AdvanceOnce(f.Goal, ExplicitParkTestFixture.Policy);
         Assert.Equal(1, f.Dispatches);
-        f.ReconcileRed(driver);
+        var releasedReplay = f.ReconcileRed(driver);
+        AssertGuardHold(releasedReplay, GoalLifecycleState.WorkspaceReady, 1, "acceptance-retry-already-prepared",
+            "Acceptance retry is already prepared; terminal replay admits no new work.",
+            new(null, GoalStatus.Active, true, false));
         f.AssertFailure();
         Assert.Equal(1, f.Dispatches);
     }
@@ -50,7 +57,8 @@ public sealed class ConductorBatchLoopTestsExplicitParkReconciliation : Conducto
         await f.Park();
         await f.Unpark();
         await f.Reload();
-        f.ReconcileRed(f.Driver());
+        var result = f.ReconcileRed(f.Driver());
+        Assert.NotEqual("landing-goal-state-guard", VerifiedAcceptanceEscalationDecision.BuildTickOutcomePayload(result.Outcome).Decision?.Stage);
         Assert.Equal(GoalStatus.Active, f.Goal.Status);
         Assert.Equal(WorkTaskStatus.Assigned, f.Task.Status);
         Assert.Null(f.Goal.ParkedLifecycleStatus);
@@ -70,9 +78,36 @@ public sealed class ConductorBatchLoopTestsExplicitParkReconciliation : Conducto
             ExplicitParkTestFixture.Policy, AcceptanceVerificationSummary.PassedWithNoUnmetCriteria, out var leaseHeld);
         Assert.Equal(0, f.Landings);
         Assert.False(leaseHeld);
-        Assert.IsType<ConductorAdvanceOutcome.Held>(result.Outcome);
+        AssertGuardHold(result, GoalLifecycleState.Verified, 2, "parked-landing-held",
+            "Goal is parked; landing remains held.", new(GoalStatus.Parked, null, null, true));
         Assert.Equal(GoalStatus.Parked, f.Goal.Status);
         Assert.Equal(GoalStatus.Verified, f.Goal.LifecycleStatus);
+    }
+
+    private static void AssertGuardHold(ConductorAdvanceResult result, GoalLifecycleState state, int rung,
+        string evidence, string reason, LandingGoalStateGuardFacts expectedFacts)
+    {
+        var held = Assert.IsType<ConductorAdvanceOutcome.Held>(result.Outcome);
+        Assert.Equal(state, held.State);
+        Assert.Equal(reason, held.Reason);
+        var decision = Assert.IsType<PolicyDecisionRecord>(held.Decision);
+        Assert.Equal("landing-goal-state-guard", decision.Stage);
+        Assert.Equal("Hold", decision.Action);
+        Assert.Equal(rung, decision.Rung);
+        Assert.Equal(evidence, decision.DiscriminatingEvidence);
+        Assert.Equal(reason, decision.Reason);
+        Assert.Equal(expectedFacts.ToRecordedFacts().ToArray(), decision.Facts.ToArray());
+        var payload = VerifiedAcceptanceEscalationDecision.BuildTickOutcomePayload(held);
+        var restored = JsonSerializer.Deserialize<ConductorTickOutcomePayload>(JsonSerializer.Serialize(payload))!;
+        Assert.Equal("Held", restored.OutcomeKind);
+        Assert.Equal(state.ToString(), restored.LifecycleState);
+        Assert.Null(restored.EscalationKind);
+        var recorded = Assert.IsType<PolicyDecisionRecord>(restored.Decision);
+        var facts = LandingGoalStateGuardFacts.FromRecordedFacts(recorded.Facts);
+        Assert.Equal(expectedFacts, facts);
+        var replay = LandingGoalStateGuardPolicy.Evaluate(facts).ToRecord();
+        Assert.Equal(decision with { Facts = recorded.Facts }, recorded);
+        Assert.Equal(recorded with { Facts = replay.Facts }, replay);
     }
 
     [Fact]

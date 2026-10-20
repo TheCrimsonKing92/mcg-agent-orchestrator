@@ -100,7 +100,7 @@ internal sealed class ExplicitParkTestFixture : IDisposable
         return (ConductorParallelAcceptanceRunResult.Accepted(candidate, acceptance), attempt);
     }
 
-    internal void ReconcileRed(ConductorDriver driver)
+    internal ConductorAdvanceResult ReconcileRed(ConductorDriver driver)
     {
         var (run, attempt) = Red();
         Assert.Equal("terminal-attempt", attempt.AttemptId);
@@ -108,8 +108,9 @@ internal sealed class ExplicitParkTestFixture : IDisposable
         Assert.Equal(attempt.BranchHeadSha, run.Candidate.BranchHeadSha);
         Assert.Equal(attempt.MainHeadSha, run.Candidate.MainHeadSha);
         ConductorBatchLoop.ReconcileParallelAcceptanceTerminalState(Kernel, Goal, run, attempt);
-        ConductorBatchLoop.CompleteParallelAcceptanceRun(driver, Policy, run, attempt, out var leaseHeld);
+        var result = ConductorBatchLoop.CompleteParallelAcceptanceRun(driver, Policy, run, attempt, out var leaseHeld);
         Assert.False(leaseHeld);
+        return result;
     }
 
     internal void AssertFailure()
