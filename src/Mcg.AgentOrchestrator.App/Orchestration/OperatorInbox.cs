@@ -571,7 +571,8 @@ internal static class OperatorInbox
                     reason,
                     integrationBranch,
                     DateTimeOffset.UtcNow,
-                    AcceptanceFailureOccurredAt: acceptanceFailureOccurredAt));
+                    AcceptanceFailureOccurredAt: acceptanceFailureOccurredAt,
+                    AttributionPendingIdentity: goal.LatestAcceptanceFailure?.AttributionPending?.Identity));
                 SaveLandingEscalationsUnsafe(workspace, existing);
             }
         }
@@ -730,6 +731,17 @@ internal static class OperatorInbox
                          item.AcceptanceFailureOccurredAt != acceptanceFailureOccurredAt))
                     {
                         return item;
+                    }
+
+                    // Pending attribution owns its attention through the same failure occurrence.
+                    // Resolve before saving so an outbox replay can recover a failed write.
+                    if (item.AttributionPendingIdentity is not null &&
+                        (item.ResolvedAtUtc is null || item.ResolvedBy == "acceptance-retry"))
+                    {
+                        var sourceKey = $"landing-escalation:{goal.Id.Value}:{item.Reason}";
+                        var itemId = BuildId(goal.Id, OperatorInboxKind.LandingEscalation, sourceKey);
+                        CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory)
+                            .TryResolveAsync(itemId, operatorReason).GetAwaiter().GetResult();
                     }
 
                     if (item.ResolvedAtUtc is not null)
@@ -1546,7 +1558,8 @@ internal static class OperatorInbox
         DateTimeOffset? ResolvedAtUtc = null,
         string? ResolvedBy = null,
         string? ResolutionReason = null,
-        DateTimeOffset? AcceptanceFailureOccurredAt = null);
+        DateTimeOffset? AcceptanceFailureOccurredAt = null,
+        string? AttributionPendingIdentity = null);
 
     private sealed record LandingEscalationStore(IReadOnlyList<LandingEscalationRecord> Items);
 

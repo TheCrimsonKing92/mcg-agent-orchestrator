@@ -27,6 +27,8 @@ public sealed class ConductorAttributionPendingRecoveryTests : GoalWorktreeTestB
                 getLandingFileScopes: _ => ["src/Changed.cs"], apparatusRedGate: fixture.Gate,
                 writeEscalationWithResult: (goal, _, reason) => OperatorInbox.RecordLandingEscalation(workspace, goal, reason, "conductor:acceptance", collaborationStore: store));
             var held = ConductorDriverTestsAttributionPending.AssertPending(initial.AdvanceOnce(fixture.Goal, ConductorAutonomyPolicy.Conservative), fixture.Goal);
+            var attention = Assert.Single(await store.ListAsync(fixture.Goal.Id.Value));
+            Assert.Equal(CollaborationItemStatus.Raised, attention.Status);
             await repository.SaveAsync(fixture.Kernel);
             var kernel = await repository.LoadAsync();
             var goal = kernel.GetGoal(fixture.Goal.Id);
@@ -37,12 +39,25 @@ public sealed class ConductorAttributionPendingRecoveryTests : GoalWorktreeTestB
                 ["acceptance-retry", goal.Id.Value[..8], "verified repair supplied"], context));
             Assert.Equal(GoalStatus.AcceptanceFailed, goal.Status);
             Assert.Equal(occurrence, goal.LatestAcceptanceFailure!.OccurredAt);
+            Assert.Equal(OperatorInbox.LandingEscalationResolution.Superseded,
+                OperatorInbox.ResolveLandingEscalationOccurrence(workspace, goal, "stale retry", occurrence.AddTicks(-1)));
+            Assert.Equal(CollaborationItemStatus.Raised, Assert.Single(await store.ListAsync(goal.Id.Value)).Status);
             CliCommandHandlers.Execute(["acceptance-retry", goal.Id.Value[..8], "verified repair supplied", "--confirm-acceptance-retry"], context);
             Assert.Equal(GoalStatus.Verified, goal.Status);
             Assert.Null(goal.RetainedAcceptanceFailure);
             Assert.Equal(1, goal.OperatorAcceptanceRegateCount);
             Assert.Equal(0, goal.AutomaticAcceptanceRetryCount);
-            Assert.Equal(CollaborationItemStatus.Resolved, Assert.Single(await store.ListAsync(goal.Id.Value)).Status);
+            var resolved = Assert.Single(await store.ListAsync(goal.Id.Value));
+            Assert.Equal(attention.Id, resolved.Id);
+            Assert.Equal(CollaborationItemStatus.Resolved, resolved.Status);
+            Assert.Equal("verified repair supplied", resolved.Resolution);
+            Assert.Equal(OperatorInbox.LandingEscalationResolution.AlreadyResolved,
+                OperatorInbox.ResolveLandingEscalationOccurrence(workspace, goal, "audit replay", occurrence));
+            var replayed = Assert.Single(await store.ListAsync(goal.Id.Value));
+            Assert.Equal(resolved.Id, replayed.Id);
+            Assert.Equal(resolved.Status, replayed.Status);
+            Assert.Equal(resolved.Resolution, replayed.Resolution);
+            Assert.Equal(resolved.ResolvedAt, replayed.ResolvedAt);
             await repository.SaveAsync(kernel);
             var cleared = (await repository.LoadAsync()).GetGoal(goal.Id);
             Assert.Null(cleared.RetainedAcceptanceFailure);
