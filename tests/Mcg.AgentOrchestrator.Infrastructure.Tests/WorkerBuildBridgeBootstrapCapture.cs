@@ -13,6 +13,7 @@ internal sealed class WorkerBuildBridgeBootstrapCapture : IDisposable
     private readonly object _child;
     private Dictionary<string, WorkerBuildBridgeCandidateBindings.Identity>? _copied;
     private Exception? _watcherFailure;
+    private Exception? _afterCaptureFailure;
     private bool _disposed;
 
     internal WorkerBuildBridgeBootstrapCapture(string fixtureRoot, Process child, WorkerBuildBridgeCandidateBindings bindings)
@@ -30,7 +31,7 @@ internal sealed class WorkerBuildBridgeBootstrapCapture : IDisposable
             InternalBufferSize = 64 * 1024
         };
         _watcher.Created += (_, args) => { if (args.FullPath.Equals(_processRoot, StringComparison.OrdinalIgnoreCase)) ArmScopedWatcher(); };
-        _watcher.Error += (_, args) => { lock (_gate) _watcherFailure = args.GetException(); };
+        _watcher.Error += (_, args) => ObserveFailure(args.GetException());
         _watcher.EnableRaisingEvents = true;
         ArmScopedWatcher();
     }
@@ -50,14 +51,14 @@ internal sealed class WorkerBuildBridgeBootstrapCapture : IDisposable
                 _scopedWatcher.Created += Observe;
                 _scopedWatcher.Changed += Observe;
                 _scopedWatcher.Renamed += Observe;
-                _scopedWatcher.Error += (_, args) => { lock (_gate) _watcherFailure = args.GetException(); };
+                _scopedWatcher.Error += (_, args) => ObserveFailure(args.GetException());
                 _scopedWatcher.EnableRaisingEvents = true;
                 _watcher.EnableRaisingEvents = false;
                 TryCapture();
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
             {
-                _watcherFailure = exception;
+                ObserveFailure(exception);
             }
         }
     }
@@ -78,7 +79,14 @@ internal sealed class WorkerBuildBridgeBootstrapCapture : IDisposable
                     binding => WorkerBuildBridgeCandidateBindings.ReadIdentity(Path.Combine(_bootstrap, binding.Assembly.Name + ".dll")));
                 // A complete real tool PE is required as well as its dependency copies.
                 copied.Add("WorkerBuildScopeTool", WorkerBuildBridgeCandidateBindings.ReadIdentity(Path.Combine(_bootstrap, "WorkerBuildScopeTool.dll")));
-                if (_bindings.Bindings.All(binding => copied[binding.Assembly.Name] == binding.Assembly)) _copied = copied;
+                if (_bindings.Bindings.All(binding => copied[binding.Assembly.Name] == binding.Assembly))
+                {
+                    _copied = copied;
+                    // The snapshot is complete. End observation before the real helper removes
+                    // its temporary directory; cleanup events cannot invalidate captured bytes.
+                    _watcher.EnableRaisingEvents = false;
+                    if (_scopedWatcher is not null) _scopedWatcher.EnableRaisingEvents = false;
+                }
             }
             catch (Exception exception) when (exception is IOException or BadImageFormatException or InvalidOperationException)
             {
@@ -86,15 +94,27 @@ internal sealed class WorkerBuildBridgeBootstrapCapture : IDisposable
             }
             catch (UnauthorizedAccessException exception)
             {
-                _watcherFailure = exception;
+                ObserveFailure(exception);
             }
+        }
+    }
+
+    private void ObserveFailure(Exception exception)
+    {
+        lock (_gate)
+        {
+            // Preserve pre-snapshot faults even if later events capture all files. A queued
+            // watcher callback after completion is retained separately from capture failures.
+            if (_copied is null) _watcherFailure ??= exception;
+            else _afterCaptureFailure ??= exception;
         }
     }
 
     internal string Evidence()
     {
         lock (_gate) return JsonSerializer.Serialize(new { child = _child, hostGeneration = _bindings.Generation, graph = _bindings.SourceGraph.Inputs, bindings = _bindings.Bindings,
-            _bindings.HostSnapshotSha256, _bindings.RecheckedHostSnapshotSha256, copied = _copied, watcherFailure = _watcherFailure?.Message });
+            _bindings.HostSnapshotSha256, _bindings.RecheckedHostSnapshotSha256, copied = _copied,
+            watcherFailure = _watcherFailure?.ToString(), afterCaptureFailure = _afterCaptureFailure?.ToString() });
     }
 
     internal void Verify()

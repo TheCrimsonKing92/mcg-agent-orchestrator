@@ -84,7 +84,11 @@ public sealed class MtpTestRunnerScriptTestsWorkerBuildNoBuildBridge
         File.WriteAllText(script, repair["Sanctioned build: ".Length..] + "\nexit $LASTEXITCODE\n");
         var result = fixture.Repair(script, expectSuccess: false);
         Assert.NotEqual(0, result.ExitCode);
-        Assert.False(File.Exists(fixture.ReceiptPath), "Rejected bootstrap must not publish a successful receipt.");
+        using var receipt = JsonDocument.Parse(File.ReadAllText(fixture.ReceiptPath));
+        Assert.Equal("failure", receipt.RootElement.GetProperty("buildOutcome").GetString());
+        var evaluation = WorkerBuildReceipt.Evaluate(fixture.ReceiptPath, fixture.Root);
+        Assert.False(evaluation.Matches, "Rejected bootstrap must not publish a successful receipt.");
+        Assert.Equal("build-failed", evaluation.Reason);
         var log = fixture.BootstrapLog();
         // These prove a compiler rejection, rather than a slot/capacity/launcher failure.
         Assert.Contains(invalidSource ? "error CS1029" : "error CS0103", log, StringComparison.Ordinal);
