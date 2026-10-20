@@ -45,6 +45,87 @@ public sealed class SqliteExplicitDispositionMergeTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
+    public async Task TickMerge_RefreshedAuthorityWithOldBaseline_RetainsRed(bool unpark)
+    {
+        using var f = new ExplicitParkTestFixture();
+        await f.Repository.SaveAsync(f.Kernel);
+        var baseline = f.Kernel.ExportGoalSnapshot(f.Goal.Id);
+        Assert.Null(baseline.ExplicitDisposition);
+        Assert.Equal(GoalStatus.Verifying, baseline.Status);
+        await f.Park();
+        if (unpark) await f.Unpark();
+        // The conductor refreshes its kernel but retains the older checkpoint baseline.
+        await f.Reload();
+        var committed = (await f.Repository.LoadGoalAsync(f.Goal.Id))!;
+        Assert.NotEqual(baseline.ExplicitDisposition, f.Goal.ExplicitDisposition);
+        Assert.Equal(committed.ExplicitDisposition, f.Goal.ExplicitDisposition);
+        f.ReconcileRed(f.Driver());
+        var tick = f.Kernel.ExportGoalSnapshot(f.Goal.Id);
+        Assert.Equal(unpark ? GoalStatus.Active : GoalStatus.Parked, tick.Status);
+        Assert.Equal(GoalStatus.Active, f.Goal.LifecycleStatus);
+        var result = Assert.Single(await f.Repository.SaveGoalSnapshotsWithMergeAsync(
+            [new GoalSnapshotSaveRequest(baseline, tick)]));
+        Assert.Equal(GoalSnapshotSaveDisposition.Merged, result.Disposition);
+        var raw = (await f.Repository.LoadGoalAsync(f.Goal.Id))!;
+        Assert.Equal(tick.Status, raw.Status);
+        Assert.Equal(committed.ExplicitDisposition, raw.ExplicitDisposition);
+        Assert.Equal(unpark ? (GoalStatus?)null : GoalStatus.Active, raw.ParkedLifecycleStatus);
+        Assert.Equal(1, raw.AutomaticAcceptanceRetryCount);
+        Assert.True(raw.AcceptanceFailureDeferredForRetry);
+        await f.Reload();
+        f.AssertFailure();
+        Assert.Contains(f.Goal.Timeline, e => e.Message.Contains("terminal-attempt", StringComparison.Ordinal));
+        f.ReconcileRed(f.Driver());
+        f.AssertFailure();
+        f.Driver().AdvanceOnce(f.Goal, ExplicitParkTestFixture.Policy);
+        Assert.Equal(unpark ? 1 : 0, f.Dispatches);
+        Assert.Equal(0, f.Acceptances + f.Landings);
+    }
+
+    [Theory]
+    [InlineData(GoalStatus.Cancelled)]
+    [InlineData(GoalStatus.Superseded)]
+    public async Task TickMerge_StopAfterPark_RemainsTerminalWithLateEvidence(GoalStatus stopped)
+    {
+        using var f = new ExplicitParkTestFixture();
+        await f.Repository.SaveAsync(f.Kernel);
+        await f.Park();
+        await f.Reload();
+        var baseline = f.Kernel.ExportGoalSnapshot(f.Goal.Id);
+        await f.Repository.TransactGoalAsync(f.Goal.Id, (stored, _) =>
+        {
+            var writer = AgentOrchestratorKernel.FromSnapshot(new([stored!], []));
+            if (stopped == GoalStatus.Cancelled)
+                writer.CancelGoal(f.Goal.Id, "Later committed cancel");
+            else
+                writer.SupersedeGoal(f.Goal.Id, "Later committed supersede");
+            Assert.Equal(stopped, writer.GetGoal(f.Goal.Id).Status);
+            return Task.FromResult((true, writer.ExportGoalSnapshot(f.Goal.Id), true));
+        });
+        f.ReconcileRed(f.Driver());
+        Assert.Equal(GoalStatus.Parked, f.Goal.Status);
+        Assert.Equal(GoalStatus.Active, f.Goal.LifecycleStatus);
+        var result = Assert.Single(await f.Repository.SaveGoalSnapshotsWithMergeAsync(
+            [new GoalSnapshotSaveRequest(baseline, f.Kernel.ExportGoalSnapshot(f.Goal.Id))]));
+        Assert.Equal(GoalSnapshotSaveDisposition.Merged, result.Disposition);
+        var raw = (await f.Repository.LoadGoalAsync(f.Goal.Id))!;
+        Assert.Equal(stopped, raw.Status);
+        Assert.Equal(stopped, raw.ParkedLifecycleStatus);
+        Assert.Equal(baseline.ExplicitDisposition, raw.ExplicitDisposition);
+        await f.Reload();
+        Assert.Equal(stopped, f.Goal.Status);
+        Assert.True(f.Goal.IsTerminal);
+        Assert.False(f.Goal.IsExplicitlyParked);
+        f.AssertFailure();
+        var stopKind = stopped == GoalStatus.Cancelled ? ProgressKind.GoalCancelled : ProgressKind.GoalSuperseded;
+        Assert.Single(f.Goal.Timeline.Where(e => e.Kind == stopKind));
+        f.Driver().AdvanceOnce(f.Goal, ExplicitParkTestFixture.Policy);
+        Assert.Equal(0, f.Dispatches + f.Acceptances + f.Landings);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
     public async Task TickMerge_LaterDisposition_WinsWithoutLosingProgress(bool parkAgain)
     {
         using var f = new ExplicitParkTestFixture();

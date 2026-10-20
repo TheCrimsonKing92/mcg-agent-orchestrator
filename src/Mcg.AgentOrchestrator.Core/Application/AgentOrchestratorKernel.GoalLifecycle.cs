@@ -800,14 +800,6 @@ public sealed partial class AgentOrchestratorKernel
         return true;
     }
 
-    public void RetainParkedAcceptanceRetryExhaustion(GoalId goalId)
-    {
-        var goal = GetGoal(goalId);
-        if (goal.IsExplicitlyParked && goal.LifecycleStatus == GoalStatus.AcceptanceFailed &&
-            goal.LatestAcceptanceFailure is not null)
-            goal.SetStatus(GoalStatus.Failed);
-    }
-
     public TaskSpec RequeueInterruptedDispatch(
         GoalId goalId,
         TaskId taskId,

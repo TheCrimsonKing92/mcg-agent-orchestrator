@@ -51,6 +51,34 @@ public sealed class GoalExplicitDispositionTests
             Assert.Throws<InvalidOperationException>(() => kernel.ParkGoal(goal.Id, "Too late"));
     }
 
+    [Theory]
+    [InlineData(GoalStatus.Cancelled)]
+    [InlineData(GoalStatus.Superseded)]
+    public void Stop_ExplicitlyParked_ExposesTerminalDisposition(GoalStatus stopped)
+    {
+        var (kernel, goal, _) = VerifyingGoal();
+        kernel.ParkGoal(goal.Id, "Hold before stop");
+        if (stopped == GoalStatus.Cancelled)
+            kernel.CancelGoal(goal.Id, "Later operator cancel");
+        else
+            kernel.SupersedeGoal(goal.Id, "Later operator supersede");
+        Assert.Equal(stopped, goal.Status);
+        Assert.Equal(stopped, goal.LifecycleStatus);
+        Assert.True(goal.IsTerminal);
+        Assert.False(goal.IsExplicitlyParked);
+        var kind = stopped == GoalStatus.Cancelled ? ProgressKind.GoalCancelled : ProgressKind.GoalSuperseded;
+        Assert.Single(goal.Timeline.Where(e => e.Kind == kind));
+        kernel = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot());
+        goal = kernel.GetGoal(goal.Id);
+        Assert.Equal(stopped, goal.Status);
+        Assert.True(goal.IsTerminal);
+        Assert.False(goal.IsExplicitlyParked);
+        Assert.Throws<InvalidOperationException>(() => kernel.UnparkGoal(goal.Id, "Cannot undo stop"));
+        goal.SetStatus(GoalStatus.Active); // A late ordinary callback cannot undo the stop.
+        Assert.Equal(stopped, goal.Status);
+        Assert.Equal(stopped, goal.LifecycleStatus);
+    }
+
     [Fact]
     public void Park_RejectedTransition_PreservesExactState()
     {

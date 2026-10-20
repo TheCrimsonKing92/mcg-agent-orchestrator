@@ -76,7 +76,8 @@ public sealed class Goal
 
     public GoalExplicitDisposition? ExplicitDisposition { get; private set; }
     public GoalStatus? ParkedLifecycleStatus { get; private set; }
-    public bool IsExplicitlyParked => ExplicitDisposition?.Action == GoalExplicitDispositionAction.Park;
+    public bool IsExplicitlyParked => ExplicitDisposition?.Action == GoalExplicitDispositionAction.Park &&
+        LifecycleStatus is not (GoalStatus.Cancelled or GoalStatus.Superseded);
     public GoalStatus LifecycleStatus => ParkedLifecycleStatus ?? Status;
     public GoalPriority Priority { get; private set; } = GoalPriority.Normal;
 
@@ -263,10 +264,17 @@ public sealed class Goal
         {
             // Ordinary progress cannot release an explicit operator disposition. Retain the
             // outcome so unpark can expose completion, failure or a staged retry faithfully.
+            // A later explicit stop ends the hold and must remain publicly terminal.
             if (status != GoalStatus.Parked) ParkedLifecycleStatus = status;
-            Status = GoalStatus.Parked;
-            return;
+            if (status is not (GoalStatus.Cancelled or GoalStatus.Superseded))
+            {
+                Status = GoalStatus.Parked;
+                return;
+            }
         }
+        else if (ExplicitDisposition?.Action == GoalExplicitDispositionAction.Park &&
+            LifecycleStatus is GoalStatus.Cancelled or GoalStatus.Superseded)
+            status = LifecycleStatus;
         if (!IsTerminal && IsTerminalMetadataStatus(status))
             GoalEffectivePriorityIndex.RecordSeeds(this, [], terminal: true);
         Status = status;

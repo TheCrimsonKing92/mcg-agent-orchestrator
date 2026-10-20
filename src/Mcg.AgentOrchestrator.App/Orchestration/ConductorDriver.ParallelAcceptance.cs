@@ -414,9 +414,7 @@ internal sealed partial class ConductorDriver
                 return AcceptanceAttemptCancellation.Decide(
                     observedStatus,
                     goalRecordReadable: true,
-                    attemptInvalidationRecorded: invalidated,
-                    explicitParkHoldsAdmissionOnly: snapshot?.ExplicitDisposition?.Action == GoalExplicitDispositionAction.Park &&
-                        snapshot.ParkedLifecycleStatus is not (GoalStatus.Cancelled or GoalStatus.Superseded or GoalStatus.Failed));
+                    attemptInvalidationRecorded: invalidated);
             }
             catch
             {

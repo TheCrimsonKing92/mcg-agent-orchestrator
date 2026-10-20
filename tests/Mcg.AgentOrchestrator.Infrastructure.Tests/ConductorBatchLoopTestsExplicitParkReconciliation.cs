@@ -76,14 +76,15 @@ public sealed class ConductorBatchLoopTestsExplicitParkReconciliation : Conducto
     }
 
     [Fact]
-    public async Task CancellationProbe_ExplicitPark_PreservesAlreadyOwnedWork()
+    public async Task CancellationProbe_ExplicitPark_PreservesGateCancellation()
     {
         using var f = new ExplicitParkTestFixture();
         await f.Repository.SaveAsync(f.Kernel);
         await f.Park();
         var workspace = OrchestratorWorkspace.ForDirectory(f.Root);
         var decision = ConductorDriver.GetAcceptanceAttemptCancellationDecision(workspace, f.Goal.Id);
-        Assert.False(decision.ShouldCancel);
+        Assert.True(decision.ShouldCancel);
+        Assert.Equal(AcceptanceAttemptCancellationCause.StoppedDisposition, decision.Cause);
         Assert.Equal(GoalStatus.Parked, decision.ObservedStatus);
         Assert.True(ConductorDriver.GetAcceptanceAttemptCancellationDecision(workspace, f.Goal.Id,
             attemptInvalidationRecorded: () => true).ShouldCancel);
@@ -91,31 +92,58 @@ public sealed class ConductorBatchLoopTestsExplicitParkReconciliation : Conducto
             loadGoalStatus: _ => GoalStatus.Parked).ShouldCancel); // Legacy authority remains unchanged.
         await f.Reload();
         f.Kernel.CancelGoal(f.Goal.Id, "Separate explicit stop");
+        Assert.Equal(GoalStatus.Cancelled, f.Goal.Status);
+        Assert.True(f.Goal.IsTerminal);
         await f.Repository.SaveAsync(f.Kernel);
-        Assert.True(ConductorDriver.GetAcceptanceAttemptCancellationDecision(workspace, f.Goal.Id).ShouldCancel);
+        var stopped = ConductorDriver.GetAcceptanceAttemptCancellationDecision(workspace, f.Goal.Id);
+        Assert.True(stopped.ShouldCancel);
+        Assert.Equal(GoalStatus.Cancelled, stopped.ObservedStatus);
     }
 
     [Fact]
-    public async Task Reconcile_ExhaustedRetryWhileParked_ReleasesFailed()
+    public async Task Reconcile_ExhaustedRetry_PreservesNormalFailureRouting()
     {
-        using var f = new ExplicitParkTestFixture();
-        await f.Repository.SaveAsync(f.Kernel);
-        await f.Park();
-        await f.Reload();
-        var (run, attempt) = f.Red();
-        var driver = f.Driver();
-        ConductorBatchLoop.ReconcileParallelAcceptanceTerminalState(f.Kernel, f.Goal, run, attempt);
-        ConductorBatchLoop.CompleteParallelAcceptanceRun(driver,
-            ExplicitParkTestFixture.Policy with { MaxCriterionRetries = 0 }, run, attempt, out _);
-        Assert.Equal(GoalStatus.Parked, f.Goal.Status);
-        Assert.Equal(GoalStatus.Failed, f.Goal.LifecycleStatus);
-        Assert.Equal(0, f.Goal.AutomaticAcceptanceRetryCount);
-        Assert.False(f.Goal.AcceptanceFailureDeferredForRetry);
-        await f.Repository.SaveAsync(f.Kernel);
-        await f.Unpark();
-        await f.Reload();
-        Assert.Equal(GoalStatus.Failed, f.Goal.Status);
-        Assert.NotNull(f.Goal.RetainedAcceptanceFailure);
+        using var held = new ExplicitParkTestFixture();
+        using var active = new ExplicitParkTestFixture();
+        await held.Repository.SaveAsync(held.Kernel);
+        await held.Park();
+        await held.Reload();
+        var policy = ExplicitParkTestFixture.Policy with { MaxCriterionRetries = 0 };
+        ConductorAdvanceOutcome? normalOutcome = null;
+        foreach (var f in new[] { active, held })
+        {
+            var (run, attempt) = f.Red();
+            ConductorBatchLoop.ReconcileParallelAcceptanceTerminalState(f.Kernel, f.Goal, run, attempt);
+            var result = ConductorBatchLoop.CompleteParallelAcceptanceRun(
+                f.Driver(), policy, run, attempt, out var leaseHeld);
+            Assert.False(leaseHeld);
+            var outcome = Assert.IsType<ConductorAdvanceOutcome.Escalated>(result.Outcome);
+            if (normalOutcome is ConductorAdvanceOutcome.Escalated normal)
+                Assert.Equal(normal.Reason, outcome.Reason);
+            else
+                normalOutcome = outcome;
+            Assert.Equal(GoalStatus.AcceptanceFailed, f.Goal.LifecycleStatus);
+            Assert.Equal(0, f.Goal.AutomaticAcceptanceRetryCount);
+            Assert.Equal(0, f.Task.CriterionRetryCount);
+            Assert.False(f.Goal.AcceptanceFailureDeferredForRetry);
+            var failure = Assert.IsType<AcceptanceFailureSummary>(f.Goal.RetainedAcceptanceFailure);
+            Assert.Equal(new[] { "focused RED" }, failure.FailedChecks);
+            Assert.Equal("branch-identity", failure.BranchHeadSha);
+            Assert.Equal("main-identity", failure.MainHeadSha);
+            Assert.Equal("baseline-receipt", failure.BaselineAttestation);
+            Assert.Equal("failure detail", Assert.Single(failure.CheckAttributions!).Evidence);
+            Assert.Equal(0, f.Dispatches + f.Acceptances + f.Landings);
+        }
+        Assert.Equal(GoalStatus.AcceptanceFailed, active.Goal.Status);
+        Assert.Equal(GoalStatus.Parked, held.Goal.Status);
+        await held.Repository.SaveAsync(held.Kernel);
+        await held.Unpark();
+        await held.Reload();
+        Assert.Equal(active.Goal.Status, held.Goal.Status);
+        Assert.Equal(GoalStatus.AcceptanceFailed, held.Goal.Status);
+        Assert.NotNull(held.Goal.LatestAcceptanceFailure);
+        Assert.Equal(0, held.Goal.AutomaticAcceptanceRetryCount);
+        Assert.False(held.Goal.AcceptanceFailureDeferredForRetry);
     }
 
     [Theory]

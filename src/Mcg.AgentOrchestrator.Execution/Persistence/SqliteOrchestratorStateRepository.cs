@@ -730,7 +730,10 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
                                 "goal row no longer exists")));
                     }
 
-                    if (request.Current.ExplicitDisposition != request.Baseline.ExplicitDisposition)
+                    // A refreshed kernel can carry authority committed since the checkpoint
+                    // baseline. It may retain that authority, but cannot propose a new action.
+                    if (request.Current.ExplicitDisposition != request.Baseline.ExplicitDisposition &&
+                        request.Current.ExplicitDisposition != storedSnapshot.ExplicitDisposition)
                     {
                         return Task.FromResult<(bool ShouldSave, GoalStateSnapshot? NewState, GoalSnapshotSaveResult Result)>(
                             (false, null, new GoalSnapshotSaveResult(request.Current.Id,
@@ -2070,11 +2073,17 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
 
         // Explicit commands are serialized by the goal-row CAS. Only the stored row may
         // supply that authority; lifecycle progress is still tick-owned and merges separately.
-        var lifecycle = PickTickOwned(
+        // A committed explicit stop is terminal even if an older tick still reconciles
+        // progress under the preceding park. Keep that evidence without reviving the hold.
+        var stoppedAfterPark = stored.ExplicitDisposition?.Action == GoalExplicitDispositionAction.Park &&
+            stored.Status is GoalStatus.Cancelled or GoalStatus.Superseded;
+        var lifecycle = stoppedAfterPark ? stored.Status : PickTickOwned(
             baseline.ParkedLifecycleStatus ?? baseline.Status,
             stored.ParkedLifecycleStatus ?? stored.Status,
             current.ParkedLifecycleStatus ?? current.Status);
-        var explicitlyParked = stored.ExplicitDisposition?.Action == GoalExplicitDispositionAction.Park;
+        var hasParkDisposition = stored.ExplicitDisposition?.Action == GoalExplicitDispositionAction.Park;
+        var explicitlyParked = hasParkDisposition &&
+            lifecycle is not (GoalStatus.Cancelled or GoalStatus.Superseded);
 
         var mergedSourceBacklogLink = PickStoreOwned(
             (baseline.SourceBacklogItemId, baseline.SourceBacklogCoverage),
@@ -2087,7 +2096,7 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
             BriefVersions = PickStoreOwnedList(baseline.BriefVersions, stored.BriefVersions, current.BriefVersions),
             Status = explicitlyParked ? GoalStatus.Parked : lifecycle,
             ExplicitDisposition = stored.ExplicitDisposition,
-            ParkedLifecycleStatus = explicitlyParked ? lifecycle : null,
+            ParkedLifecycleStatus = hasParkDisposition ? lifecycle : null,
             Tasks = mergedTasks,
             Timeline = MergeTimeline(baseline.Timeline, stored.Timeline, current.Timeline),
             DependsOn = PickStoreOwnedList(baseline.DependsOn, stored.DependsOn, current.DependsOn),

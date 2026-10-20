@@ -175,7 +175,6 @@ internal sealed partial class ConductorDriver
                     new ConductorAdvanceOutcome.Executed(GoalLifecycleState.Verified, retryMessage));
             }
 
-            (_conductorTickKernel ?? _cohortKernel)?.RetainParkedAcceptanceRetryExhaustion(goal.Id);
             return CreateUnmetCriteriaCompletion(goal, goalPrefix, policy, acceptance, criteria, retryTaskAvailable: true);
         }
 
