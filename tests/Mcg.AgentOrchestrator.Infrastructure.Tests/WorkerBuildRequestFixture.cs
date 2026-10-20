@@ -163,6 +163,24 @@ internal sealed class WorkerBuildRequestFixture : IDisposable
             {
                 using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
                 output.AppendLine($"log='{path}'; bytes={stream.Length}; tail_chars<=4096");
+                if (stream.Length > 4096)
+                {
+                    // A repeated MSBuild stack can push its original exception out of
+                    // the tail. Retain the first diagnostic too, with bounded scan/output.
+                    using var prefixReader = new StreamReader(stream, leaveOpen: true);
+                    var prefix = new char[65536];
+                    var scanned = new string(prefix, 0, prefixReader.ReadBlock(prefix, 0, prefix.Length));
+                    var first = scanned.IndexOf(": error ", StringComparison.OrdinalIgnoreCase);
+                    var exception = scanned.IndexOf("Exception", StringComparison.Ordinal);
+                    if (first < 0 || (exception >= 0 && exception < first)) first = exception;
+                    if (first >= 0)
+                    {
+                        first = scanned.LastIndexOf('\n', first) + 1;
+                        output.AppendLine("first_error_or_exception_chars<=2048; scan_chars<=65536");
+                        output.AppendLine(scanned.Substring(first, Math.Min(2048, scanned.Length - first)));
+                    }
+                    else output.AppendLine("first_error_or_exception=not-found-in-initial-65536-chars");
+                }
                 stream.Seek(Math.Max(0, stream.Length - 4096), SeekOrigin.Begin);
                 using var reader = new StreamReader(stream);
                 var tail = new char[4096];

@@ -104,7 +104,10 @@ internal sealed class WorkerBuildRequestHost : IWorkerBuildRequestService
                 slot = acquired.Lease;
                 var logRoot = Path.Combine(slot.Environment.ArtifactsPath, "worker-host-builds", invocation.Id);
                 Directory.CreateDirectory(logRoot);
-                var tempRoot = Path.Combine(logRoot, "temp");
+                // Exec adds MSBuildTemp<user>/tmp<guid>.exec.cmd beneath TEMP. cmd.exe
+                // cannot execute that batch file beyond MAX_PATH, even when .NET can
+                // create it. Keep invocation isolation without nesting below the logs.
+                var tempRoot = Path.Combine(slot.Environment.ArtifactsPath, "tmp", invocation.Id);
                 Directory.CreateDirectory(tempRoot);
                 if (task.LastDispatch.SandboxLowIntegrity &&
                     !new IcaclsIntegrityLabeler().SetIntegrity(slot.Environment.ArtifactsPath, "(OI)(CI)L", recursive: true))

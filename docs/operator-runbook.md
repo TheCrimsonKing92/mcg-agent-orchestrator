@@ -12,6 +12,8 @@ Completion-only coordinators pin one build storage root at construction and use 
 
 The phases are Requested, Authorized, WaitingForCustody, CustodyAcquired, WaitingForBuildSlot, PreparingLaunch, ChildRegistered, CompilerStarted and Completed. Custody is the existing goal-evidence lease; build capacity is the ordinary first-free byte-range slot lock. They are separate observations. The canonical dispatch process record pins the host PID, start time and image path; authorization and consumption reject a missing or mismatched identity component. The host registers suspended child PID/start/image before resume, verifies current dispatch admission and candidate/scope again at resume and completion, and records terminal state before acknowledging the adapter. LowIL compiler tokens are lowered and confirmed before any candidate code runs; compiler environment selection omits provider credentials.
 
+Compiler `TEMP`/`TMP` stays invocation-specific under the owning goal's artifacts directory (`tmp/<invocation>`), alongside the logs rather than beneath them. MSBuild adds a user directory and generated batch filename for `Exec`; a batch path beyond the limit accepted by `cmd.exe` can fail before its command starts. Integration fixture diagnostics retain the first error/exception from a bounded prefix scan as well as the output tail. These diagnostics explain failures and never authorize or classify a build. See the [retry investigation](diagnosis/35bcb7de-worker-build-retry.md) for the path control and remaining LowIL evidence gap.
+
 | Outcome | Host observation |
 | --- | --- |
 | Success | Every scoped build process exited zero; candidate/scope still match |
