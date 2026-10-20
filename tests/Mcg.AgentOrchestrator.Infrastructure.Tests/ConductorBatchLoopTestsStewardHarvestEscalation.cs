@@ -51,6 +51,12 @@ public sealed class ConductorBatchLoopTestsStewardHarvestEscalation : ConductorB
                         versionAfterEscalation = persistedVersion;
                         harness.Model.Started.Task.GetAwaiter().GetResult();
                         host.CurrentRound!.GetAwaiter().GetResult();
+                        // Harvest after the escalation checkpoint, before the next boundary.
+                        // The producer must queue, never apply, its version-bound proposal.
+                        host.ServiceTick(harness.Kernel);
+                        Xunit.Assert.Equal(OperatorIntentStatus.Pending,
+                            Xunit.Assert.Single(harness.Intents.ListForGoalAsync(harness.Goal.Id.Value)
+                                .GetAwaiter().GetResult()).Status);
                     }
                     if (harness.Task.Status == WorkTaskStatus.Assigned)
                         File.WriteAllText(stopPath, "stop");

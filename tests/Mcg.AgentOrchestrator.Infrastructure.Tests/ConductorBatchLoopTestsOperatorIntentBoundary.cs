@@ -9,6 +9,8 @@ using Mcg.AgentOrchestrator.Infrastructure;
 public sealed class ConductorBatchLoopTestsOperatorIntentBoundary(ITestOutputHelper output)
     : ConductorBatchLoopTests(output)
 {
+    private const int BoundaryHangFailsafeMilliseconds = 30_000;
+
     [Xunit.Fact]
     public async Task Retry_IsDurableBeforeUnrelatedSweepAndCleanup()
     {
@@ -75,7 +77,7 @@ public sealed class ConductorBatchLoopTestsOperatorIntentBoundary(ITestOutputHel
         finally { TryDeleteDirectory(root); }
     }
 
-    [Xunit.Theory(Timeout = 30000)]
+    [Xunit.Theory(Timeout = BoundaryHangFailsafeMilliseconds)]
     [Xunit.InlineData(false)]
     [Xunit.InlineData(true)]
     [Xunit.Trait("Category", "CrossTick")]
@@ -116,7 +118,8 @@ public sealed class ConductorBatchLoopTestsOperatorIntentBoundary(ITestOutputHel
                 }).Run(kernel, MakeDriver(getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
                     getRunningCount: () => ConductorAutonomyPolicy.Conservative.MaxConcurrentPaidWorkers),
                 ConductorAutonomyPolicy.Conservative, NoStopPath(), maxIterations: 2,
-                persistGoalTick: (_, _) => { });
+                persistGoalTick: (_, _) => { }, watchInterval: TimeSpan.FromMinutes(1),
+                sleepFunc: _ => false);
 
             Assert.True(injected);
             Assert.Equal(2, sweeps);
@@ -154,7 +157,7 @@ public sealed class ConductorBatchLoopTestsOperatorIntentBoundary(ITestOutputHel
         finally { TryDeleteDirectory(root); }
     }
 
-    [Xunit.Fact(Timeout = 30000)]
+    [Xunit.Fact(Timeout = BoundaryHangFailsafeMilliseconds)]
     [Xunit.Trait("Category", "CrossTick")]
     public async Task WakeArrival_IsAppliedBeforeWakeMaintenance()
     {
@@ -188,7 +191,7 @@ public sealed class ConductorBatchLoopTestsOperatorIntentBoundary(ITestOutputHel
         finally { TryDeleteDirectory(root); }
     }
 
-    [Xunit.Fact(Timeout = 30000)]
+    [Xunit.Fact(Timeout = BoundaryHangFailsafeMilliseconds)]
     [Xunit.Trait("Category", "CrossTick")]
     public async Task CheckpointHold_PreservesClaimedEffectUntilRecoveryBeforeMaintenance()
     {
@@ -208,7 +211,10 @@ public sealed class ConductorBatchLoopTestsOperatorIntentBoundary(ITestOutputHel
                     var row = store.GetAsync(intent.Id).GetAwaiter().GetResult()!;
                     Assert.Equal(sweeps == 0 ? OperatorIntentStatus.Claimed : OperatorIntentStatus.Applied, row.Status);
                     Assert.Equal(sweeps == 0, held.Contains(goal.Id.Value));
-                    Assert.Equal(1, goal.AutomaticAcceptanceRetryCount);
+                    // An operator retry uses authoritative feedback, not the automatic acceptance budget.
+                    Assert.Equal(0, goal.AutomaticAcceptanceRetryCount);
+                    Assert.Equal(WorkTaskStatus.Assigned, goal.Tasks.Single().Status);
+                    Assert.Single(goal.Timeline.Where(item => item.Kind == ProgressKind.TaskRetried));
                     Assert.Single(goal.Timeline.Where(item => item.OperatorIntentApplied?.IntentId == intent.Id));
                     sweeps++;
                     return null;
@@ -221,6 +227,45 @@ public sealed class ConductorBatchLoopTestsOperatorIntentBoundary(ITestOutputHel
                     null, "state", Path.Combine(root, "state.db"), "test-checkpoint")).ToArray());
             Assert.Equal(2, sweeps);
             Assert.Equal(1, preparations);
+        }
+        finally { TryDeleteDirectory(root); }
+    }
+
+    [Xunit.Fact(Timeout = BoundaryHangFailsafeMilliseconds)]
+    [Xunit.Trait("Category", "CrossTick")]
+    public async Task WakeAndStop_ReconcilesWithoutClaimingLaterIntent()
+    {
+        var root = CreateTempDirectory("mcg-intent-wake-stop");
+        try
+        {
+            var (kernel, goal) = SimpleGoal();
+            var store = Store(root);
+            var intent = Retry(goal, "wake-stop");
+            var stop = Path.Combine(root, "stop");
+            var sweeps = 0;
+            var preparations = 0;
+            var recoveries = 0;
+            using var wake = new TestWakeSignal(() =>
+            {
+                store.EnqueueAsync(intent).GetAwaiter().GetResult();
+                File.WriteAllText(stop, "stop");
+            });
+
+            var result = new ConductorBatchLoop(operatorIntents: new OperatorIntentCoordinator(store),
+                prepareOperatorIntentTarget: (_, _) => { preparations++; return true; },
+                sweep: _ => sweeps++, recoverInterruptedDispatches: _ => recoveries++)
+                .Run(kernel, MakeDriver(getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+                        getRunningCount: () => ConductorAutonomyPolicy.Conservative.MaxConcurrentPaidWorkers),
+                    ConductorAutonomyPolicy.Conservative, stop, maxIterations: 2,
+                    persistGoalTick: (_, _) => { }, watchInterval: TimeSpan.FromMinutes(1), wakeSignal: wake);
+
+            Assert.True(result.StopRequested);
+            Assert.Equal(1, wake.SignaledWaits);
+            Assert.Equal(2, sweeps);
+            Assert.Equal(2, recoveries);
+            Assert.Equal(0, preparations);
+            Assert.Equal(OperatorIntentStatus.Pending, (await store.GetAsync(intent.Id))!.Status);
+            Assert.DoesNotContain(goal.Timeline, item => item.OperatorIntentApplied?.IntentId == intent.Id);
         }
         finally { TryDeleteDirectory(root); }
     }

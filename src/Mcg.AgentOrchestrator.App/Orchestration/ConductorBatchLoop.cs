@@ -553,6 +553,22 @@ internal sealed partial class ConductorBatchLoop
             return new(SelfRelaunchDrainDisposition.Proceed);
         }
 
+        void ReconcilePendingWakeMaintenance(int tick, List<string> timingLines)
+        {
+            if (pendingWakeMaintenanceKind is not { } kind) return;
+            pendingWakeMaintenanceKind = null;
+            RunJanitorialPhase(kind, tick,
+                () => _sweep(kernel, ProtectedOperatorIntentGoalIds(kernel, checkpointHeldGoals)));
+            RunJanitorialPhase(kind.Replace("-sweep", "-recover-interrupted-dispatches", StringComparison.Ordinal), tick, () =>
+            {
+                _recoverInterruptedDispatches(kernel);
+                return true;
+            });
+            TryPersistCheckpoint(persistTick, persistGoalTick, kernel, tick, onlyGoalId,
+                kind, timingLines, busyWriteDelay,
+                checkpointGoalTick: checkpointGoalTick, checkpointHeldGoalIds: checkpointHeldGoals);
+        }
+
         while (true)
         {
             using var writeOperationTag = SqliteOrchestratorStateRepository.UseWriteOperationTag("loop:tick");
@@ -569,6 +585,7 @@ internal sealed partial class ConductorBatchLoop
 
             if (IsStopRequested(stopFilePath))
             {
+                ReconcilePendingWakeMaintenance(totalTicks, []);
                 stopRequested = true;
                 StopLoop("stop-file");
                 Console.WriteLine($"[conduct --loop] Stop signal detected at tick {totalTicks + 1}; no new dispatches will be started.");
@@ -583,6 +600,7 @@ internal sealed partial class ConductorBatchLoop
                 maxIterations.HasValue &&
                 totalTicks >= maxIterations.Value)
             {
+                ReconcilePendingWakeMaintenance(totalTicks, []);
                 StopLoop("max-iter", $"max={maxIterations.Value}");
                 Console.WriteLine($"[conduct --loop] Max iterations ({maxIterations.Value}) reached after {totalTicks} ticks.");
                 DetachNonTerminalEligibleGoals(kernel, driver, onlyGoalId, excludedGoals, reapedGoals);
@@ -617,6 +635,7 @@ internal sealed partial class ConductorBatchLoop
                 }
                 else
                 {
+                    ReconcilePendingWakeMaintenance(totalTicks, []);
                     onMaxDurationDeferralStateChanged?.Invoke(false);
                     StopLoop("max-duration", ConductorMaxDurationStopDeferral.FormatStopDetail(maxDuration.Value, verdict, snapshot.Failure));
                     Console.WriteLine($"[conduct --loop] Max duration ({maxDuration.Value.TotalSeconds:0}s) reached after {totalTicks} ticks.");
@@ -693,20 +712,7 @@ internal sealed partial class ConductorBatchLoop
                 reapedGoals.Remove(goalId.Value);
                 goalProjectionCache.Invalidate(goalId);
             }
-            if (pendingWakeMaintenanceKind is { } wakeMaintenanceKind)
-            {
-                pendingWakeMaintenanceKind = null;
-                RunJanitorialPhase(wakeMaintenanceKind, nextTick,
-                    () => _sweep(kernel, ProtectedOperatorIntentGoalIds(kernel, checkpointHeldGoals)));
-                RunJanitorialPhase(wakeMaintenanceKind.Replace("-sweep", "-recover-interrupted-dispatches", StringComparison.Ordinal), nextTick, () =>
-                {
-                    _recoverInterruptedDispatches(kernel);
-                    return true;
-                });
-                TryPersistCheckpoint(persistTick, persistGoalTick, kernel, nextTick, onlyGoalId,
-                    wakeMaintenanceKind, preTickTimingLines, busyWriteDelay,
-                    checkpointGoalTick: checkpointGoalTick, checkpointHeldGoalIds: checkpointHeldGoals);
-            }
+            ReconcilePendingWakeMaintenance(nextTick, preTickTimingLines);
             var preSweepBaseline = GoalKernelChange.CaptureAll(kernel);
             TerminalGoalJournalMetadataCache.BeginMeasurement();
             var sweepClock = StartDiagnosticTimer();
@@ -785,21 +791,9 @@ internal sealed partial class ConductorBatchLoop
             var preWalkIntentLines = intentBoundary.Lines;
             preWalkIntentLines.AddRange(ConductorTickStepLedger.Measure("workspace-intents", () => ServiceWorkspaceIntents(kernel)));
             var preWalkIntentProcessed = preWalkIntentLines.Count > 0;
-            var intentsAwaitingReload = intentBoundary.AwaitingReload;
-            // A maintenance-time arrival may require another boundary even when this working set
-            // is empty. Observe it for the existing reload recheck; never add it to this batch.
-            if (_operatorIntents is not null && actionableIntentGoalIds.Count == 0)
-            {
-                try
-                {
-                    intentsAwaitingReload += _operatorIntents.ListActionableGoalIds()
-                        .Count(id => onlyGoalId is null || id == onlyGoalId);
-                }
-                catch (Exception ex)
-                {
-                    EmitProgress($"OPERATOR_INTENT result=store-unavailable phase=list reason={SanitizeReason(ex.Message)}");
-                }
-            }
+            var intentsAwaitingReload = intentBoundary.AwaitingReload +
+                ConductorOperatorIntentBoundary.ObserveDeferredArrivals(_operatorIntents, onlyGoalId,
+                    actionableIntentGoalIds, checkpointHeldGoals);
 
             _slotContentionHolds.Retain(kernel.Goals.Select(goal => goal.Id));
             var scopedGoals = kernel.Goals
@@ -1010,6 +1004,9 @@ internal sealed partial class ConductorBatchLoop
 
                     if (idleSleep == WatchSleepResult.StopRequested || IsStopRequested(stopFilePath))
                     {
+                        // A wake still owns exit reconciliation even when shutdown wins admission.
+                        // Do not capture or apply another intent batch on this stopping path.
+                        ReconcilePendingWakeMaintenance(nextTick, preTickTimingLines);
                         stopRequested = true;
                         StopLoop("stop-while-idle");
                         DetachNonTerminalEligibleGoals(kernel, driver, onlyGoalId, excludedGoals, reapedGoals);
@@ -1644,6 +1641,7 @@ internal sealed partial class ConductorBatchLoop
 
                 if (sleepResult == WatchSleepResult.StopRequested || IsStopRequested(stopFilePath))
                 {
+                    ReconcilePendingWakeMaintenance(totalTicks, tickLines);
                     stopRequested = true;
                     StopLoop("stop-file-during-sleep");
                     Console.WriteLine($"[conduct --loop --watch] Stop signal detected during sleep after tick {totalTicks}; no new dispatches.");

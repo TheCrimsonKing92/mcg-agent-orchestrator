@@ -30,9 +30,10 @@ public sealed class ConductorBatchLoopTestsStepLedger(ITestOutputHelper output) 
 
             var line = Phase(tick, "prewalk");
             Assert.Contains("prewalk_steps=retire-until-goal-lessons:11:1,workspace-intents:13:1,steward:17:1,author:19:1,store-evidence:23:1,judge-panel:29:1,board-fill:31:1,operator-intent-list:37:1,eligibility:41:1", line);
-            Assert.EndsWith(" cpu_ms=221", line);
+            // The 37 ms capture is now before sweep/prewalk: 221 - 37 = 184 ms.
+            Assert.EndsWith(" cpu_ms=184", line);
             // Emission order differs from call order; instrumentation cannot reorder calls.
-            Assert.Equal(new[] { "retire-until-goal-lessons", "steward", "author", "store-evidence", "judge-panel", "board-fill", "workspace-intents", "operator-intent-list", "eligibility" }, observed);
+            Assert.Equal(new[] { "operator-intent-list", "retire-until-goal-lessons", "steward", "author", "store-evidence", "judge-panel", "board-fill", "workspace-intents", "eligibility" }, observed);
             AssertBound(line, "prewalk_steps");
         }
         finally { TryDeleteDirectory(root); }

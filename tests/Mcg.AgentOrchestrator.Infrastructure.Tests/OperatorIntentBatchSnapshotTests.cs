@@ -67,7 +67,11 @@ public sealed class OperatorIntentBatchSnapshotTests
 
         Assert.False(replay.MutatedGoalState);
         Assert.Contains(replay.ProgressLines, line => line.Contains("applied-recovered", StringComparison.Ordinal));
-        Assert.Equal(1, goal.AutomaticAcceptanceRetryCount);
+        // OperatorIntentCoordinator calls RetryTaskWithAuthoritativeFeedback; only the separate
+        // automatic acceptance-recovery path increments AutomaticAcceptanceRetryCount.
+        Assert.Equal(0, goal.AutomaticAcceptanceRetryCount);
+        Assert.Equal(WorkTaskStatus.Assigned, goal.Tasks.Single().Status);
+        Assert.Single(goal.Timeline.Where(item => item.Kind == ProgressKind.TaskRetried));
         Assert.Single(goal.Timeline.Where(item => item.OperatorIntentApplied?.IntentId == intent.Id));
         Assert.Equal(OperatorIntentStatus.Applied, (await fixture.Store.GetAsync(intent.Id))!.Status);
     }

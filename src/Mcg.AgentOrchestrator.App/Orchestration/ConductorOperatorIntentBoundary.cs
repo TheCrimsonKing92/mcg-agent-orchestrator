@@ -9,6 +9,28 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 // Applies one captured batch; the tick owner retains checkpoint and completion authority.
 internal static class ConductorOperatorIntentBoundary
 {
+    // Observation can keep an empty loop alive, but must never expand this boundary's batch.
+    internal static int ObserveDeferredArrivals(OperatorIntentCoordinator? operatorIntents, string? onlyGoalId,
+        IReadOnlySet<string> capturedGoalIds,
+        IReadOnlyDictionary<string, GoalSnapshotCheckpointResult> checkpointHeldGoals)
+    {
+        if (operatorIntents is null) return 0;
+        try
+        {
+            var arrivals = operatorIntents.ListActionableGoalIds()
+                .Where(id => onlyGoalId is null || id == onlyGoalId)
+                .Where(id => !capturedGoalIds.Contains(id)).ToArray();
+            foreach (var id in arrivals.Where(checkpointHeldGoals.ContainsKey))
+                EmitProgress($"OPERATOR_INTENT goal={ShortGoalId(id)} result=deferred reason=checkpoint-held");
+            return arrivals.Length;
+        }
+        catch (Exception ex)
+        {
+            EmitProgress($"OPERATOR_INTENT result=store-unavailable phase=list reason={SanitizeReason(ex.Message)}");
+            return 0;
+        }
+    }
+
     internal sealed record Result
     {
         public HashSet<GoalId> ChangedGoalIds { get; } = [];

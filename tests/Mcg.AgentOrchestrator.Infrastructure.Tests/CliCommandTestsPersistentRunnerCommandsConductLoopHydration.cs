@@ -541,7 +541,9 @@ public sealed class CliCommandTestsPersistentRunnerCommandsConductLoopHydration 
                     document.RootElement.GetProperty("eventType").GetString() == "GoalEvictedFromConductor"));
                 Xunit.Assert.Equal(storedStatus.ToString(), eviction.RootElement.GetProperty("status").GetString());
                 Xunit.Assert.Equal(
-                    enqueueIntent ? "operator-intent-forced-reload" : "scheduled-reload",
+                    // Target preparation already hydrates the terminal snapshot before the
+                    // ordinary sweep. Eviction therefore uses the scheduled reload path.
+                    "scheduled-reload",
                     eviction.RootElement.GetProperty("trigger").GetString());
             }
             finally
