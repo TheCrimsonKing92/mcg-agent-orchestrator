@@ -131,8 +131,8 @@ public sealed partial class AgentOrchestratorKernel
             _humanInputRequests.Remove(request.Id);
         foreach (var request in humanInputRequests.Select(HumanInputRequest.FromSnapshot))
             _humanInputRequests.Add(request.Id, request);
-        RepairMissingHumanInputRequests();
-        SweepParkedGoalHumanWaits();
+        RepairMissingHumanInputRequests(goalId);
+        SweepParkedGoalHumanWaits(goalId);
     }
 
     // Additive merge: ingest goals (and their human-input requests) from the snapshot that this kernel
@@ -253,9 +253,10 @@ public sealed partial class AgentOrchestratorKernel
         return refreshed;
     }
 
-    private void RepairMissingHumanInputRequests()
+    private void RepairMissingHumanInputRequests(GoalId? onlyGoalId = null)
     {
         foreach (var goal in _goals.Values.Where(goal =>
+                     (onlyGoalId is null || goal.Id == onlyGoalId) &&
                      goal.Status != GoalStatus.Parked &&
                      !IsTerminalGoalStatus(goal.Status)))
         {

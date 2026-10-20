@@ -153,7 +153,14 @@ internal sealed partial class OperatorIntentCoordinator
     public IReadOnlyList<string> ListActionableGoalIds() =>
         _store.ListActionableGoalIdsAsync().GetAwaiter().GetResult();
 
-    public OperatorIntentExecutionResult ExecutePending(AgentOrchestratorKernel kernel, Goal goal)
+    public IReadOnlyList<OperatorIntentRecord> CaptureGoalBatch() =>
+        _store.CaptureGoalBatchAsync(ClaimOwner).GetAwaiter().GetResult();
+
+    internal bool HasPendingCompletion(string goalId) =>
+        _pendingCompletions.TryGetValue(goalId, out var pending) && pending.Count > 0;
+
+    public OperatorIntentExecutionResult ExecutePending(
+        AgentOrchestratorKernel kernel, Goal goal, IReadOnlySet<string>? intentIds = null)
     {
         if (_pendingCompletions.TryGetValue(goal.Id.Value, out var uncommitted) && uncommitted.Count > 0)
         {
@@ -168,7 +175,9 @@ internal sealed partial class OperatorIntentCoordinator
         var appliedVerbs = new List<string>();
         for (var count = 0; count < MaxIntentsPerGoalPerTick; count++)
         {
-            var intent = (appliedVerbs.Count == 0
+            var intent = (intentIds is not null
+                ? _store.ClaimNextInBatchAsync(goal.Id.Value, ClaimOwner, intentIds, pendingOnly: appliedVerbs.Count > 0)
+                : appliedVerbs.Count == 0
                 ? _store.ClaimNextAsync(goal.Id.Value, ClaimOwner)
                 : _store.ClaimNextPendingAsync(goal.Id.Value, ClaimOwner)).GetAwaiter().GetResult();
             if (intent is null)
@@ -221,7 +230,7 @@ internal sealed partial class OperatorIntentCoordinator
                 if (retryClarification is RetryClarificationHandling.AwaitingExistingAnswer or
                     RetryClarificationHandling.AwaitingNewAnswer or RetryClarificationHandling.AwaitingOtherHumanInput)
                 {
-                    if (TryApplyQueuedAnswer(kernel, goal, lines, out var answerMutated))
+                    if (TryApplyQueuedAnswer(kernel, goal, lines, out var answerMutated, intentIds))
                     {
                         mutated |= answerMutated || retryClarification == RetryClarificationHandling.AwaitingNewAnswer;
                         break;
@@ -294,14 +303,17 @@ internal sealed partial class OperatorIntentCoordinator
         };
     }
 
-    public IReadOnlyList<string> RejectPending(string goalId, string reason, string? reasonCode = null)
+    public IReadOnlyList<string> RejectPending(
+        string goalId, string reason, string? reasonCode = null, IReadOnlySet<string>? intentIds = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(goalId);
         ArgumentException.ThrowIfNullOrWhiteSpace(reason);
         var lines = new List<string>();
         for (var count = 0; count < MaxIntentsPerGoalPerTick; count++)
         {
-            var intent = _store.ClaimNextAsync(goalId, ClaimOwner).GetAwaiter().GetResult();
+            var intent = (intentIds is null
+                ? _store.ClaimNextAsync(goalId, ClaimOwner)
+                : _store.ClaimNextInBatchAsync(goalId, ClaimOwner, intentIds)).GetAwaiter().GetResult();
             if (intent is null)
             {
                 break;

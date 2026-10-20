@@ -21,6 +21,7 @@ internal sealed class GoalIntegrationEvidenceResolver : IGoalIntegrationEvidence
     private readonly IReadOnlyList<IntegrationCommitCandidate> _candidates;
     private readonly Func<string, IReadOnlyList<string>, GitCli.GitResult> _gitRunner;
     private readonly Dictionary<GoalId, GoalIntegrationEvidence?> _cache = [];
+    internal bool IsAvailable { get; private set; }
 
     internal static Func<string, IReadOnlyList<string>, GitCli.GitResult> GitRunner { get; set; } =
         (workingDirectory, args) => GitCli.Run(workingDirectory, args.ToArray());
@@ -29,12 +30,14 @@ internal sealed class GoalIntegrationEvidenceResolver : IGoalIntegrationEvidence
         string executionDirectory,
         string? mainSha,
         IReadOnlyList<IntegrationCommitCandidate> candidates,
-        Func<string, IReadOnlyList<string>, GitCli.GitResult> gitRunner)
+        Func<string, IReadOnlyList<string>, GitCli.GitResult> gitRunner,
+        bool evidenceAvailable = true)
     {
         _executionDirectory = Path.GetFullPath(executionDirectory);
         _mainSha = mainSha;
         _candidates = candidates;
         _gitRunner = gitRunner;
+        IsAvailable = evidenceAvailable && !string.IsNullOrWhiteSpace(mainSha);
     }
 
     public static GoalIntegrationEvidenceResolver Build(
@@ -62,7 +65,8 @@ internal sealed class GoalIntegrationEvidenceResolver : IGoalIntegrationEvidence
         var candidates = log.ExitCode == 0
             ? ParseCandidates(log.Output)
             : [];
-        return new GoalIntegrationEvidenceResolver(fullExecutionDirectory, mainSha, candidates, gitRunner);
+        return new GoalIntegrationEvidenceResolver(fullExecutionDirectory, mainSha, candidates, gitRunner,
+            log.ExitCode == 0 && !log.DrainTimedOut && log.ProcessStarted);
     }
 
     public bool TryResolve(GoalId goalId, out GoalIntegrationEvidence? evidence)
@@ -99,6 +103,10 @@ internal sealed class GoalIntegrationEvidenceResolver : IGoalIntegrationEvidence
         if (ancestry.ExitCode == 0)
         {
             evidence = new GoalIntegrationEvidence(candidate.Sha, _mainSha, candidate.Subject);
+        }
+        else if (ancestry.ExitCode != 1)
+        {
+            IsAvailable = false;
         }
 
         _cache[goalId] = evidence;

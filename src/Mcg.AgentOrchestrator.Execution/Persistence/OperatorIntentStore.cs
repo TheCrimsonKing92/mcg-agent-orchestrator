@@ -49,6 +49,15 @@ public sealed record ActionableOperatorIntentSummary(
 
 public interface IOperatorIntentStore
 {
+    Task<IReadOnlyList<OperatorIntentRecord>> CaptureGoalBatchAsync(
+        string claimOwner, CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException("This store does not support goal-intent batch capture.");
+
+    Task<OperatorIntentRecord?> ClaimNextInBatchAsync(
+        string goalId, string claimOwner, IReadOnlySet<string> intentIds,
+        bool pendingOnly = false, string? verb = null, CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException("This store does not support bounded goal-intent claims.");
+
     Task<OperatorIntentRecord> EnqueueAsync(
         OperatorIntentRecord intent,
         CancellationToken cancellationToken = default);
@@ -236,7 +245,8 @@ public sealed partial class SqliteOperatorIntentStore : IOperatorIntentStore
         string? verb,
         string claimOwner,
         CancellationToken cancellationToken,
-        bool pendingOnly = false)
+        bool pendingOnly = false,
+        IReadOnlySet<string>? intentIds = null)
     {
         EnsureWritable();
         ArgumentException.ThrowIfNullOrWhiteSpace(goalId);
@@ -244,7 +254,7 @@ public sealed partial class SqliteOperatorIntentStore : IOperatorIntentStore
 
         await using var conn = OpenConnection();
         await using var tx = conn.BeginTransaction();
-        var intent = await ReadNextActionableAsync(conn, tx, goalId, verb, claimOwner, cancellationToken, pendingOnly);
+        var intent = await ReadNextActionableAsync(conn, tx, goalId, verb, claimOwner, cancellationToken, pendingOnly, intentIds);
         if (intent is null)
         {
             await tx.CommitAsync(cancellationToken);
@@ -520,7 +530,8 @@ public sealed partial class SqliteOperatorIntentStore : IOperatorIntentStore
         string? verb,
         string claimOwner,
         CancellationToken cancellationToken,
-        bool pendingOnly)
+        bool pendingOnly,
+        IReadOnlySet<string>? intentIds)
     {
         await using var cmd = conn.CreateCommand();
         cmd.Transaction = tx;
@@ -529,6 +540,7 @@ public sealed partial class SqliteOperatorIntentStore : IOperatorIntentStore
             WHERE goal_id = $goal_id
               AND ($verb IS NULL OR verb = $verb)
               AND (status = $pending OR ($pending_only = 0 AND status = $claimed AND claim_owner = $claim_owner))
+              AND ($intent_ids IS NULL OR id IN (SELECT value FROM json_each($intent_ids)))
             ORDER BY CASE status WHEN 'Claimed' THEN 0 ELSE 1 END, created_at, id
             LIMIT 1
             """;
@@ -538,6 +550,7 @@ public sealed partial class SqliteOperatorIntentStore : IOperatorIntentStore
         cmd.Parameters.AddWithValue("$claimed", OperatorIntentStatus.Claimed.ToString());
         cmd.Parameters.AddWithValue("$claim_owner", claimOwner);
         cmd.Parameters.AddWithValue("$pending_only", pendingOnly ? 1 : 0);
+        cmd.Parameters.AddWithValue("$intent_ids", intentIds is null ? DBNull.Value : JsonSerializer.Serialize(intentIds));
         await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
         return await reader.ReadAsync(cancellationToken) ? ReadIntent(reader) : null;
     }

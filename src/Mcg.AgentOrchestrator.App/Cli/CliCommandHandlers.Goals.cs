@@ -1790,6 +1790,8 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                             Console.Error.WriteLine),
                         postLandingCanary: postLandingCanary,
                         goalReloadObservation: resolveGoalReloadObservation,
+                        prepareOperatorIntentTarget: (loopKernel, goalId) => PrepareOperatorIntentTarget(
+                            context, loopKernel, goalId, loopReaper, intentGoalReloadObservations),
                         lifecycleRecorder: new ConductorLifecycleRecorder(
                             new SqliteRunEventStore(context.Workspace.RunEventStorePath),
                             readAdoptionCensus: WorkerAdoptionCensus.CreateDefault(context.Workspace.SqliteStatePath),
@@ -1919,6 +1921,9 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     (wk, goal) => new GoalDispatchOperations().RefreshDispatches(wk, goal, watchReaper),
                     conductEventLogWriter: new ConductEventLogWriter(context.Workspace.ConductEventsLogPath),
                     operatorIntents: OperatorIntentCoordinator.CreateDefault(context.Workspace),
+                    prepareOperatorIntentTarget: (wk, goalId) => PrepareLoadedOperatorIntentTarget(
+                        context, wk, wk.GetGoal(goalId), watchReaper),
+                    goalReloadObservation: _ => new ConductorGoalReloadObservation.NotObserved(),
                     progressiveReviewGlances: ProgressiveReviewGlanceCoordinator.CreateDefault(context.Workspace, context.WorkerProfiles),
                     progressiveReviewSteering: ProgressiveReviewSteeringCoordinator.CreateDefault(context.Workspace, context.Agents, context.WorkerProfiles, context.Providers),
                     postLandingCanary: PostLandingCanaryFactory.CreateDefault(context.Workspace),

@@ -951,6 +951,9 @@ internal static partial class CliPersistentStateRunner
         var tickBaselines = new Dictionary<string, GoalSnapshot>(StringComparer.Ordinal);
         AgentOrchestratorKernel LoadLoopKernel() => LoadLoopKernelForGoals([]);
 
+        AgentOrchestratorKernel LoadOperatorIntentTargets(IReadOnlyCollection<GoalId> goalIds)
+            => LoadConductLoopOperatorIntentTargets(stateRepository, goalIds, tickBaselines);
+
         AgentOrchestratorKernel LoadLoopKernelForGoals(IReadOnlyCollection<string> trackedGoalIds)
         {
             var loaded = LoadConductLoopKernel(
@@ -1152,6 +1155,7 @@ internal static partial class CliPersistentStateRunner
             reloadResolvedParkedHumanWaitKernel: () => LoadConductLoopResolvedParkedHumanWaitKernel(stateRepository),
             reloadParkedGoalSafetyNetKernel: () => LoadConductLoopParkedGoalSafetyNetKernel(stateRepository),
             reloadKernelForGoals: LoadLoopKernelForGoals,
+            loadOperatorIntentTargets: LoadOperatorIntentTargets,
             checkpointGoalKernel: CheckpointGoals,
             initialConductLoopLoadHold: initialConductLoopLoadHold,
             persistCriticalGoalKernel: PersistCriticalGoals,
@@ -1503,6 +1507,16 @@ internal static partial class CliPersistentStateRunner
 
     private static string SanitizeConductToken(string value) =>
         value.Replace(' ', '_').Replace('\t', '_').Replace('\n', '_').Replace('\r', '_');
+
+    internal static AgentOrchestratorKernel LoadConductLoopOperatorIntentTargets(
+        IOrchestratorStateQueries repository, IReadOnlyCollection<GoalId> goalIds,
+        IDictionary<string, GoalSnapshot> tickBaselines)
+    {
+        var loaded = repository.LoadGoalsAsync(goalIds).GetAwaiter().GetResult();
+        foreach (var snapshot in loaded.ExportSnapshot().Goals)
+            tickBaselines[snapshot.Id] = snapshot;
+        return loaded;
+    }
 
     internal static AgentOrchestratorKernel LoadConductLoopKernel(
         ITransactionalOrchestratorStateRepository stateRepository,

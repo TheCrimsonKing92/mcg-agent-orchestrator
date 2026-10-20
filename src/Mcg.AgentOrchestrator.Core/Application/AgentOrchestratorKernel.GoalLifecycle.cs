@@ -2424,10 +2424,12 @@ public sealed partial class AgentOrchestratorKernel
         Append(goal, request.TaskId, ProgressKind.HumanInputReceived, $"Dismissed human wait {request.Id.Value[..8]}.");
     }
 
-    public int SweepParkedGoalHumanWaits()
+    public int SweepParkedGoalHumanWaits() => SweepParkedGoalHumanWaits(null);
+
+    private int SweepParkedGoalHumanWaits(GoalId? onlyGoalId)
     {
         var resolved = 0;
-        foreach (var goal in _goals.Values)
+        foreach (var goal in _goals.Values.Where(goal => onlyGoalId is null || goal.Id == onlyGoalId))
         {
             var parkResolution = ResolveParkResolution(goal);
             if (parkResolution is null)

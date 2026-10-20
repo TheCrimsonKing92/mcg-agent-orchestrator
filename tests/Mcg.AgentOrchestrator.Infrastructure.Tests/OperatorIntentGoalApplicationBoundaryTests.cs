@@ -6,7 +6,7 @@ public sealed class OperatorIntentGoalApplicationBoundaryTests
     public void TickDelegatesToSharedApplicationWithoutReverseDependency()
     {
         var root = FindRepositoryRoot();
-        var loopPath = Path.Combine(root, "src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs");
+        var loopPath = Path.Combine(root, "src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.OperatorIntentBoundary.cs");
         var applicationPath = Path.Combine(root, "src/Mcg.AgentOrchestrator.App/Orchestration/OperatorIntentGoalApplication.cs");
         Assert.True(File.Exists(loopPath), $"Missing source: {loopPath}");
         Assert.True(File.Exists(applicationPath), $"Missing source: {applicationPath}");
