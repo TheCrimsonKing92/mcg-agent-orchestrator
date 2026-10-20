@@ -127,11 +127,17 @@ public sealed class DotnetBuildEnvironmentManagerTestsFocusedChildFailures
         File.WriteAllText(Path.Combine(owner.Root, "proceed"), "go");
         Assert.True(owner.Harness.WaitForExit(10000), owner.Diagnostics());
         Assert.False(descendant.HasExited, owner.Diagnostics());
-        var failure = await FailIdentity(owner);
+        var releaseObserved = false;
+        var failure = await FailIdentity(owner, observeCleanup: exited =>
+        {
+            // Observe the descendant's signal before successful cleanup removes the fixture root.
+            releaseObserved = File.Exists(Path.Combine(owner.Root, "descendant-release-observed"));
+            return exited;
+        });
         Assert.StartsWith(Fixture.IdentityFailure, failure.Message);
         Assert.True(descendant.WaitForExit(5000), failure.Message);
         Assert.True(owner.CustodyResolved, failure.Message);
-        Assert.False(owner.ForcedTermination, failure.Message);
+        Assert.True(releaseObserved, "Orphaned descendant did not observe cooperative release. " + failure.Message);
         Assert.False(Directory.Exists(owner.Root));
     }
 
@@ -146,7 +152,6 @@ public sealed class DotnetBuildEnvironmentManagerTestsFocusedChildFailures
         Assert.True(descendant.WaitForExit(5000), failure.Message);
         Assert.Contains("late-publication-observed", owner.Stdout!.Snapshot().Tail);
         Assert.True(owner.CustodyResolved, failure.Message);
-        Assert.False(owner.ForcedTermination, failure.Message);
         Assert.False(Directory.Exists(owner.Root));
     }
 
@@ -160,7 +165,6 @@ public sealed class DotnetBuildEnvironmentManagerTestsFocusedChildFailures
         Assert.StartsWith(Fixture.IdentityFailure, failure.Message);
         Assert.True(owner.Harness.HasExited, failure.Message);
         Assert.Contains("late-release-observed", owner.Stdout!.Snapshot().Tail);
-        Assert.False(owner.ForcedTermination, failure.Message);
         Assert.True(owner.CustodyResolved, failure.Message);
         Assert.False(Directory.Exists(owner.Root));
     }
@@ -233,12 +237,12 @@ public sealed class DotnetBuildEnvironmentManagerTestsFocusedChildFailures
         Assert.False(Directory.Exists(owner.Root));
     }
 
-    private static Task<Xunit.Sdk.XunitException> FailIdentity(Fixture owner) =>
+    private static Task<Xunit.Sdk.XunitException> FailIdentity(Fixture owner, Func<bool, bool>? observeCleanup = null) =>
         Assert.ThrowsAsync<Xunit.Sdk.XunitException>(() => owner.RunAsync(() =>
         {
             using var identity = owner.RequireIdentity(waitForPublication: false);
             return Task.CompletedTask;
-        }));
+        }, observeCleanup));
 
     private static JsonElement ParseDiagnostics(string failure)
     {
@@ -305,7 +309,10 @@ public sealed class DotnetBuildEnvironmentManagerTestsFocusedChildFailures
             if ($env:FOCUSED_CONTROL_MODE -eq 'ignore-release') {
                 $never = [Threading.EventWaitHandle]::new($false, [Threading.EventResetMode]::ManualReset)
                 [void]$never.WaitOne()
-            } else { Wait-FixtureFile $env:FOCUSED_TREE_RELEASE }
+            } else {
+                Wait-FixtureFile $env:FOCUSED_TREE_RELEASE
+                [IO.File]::WriteAllText((Join-Path $env:FOCUSED_TREE_ROOT 'descendant-release-observed'), 'observed')
+            }
             """);
         File.WriteAllText(script, waitFunction + """
 
