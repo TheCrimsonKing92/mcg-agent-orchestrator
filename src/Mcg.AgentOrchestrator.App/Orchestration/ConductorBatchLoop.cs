@@ -794,6 +794,25 @@ internal sealed partial class ConductorBatchLoop
             var preWalkCpuStart = ReadProcessCpu();
             RunJanitorialPhase("retire-until-goal-lessons", nextTick, () => ConductorTickStepLedger.Measure("retire-until-goal-lessons", () => RetireUntilGoalLessons(kernel)));
             var hostedChangedGoalIds = ServiceStewardAndAuthor(kernel, onlyGoalId);
+            if (intentBoundary.DeferredIntents.Count > 0)
+            {
+                // Maintenance owns interrupted-work and landing/evidence reconciliation. Retry
+                // only deferred members of the original snapshot against its current working set.
+                var reconciled = ServiceOperatorIntentBoundary(kernel, driver, onlyGoalId, checkpointHeldGoals,
+                    nextTick, persistTick, persistGoalTick, checkpointGoalTick, busyWriteDelay,
+                    intentBoundary.DeferredIntents);
+                intentBoundary.IncludeAfterMaintenance(reconciled);
+                foreach (var goalId in reconciled.AppliedGoalIds)
+                {
+                    excludedGoals.Remove(goalId.Value);
+                    setAsideGoals.Remove(goalId.Value);
+                    selfClearedSetAsideEntries.Remove(goalId.Value);
+                    escalatedGoals.Remove(goalId.Value);
+                    completedGoals.Remove(goalId.Value);
+                    reapedGoals.Remove(goalId.Value);
+                    goalProjectionCache.Invalidate(goalId);
+                }
+            }
             var actionableIntentGoalIds = intentBoundary.ActionableGoalIds;
             var preWalkIntentLines = intentBoundary.Lines;
             preWalkIntentLines.AddRange(ConductorTickStepLedger.Measure("workspace-intents", () => ServiceWorkspaceIntents(kernel)));
@@ -2026,11 +2045,12 @@ internal sealed partial class ConductorBatchLoop
         int tick, Action<AgentOrchestratorKernel>? persistTick,
         Action<AgentOrchestratorKernel, IReadOnlyCollection<GoalId>>? persistGoalTick,
         Func<AgentOrchestratorKernel, IReadOnlyCollection<GoalId>, IReadOnlyList<GoalSnapshotCheckpointResult>>? checkpointGoalTick,
-        Action<TimeSpan>? busyWriteDelay)
+        Action<TimeSpan>? busyWriteDelay,
+        IReadOnlyList<OperatorIntentRecord>? capturedBatch = null)
     {
         var result = ConductorOperatorIntentBoundary.Apply(
             kernel, driver, onlyGoalId, checkpointHeldGoals, _operatorIntents,
-            _prepareOperatorIntentTarget, _goalReloadObservation);
+            capturedBatch is null ? _prepareOperatorIntentTarget : null, _goalReloadObservation, capturedBatch);
         if (result.ChangedGoalIds.Count == 0) return result;
         var requested = result.ChangedGoalIds.ToArray();
         if (checkpointGoalTick is not null)

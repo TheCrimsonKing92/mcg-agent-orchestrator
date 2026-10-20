@@ -1,3 +1,4 @@
+using System.Runtime.ExceptionServices;
 using System.Text.Json;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
@@ -97,6 +98,7 @@ public sealed class ConductorBatchLoopTestsOperatorIntentBoundary(ITestOutputHel
             var lateOther = Mapping(other, "late-other");
             var injected = false;
             var sweeps = 0;
+            Exception? sweepFailure = null;
             void Inject()
             {
                 if (injected) return;
@@ -109,18 +111,24 @@ public sealed class ConductorBatchLoopTestsOperatorIntentBoundary(ITestOutputHel
                 prepareOperatorIntentTarget: (_, _) => { if (!duringSweep) Inject(); return true; },
                 sweep: _ =>
                 {
-                    sweeps++;
-                    Assert.Equal(OperatorIntentStatus.Applied, store.GetAsync(first.Id).GetAwaiter().GetResult()!.Status);
-                    if (duringSweep) Inject();
-                    var expected = sweeps == 1 ? OperatorIntentStatus.Pending : OperatorIntentStatus.Applied;
-                    Assert.Equal(expected, store.GetAsync(lateSame.Id).GetAwaiter().GetResult()!.Status);
-                    Assert.Equal(expected, store.GetAsync(lateOther.Id).GetAwaiter().GetResult()!.Status);
+                    try
+                    {
+                        sweeps++;
+                        Assert.Equal(OperatorIntentStatus.Applied, store.GetAsync(first.Id).GetAwaiter().GetResult()!.Status);
+                        if (duringSweep) Inject();
+                        var expected = sweeps == 1 ? OperatorIntentStatus.Pending : OperatorIntentStatus.Applied;
+                        Assert.Equal(expected, store.GetAsync(lateSame.Id).GetAwaiter().GetResult()!.Status);
+                        Assert.Equal(expected, store.GetAsync(lateOther.Id).GetAwaiter().GetResult()!.Status);
+                    }
+                    catch (Exception ex) { sweepFailure ??= ex; throw; }
                 }).Run(kernel, MakeDriver(getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
                     getRunningCount: () => ConductorAutonomyPolicy.Conservative.MaxConcurrentPaidWorkers),
                 ConductorAutonomyPolicy.Conservative, NoStopPath(), maxIterations: 2,
                 persistGoalTick: (_, _) => { }, watchInterval: TimeSpan.FromMinutes(1),
                 sleepFunc: _ => false);
 
+            // RunJanitorialPhase contains callback exceptions; preserve the original assertion.
+            if (sweepFailure is not null) ExceptionDispatchInfo.Capture(sweepFailure).Throw();
             Assert.True(injected);
             Assert.Equal(2, sweeps);
             Assert.Single(firstGoal.Timeline.Where(item => item.OperatorIntentApplied?.IntentId == lateSame.Id));
@@ -130,7 +138,7 @@ public sealed class ConductorBatchLoopTestsOperatorIntentBoundary(ITestOutputHel
     }
 
     [Xunit.Fact]
-    public async Task UnresolvedTarget_RemainsQueuedUntilOrdinaryMaintenance()
+    public async Task DeferredTarget_RetriesCapturedIntentAfterOrdinaryMaintenance()
     {
         var root = CreateTempDirectory("mcg-intent-deferred");
         try
@@ -152,7 +160,73 @@ public sealed class ConductorBatchLoopTestsOperatorIntentBoundary(ITestOutputHel
                     swept = true;
                 }).Run(kernel, MakeDriver(), ConductorAutonomyPolicy.Conservative, NoStopPath(), maxIterations: 1);
             Assert.True(swept);
-            Assert.DoesNotContain(goal.Timeline, item => item.OperatorIntentApplied?.IntentId == intent.Id);
+            Assert.Equal(OperatorIntentStatus.Applied, (await store.GetAsync(intent.Id))!.Status);
+            Assert.Single(goal.Timeline.Where(item => item.OperatorIntentApplied?.IntentId == intent.Id));
+        }
+        finally { TryDeleteDirectory(root); }
+    }
+
+    [Xunit.Fact]
+    public async Task DeferredVerifiedTarget_AppliesOnlyCapturedEvidenceAfterMaintenance()
+    {
+        var root = CreateTempDirectory("mcg-intent-deferred-evidence");
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var goal = CreateVerifiedSimpleGoal(kernel, "Landed goal awaiting criterion evidence");
+            kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec("mapping", ["criterion"],
+                VerificationClass.TestVerifiable, [], []));
+            kernel.MapCriterionEvidenceOwner(goal.Id, 0, 1, CriterionEvidenceOwner.Acceptance,
+                "conductor", CriterionEvidenceScopes.FullAcceptanceGate, expectedCandidateSha: "candidate");
+            Assert.Equal(GoalStatus.Verified, goal.Status);
+            var statePath = Path.Combine(root, "state.db");
+            StateDbMigrations.EnsureUpToDate(statePath);
+            var repository = new SqliteOrchestratorStateRepository(statePath);
+            await repository.SaveAsync(kernel);
+            var store = Store(root);
+            var captured = await store.EnqueueAsync(Mapping(goal, "captured-evidence"));
+            var late = Mapping(goal, "late-evidence");
+            var events = new List<string>();
+            Exception? sweepFailure = null;
+
+            new ConductorBatchLoop(operatorIntents: new OperatorIntentCoordinator(store),
+                prepareOperatorIntentTarget: (_, _) =>
+                {
+                    events.Add("prepare");
+                    // Landing/evidence preparation keeps deferring this Verified aggregate,
+                    // even after the sweep preserves it for its remaining evidence obligation.
+                    return false;
+                },
+                goalReloadObservation: _ => new ConductorGoalReloadObservation.NotObserved(),
+                sweep: _ =>
+                {
+                    try
+                    {
+                        Assert.Equal(OperatorIntentStatus.Pending, store.GetAsync(captured.Id).GetAwaiter().GetResult()!.Status);
+                        Assert.Equal(GoalStatus.Verified, goal.Status);
+                        Assert.Contains(goal.OutstandingCriterionEvidenceObligations,
+                            item => item.Owner == CriterionEvidenceOwner.Acceptance);
+                        events.Add("maintenance");
+                        store.EnqueueAsync(late).GetAwaiter().GetResult();
+                    }
+                    catch (Exception ex) { sweepFailure = ex; throw; }
+                }).Run(kernel, MakeDriver(), ConductorAutonomyPolicy.Conservative, NoStopPath(), maxIterations: 1,
+                persistGoalTick: (current, ids) =>
+                {
+                    repository.SaveGoalSnapshotsAsync(ids.Select(current.ExportGoalSnapshot).ToArray()).GetAwaiter().GetResult();
+                    events.Add("persist");
+                });
+
+            if (sweepFailure is not null) ExceptionDispatchInfo.Capture(sweepFailure).Throw();
+            Assert.Equal(new[] { "prepare", "maintenance" }, events.Take(2));
+            Assert.Equal(1, events.Count(item => item == "prepare"));
+            Assert.Contains("persist", events);
+            Assert.Equal(OperatorIntentStatus.Applied, (await store.GetAsync(captured.Id))!.Status);
+            Assert.Equal(OperatorIntentStatus.Pending, (await store.GetAsync(late.Id))!.Status);
+            var durable = (await repository.LoadGoalsAsync([goal.Id])).GetGoal(goal.Id);
+            Assert.Equal(GoalStatus.Verified, durable.Status);
+            Assert.Single(durable.Timeline.Where(item => item.OperatorIntentApplied?.IntentId == captured.Id));
+            Assert.DoesNotContain(durable.Timeline, item => item.OperatorIntentApplied?.IntentId == late.Id);
         }
         finally { TryDeleteDirectory(root); }
     }

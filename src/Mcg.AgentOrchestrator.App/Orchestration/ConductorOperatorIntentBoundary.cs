@@ -39,7 +39,20 @@ internal static class ConductorOperatorIntentBoundary
         public HashSet<GoalId> DurableGoalIds { get; } = [];
         public HashSet<string> ActionableGoalIds { get; } = new(StringComparer.Ordinal);
         public List<string> Lines { get; } = [];
+        public List<OperatorIntentRecord> DeferredIntents { get; } = [];
         public int AwaitingReload { get; set; }
+
+        internal void IncludeAfterMaintenance(Result reconciled)
+        {
+            ChangedGoalIds.UnionWith(reconciled.ChangedGoalIds);
+            AppliedGoalIds.UnionWith(reconciled.AppliedGoalIds);
+            // A second mutation needs its own successful checkpoint.
+            DurableGoalIds.ExceptWith(reconciled.ChangedGoalIds);
+            DurableGoalIds.UnionWith(reconciled.DurableGoalIds);
+            UnavailableGoalIds.UnionWith(reconciled.UnavailableGoalIds);
+            Lines.AddRange(reconciled.Lines);
+            AwaitingReload = reconciled.AwaitingReload;
+        }
     }
 
     internal static Result Apply(
@@ -47,12 +60,13 @@ internal static class ConductorOperatorIntentBoundary
         IReadOnlyDictionary<string, GoalSnapshotCheckpointResult> checkpointHeldGoals,
         OperatorIntentCoordinator? operatorIntents,
         Func<AgentOrchestratorKernel, GoalId, bool>? prepareTarget,
-        Func<string, ConductorGoalReloadObservation> observeGoal)
+        Func<string, ConductorGoalReloadObservation> observeGoal,
+        IReadOnlyList<OperatorIntentRecord>? capturedBatch = null)
     {
         var result = new Result();
         if (operatorIntents is null) return result;
         IReadOnlyList<OperatorIntentRecord> batch;
-        try { batch = ConductorTickStepLedger.Measure("operator-intent-list", () => operatorIntents.CaptureGoalBatch()); }
+        try { batch = capturedBatch ?? ConductorTickStepLedger.Measure("operator-intent-list", () => operatorIntents.CaptureGoalBatch()); }
         catch (Exception ex)
         {
             EmitProgress($"OPERATOR_INTENT result=store-unavailable phase=list reason={SanitizeReason(ex.Message)}");
@@ -84,12 +98,17 @@ internal static class ConductorOperatorIntentBoundary
                     result.ChangedGoalIds.Add(goalId);
                 if (!prepared || goal is null)
                 {
-                    result.UnavailableGoalIds.Add(target.Key);
                     var disposition = UnloadedGoalIntentDisposition.Decide(target.Key, onlyGoalId, observeGoal);
                     if (disposition is UnloadedGoalIntentDisposition.Rejected rejection)
+                    {
+                        result.UnavailableGoalIds.Add(target.Key);
                         result.Lines.AddRange(operatorIntents.RejectPending(target.Key, rejection.Reason, rejection.ReasonCode, ids));
+                    }
                     else
                     {
+                        // Keep the frozen members for the ordinary post-maintenance application
+                        // path. Deferral alone must not exclude a loaded target from the walk.
+                        result.DeferredIntents.AddRange(target);
                         result.AwaitingReload++;
                         EmitProgress($"OPERATOR_INTENT goal={ShortGoalId(target.Key)} result=deferred reason=awaiting-goal-reload");
                     }
