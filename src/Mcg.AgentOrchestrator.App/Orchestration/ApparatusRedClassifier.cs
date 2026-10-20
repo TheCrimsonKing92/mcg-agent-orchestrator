@@ -113,17 +113,13 @@ internal static class ApparatusRedClassifier
                 continue;
             }
 
-            if (failingTest.CandidateRerunFailed)
+            // A confirmed inherited failure still needs the existing cross-goal/apparatus
+            // evaluation below; baseline attribution alone is not an apparatus reason.
+            var hasInheritedBaseline = failingTest.ConfirmedLaneFailure is not null &&
+                failingTest.BaselineAttribution is { Origin: AcceptanceTestFailureOrigin.Inherited } inherited &&
+                !string.IsNullOrWhiteSpace(inherited.Evidence);
+            if (failingTest.CandidateRerunFailed && !hasInheritedBaseline)
             {
-                if (failingTest.ConfirmedLaneFailure is not null &&
-                    failingTest.BaselineAttribution is { Origin: AcceptanceTestFailureOrigin.Inherited } inherited &&
-                    !string.IsNullOrWhiteSpace(inherited.Evidence))
-                {
-                    // This identity remains on the existing inherited-result route; it cannot
-                    // turn another identity's unavailable baseline into a candidate introduction.
-                    evidenceKinds.Add("inherited-baseline");
-                    continue;
-                }
                 if (failingTest.ConfirmedLaneFailure is not null && failingTest.HasCrossGoalOccurrence &&
                     failingTest.BaselineAttribution is { Origin: AcceptanceTestFailureOrigin.Unattributed } baseline &&
                     !string.IsNullOrWhiteSpace(baseline.Evidence))

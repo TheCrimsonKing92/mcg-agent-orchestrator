@@ -139,7 +139,59 @@ public sealed class ConductorDriverTestsAttributionPending
         var reading = fixture.Gate.RecordGateCompletion(fixture.Goal, fixture.Summary, new(() => ["src/Changed.cs"]))!;
         var pending = Assert.IsType<ApparatusRedDisposition.AttributionPending>(fixture.Gate.Classify(fixture.Goal, reading));
         Assert.Equal(Fixture.Identities[1], Assert.Single(pending.PendingTests).TestIdentity);
-        Assert.Contains("inherited-baseline", pending.OtherEvidenceKind, StringComparison.Ordinal);
+        Assert.Equal(ApparatusRedClassifier.CrossGoalEvidenceKind, pending.OtherEvidenceKind);
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public void InheritedWithoutHistory_WithPendingOrInfrastructureSibling_RemainsGenuine(
+        bool infrastructureSibling, bool reverse)
+    {
+        // All files and history are scoped to this fixture; no process or ambient state is used.
+        using var fixture = new Fixture(firstIdentityHasHistory: false);
+        fixture.Check = fixture.Check with
+        {
+            FailingTestAttributions = fixture.Check.FailingTestAttributions!.Select((attribution, i) =>
+                i == 0 ? attribution with { Origin = AcceptanceTestFailureOrigin.Inherited,
+                    Evidence = "executed baseline failed for this identity" } : attribution).ToArray(),
+            FailingTestIdentities = (reverse
+                ? Fixture.Identities.Take(2).Reverse() : Fixture.Identities.Take(2)).ToArray()
+        };
+        if (infrastructureSibling)
+        {
+            foreach (var path in fixture.Check.LaneRerun!.FirstTestResultPaths.Concat(fixture.Check.LaneRerun.RerunTestResultPaths))
+            {
+                var trx = XDocument.Load(path);
+                var sibling = trx.Descendants("UnitTestResult").Single(row =>
+                    (string?)row.Attribute("testName") == Fixture.Identities[1]);
+                sibling.Descendants("Message").Single().Value = "Stable dotnet build slots busy";
+                trx.Save(path);
+            }
+            fixture.Check = AcceptanceLaneRerunAttributionReader.Attach(
+                fixture.Check with { LaneRerun = fixture.Check.LaneRerun with { Attribution = null } },
+                fixture.Goal.Id.Value, Fixture.Candidate, Fixture.Main);
+        }
+
+        Assert.DoesNotContain(fixture.Index.Read(), record => record.TestIdentity == Fixture.Identities[0]);
+        var reading = fixture.Gate.RecordGateCompletion(fixture.Goal, fixture.Summary, new(() => ["src/Changed.cs"]))!;
+        Assert.All(reading.FailingTests, test =>
+        {
+            Assert.True(test.CandidateRerunFailed);
+            Assert.NotNull(test.ConfirmedLaneFailure);
+        });
+        var inherited = reading.FailingTests.Single(test => test.TestIdentity == Fixture.Identities[0]);
+        Assert.Equal(AcceptanceTestFailureOrigin.Inherited, inherited.BaselineAttribution!.Origin);
+        Assert.Null(inherited.ExceptionSignature);
+        var other = reading.FailingTests.Single(test => test.TestIdentity == Fixture.Identities[1]);
+        Assert.Equal(infrastructureSibling ? "dotnet-build-slots-busy" : null, other.ExceptionSignature);
+        Assert.Equal(AcceptanceTestFailureOrigin.Unattributed, other.BaselineAttribution!.Origin);
+        var genuine = Assert.IsType<ApparatusRedDisposition.Genuine>(fixture.Gate.Classify(fixture.Goal, reading));
+        Assert.Equal($"failing test {Fixture.Identities[0]} has neither a recorded infrastructure signature " +
+            "nor a prior cross-goal occurrence", genuine.Reason);
+        Assert.Equal(0, AcceptanceFailingTestIndex.CountRegates(fixture.Index.Read(), fixture.Goal.Id.Value));
     }
 
     [Fact]
@@ -180,7 +232,7 @@ public sealed class ConductorDriverTestsAttributionPending
         internal AcceptanceVerificationSummary Summary => new(false, [Check], FailedChecks: [Check.Name],
             BranchHeadSha: Candidate, MainHeadSha: Main, AttemptId: Attempt);
 
-        internal Fixture(int cap = 2)
+        internal Fixture(int cap = 2, bool firstIdentityHasHistory = true)
         {
             (Kernel, Goal) = SimpleGoal();
             PassVerification(Kernel, Goal, Goal.Tasks.Single());
@@ -204,7 +256,8 @@ public sealed class ConductorDriverTestsAttributionPending
             Check = AcceptanceLaneRerunAttributionReader.Attach(Check, Goal.Id.Value, Candidate, Main);
             var now = DateTimeOffset.Parse("2026-10-20T09:45:00Z", null);
             Index = new(Path.Combine(Root, "failing-index.jsonl"));
-            Index.Append(Identities.Select(identity => new AcceptanceFailingTestIndexRecord(
+            Index.Append(Identities.Where((_, i) => firstIdentityHasHistory || i != 0)
+                .Select(identity => new AcceptanceFailingTestIndexRecord(
                 AcceptanceFailingTestIndex.ContractVersion, AcceptanceFailingTestIndexKinds.GateFailure,
                 "other-goal", now.AddHours(-1), CheckName: CheckName, TestIdentity: identity,
                 ResolvedSourcePath: "tests/Sample.Tests/" + ClassName + ".cs", InsideChangedPaths: false,
