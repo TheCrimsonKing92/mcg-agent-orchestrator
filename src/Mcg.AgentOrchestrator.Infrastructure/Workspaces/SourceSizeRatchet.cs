@@ -308,7 +308,7 @@ internal static class SourceSizeRatchet
             // Finding projection remains in ReviewFindingContextProjector; 2606 is the measured size.
             // Goal 6e82a00d extracts build-scope preparation to WorkerBuildScopeDispatchPreparation and
             // integration-ref lookup to WorkerGitContext. Measured 2596 after extraction; no extra headroom.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Execution/Workers/WorkerProfileDispatcher.cs", 2596),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Execution/Workers/WorkerProfileDispatcher.cs", 2583),
             // Raised for goal fd252fe4: the single typed retry-cause argument belongs at the durable CLI
             // command-application boundary; classification and admission behavior remain elsewhere.
             // Goal 17d96426 classifies the stateless Hermes trial beside the existing stateless commands.
