@@ -10,7 +10,8 @@ using Fixture = ConductorDriverTestsAttributionPending.Fixture;
 
 public sealed class ConductorAttributionPendingRecoveryTests : GoalWorktreeTestBase
 {
-    // Parallel-safe: each case owns its workspace, SQLite stores and injected operations.
+    // Each case owns its workspace, SQLite stores and injected operations. Production audit
+    // calls consume global hooks; GoalWorktreeTestsAcceptanceRetry isolates their setters.
     [Fact]
     public async Task ResolvedOccurrenceReplayCannotCloseNewerSameReasonOrOrdinaryAttention()
     {
@@ -67,7 +68,7 @@ public sealed class ConductorAttributionPendingRecoveryTests : GoalWorktreeTestB
         Assert.Equal("error", Raise(workspace, goal, failingRaise).CollaborationOutcome);
         Assert.Empty(await store.ListAsync(goal.Id.Value));
         var before = File.ReadAllText(RecordPath(workspace));
-        var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+        var repository = InfrastructureTestSupport.CreateMigratedStateRepository(workspace.SqliteStatePath);
         await repository.SaveAsync(fixture.Kernel);
         var message = await QueueAudit(repository, goal);
         await Assert.ThrowsAsync<InvalidOperationException>(() => ProcessAudit(repository, workspace, goal, message, store));
@@ -95,7 +96,7 @@ public sealed class ConductorAttributionPendingRecoveryTests : GoalWorktreeTestB
         Raise(workspace, goal, store);
         var before = File.ReadAllText(RecordPath(workspace));
         var raised = Assert.Single(await store.ListAsync(goal.Id.Value));
-        var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+        var repository = InfrastructureTestSupport.CreateMigratedStateRepository(workspace.SqliteStatePath);
         await repository.SaveAsync(fixture.Kernel);
         var message = await QueueAudit(repository, goal);
         using var cancellation = new CancellationTokenSource();
