@@ -24,8 +24,12 @@ public sealed class CliExplicitDispositionOrderingTests : CliGoalParkTestSupport
             var writer = new SqliteOrchestratorStateRepository(seed.Workspace.SqliteStatePath);
             var probe = new GoalTransactionProbeRepository(seed.Repository)
             {
-                StateAfterApplication = (attempt, state, token) => writer.SaveGoalSnapshotsAsync(
-                    [state.Goal with { Objective = $"Competing commit {attempt}" }], token)
+                StateAfterApplication = (attempt, _, token) => writer.TransactGoalStateAsync(
+                    seed.GoalId, (state, transactionToken) => Task.FromResult((true,
+                        (GoalStateSnapshot?)(state! with
+                        {
+                            Goal = state.Goal with { Objective = $"Competing commit {attempt}" }
+                        }), true)), token)
             };
             var outcome = CliPersistentStateRunner.ExecuteGoalParkApplication(
                 new(seed.GoalId.Value, "Must not commit", true), seed.GoalId, probe);
@@ -34,6 +38,7 @@ public sealed class CliExplicitDispositionOrderingTests : CliGoalParkTestSupport
             Assert.False(outcome.ShouldSave);
             Assert.True(probe.StateApplicationCount > 1);
             var after = (await LoadGoalStateExactly(seed.Repository, seed.GoalId))!;
+            Assert.Equal($"Competing commit {probe.StateApplicationCount}", after.Goal.Objective);
             Assert.Equal(before.Goal.Status, after.Goal.Status);
             Assert.Equal(before.Goal.CurrentHold, after.Goal.CurrentHold);
             Assert.Null(after.Goal.ExplicitDisposition);

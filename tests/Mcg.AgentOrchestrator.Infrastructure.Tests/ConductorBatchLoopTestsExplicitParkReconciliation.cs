@@ -178,6 +178,8 @@ public sealed class ConductorBatchLoopTestsExplicitParkReconciliation : Conducto
         held.RunTickForTests(f.Kernel, driver);
         var handle = held.RequiredHandleForTests(f.Goal);
         var attemptId = handle.Attempt.AttemptId;
+        Assert.Equal(1, held.HeldAttemptCount);
+        Assert.Equal(0, held.ProcessSpawnCount);
         Assert.True(held.AttemptCoordinator.HasLiveAttempt(f.Goal.Id.Value));
         await f.Repository.SaveAsync(f.Kernel);
         await f.Park();
@@ -188,7 +190,9 @@ public sealed class ConductorBatchLoopTestsExplicitParkReconciliation : Conducto
         Assert.Equal(GoalStatus.Parked, f.Goal.Status);
         Assert.NotNull(f.Goal.RetainedAcceptanceFailure);
         Assert.Equal(1, f.Goal.AutomaticAcceptanceRetryCount);
-        Assert.Equal(1, held.ProcessSpawnCount);
+        Assert.Equal(0, held.HeldAttemptCount);
+        Assert.Equal(0, held.ProcessSpawnCount);
+        Assert.False(held.AttemptCoordinator.HasLiveAttempt(f.Goal.Id.Value));
         Assert.Empty(held.AttemptCoordinator.GetUnreconciledAttempts([f.Goal.Id.Value]));
         Assert.Contains(f.Goal.Timeline, e => e.Message.Contains(attemptId, StringComparison.Ordinal));
     }
