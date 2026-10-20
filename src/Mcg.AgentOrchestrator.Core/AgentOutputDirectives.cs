@@ -204,7 +204,7 @@ public static class AgentOutputDirectives
             if (parsed.Directive is null)
             {
                 if (evidenceLines.Length > 1)
-                    return MalformedEvidenceRequest("exactly one evidence request may be emitted per round");
+                    return MalformedEvidenceRequest("none is valid only alone; omit none when emitting evidence requests");
                 continue;
             }
             requests.Add(parsed.Directive);
