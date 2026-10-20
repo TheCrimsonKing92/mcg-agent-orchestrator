@@ -79,6 +79,41 @@ public sealed class GoalExplicitDispositionTests
         Assert.Equal(stopped, goal.LifecycleStatus);
     }
 
+    [Theory]
+    [InlineData(GoalStatus.Completed, GoalStatus.Cancelled)]
+    [InlineData(GoalStatus.Completed, GoalStatus.Superseded)]
+    [InlineData(GoalStatus.Failed, GoalStatus.Cancelled)]
+    [InlineData(GoalStatus.Failed, GoalStatus.Superseded)]
+    public void Stop_RetainedTerminalUnderPark_RejectsWithoutChangingState(
+        GoalStatus outcome, GoalStatus stopped)
+    {
+        var (kernel, goal, _) = VerifyingGoal();
+        kernel.ParkGoal(goal.Id, "Hold before terminal outcome");
+        if (outcome == GoalStatus.Completed)
+            kernel.CompleteGoal(goal.Id, "Already owned completion");
+        else
+            goal.SetStatus(outcome);
+        kernel = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot());
+        goal = kernel.GetGoal(goal.Id);
+        Assert.Equal(GoalStatus.Parked, goal.Status);
+        Assert.Equal(outcome, goal.LifecycleStatus);
+        var before = System.Text.Json.JsonSerializer.Serialize(kernel.ExportSnapshot());
+
+        var error = Assert.Throws<InvalidOperationException>(() =>
+        {
+            if (stopped == GoalStatus.Cancelled)
+                kernel.CancelGoal(goal.Id, "Cannot change terminal verdict");
+            else
+                kernel.SupersedeGoal(goal.Id, "Cannot change terminal verdict");
+        });
+
+        Assert.Contains(outcome.ToString(), error.Message);
+        Assert.Equal(before, System.Text.Json.JsonSerializer.Serialize(kernel.ExportSnapshot()));
+        kernel = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot());
+        goal = kernel.UnparkGoal(goal.Id, "Expose retained outcome");
+        Assert.Equal(outcome, goal.Status);
+    }
+
     [Fact]
     public void Park_RejectedTransition_PreservesExactState()
     {

@@ -1,5 +1,6 @@
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
+using Mcg.AgentOrchestrator.App.Cli;
 
 // Parallel safe: every case owns an isolated SQLite store.
 public sealed class SqliteExplicitDispositionMergeTests
@@ -80,6 +81,117 @@ public sealed class SqliteExplicitDispositionMergeTests
         f.Driver().AdvanceOnce(f.Goal, ExplicitParkTestFixture.Policy);
         Assert.Equal(unpark ? 1 : 0, f.Dispatches);
         Assert.Equal(0, f.Acceptances + f.Landings);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task TickMerge_RefreshedThenSupersededAuthority_RetainsRed(bool repark)
+    {
+        using var f = new ExplicitParkTestFixture();
+        await f.Repository.SaveAsync(f.Kernel);
+        var baseline = f.Kernel.ExportGoalSnapshot(f.Goal.Id);
+        Assert.Null(baseline.ExplicitDisposition);
+        Assert.Equal(GoalStatus.Verifying, baseline.Status);
+        await f.Park();
+        if (repark) Unpark(f);
+        await f.Reload(); // Refresh does not advance the conductor's checkpoint baseline.
+        Assert.Equal(new GoalExplicitDisposition(repark ? 2 : 1, repark
+            ? GoalExplicitDispositionAction.Unpark : GoalExplicitDispositionAction.Park),
+            f.Goal.ExplicitDisposition);
+        f.ReconcileRed(f.Driver());
+        var tick = f.Kernel.ExportGoalSnapshot(f.Goal.Id);
+        Assert.Equal(repark ? GoalStatus.Active : GoalStatus.Parked, tick.Status);
+        Assert.Equal(GoalStatus.Active, f.Goal.LifecycleStatus);
+
+        // The next explicit command commits after refresh and RED reconciliation.
+        if (repark) await f.Park();
+        else Unpark(f);
+        await f.Repository.TransactGoalAsync(f.Goal.Id, (stored, _) =>
+        {
+            var writer = AgentOrchestratorKernel.FromSnapshot(new([stored!], []));
+            writer.RecordTaskNote(f.Goal.Id, f.Task.Id, "Progress after newer disposition");
+            return Task.FromResult((true, writer.ExportGoalSnapshot(f.Goal.Id), true));
+        });
+        var committed = (await f.Repository.LoadGoalAsync(f.Goal.Id))!;
+        Assert.Equal(new GoalExplicitDisposition(repark ? 3 : 2, repark
+            ? GoalExplicitDispositionAction.Park : GoalExplicitDispositionAction.Unpark),
+            committed.ExplicitDisposition);
+        Assert.NotEqual(tick.ExplicitDisposition, committed.ExplicitDisposition);
+        var result = Assert.Single(await f.Repository.SaveGoalSnapshotsWithMergeAsync(
+            [new GoalSnapshotSaveRequest(baseline, tick)]));
+        Assert.Equal(GoalSnapshotSaveDisposition.Merged, result.Disposition);
+        var raw = (await f.Repository.LoadGoalAsync(f.Goal.Id))!;
+        Assert.Equal(repark ? GoalStatus.Parked : GoalStatus.Active, raw.Status);
+        Assert.Equal(committed.ExplicitDisposition, raw.ExplicitDisposition);
+        Assert.Equal(repark ? GoalStatus.Active : (GoalStatus?)null, raw.ParkedLifecycleStatus);
+        Assert.Equal(1, raw.AutomaticAcceptanceRetryCount);
+        Assert.True(raw.AcceptanceFailureDeferredForRetry);
+        f.Kernel.ReplaceGoalStateWithSnapshot(result.PersistedSnapshot!, result.PersistedHumanInputRequests ?? []);
+        Assert.Equal(raw.Status, f.Kernel.GetGoal(f.Goal.Id).Status);
+        await f.Reload();
+        f.AssertFailure();
+        Assert.Equal(WorkTaskStatus.Assigned, f.Task.Status);
+        Assert.Contains(f.Goal.Timeline, e => e.Message == "Progress after newer disposition");
+        Assert.Contains(f.Goal.Timeline, e => e.Message.Contains("terminal-attempt", StringComparison.Ordinal));
+        f.ReconcileRed(f.Driver());
+        f.AssertFailure(); // Re-consuming the attempt must not count the retry again.
+        f.Driver().AdvanceOnce(f.Goal, ExplicitParkTestFixture.Policy);
+        Assert.Equal(repark ? 0 : 1, f.Dispatches);
+        Assert.Equal(0, f.Acceptances + f.Landings);
+    }
+
+    [Fact]
+    public async Task TickSave_OlderAuthorityWithCurrentBaseline_PreservesCommittedUnpark()
+    {
+        using var f = new ExplicitParkTestFixture();
+        await f.Repository.SaveAsync(f.Kernel);
+        await f.Park();
+        await f.Reload();
+        f.ReconcileRed(f.Driver());
+        var tick = f.Kernel.ExportGoalSnapshot(f.Goal.Id);
+        Unpark(f);
+        var baseline = (await f.Repository.LoadGoalAsync(f.Goal.Id))!;
+        Assert.Equal(1, tick.ExplicitDisposition!.Revision);
+        Assert.Equal(2, baseline.ExplicitDisposition!.Revision);
+        var result = Assert.Single(await f.Repository.SaveGoalSnapshotsWithMergeAsync(
+            [new GoalSnapshotSaveRequest(baseline, tick)]));
+        Assert.Equal(GoalSnapshotSaveDisposition.Merged, result.Disposition);
+        var raw = (await f.Repository.LoadGoalAsync(f.Goal.Id))!;
+        Assert.Equal(baseline.ExplicitDisposition, raw.ExplicitDisposition);
+        Assert.Equal(GoalStatus.Active, raw.Status);
+        Assert.Null(raw.ParkedLifecycleStatus);
+        await f.Reload();
+        f.AssertFailure();
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task TickSave_UncommittedAuthority_RejectsNewOrConflictingRevision(bool sameRevision)
+    {
+        using var f = new ExplicitParkTestFixture();
+        await f.Repository.SaveAsync(f.Kernel);
+        await f.Park();
+        var baseline = (await f.Repository.LoadGoalAsync(f.Goal.Id))!;
+        var tick = baseline with
+        {
+            ExplicitDisposition = new GoalExplicitDisposition(sameRevision ? 1 : 2,
+                sameRevision ? GoalExplicitDispositionAction.Unpark : GoalExplicitDispositionAction.Park)
+        };
+        var result = Assert.Single(await f.Repository.SaveGoalSnapshotsWithMergeAsync(
+            [new GoalSnapshotSaveRequest(baseline, tick)]));
+        Assert.Equal(GoalSnapshotSaveDisposition.Skipped, result.Disposition);
+        var raw = (await f.Repository.LoadGoalAsync(f.Goal.Id))!;
+        Assert.Equal(baseline.ExplicitDisposition, raw.ExplicitDisposition);
+        Assert.Equal(GoalStatus.Parked, raw.Status);
+    }
+
+    private static void Unpark(ExplicitParkTestFixture f)
+    {
+        var outcome = CliPersistentStateRunner.ExecuteGoalUnparkApplication(
+            new(f.Goal.Id.Value, "Supported later unpark", true), f.Goal.Id, f.Repository);
+        Assert.True(outcome.ShouldSave);
     }
 
     [Theory]

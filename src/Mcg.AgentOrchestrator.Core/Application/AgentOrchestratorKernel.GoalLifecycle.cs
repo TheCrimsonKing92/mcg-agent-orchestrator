@@ -1492,14 +1492,14 @@ public sealed partial class AgentOrchestratorKernel
             throw new ArgumentException("Goal stop reason cannot be empty.", nameof(reason));
         }
 
-        if (goal.Status == GoalStatus.Completed)
+        if (goal.LifecycleStatus == GoalStatus.Completed)
         {
             throw new InvalidOperationException($"Goal '{goalId}' is Completed and cannot be cancelled or superseded.");
         }
 
-        if (IsTerminalGoalStatus(goal.Status))
+        if (IsTerminalGoalStatus(goal.LifecycleStatus))
         {
-            throw new InvalidOperationException($"Goal '{goalId}' is already {goal.Status}.");
+            throw new InvalidOperationException($"Goal '{goalId}' is already {goal.LifecycleStatus}.");
         }
 
         var runningTasks = goal.Tasks

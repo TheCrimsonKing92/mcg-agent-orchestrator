@@ -730,10 +730,15 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
                                 "goal row no longer exists")));
                     }
 
-                    // A refreshed kernel can carry authority committed since the checkpoint
-                    // baseline. It may retain that authority, but cannot propose a new action.
-                    if (request.Current.ExplicitDisposition != request.Baseline.ExplicitDisposition &&
-                        request.Current.ExplicitDisposition != storedSnapshot.ExplicitDisposition)
+                    // Refresh may carry committed authority newer than the checkpoint but older
+                    // than the stored row. Merge that progress using only the stored authority;
+                    // a tick cannot propose a newer revision or contradict the committed action.
+                    var tickDisposition = request.Current.ExplicitDisposition;
+                    var storedDisposition = storedSnapshot.ExplicitDisposition;
+                    if (tickDisposition is not null &&
+                        (storedDisposition is null || tickDisposition.Revision > storedDisposition.Revision ||
+                         (tickDisposition.Revision == storedDisposition.Revision &&
+                          tickDisposition.Action != storedDisposition.Action)))
                     {
                         return Task.FromResult<(bool ShouldSave, GoalStateSnapshot? NewState, GoalSnapshotSaveResult Result)>(
                             (false, null, new GoalSnapshotSaveResult(request.Current.Id,
@@ -741,7 +746,7 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
                                 "tick cannot change explicit operator disposition", storedState!.HumanInputRequests)));
                     }
 
-                    if (SnapshotEquals(storedSnapshot, request.Baseline))
+                    if (SnapshotEquals(storedSnapshot, request.Baseline) && tickDisposition == storedDisposition)
                     {
                         var state = ValidateConsistentGoalState(
                             request.Current,
