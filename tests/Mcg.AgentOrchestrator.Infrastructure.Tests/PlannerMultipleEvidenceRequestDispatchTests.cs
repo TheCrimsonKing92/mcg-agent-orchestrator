@@ -48,9 +48,18 @@ public sealed class PlannerMultipleEvidenceRequestDispatchTests
                 .RefreshLatestProcess(kernel, goal.Id, planner.Id);
 
             Assert.True(livenessChecked);
+            Assert.True(planner.LastVerification!.Succeeded,
+                $"{planner.LastVerification.OrchestratorFailureReason}\n{planner.LastVerification.StandardError}");
+            Assert.Equal(planner.LastDispatch!.DispatchedAt, planner.LastVerification.DispatchAttemptAt);
             Assert.Equal(WorkTaskStatus.Completed, planner.Status);
             Assert.Equal(WorkTaskStatus.Assigned, developer.Status);
             Assert.Equal(2, goal.GateTestObligations.Count);
+            Assert.All(goal.GateTestObligations, item =>
+            {
+                Assert.NotNull(item.PlannerIdentity);
+                Assert.Equal(goal.AuthoritativeBrief.Version, item.PlannerIdentity.BriefVersion);
+                Assert.Equal(planner.Id.Value, item.PlannerIdentity.RequestingTaskId);
+            });
             var obligation = goal.GateTestObligations[0];
             Assert.Empty(kernel.GetPendingHumanInput(goal.Id));
             Assert.Equal(new[] { "AlphaTests", "BetaTests" }, obligation.Selectors);

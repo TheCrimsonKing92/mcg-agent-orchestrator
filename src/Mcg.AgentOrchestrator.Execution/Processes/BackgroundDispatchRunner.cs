@@ -1903,7 +1903,9 @@ public sealed partial class BackgroundDispatchRunner
             PlannerCandidateDivergence: plannerCandidateDivergence,
             AssignedScopeComplete: hasAssignedScopeComplete ? assignedScopeComplete : null,
             EvidenceSource: VerificationEvidenceSource.Dispatch,
-            DispatchAttemptAt: requiresTerminalContract ? dispatchAttempt?.DispatchedAt : null);
+            // Planner evidence binds its brief through host dispatch provenance as well.
+            DispatchAttemptAt: requiresTerminalContract || task.RequiredRole == AgentRole.Planner
+                ? dispatchAttempt?.DispatchedAt : null);
 
         var outcome = new DispatchRefreshOutcome(
             completed,

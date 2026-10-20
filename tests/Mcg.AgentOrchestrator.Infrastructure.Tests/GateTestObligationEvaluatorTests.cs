@@ -20,7 +20,10 @@ public sealed class GateTestObligationEvaluatorTests
             GateTestObligations = [new(identity.StableId, 1, payload.Selectors!, "planner", "Candidate receipt", DateTimeOffset.UnixEpoch, identity, payload)]
         }] });
         var goal = kernel.GetGoal(fixture.Goal.Id);
-        var (_, path, _) = fixture.WriteAttempt([("AlphaTests.Check", "Passed"), ("BetaTests.Check", "Passed")]);
+        // Use coherent grouped TRX without a solo attempt that could mask grouped resolution.
+        var path = GroupedGateTrxSamples.Write(fixture.Root, "typed-grouped.trx",
+            new("alpha", "AlphaTests", "Check", "AlphaTests.Check", "Passed"),
+            new("beta", "BetaTests", "Check", "BetaTests.Check", "Passed"));
         ProspectiveEvidenceGateResolverGroupedReceiptTests.Save(fixture, [path], cohort, briefVersion: 2);
         Assert.Equal(GateTestObligationEvaluator.Outcome.Pending,
             Assert.Single(GateTestObligationEvaluator.Evaluate(goal, fixture.OrchestratorDirectory, fixture.CandidateSha)).Outcome);

@@ -208,10 +208,14 @@ public sealed class CliAttentionShowAgentReadEnvelopeContractTests : CliTaskQuer
                 waits = new[] { new
                 {
                     id = seed.Wait.Id.Value, goalId = seed.First.Id.Value, taskId = (string?)null,
-                    kind = "SpecClarification", question = "Literal question", requestedAt = "2100-01-01T00:00:00.0000000Z",
+                    kind = "SpecClarification", question = "Literal question",
+                    plannerIdentity = (object?)null, plannerEvidence = (object?)null,
+                    owner = "operator", availability = (string?)null, nextAction = seed.Wait.ResumeCommand,
+                    requestedAt = "2100-01-01T00:00:00.0000000Z",
                     isAutoDefaultable = true, isDismissible = false, isAnswerRequired = true, isExternallyBlocked = false,
                     resumeCommand = seed.Wait.ResumeCommand
                 } },
+                gateEvidence = Array.Empty<object>(),
                 items = (await seed.Store.GetAttentionQueueAsync()).Select(item => new
                 {
                     id = item.Id, type = item.Type.ToString(), goalId = item.GoalId, status = "Raised",

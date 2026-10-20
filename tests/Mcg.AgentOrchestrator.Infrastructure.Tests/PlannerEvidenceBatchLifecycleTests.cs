@@ -15,6 +15,9 @@ public sealed class PlannerEvidenceBatchLifecycleTests
         var extraHistory = PlannerMultipleEvidenceRequestMergeTests.HistoricalRequest.Replace("history", "second-history", StringComparison.Ordinal);
         var batch = PlannerMultipleEvidenceRequestMergeTests.MixedRequests + "\n" + extraHistory;
         f.Refresh(batch);
+        Assert.True(f.Planner.LastVerification!.Succeeded,
+            $"{f.Planner.LastVerification.OrchestratorFailureReason}\n{f.Planner.LastVerification.StandardError}");
+        Assert.Equal(f.Planner.LastDispatch!.DispatchedAt, f.Planner.LastVerification.DispatchAttemptAt);
         Assert.Equal(WorkTaskStatus.WaitingForHuman, f.Planner.Status);
         Assert.Equal(3, f.Kernel.HumanInputRequests.Count);
         Assert.Single(f.Goal.GateTestObligations);
@@ -302,6 +305,7 @@ public sealed class PlannerEvidenceBatchLifecycleTests
         internal Fixture(bool legacy = false, bool revised = false)
         {
             Directory.CreateDirectory(Root);
+            _ = StateDbMigrations.EnsureUpToDate(Database);
             var planner = new TaskSpec(TaskId.New(), "Plan the implementation.", AgentRole.Planner);
             var developer = new TaskSpec(TaskId.New(), "Implement the plan.", AgentRole.Developer);
             _plannerId = planner.Id;
