@@ -524,15 +524,29 @@ internal static class OperatorInbox
         ICollaborationItemStore? collaborationStore = null,
         TimeSpan? collaborationRaiseTimeout = null,
         TimeSpan? channelSendTimeout = null,
-        TimeSpan? landingEscalationLockTimeout = null)
+        TimeSpan? landingEscalationLockTimeout = null,
+        CancellationToken cancellationToken = default)
     {
         var jsonClock = Stopwatch.StartNew();
         var jsonOutcome = "ok";
+        var record = new LandingEscalationRecord(goal.Id.Value, reason, integrationBranch, DateTimeOffset.UtcNow,
+            AcceptanceFailureOccurredAt: goal.LatestAcceptanceFailure?.OccurredAt,
+            AttributionPendingIdentity: goal.LatestAcceptanceFailure?.AttributionPending?.Identity);
+        var sourceKey = LandingEscalationSourceKey(record);
+        var itemId = BuildId(goal.Id, OperatorInboxKind.LandingEscalation, sourceKey);
+        var store = collaborationStore
+            ?? CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
+        var collaborationClock = new Stopwatch();
+        string? pendingRaiseOutcome = null;
         var escalationLock = TryAcquireLandingEscalationLock(
             workspace,
             landingEscalationLockTimeout ?? DefaultLandingEscalationLockTimeout);
         if (escalationLock is null)
         {
+            // Pending raises and resolutions share this lock, including the awaited store operation.
+            if (record.AttributionPendingIdentity is not null)
+                return new LandingEscalationWriteResult(ElapsedMilliseconds(jsonClock.Elapsed),
+                    "lock-timeout", 0, "skipped", 0, "skipped");
             jsonOutcome = "lock-timeout";
             Console.Error.WriteLine(
                 $"warning: landing escalation JSON record was not written for goal {goal.Id.Value[..8]} " +
@@ -548,7 +562,9 @@ internal static class OperatorInbox
                     existing.Any(item =>
                         item.GoalId.Equals(goal.Id.Value, StringComparison.OrdinalIgnoreCase) &&
                         item.ResolvedAtUtc is not null &&
-                        item.AcceptanceFailureOccurredAt == acceptanceFailureOccurredAt);
+                        item.AcceptanceFailureOccurredAt == acceptanceFailureOccurredAt &&
+                        (record.AttributionPendingIdentity is null ||
+                         item.AttributionPendingIdentity == record.AttributionPendingIdentity));
                 if (staleAcceptanceEscalation)
                 {
                     jsonClock.Stop();
@@ -561,31 +577,44 @@ internal static class OperatorInbox
                         "skipped");
                 }
 
-                existing = existing
-                    .Where(e =>
+                if (record.AttributionPendingIdentity is null)
+                    existing = existing.Where(e =>
                         !e.GoalId.Equals(goal.Id.Value, StringComparison.OrdinalIgnoreCase) ||
-                        e.ResolvedAtUtc is not null)
-                    .ToList();
-                existing.Add(new LandingEscalationRecord(
-                    goal.Id.Value,
-                    reason,
-                    integrationBranch,
-                    DateTimeOffset.UtcNow,
-                    AcceptanceFailureOccurredAt: acceptanceFailureOccurredAt,
-                    AttributionPendingIdentity: goal.LatestAcceptanceFailure?.AttributionPending?.Identity));
+                        e.ResolvedAtUtc is not null).ToList();
+                else
+                    existing = existing.Where(e =>
+                        e.GoalId != record.GoalId || e.AttributionPendingIdentity != record.AttributionPendingIdentity ||
+                        e.AcceptanceFailureOccurredAt != record.AcceptanceFailureOccurredAt).ToList();
+                existing.Add(record);
                 SaveLandingEscalationsUnsafe(workspace, existing);
+                if (record.AttributionPendingIdentity is not null)
+                {
+                    collaborationClock.Start();
+                    try
+                    {
+                        RunPendingStoreOperation(async token =>
+                        {
+                            // RaiseAsync deduplicates only OPEN rows. A delayed repeat must also
+                            // respect terminal rows for this exact obligation, never recreate one.
+                            var rows = await store.ListAsync(goal.Id.Value, token).ConfigureAwait(false);
+                            if (!rows.Any(row => row.CorrelationKey == itemId &&
+                                CollaborationItemLifecycle.IsTerminal(row.Status)))
+                                await store.RaiseAsync(CollaborationItemType.Decision, goal.Id.Value,
+                                    $"Landing parked on {integrationBranch}", reason, itemId, token).ConfigureAwait(false);
+                        }, collaborationRaiseTimeout ?? DefaultCollaborationRaiseTimeout, cancellationToken);
+                        pendingRaiseOutcome = "ok";
+                    }
+                    catch (OperationCanceledException) { pendingRaiseOutcome = "timeout"; }
+                    catch { pendingRaiseOutcome = "error"; }
+                    collaborationClock.Stop();
+                }
             }
         }
         jsonClock.Stop();
 
         var goalPrefix = goal.Id.Value[..8];
-        var sourceKey = $"landing-escalation:{goal.Id.Value}:{reason}";
-        var itemId = BuildId(goal.Id, OperatorInboxKind.LandingEscalation, sourceKey);
-
-        var store = collaborationStore
-            ?? CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
-        var collaborationClock = Stopwatch.StartNew();
-        var collaborationOutcome = RunBoundedOnBackground(
+        if (pendingRaiseOutcome is null) collaborationClock.Start();
+        var collaborationOutcome = pendingRaiseOutcome ?? RunBoundedOnBackground(
             () => store.RaiseAsync(
                 CollaborationItemType.Decision,
                 goal.Id.Value,
@@ -638,6 +667,27 @@ internal static class OperatorInbox
             collaborationOutcome,
             ElapsedMilliseconds(channelClock.Elapsed),
             channelOutcome);
+    }
+
+    private static string LandingEscalationSourceKey(LandingEscalationRecord record)
+    {
+        if (record.AttributionPendingIdentity is null)
+            return $"landing-escalation:{record.GoalId}:{record.Reason}";
+        if (string.IsNullOrWhiteSpace(record.AttributionPendingIdentity) ||
+            record.AcceptanceFailureOccurredAt is null || record.AcceptanceFailureOccurredAt == default(DateTimeOffset))
+            throw new InvalidOperationException("Pending attribution attention requires an exact acceptance-failure occurrence.");
+        return $"landing-escalation:{record.GoalId}:attribution-pending:{record.AttributionPendingIdentity}:" +
+            record.AcceptanceFailureOccurredAt.Value.UtcTicks;
+    }
+
+    // Cancel the actual operation and await it before releasing the occurrence lock. A timeout
+    // must not leave a background writer that can recreate attention after resolution.
+    private static void RunPendingStoreOperation(Func<CancellationToken, Task> operation, TimeSpan timeout,
+        CancellationToken cancellationToken = default)
+    {
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        cancellation.CancelAfter(timeout);
+        Task.Run(() => operation(cancellation.Token), CancellationToken.None).GetAwaiter().GetResult();
     }
 
     private static string RunBoundedOnBackground(Action action, TimeSpan timeout)
@@ -715,7 +765,10 @@ internal static class OperatorInbox
         Goal goal,
         string operatorReason,
         DateTimeOffset acceptanceFailureOccurredAt,
-        DateTimeOffset? resolvedAtUtc = null)
+        DateTimeOffset? resolvedAtUtc = null,
+        ICollaborationItemStore? collaborationStore = null,
+        TimeSpan? collaborationTimeout = null,
+        CancellationToken cancellationToken = default)
     {
         BeforeLandingEscalationResolution?.Invoke();
         using (AcquireLandingEscalationLock(workspace))
@@ -726,22 +779,34 @@ internal static class OperatorInbox
             var items = LoadLandingEscalationsUnsafe(workspace)
                 .Select(item =>
                 {
-                    if (!item.GoalId.Equals(goal.Id.Value, StringComparison.OrdinalIgnoreCase) ||
-                        (item.AcceptanceFailureOccurredAt is not null &&
-                         item.AcceptanceFailureOccurredAt != acceptanceFailureOccurredAt))
+                    if (!item.GoalId.Equals(goal.Id.Value, StringComparison.OrdinalIgnoreCase))
                     {
                         return item;
                     }
+                    // A typed marker without an occurrence cannot safely fall back to reason identity.
+                    var sourceKey = LandingEscalationSourceKey(item);
+                    if (item.AcceptanceFailureOccurredAt is not null &&
+                        item.AcceptanceFailureOccurredAt != acceptanceFailureOccurredAt)
+                        return item;
 
                     // Pending attribution owns its attention through the same failure occurrence.
                     // Resolve before saving so an outbox replay can recover a failed write.
                     if (item.AttributionPendingIdentity is not null &&
                         (item.ResolvedAtUtc is null || item.ResolvedBy == "acceptance-retry"))
                     {
-                        var sourceKey = $"landing-escalation:{goal.Id.Value}:{item.Reason}";
                         var itemId = BuildId(goal.Id, OperatorInboxKind.LandingEscalation, sourceKey);
-                        CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory)
-                            .TryResolveAsync(itemId, operatorReason).GetAwaiter().GetResult();
+                        var store = collaborationStore ?? CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
+                        RunPendingStoreOperation(async token =>
+                        {
+                            if (await store.TryResolveAsync(itemId, operatorReason, token).ConfigureAwait(false))
+                                return;
+                            var rows = await store.ListAsync(goal.Id.Value, token).ConfigureAwait(false);
+                            var exact = rows.Where(row => row.CorrelationKey == itemId && row.GoalId == goal.Id.Value).ToArray();
+                            if (exact.Length == 0 || exact.Any(row => !CollaborationItemLifecycle.IsTerminal(row.Status)))
+                                // Exceptions leave the existing acceptance-retry outbox message pending;
+                                // Missing would quarantine it, losing a retryable store obligation.
+                                throw new InvalidOperationException("Pending attribution attention has no terminal exact-occurrence store receipt; retry resolution.");
+                        }, collaborationTimeout ?? DefaultCollaborationRaiseTimeout, cancellationToken);
                     }
 
                     if (item.ResolvedAtUtc is not null)
@@ -1019,7 +1084,7 @@ internal static class OperatorInbox
                 $"escalated at {escalation.EscalatedAt:u}; branch={escalation.IntegrationBranch}",
                 BuildEscalationSuggestedAction(escalation.IntegrationBranch),
                 BuildEscalationCommand(goal.Id.Value[..8], escalation.IntegrationBranch),
-                $"landing-escalation:{escalation.GoalId}:{escalation.Reason}",
+                LandingEscalationSourceKey(escalation),
                 escalation.EscalatedAt,
                 acknowledgements));
         }
