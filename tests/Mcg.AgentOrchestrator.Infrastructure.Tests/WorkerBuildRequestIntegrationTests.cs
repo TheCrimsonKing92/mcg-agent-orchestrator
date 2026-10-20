@@ -1,7 +1,7 @@
 using Mcg.AgentOrchestrator.Core;
 
 // Parallel-safe: fixture owns its stores, slot locks and processes.
-public sealed class WorkerBuildRequestIntegrationTests
+public sealed class WorkerBuildRequestIntegrationTests(ITestOutputHelper output)
 {
     [Fact]
     public async Task OrdinaryHelperLowIntegrityPeerAndCompilerRetainSandbox()
@@ -16,6 +16,8 @@ public sealed class WorkerBuildRequestIntegrationTests
             Assert.True(Mcg.AgentOrchestrator.Infrastructure.WorkerBuildProcessIntegrity.IsLow(fixture.Worker!.Process));
         });
         Assert.True(lowCompilerObserved);
+        if (invocation.Outcome != WorkerBuildOutcome.Success)
+            output.WriteLine(fixture.DescribeHostBuildDiagnostics());
         Assert.Equal(WorkerBuildOutcome.Success, invocation.Outcome);
     }
 

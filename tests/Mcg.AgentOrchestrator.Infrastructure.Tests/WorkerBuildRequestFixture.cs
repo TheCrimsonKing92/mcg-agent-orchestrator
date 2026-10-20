@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
+using System.Text;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
@@ -115,6 +116,61 @@ internal sealed class WorkerBuildRequestFixture : IDisposable
 
     internal WorkerBuildConsumption Consume() => Operations.Consume(Kernel, GoalId, TaskId, [Source], [Source]);
     internal void Save() => new SqliteOrchestratorStateRepository(StatePath).SaveAsync(Kernel).GetAwaiter().GetResult();
+
+    // Copy bounded, attributable diagnostics into the test receipt before successful custody
+    // cleanup removes this fixture's tree. Logs explain failures; they never authorize builds.
+    internal string DescribeHostBuildDiagnostics(string? hostDiagnosticPath = null)
+    {
+        var output = new StringBuilder($"Worker build diagnostics: root='{Root}'; goal={GoalId.Value}; task={TaskId.Value}\n");
+        try
+        {
+            var task = Operations.Load(GoalId.Value).GetTask(GoalId, TaskId);
+            output.AppendLine($"task_status={task.Status}; dispatch={Reference.DispatchId}; invocations={task.WorkerBuildInvocations.Count}");
+            if (hostDiagnosticPath is not null) AppendTail(hostDiagnosticPath);
+            if (task.LastProcess is { } process)
+            {
+                output.AppendLine($"host={process.ProcessId}/{process.ProcessIdentityStartedAt:O}/'{process.ProcessIdentityImagePath}'; exit={process.ExitCode}");
+                AppendTail(process.StandardOutputPath);
+                AppendTail(process.StandardErrorPath);
+                AppendTail(process.ExitCodePath);
+            }
+            // These two failing controls each submit exactly one invocation and one project.
+            // Bound diagnostic work even if a regression unexpectedly adds more records.
+            foreach (var invocation in task.WorkerBuildInvocations.Take(2))
+            {
+                output.AppendLine($"invocation={invocation.Id}; outcome={invocation.Outcome}; compiler_exit={invocation.CompilerExitCode}; custody_released={invocation.CustodyReleased}; diagnostic={invocation.Diagnostic}");
+                output.AppendLine("last_phases=" + string.Join(",", invocation.Observations.TakeLast(20).Select(o => $"{o.Phase}@{o.At:O}")));
+                var logs = Path.Combine(DotnetBuildEnvironmentManager.GoalArtifactsPath(GoalId, Storage), "worker-host-builds", invocation.Id);
+                foreach (var (child, index) in (invocation.Children ?? []).Take(2).Select((child, index) => (child, index)))
+                {
+                    output.AppendLine($"compiler={child.Pid}/{child.StartedAt:O}/'{child.ImagePath}'");
+                    AppendTail(Path.Combine(logs, $"{index}.out.log"));
+                    AppendTail(Path.Combine(logs, $"{index}.err.log"));
+                }
+            }
+            if (Worker is not null)
+            {
+                AppendTail(Path.Combine(Root, "worker.out.log"));
+                AppendTail(Path.Combine(Root, "worker.err.log"));
+            }
+        }
+        catch (Exception error) { output.AppendLine($"Diagnostic snapshot unavailable: {error.GetType().Name}: {error.Message}"); }
+        return output.ToString();
+
+        void AppendTail(string path)
+        {
+            try
+            {
+                using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                output.AppendLine($"log='{path}'; bytes={stream.Length}; tail_chars<=4096");
+                stream.Seek(Math.Max(0, stream.Length - 4096), SeekOrigin.Begin);
+                using var reader = new StreamReader(stream);
+                var tail = new char[4096];
+                output.AppendLine(new string(tail, 0, reader.ReadBlock(tail, 0, tail.Length)));
+            }
+            catch (Exception error) { output.AppendLine($"log='{path}'; unavailable={error.GetType().Name}: {error.Message}"); }
+        }
+    }
 
     internal string Git(params string[] arguments)
     {

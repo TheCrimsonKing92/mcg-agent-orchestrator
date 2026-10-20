@@ -4,7 +4,7 @@ using System.Diagnostics;
 using System.Security;
 
 // Parallel-safe: fixture-owned native groups and canonical stores, with event/phase-gated stimuli.
-public sealed class WorkerBuildRequestRecoveryTests
+public sealed class WorkerBuildRequestRecoveryTests(ITestOutputHelper output)
 {
     [Fact]
     public async Task ManagedHostDeathAfterCompilerStart_ReloadRetainsTerminalObligationWithoutRelaunch()
@@ -23,8 +23,10 @@ public sealed class WorkerBuildRequestRecoveryTests
         Process? host = null;
         Process? compiler = null;
         SpawnProcessIdentity? hostIdentity = null;
+        string? hostDiagnosticPath = null;
         var runner = new BackgroundDispatchRunner(disableProcessStart: false, startProcess: start =>
         {
+            hostDiagnosticPath = DispatchProcessHost.ReadParameters(start.ArgumentList[^1]).HostDiagnosticPath;
             host = Process.Start(start);
             if (host is not null) hostIdentity = SpawnProcessIdentityReader.ReadForRegistration(host).Identity;
             return host;
@@ -37,7 +39,9 @@ public sealed class WorkerBuildRequestRecoveryTests
             Assert.NotNull(host);
             Assert.NotNull(hostIdentity);
             Assert.Equal(started.ProcessId, host.Id);
-            Assert.True(await Task.Run(() => ready.WaitOne(TimeSpan.FromMinutes(3))), "Owned compiler did not signal the named readiness event.");
+            var compilerReady = await Task.Run(() => ready.WaitOne(TimeSpan.FromMinutes(3)));
+            if (!compilerReady) output.WriteLine(fixture.DescribeHostBuildDiagnostics(hostDiagnosticPath));
+            Assert.True(compilerReady, "Owned compiler did not signal the named readiness event.");
             var before = Assert.Single(fixture.Operations.Load(fixture.GoalId.Value).GetTask(fixture.GoalId, fixture.TaskId).WorkerBuildInvocations);
             Assert.Equal(WorkerBuildPhase.CompilerStarted, before.Phase);
             var child = Assert.Single(before.Children!);

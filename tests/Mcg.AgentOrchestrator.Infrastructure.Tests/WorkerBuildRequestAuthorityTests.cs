@@ -132,8 +132,27 @@ public sealed class WorkerBuildRequestAuthorityTests
             "start" => process with { ProcessIdentityStartedAt = process.ProcessIdentityStartedAt!.Value.AddSeconds(-1) },
             _ => process with { ProcessIdentityImagePath = Path.Combine(fixture.Root, "unrelated.exe") }
         };
-        fixture.Kernel.RecordTaskProcessStarted(fixture.GoalId, fixture.TaskId, replacement);
-        fixture.Save();
+        // The host saved this invocation independently of the fixture's pre-build kernel.
+        // Mutate the canonical snapshot, rather than overwriting it with that stale kernel.
+        await new SqliteOrchestratorStateRepository(fixture.StatePath).TransactGoalStateAsync(fixture.GoalId, (state, _) =>
+        {
+            Assert.NotNull(state);
+            var canonical = AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot([state.Goal], []));
+            canonical.RecordTaskProcessStarted(fixture.GoalId, fixture.TaskId, replacement);
+            return Task.FromResult((true, (GoalStateSnapshot?)(state with
+            {
+                Goal = canonical.ExportGoalSnapshot(fixture.GoalId)
+            }), true));
+        });
+        var beforeConsumption = fixture.Operations.Load(fixture.GoalId.Value).GetTask(fixture.GoalId, fixture.TaskId);
+        Assert.NotNull(beforeConsumption.LastProcess);
+        Assert.Equal(replacement.ProcessId, beforeConsumption.LastProcess.ProcessId);
+        Assert.Equal(replacement.ProcessIdentityStartedAt, beforeConsumption.LastProcess.ProcessIdentityStartedAt);
+        Assert.Equal(replacement.ProcessIdentityImagePath, beforeConsumption.LastProcess.ProcessIdentityImagePath);
+        var preserved = Assert.Single(beforeConsumption.WorkerBuildInvocations);
+        Assert.Equal(invocation.Id, preserved.Id);
+        Assert.Equal(WorkerBuildOutcome.Success, preserved.Outcome);
+        Assert.False(preserved.Consumed);
         Assert.Throws<UnauthorizedAccessException>(() => fixture.Consume());
         var retained = Assert.Single(fixture.Operations.Load(fixture.GoalId.Value)
             .GetTask(fixture.GoalId, fixture.TaskId).WorkerBuildInvocations);
