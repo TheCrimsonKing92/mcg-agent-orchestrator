@@ -83,6 +83,45 @@ public sealed partial class TaskSpec
 
     public CompletionBuildEvidenceOperation? CompletionBuildEvidence { get; private set; }
 
+    public IReadOnlyList<WorkerBuildInvocation> WorkerBuildInvocations { get; private set; } = [];
+
+    internal void ReconcileWorkerBuildInvocations(IReadOnlyList<WorkerBuildInvocation> canonical)
+    {
+        var merged = WorkerBuildInvocations.ToDictionary(i => i.Id);
+        foreach (var incoming in canonical)
+        {
+            incoming.RequireValid();
+            if (incoming.TaskId != Id.Value || !DispatchHistory.Any(d => d.DispatchedAt == incoming.DispatchAt))
+                throw new InvalidOperationException("Canonical worker build history belongs to another task/dispatch.");
+            if (merged.TryGetValue(incoming.Id, out var previous))
+            {
+                if (!previous.SameOrigin(incoming)) throw new InvalidOperationException("Canonical worker build origin changed.");
+                if (incoming.Version <= previous.Version) continue;
+                previous.RequireSuccessor(incoming with { Version = previous.Version + 1 });
+            }
+            merged[incoming.Id] = incoming;
+        }
+        WorkerBuildInvocations = merged.Values.ToArray();
+    }
+
+    internal void RecordWorkerBuildInvocation(WorkerBuildInvocation invocation)
+    {
+        invocation.RequireValid();
+        if (invocation.TaskId != Id.Value || !DispatchHistory.Any(d => d.DispatchedAt == invocation.DispatchAt))
+            throw new InvalidOperationException("Worker build invocation does not belong to this dispatch.");
+        var previous = WorkerBuildInvocations.SingleOrDefault(i => i.Id == invocation.Id);
+        if (previous is null)
+        {
+            if (invocation.Version != 1 || invocation.Phase != WorkerBuildPhase.Requested ||
+                invocation.Children is { Count: > 0 } || invocation.Consumed || invocation.CustodyReleased || invocation.LeaseOwner is not null ||
+                WorkerBuildInvocations.Any(i => i.DispatchId == invocation.DispatchId &&
+                    (i.RequestKey == invocation.RequestKey || !i.IsTerminal || !i.CustodyReleased)))
+                throw new InvalidOperationException("Worker build request duplicates an existing invocation or obligation.");
+        }
+        else previous.RequireSuccessor(invocation);
+        WorkerBuildInvocations = WorkerBuildInvocations.Where(i => i.Id != invocation.Id).Append(invocation).ToArray();
+    }
+
     internal void RecordCompletionBuildEvidence(CompletionBuildEvidenceOperation operation)
     {
         var previous = CompletionBuildEvidence;
@@ -289,7 +328,8 @@ public sealed partial class TaskSpec
                     LastProcess.ExitArtifactReason,
                     LastProcess.WasGracefullyDetachedByConductor,
                     LastProcess.NonBlockingProcessIds,
-                    LastProcess.ProcessIdentityStartedAt),
+                    LastProcess.ProcessIdentityStartedAt,
+                    LastProcess.ProcessIdentityImagePath),
             VerificationPlan,
             SubscriptionRetryAfter,
             SubscriptionLimitReviewNote,
@@ -320,7 +360,8 @@ public sealed partial class TaskSpec
             CriterionRetryFeedbackRoundAt,
             LatestRetryInherited,
             SubscriptionDeferralReleasedAt,
-            CompletionBuildEvidence);
+            CompletionBuildEvidence,
+            WorkerBuildInvocations);
     }
 
     internal static TaskSpec FromSnapshot(TaskSnapshot snapshot)
@@ -541,7 +582,8 @@ public sealed partial class TaskSpec
                 snapshot.LastProcess.ExitArtifactReason,
                 snapshot.LastProcess.WasGracefullyDetachedByConductor,
                 snapshot.LastProcess.NonBlockingProcessIds,
-                snapshot.LastProcess.ProcessIdentityStartedAt));
+                snapshot.LastProcess.ProcessIdentityStartedAt,
+                snapshot.LastProcess.ProcessIdentityImagePath));
         }
 
         task.SetSubscriptionRetryAfter(snapshot.SubscriptionRetryAfter);
@@ -576,6 +618,7 @@ public sealed partial class TaskSpec
         task.PendingInterruptedWorkCheckpoint = snapshot.PendingInterruptedWorkCheckpoint;
         task.WasCancelledByConductor = snapshot.WasCancelledByConductor;
         task.CompletionBuildEvidence = snapshot.CompletionBuildEvidence;
+        task.WorkerBuildInvocations = snapshot.WorkerBuildInvocations ?? [];
         return task;
     }
 
@@ -1010,6 +1053,8 @@ public sealed partial class TaskSpec
             throw new InvalidOperationException("A pending completion build must be cancelled before another dispatch.");
         if (CompletionBuildEvidence is { CustodyReleased: false })
             throw new InvalidOperationException("Completion build custody must be released before another dispatch.");
+        if (WorkerBuildInvocations.Any(i => !i.IsTerminal || !i.CustodyReleased))
+            throw new InvalidOperationException("Worker build invocations must be reconciled before another dispatch.");
         CompletionBuildEvidence = null;
         if (_dispatchHistory.Count > 0)
         {
@@ -1077,6 +1122,15 @@ public sealed partial class TaskSpec
     {
         if (LastDispatch is not null)
             ReplaceLastDispatch(LastDispatch with { SandboxLowIntegrity = sandboxLowIntegrity });
+    }
+
+    internal void SetWorkerBuildProtocol(int version)
+    {
+        if (LastDispatch is null || LastProcess is not null || version != 1)
+            throw new InvalidOperationException("Worker build enrollment must precede process launch.");
+        var updated = LastDispatch with { WorkerBuildProtocolVersion = version };
+        LastDispatch = updated;
+        _dispatchHistory[^1] = updated;
     }
 
     internal void SetDispatchSpawnReceipt(
@@ -1203,7 +1257,8 @@ public sealed partial class TaskSpec
         dispatch.CandidateIdentity,
         dispatch.ProviderUsage,
         dispatch.InconclusiveRoundInputs, dispatch.ShadowDecision,
-        dispatch.FailedRoundCheckpointReceipt, dispatch.FailedRoundCheckpointDecision, dispatch.SelectedSkills, dispatch.WorkerBuildScope);
+        dispatch.FailedRoundCheckpointReceipt, dispatch.FailedRoundCheckpointDecision, dispatch.SelectedSkills, dispatch.WorkerBuildScope,
+        dispatch.WorkerBuildProtocolVersion);
 
     private static TaskDispatchRecord FromDispatchSnapshot(TaskDispatchSnapshot dispatch) => new(
         dispatch.WorkerName,
@@ -1246,7 +1301,8 @@ public sealed partial class TaskSpec
         dispatch.CandidateIdentity,
         dispatch.ProviderUsage,
         dispatch.InconclusiveRoundInputs, dispatch.ShadowDecision,
-        dispatch.FailedRoundCheckpointReceipt, dispatch.FailedRoundCheckpointDecision, dispatch.SelectedSkills, dispatch.WorkerBuildScope);
+        dispatch.FailedRoundCheckpointReceipt, dispatch.FailedRoundCheckpointDecision, dispatch.SelectedSkills, dispatch.WorkerBuildScope,
+        dispatch.WorkerBuildProtocolVersion);
 
     private static string? NormalizeOptional(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();

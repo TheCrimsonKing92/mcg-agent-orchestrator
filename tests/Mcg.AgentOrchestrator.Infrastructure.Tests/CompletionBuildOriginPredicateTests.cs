@@ -62,6 +62,33 @@ public sealed class CompletionBuildOriginPredicateTests
         Assert.Equal(0, f.Stops);
     }
 
+    [Fact]
+    public void ReconcileAttached_BindsResultPathToExplicitOwningStorageRoot()
+    {
+        var f = Start();
+        var operation = f.Task.CompletionBuildEvidence!;
+        Assert.Equal(Path.Combine(DotnetBuildStorageLayout.GoalArtifactsPath(f.GoalId, f.Storage),
+            "completion-build-evidence", operation.Id + ".result.json"), operation.ResultPath);
+        var lease = Lease(f);
+        var foreign = new DotnetBuildStorageRoot(Path.Combine(f.Root, "foreign-build-storage"));
+        var coordinator = new CompletionBuildEvidenceCoordinator(f.StatePath, f.Root, storageRoot: foreign);
+
+        var error = Assert.Throws<CompletionBuildOriginRejectedException>(() => coordinator.ReconcileAttached(
+            f.Kernel, f.GoalId, f.TaskId, CompletionBuildEvidenceTarget.From(operation)));
+
+        Assert.Equal("ResultPathMatches", error.PredicateName);
+        Assert.Equal(lease, Lease(f));
+        Assert.True(f.Live);
+        Assert.Equal(0, f.Stops);
+        // A separately created coordinator with the original owning root still validates
+        // and can cancel; the operation cannot authorize either namespace interchangeably.
+        var cancelled = f.Coordinator().CancelAttached(f.Kernel, f.GoalId, f.TaskId,
+            CompletionBuildEvidenceTarget.From(operation));
+        Assert.Equal(CompletionBuildEvidencePhase.Cancelled, cancelled.Phase);
+        Assert.True(cancelled.CustodyReleased);
+        Assert.Null(Lease(f));
+    }
+
     [Theory]
     [InlineData("GoalIdMatches", "ResultPathMatches")]
     [InlineData("ProjectsNormalized", "TreeDigestPresent")]
@@ -162,7 +189,7 @@ public sealed class CompletionBuildOriginPredicateTests
 
     private static CompletionBuildOriginPredicates.Failure? FirstFailure(
         CompletionBuildEvidenceFixture f, CompletionBuildEvidenceOperation operation) =>
-        CompletionBuildOriginPredicates.FirstFailure(f.Task, f.GoalId, operation, f.StatePath, f.Root);
+        CompletionBuildOriginPredicates.FirstFailure(f.Task, f.GoalId, operation, f.StatePath, f.Root, f.Storage);
 
     private static CompletionBuildEvidenceFixture Start()
     {

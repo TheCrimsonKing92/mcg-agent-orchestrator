@@ -10,6 +10,7 @@ public sealed partial class AgentOrchestratorKernel
         var task = goal.FindTask(taskId);
         if (task.LastProcess is not { } current || current.ProcessId != process.ProcessId ||
             current.StartedAt != process.StartedAt || current.ProcessIdentityStartedAt != process.ProcessIdentityStartedAt ||
+            current.ProcessIdentityImagePath != process.ProcessIdentityImagePath ||
             process.CompletedAt is null)
             throw new InvalidOperationException("Unstarted dispatch suppression requires the current completed host identity.");
         task.RecordProcess(process);

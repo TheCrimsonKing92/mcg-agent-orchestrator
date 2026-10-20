@@ -1,8 +1,23 @@
 using System.Diagnostics;
 using Mcg.AgentOrchestrator.App.Orchestration;
+using Mcg.AgentOrchestrator.Infrastructure;
 
 internal static class TestOwnedProcessStop
 {
+    // Kill only the host. Its owned job must reap the compiler; tree-killing here would
+    // bypass the custody behavior exercised by abrupt-host-death tests.
+    internal static void StopRootIfSame(Process process, SpawnProcessIdentity identity, TimeSpan timeout)
+    {
+        if (process.HasExited) return;
+        if (process.Id == Environment.ProcessId || process.Id != identity.ProcessId ||
+            !SpawnProcessIdentityReader.TryRead(process, out var current) || current != identity)
+            throw new InvalidOperationException("Recorded pid/start/image does not authorize stopping the test host.");
+        // The inspected OS handle remains held through termination and exit confirmation.
+        process.Kill();
+        if (!process.WaitForExit((int)timeout.TotalMilliseconds))
+            throw new InvalidOperationException("Test host exit was not confirmed after the recorded-identity stop.");
+    }
+
     internal static ConductorSupervisorProcessIdentity? Identify(Process process)
     {
         try
