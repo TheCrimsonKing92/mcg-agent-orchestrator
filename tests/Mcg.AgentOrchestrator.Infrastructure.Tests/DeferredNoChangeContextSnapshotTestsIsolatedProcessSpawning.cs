@@ -2,7 +2,7 @@ using System.Text.Json;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
-[Collection("IsolatedProcessSpawning")]
+[Collection("IsolatedProcessSpawningRemainderC")]
 public sealed class DeferredNoChangeContextSnapshotTestsIsolatedProcessSpawning
 {
     [Fact]
