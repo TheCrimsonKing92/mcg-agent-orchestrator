@@ -139,7 +139,7 @@ internal static class SourceSizeRatchet
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.ReviewRecovery.cs", 439),
             // Goal 568eb0fe prevents terminal RED replay from preparing another retry and retains
             // exhausted retry outcomes at the existing acceptance completion boundary.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.LandingCompletion.cs", 653),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.LandingCompletion.cs", 652),
             // Goal eade84cb preserves published cohort receipts while holder cleanup still reserves capacity.
             // Custody remains separately owned; after integrating main f34678bcb, measured 645 lines, with no extra headroom.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.AcceptanceCohortExecution.cs", 631),
@@ -150,7 +150,7 @@ internal static class SourceSizeRatchet
             // Goal 4ff31b70 (ConductorDriver size relief) moved parallel acceptance members unchanged to this partial.
             // Goal 568eb0fe distinguishes explicit admission parks from attempt cancellation and
             // holds new acceptance/landing work where candidate and terminal evidence meet.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.ParallelAcceptance.cs", 635), // def5cd48: planner conflict probe and existing-policy escalation.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.ParallelAcceptance.cs", 633), // def5cd48: planner conflict probe and existing-policy escalation.
             // Goal 4ff31b70 (ConductorDriver size relief) moved dispatch diagnostics unchanged to this partial.
             // Goal 0079c3a4 moved dispatch-start effects into DispatchStartExecutor.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.DispatchDiagnostics.cs", 378),
@@ -515,7 +515,7 @@ internal static class SourceSizeRatchet
             // Measured 14888 lines across the same 70 partial files; no extra headroom.
             // Goal 568eb0fe adds admission guards and idempotent terminal RED routing at their
             // existing conductor boundaries; lifecycle/disposition authority stays in Goal and the store.
-            new SourceClassCeiling("ConductorDriver", 14841, 70), // Provider hold redispatch hook and injected recovery seam.
+            new SourceClassCeiling("ConductorDriver", 14838, 70), // Provider hold redispatch hook and injected recovery seam.
             // Goal b7c2f833: epic-at-creation validation and post-commit inheritance call sites
             // require handler glue; resolution/assignment remain in the separate EpicAtCreation type.
             // Measured 12223 total lines across the existing 30 partial files after integrating main; no extra headroom.
@@ -591,7 +591,7 @@ internal static class SourceSizeRatchet
             // measured increase is exactly 10 lines (9319 total), with the same 28 partials and no headroom.
             // Goal 568eb0fe retains exhausted retry outcomes and recomputes lifecycle on explicit
             // unpark; these transitions use the kernel's existing aggregate/lifecycle ownership.
-            new SourceClassCeiling("AgentOrchestratorKernel", 9344, 28), // Persist bounded provider hold substitution with its routing event.
+            new SourceClassCeiling("AgentOrchestratorKernel", 9336, 28), // Persist bounded provider hold substitution with its routing event.
             // Goal d6033045 extracted the pre-admission receipt pass to PassedMergeTrainReceiptAdmission; goal 1d0f2317
             // adds one admission predicate to exclude stream-complete children before slot reservation. Measured 9255.
             // Goal 679eee57 added a one-line tick call to the separately owned ConductorExperimentWatch (+1); goal 80de5cb2 extracted
