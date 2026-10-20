@@ -726,12 +726,12 @@ public sealed partial class AgentOrchestratorKernel
     public bool BeginGoalAcceptanceVerification(GoalId goalId, string reason)
     {
         var goal = GetGoal(goalId);
-        if (goal.Status == GoalStatus.Verifying)
+        if (goal.LifecycleStatus == GoalStatus.Verifying)
         {
             return false;
         }
 
-        if (goal.Status != GoalStatus.Verified)
+        if (goal.LifecycleStatus != GoalStatus.Verified)
         {
             throw new InvalidOperationException($"Goal '{goalId}' is {goal.Status}; only Verified goals can start acceptance verification.");
         }
@@ -750,7 +750,7 @@ public sealed partial class AgentOrchestratorKernel
     public bool ReconcileGoalAcceptanceVerified(GoalId goalId, string reason)
     {
         var goal = GetGoal(goalId);
-        if (goal.Status != GoalStatus.Verifying)
+        if (goal.LifecycleStatus != GoalStatus.Verifying)
         {
             return false;
         }
@@ -771,7 +771,7 @@ public sealed partial class AgentOrchestratorKernel
         string? baselineAttestation = null)
     {
         var goal = GetGoal(goalId);
-        if (goal.Status != GoalStatus.Verifying)
+        if (goal.LifecycleStatus != GoalStatus.Verifying)
         {
             return false;
         }
@@ -798,6 +798,14 @@ public sealed partial class AgentOrchestratorKernel
         goal.SetStatus(GoalStatus.AcceptanceFailed);
         Append(goal, null, ProgressKind.GoalPolicyDecision, reason);
         return true;
+    }
+
+    public void RetainParkedAcceptanceRetryExhaustion(GoalId goalId)
+    {
+        var goal = GetGoal(goalId);
+        if (goal.IsExplicitlyParked && goal.LifecycleStatus == GoalStatus.AcceptanceFailed &&
+            goal.LatestAcceptanceFailure is not null)
+            goal.SetStatus(GoalStatus.Failed);
     }
 
     public TaskSpec RequeueInterruptedDispatch(
@@ -1275,7 +1283,7 @@ public sealed partial class AgentOrchestratorKernel
             throw new InvalidOperationException($"Goal '{goalId}' is already {goal.Status}.");
         }
 
-        goal.SetStatus(GoalStatus.Parked);
+        goal.ApplyExplicitDisposition(GoalExplicitDispositionAction.Park);
         var resolution = BuildGoalParkResolution(parkReason);
         CompleteOpenHumanInputRequestsForGoal(goal.Id, resolution);
         Append(goal, null, ProgressKind.GoalPolicyDecision, resolution);
@@ -1298,7 +1306,11 @@ public sealed partial class AgentOrchestratorKernel
                 "No state changed. Use status <goal> to inspect the current lifecycle state.");
         }
 
-        goal.SetStatus(GoalStatus.Active);
+        var hadExplicitDisposition = goal.ExplicitDisposition is not null;
+        goal.ApplyExplicitDisposition(GoalExplicitDispositionAction.Unpark);
+        if (hadExplicitDisposition && !IsTerminalGoalStatus(goal.Status) &&
+            goal.Status is not (GoalStatus.Verifying or GoalStatus.AcceptanceFailed))
+            RefreshGoalStatus(goal, allowParkedRefresh: true);
         Append(goal, null, ProgressKind.GoalPolicyDecision, $"Goal unparked: {unparkReason}");
         return goal;
     }
@@ -1338,12 +1350,12 @@ public sealed partial class AgentOrchestratorKernel
             throw new ArgumentException("Goal completion reason cannot be empty.", nameof(reason));
         }
 
-        if (goal.Status == GoalStatus.Completed)
+        if (goal.LifecycleStatus == GoalStatus.Completed)
         {
             return goal;
         }
 
-        if (goal.Status is not (GoalStatus.Verifying or GoalStatus.Verified))
+        if (goal.LifecycleStatus is not (GoalStatus.Verifying or GoalStatus.Verified))
         {
             throw new InvalidOperationException($"Goal '{goalId}' is {goal.Status}; only Verifying or Verified goals can be completed.");
         }
@@ -1357,7 +1369,7 @@ public sealed partial class AgentOrchestratorKernel
                 $"Goal '{goalId}' cannot complete while criterion evidence obligations remain outstanding: {detail}.");
         }
 
-        if (goal.Status == GoalStatus.Verifying &&
+        if (goal.LifecycleStatus == GoalStatus.Verifying &&
             !goal.Tasks.All(task => task.Status is WorkTaskStatus.Completed or WorkTaskStatus.Cancelled))
         {
             throw new InvalidOperationException($"Goal '{goalId}' cannot complete from Verifying until every task is terminal.");
@@ -1387,7 +1399,7 @@ public sealed partial class AgentOrchestratorKernel
             throw new ArgumentException("Goal completion reason cannot be empty.", nameof(reason));
         }
 
-        if (goal.Status == GoalStatus.Completed)
+        if (goal.LifecycleStatus == GoalStatus.Completed)
         {
             return goal;
         }
@@ -1433,12 +1445,12 @@ public sealed partial class AgentOrchestratorKernel
 
     private static string? DescribeMergeEvidenceCompletionRefusal(Goal goal)
     {
-        if (goal.Status == GoalStatus.Completed)
+        if (goal.LifecycleStatus == GoalStatus.Completed)
         {
             return null;
         }
 
-        if (IsTerminalGoalStatus(goal.Status))
+        if (IsTerminalGoalStatus(goal.LifecycleStatus))
         {
             return $"Goal '{goal.Id}' is already terminal as {goal.Status}; merge evidence cannot rewrite that terminal outcome.";
         }
@@ -1616,7 +1628,7 @@ public sealed partial class AgentOrchestratorKernel
 
     private void ReopenAcceptanceFailedGoalWithRetry(Goal goal, TaskSpec retriedTask, string reason)
     {
-        if (goal.Status != GoalStatus.AcceptanceFailed ||
+        if (goal.LifecycleStatus != GoalStatus.AcceptanceFailed ||
             retriedTask.Status is WorkTaskStatus.Completed or WorkTaskStatus.Cancelled)
         {
             return;

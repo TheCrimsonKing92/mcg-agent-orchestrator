@@ -40,6 +40,13 @@ internal sealed partial class ConductorDriver
         ConductorAutonomyPolicy policy,
         AcceptanceVerificationSummary acceptance)
     {
+        goal = GetCurrentGoal(goal);
+        if (!acceptance.Passed && goal.AcceptanceFailureDeferredForRetry &&
+            goal.LifecycleStatus == GoalStatus.Active)
+            return MakeResult(goal.Id.Value, goalPrefix, policy,
+                new ConductorAdvanceOutcome.Held(GoalLifecycleState.WorkspaceReady,
+                    "Acceptance retry is already prepared; terminal replay admits no new work."));
+
         // Census the failing tests at the handler's single entry so every gate completion is recorded,
         // including the apparatus and unattributable early returns below. Lazy keeps the changed-path
         // git call at exactly one per advance and off gate completions that never need it.
@@ -168,6 +175,7 @@ internal sealed partial class ConductorDriver
                     new ConductorAdvanceOutcome.Executed(GoalLifecycleState.Verified, retryMessage));
             }
 
+            (_conductorTickKernel ?? _cohortKernel)?.RetainParkedAcceptanceRetryExhaustion(goal.Id);
             return CreateUnmetCriteriaCompletion(goal, goalPrefix, policy, acceptance, criteria, retryTaskAvailable: true);
         }
 

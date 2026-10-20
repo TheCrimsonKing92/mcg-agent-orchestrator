@@ -100,7 +100,7 @@ internal static partial class CliPersistentStateRunner
 
         CliCommandHandlers.RenderGoalUnparkOutcome(command, outcome, workspace,
             pendingMessageId is null ? null : () => DeliverCommittedGoalLifecycleEvent(
-                (IOrchestratorStateOutboxRepository)stateRepository, workspace, goalId, GoalStatus.Active, pendingMessageId));
+                (IOrchestratorStateOutboxRepository)stateRepository, workspace, goalId, outcome.Goal!.Status, pendingMessageId));
         return outcome.ShouldSave;
     }
 

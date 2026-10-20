@@ -1341,6 +1341,9 @@ internal sealed partial class ConductorDriver
 
         var facts = GetFacts(goal);
         var state = GoalLifecycle.ResolveState(goal, facts);
+        if (goal.Status == GoalStatus.Parked)
+            return MakeResult(goalId, goalPrefix, policy,
+                new ConductorAdvanceOutcome.Held(state, "Goal is parked; explicit unpark is required before admission."));
         try
         {
             _resolveParkedWaitEscalations(goal, state);

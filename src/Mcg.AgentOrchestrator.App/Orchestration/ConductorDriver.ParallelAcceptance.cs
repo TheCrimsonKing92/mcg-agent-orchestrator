@@ -68,6 +68,11 @@ internal sealed partial class ConductorDriver
         int slotIndex,
         out string? reason)
     {
+        if (goal.Status == GoalStatus.Parked)
+        {
+            reason = CandidateDeclineHoldActive;
+            return null;
+        }
         if (HasRoutableRecordedCohortAttributionFailure(goal))
         {
             reason = CandidateDeclineCohortAttributionFailure;
@@ -397,22 +402,21 @@ internal sealed partial class ConductorDriver
             }
         }
 
-        var loadGoalStatusRecord = loadGoalStatus ?? new Func<GoalId, GoalStatus?>(id =>
-            SqliteOrchestratorStateRepository.OpenReadOnly(workspace.SqliteStatePath)
-                .LoadGoalAsync(id)
-                .GetAwaiter()
-                .GetResult()
-                ?.Status);
-
         for (var attempt = 0; attempt < 3; attempt++)
         {
             try
             {
-                var observedStatus = loadGoalStatusRecord(goalId);
+                var snapshot = loadGoalStatus is null
+                    ? SqliteOrchestratorStateRepository.OpenReadOnly(workspace.SqliteStatePath)
+                        .LoadGoalAsync(goalId).GetAwaiter().GetResult()
+                    : null;
+                var observedStatus = loadGoalStatus is null ? snapshot?.Status : loadGoalStatus(goalId);
                 return AcceptanceAttemptCancellation.Decide(
                     observedStatus,
                     goalRecordReadable: true,
-                    attemptInvalidationRecorded: invalidated);
+                    attemptInvalidationRecorded: invalidated,
+                    explicitParkHoldsAdmissionOnly: snapshot?.ExplicitDisposition?.Action == GoalExplicitDispositionAction.Park &&
+                        snapshot.ParkedLifecycleStatus is not (GoalStatus.Cancelled or GoalStatus.Superseded or GoalStatus.Failed));
             }
             catch
             {
@@ -444,6 +448,10 @@ internal sealed partial class ConductorDriver
         }
 
         acceptance = NormalizeNamedFailedChecksForRetry(acceptance);
+        var currentGoal = GetCurrentGoal(candidate.Goal);
+        if (currentGoal.Status == GoalStatus.Parked && acceptance.Passed)
+            return MakeResult(currentGoal.Id.Value, candidate.GoalPrefix, policy,
+                new ConductorAdvanceOutcome.Held(GoalLifecycleState.Verified, "Goal is parked; landing remains held."));
         if (!acceptance.Passed || acceptance.UnmetCriteria.Count > 0)
         {
             return CompleteLandingAfterAcceptance(candidate.Goal, candidate.GoalPrefix, policy, acceptance);

@@ -730,6 +730,14 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
                                 "goal row no longer exists")));
                     }
 
+                    if (request.Current.ExplicitDisposition != request.Baseline.ExplicitDisposition)
+                    {
+                        return Task.FromResult<(bool ShouldSave, GoalStateSnapshot? NewState, GoalSnapshotSaveResult Result)>(
+                            (false, null, new GoalSnapshotSaveResult(request.Current.Id,
+                                GoalSnapshotSaveDisposition.Skipped, storedSnapshot,
+                                "tick cannot change explicit operator disposition", storedState!.HumanInputRequests)));
+                    }
+
                     if (SnapshotEquals(storedSnapshot, request.Baseline))
                     {
                         var state = ValidateConsistentGoalState(
@@ -2060,6 +2068,14 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
             return false;
         }
 
+        // Explicit commands are serialized by the goal-row CAS. Only the stored row may
+        // supply that authority; lifecycle progress is still tick-owned and merges separately.
+        var lifecycle = PickTickOwned(
+            baseline.ParkedLifecycleStatus ?? baseline.Status,
+            stored.ParkedLifecycleStatus ?? stored.Status,
+            current.ParkedLifecycleStatus ?? current.Status);
+        var explicitlyParked = stored.ExplicitDisposition?.Action == GoalExplicitDispositionAction.Park;
+
         var mergedSourceBacklogLink = PickStoreOwned(
             (baseline.SourceBacklogItemId, baseline.SourceBacklogCoverage),
             (stored.SourceBacklogItemId, stored.SourceBacklogCoverage),
@@ -2069,7 +2085,9 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
         {
             Objective = PickStoreOwned(baseline.Objective, stored.Objective, current.Objective),
             BriefVersions = PickStoreOwnedList(baseline.BriefVersions, stored.BriefVersions, current.BriefVersions),
-            Status = PickTickOwned(baseline.Status, stored.Status, current.Status),
+            Status = explicitlyParked ? GoalStatus.Parked : lifecycle,
+            ExplicitDisposition = stored.ExplicitDisposition,
+            ParkedLifecycleStatus = explicitlyParked ? lifecycle : null,
             Tasks = mergedTasks,
             Timeline = MergeTimeline(baseline.Timeline, stored.Timeline, current.Timeline),
             DependsOn = PickStoreOwnedList(baseline.DependsOn, stored.DependsOn, current.DependsOn),

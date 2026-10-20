@@ -73,6 +73,11 @@ public sealed class Goal
     public IReadOnlyList<GoalBriefVersion> BriefVersions => _briefVersions;
 
     public GoalStatus Status { get; private set; } = GoalStatus.Draft;
+
+    public GoalExplicitDisposition? ExplicitDisposition { get; private set; }
+    public GoalStatus? ParkedLifecycleStatus { get; private set; }
+    public bool IsExplicitlyParked => ExplicitDisposition?.Action == GoalExplicitDispositionAction.Park;
+    public GoalStatus LifecycleStatus => ParkedLifecycleStatus ?? Status;
     public GoalPriority Priority { get; private set; } = GoalPriority.Normal;
 
     public GoalIsolation Isolation { get; internal set; }
@@ -114,6 +119,7 @@ public sealed class Goal
         _acceptanceFailureDeferredForRetry ? null : _retainedAcceptanceFailure;
 
     public AcceptanceFailureSummary? RetainedAcceptanceFailure => _retainedAcceptanceFailure;
+    public bool AcceptanceFailureDeferredForRetry => _acceptanceFailureDeferredForRetry;
 
     public int AutomaticAcceptanceRetryCount { get; private set; }
 
@@ -253,9 +259,36 @@ public sealed class Goal
 
     internal void SetStatus(GoalStatus status)
     {
+        if (IsExplicitlyParked)
+        {
+            // Ordinary progress cannot release an explicit operator disposition. Retain the
+            // outcome so unpark can expose completion, failure or a staged retry faithfully.
+            if (status != GoalStatus.Parked) ParkedLifecycleStatus = status;
+            Status = GoalStatus.Parked;
+            return;
+        }
         if (!IsTerminal && IsTerminalMetadataStatus(status))
             GoalEffectivePriorityIndex.RecordSeeds(this, [], terminal: true);
         Status = status;
+    }
+
+    internal void ApplyExplicitDisposition(GoalExplicitDispositionAction action)
+    {
+        // Reissuing an explicit park on a legacy hold records authority from this action
+        // onward. Its ordinary lifecycle is recomputed on release, as for legacy unpark.
+        var lifecycle = LifecycleStatus == GoalStatus.Parked ? GoalStatus.Active : LifecycleStatus;
+        ExplicitDisposition = new GoalExplicitDisposition(
+            checked((ExplicitDisposition?.Revision ?? 0) + 1), action);
+        if (action == GoalExplicitDispositionAction.Park)
+        {
+            ParkedLifecycleStatus = lifecycle;
+            Status = GoalStatus.Parked;
+        }
+        else
+        {
+            ParkedLifecycleStatus = null;
+            SetStatus(lifecycle == GoalStatus.Parked ? GoalStatus.Active : lifecycle);
+        }
     }
 
     internal void SetRefinedSpec(RefinedSpec spec, DateTimeOffset recordedAt)
@@ -1156,7 +1189,9 @@ public sealed class Goal
             CriterionEvidenceObligations: _criterionEvidenceObligations.Count == 0 ? null : _criterionEvidenceObligations.ToArray(),
             GateTestObligations: _gateTestObligations.Count == 0 ? null : _gateTestObligations.ToArray(),
             PriorityScheduling: PriorityScheduling,
-            Isolation: Isolation == GoalIsolation.None ? null : GoalIsolations.Format(Isolation));
+            Isolation: Isolation == GoalIsolation.None ? null : GoalIsolations.Format(Isolation),
+            ExplicitDisposition: ExplicitDisposition,
+            ParkedLifecycleStatus: ParkedLifecycleStatus);
     }
 
     internal static Goal FromSnapshot(GoalSnapshot snapshot)
@@ -1182,6 +1217,13 @@ public sealed class Goal
             initialRecordedAt,
             snapshot.SliceBatchParentId is null ? null : new GoalId(snapshot.SliceBatchParentId));
         goal.RestoreBriefVersions(snapshot.BriefVersions);
+        if (snapshot.ExplicitDisposition?.Action == GoalExplicitDispositionAction.Park &&
+            snapshot.ParkedLifecycleStatus is null or GoalStatus.Parked ||
+            snapshot.ExplicitDisposition?.Action != GoalExplicitDispositionAction.Park &&
+            snapshot.ParkedLifecycleStatus is not null)
+            throw new ArgumentException("Explicit park snapshot has inconsistent retained lifecycle state.", nameof(snapshot));
+        goal.ExplicitDisposition = snapshot.ExplicitDisposition;
+        goal.ParkedLifecycleStatus = snapshot.ParkedLifecycleStatus;
         goal.SetStatus(snapshot.Status);
         goal.RestoreClarificationRoundCount(snapshot.ClarificationRoundCount);
 

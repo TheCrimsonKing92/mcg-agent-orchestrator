@@ -30,7 +30,8 @@ internal static class AcceptanceAttemptCancellation
     internal static AcceptanceAttemptCancellationDecision Decide(
         GoalStatus? observedStatus,
         bool goalRecordReadable,
-        bool attemptInvalidationRecorded)
+        bool attemptInvalidationRecorded,
+        bool explicitParkHoldsAdmissionOnly = false)
     {
         if (!goalRecordReadable)
         {
@@ -44,12 +45,11 @@ internal static class AcceptanceAttemptCancellation
                 AcceptanceAttemptCancellationCause.GoalRecordMissing);
         }
 
-        // A gate cannot be admitted from these dispositions: Parked is excluded before the batch walk,
-        // and Failed/Cancelled/Superseded are excluded by GoalStatusSemantics. Seeing one after a gate
-        // started therefore records a real stop, while Active and AcceptanceFailed may merely be lagging
-        // pre-gate rows and are not stop signals on their own.
-        if (observedStatus.Value is GoalStatus.Parked or
-            GoalStatus.Cancelled or
+        // Legacy parks retain their stop behavior. A typed explicit park holds new admission
+        // while already-owned work drains; cancellation still requires a separate stop or
+        // attempt invalidation. Active and AcceptanceFailed can be lagging pre-gate rows.
+        if (observedStatus.Value == GoalStatus.Parked && !explicitParkHoldsAdmissionOnly ||
+            observedStatus.Value is GoalStatus.Cancelled or
             GoalStatus.Superseded or
             GoalStatus.Failed)
         {

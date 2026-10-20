@@ -861,7 +861,9 @@ internal sealed partial class ConductorBatchLoop
             AddLedgerPhaseTimings(preTickTimingLines, nextTick, "prewalk", preWalkClock.Elapsed,
                 $"scoped={scopedGoals.Length} candidates={preWalkCandidates.Length} eligible={eligible.Length} deferred_intent={preWalkIntentChangedGoalIds.Count} excluded_parked={parkedExcludedCount} excluded_terminal={terminalExcludedCount} cache_entries={goalProjectionCache.Count}", cpuMs: EndCpuPhase(preWalkCpuStart, ref _tickCpuPrewalkMs));
 
-            if (eligible.Length == 0)
+            var hasParkedAcceptanceToReconcile = scopedGoals.Any(goal => goal.IsExplicitlyParked &&
+                driver.ParallelAcceptanceAttemptCoordinator.GetUnreconciledAttempts([goal.Id.Value]).Count > 0);
+            if (eligible.Length == 0 && !hasParkedAcceptanceToReconcile)
             {
                 if (preWalkIntentProcessed || preWalkIntentChangedGoalIds.Count > 0)
                 {
@@ -1125,6 +1127,7 @@ internal sealed partial class ConductorBatchLoop
 
                 return isDeferringMaxDurationStop || pendingSelfRelaunch is not null;
             }
+            driver.BeginTick(kernel, totalTicks);
             var parallelLandingResults = RunParallelAcceptanceBatch(
                 eligible,
                 scopedGoals,
@@ -1144,7 +1147,6 @@ internal sealed partial class ConductorBatchLoop
             var perGoalPhaseTimingLines = new List<string>();
             driver.PhaseTimingSink = line => perGoalPhaseTimingLines.Add($"PHASE_TIMING tick={totalTicks} {line}");
             var goalWalkTimings = new List<GoalWalkTiming>();
-            driver.BeginTick(kernel, totalTicks);
             var goalWalkClock = StartDiagnosticTimer();
             var goalWalkCpuStart = ReadProcessCpu();
             var glanceDurationStats = _progressiveReviewGlances is null
@@ -2192,7 +2194,7 @@ internal sealed partial class ConductorBatchLoop
         RecordActivationAdmissionWaitingForProbe(state);
         if (state.CapacityStateUnavailable) return state.Results;
 
-        ReconcileParallelAcceptanceAttempts(state, kernel, driver, policy, tick, changedGoalLines, changedGoalIds);
+        ReconcileParallelAcceptanceAttempts(state, scopedGoals, kernel, driver, policy, tick, changedGoalLines, changedGoalIds);
         PrepareGroupedAcceptanceAdmission(
             state, eligible, scopedGoals, verifiedGoalIdsAtTickStart, preWalkIntentChangedGoalIds,
             kernel, driver, policy, completedGoals, escalatedGoals, tick, changedGoalLines, changedGoalIds,
