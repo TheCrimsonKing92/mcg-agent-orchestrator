@@ -305,6 +305,64 @@ public sealed class OwnerConsoleActivityFollowScenarioTests
     }
 
     [Fact]
+    public async Task Refresh_ControlledSecondBoundary_PreservesModesAndOtherPanes()
+    {
+        // Separate the displayed hour from a clock-omitting view without waiting on real time.
+        var systemLocal = TimeProvider.System.GetLocalNow();
+        var before = new DateTimeOffset(2026, 1, 1, (systemLocal.Hour + 6) % 24, 12, 59, 900, TimeSpan.Zero);
+        var timerChanges = new List<TimeSpan>();
+        var followingClock = new OwnerConsoleTestClock { Now = before, Zone = TimeZoneInfo.Utc, TimerChanged = timerChanges.Add };
+        var inspectingClock = new OwnerConsoleTestClock { Now = before, Zone = TimeZoneInfo.Utc, TimerChanged = timerChanges.Add };
+        using var following = new Scene(clock: followingClock);
+        using var inspecting = new Scene(clock: inspectingClock);
+        var scenes = new[] { following, inspecting };
+        foreach (var scene in scenes)
+        {
+            Assert.False(scene.App.Initialized);
+            await Populate(scene, otherPanes: true);
+            await Activity(scene);
+        }
+
+        // Reuse identical inputs throughout: only the render clock crosses the boundary.
+        var model = following.Controller.Model!;
+        // Scene.Render supplies no LastConductEvent, independently of its activity rows.
+        Assert.Null(model.Status.LastEventAge);
+        foreach (var scene in scenes) scene.View.Render(model);
+        await inspecting.View.HandleKeyAsync(Key.PageDown);
+        AssertFollowing(following);
+        AssertInspecting(inspecting);
+        var presentations = scenes.Select(scene => new
+        {
+            Scene = scene,
+            Lines = scene.View.ActivityLines.ToArray(),
+            Selected = scene.View.ActivityPane.SelectedItem,
+            Viewport = scene.View.ActivityPane.Viewport,
+            Hint = scene.View.HintText
+        }).ToArray();
+
+        foreach (var instant in new[] { before, before.AddMilliseconds(200) })
+        {
+            followingClock.Now = inspectingClock.Now = instant;
+            foreach (var presentation in presentations)
+            {
+                var scene = presentation.Scene;
+                scene.View.Render(model);
+                Assert.Equal($"conductor: running | active: 12 | decisions: 12 | last event: unknown | landed today: 0 | bell: on | refreshed {instant:HH:mm:ss}",
+                    scene.View.StatusText);
+                Assert.Equal(presentation.Lines, scene.View.ActivityLines);
+                Assert.Equal(presentation.Selected, scene.View.ActivityPane.SelectedItem);
+                Assert.Equal(presentation.Viewport, scene.View.ActivityPane.Viewport);
+                Assert.Equal(presentation.Hint, scene.View.HintText);
+                Assert.False(scene.App.Initialized);
+            }
+            AssertFollowing(following);
+            AssertInspecting(inspecting);
+            EqualOtherPanes(following, inspecting);
+            Assert.Empty(timerChanges);
+        }
+    }
+
+    [Fact]
     public void Registry_Follow_IsKeylessGlobalViewCommandAfterFleet()
     {
         Assert.Empty(OwnerConsoleBindings.Validate(OwnerConsoleBindings.All));
