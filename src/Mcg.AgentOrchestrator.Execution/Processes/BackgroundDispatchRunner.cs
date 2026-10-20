@@ -1,6 +1,4 @@
 using System.Diagnostics;
-using System.Security.Cryptography;
-using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Mcg.AgentOrchestrator.Core;
@@ -2588,17 +2586,7 @@ public sealed partial class BackgroundDispatchRunner
         GoalStatus.Completed;
 
     internal static string BuildDispatchId(GoalId goalId, TaskId taskId, TaskDispatchRecord dispatch)
-    {
-        var raw = string.Join('\u001f',
-            goalId.Value,
-            taskId.Value,
-            dispatch.DispatchedAt.ToUniversalTime().ToString("O"),
-            dispatch.WorkerName,
-            dispatch.WorkingDirectory,
-            dispatch.ProviderSessionId,
-            dispatch.Command);
-        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(raw)))[..16].ToLowerInvariant();
-    }
+        => DispatchIdentity.BuildId(goalId, taskId, dispatch);
 
     private sealed record AutoRequeueBlocker(
         string BlockingEntity,
