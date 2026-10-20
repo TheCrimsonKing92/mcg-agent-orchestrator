@@ -272,13 +272,27 @@ public sealed class CliAttentionShowAgentReadEnvelopeContractTests : CliTaskQuer
                 await store.RaiseAsync(type, null, $"Visible {type}", "Required operator action");
             Assert.Equal(3, (await store.GetAttentionQueueAsync()).Count);
             var args = show ? new[] { "attention", "show" } : ["attention"];
-            var output = Run(args, workspace, kernel);
             IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
             var profiles = WorkerProfileCatalog.Default();
             Goal? selected = null;
+            // Text show deliberately falls back to the writer for any parked goal so it can sweep
+            // stale waits. Gate obligations must not change that routing contract.
+            var expectsReadOnly = !show || status != GoalStatus.Parked;
+            var output = CaptureConsole(() =>
+            {
+                CliCommandHelp.ThrowIfInvalidFlags(args);
+                Assert.Equal(expectsReadOnly, CliReadOnlyCommandRunner.TryExecute(args,
+                    new ProbeStateRepository(kernel) { ThrowOnOutbox = true }, workspace,
+                    new InMemoryModelProviderRegistry([]), null, ref agents, ref profiles, ref selected,
+                    out var changed));
+                Assert.False(changed);
+                Assert.Null(selected);
+            });
+            if (!expectsReadOnly)
+                Assert.Empty(output);
             var direct = CaptureConsole(() => Assert.False(CliCommandDispatcher.ExecuteCommand(args, kernel,
                 workspace, ref agents, new InMemoryModelProviderRegistry([]), ref profiles, ref selected)));
-            foreach (var rendered in new[] { output, direct })
+            foreach (var rendered in expectsReadOnly ? new[] { output, direct } : [direct])
                 foreach (var type in new[] { "Decision", "Clarification", "Verify" })
                     Assert.Contains($"Visible {type}", rendered);
         }
