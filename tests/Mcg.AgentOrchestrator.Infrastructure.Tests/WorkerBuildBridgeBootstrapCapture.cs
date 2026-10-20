@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Text.Json;
 
@@ -24,7 +25,9 @@ internal sealed class WorkerBuildBridgeBootstrapCapture : IDisposable
             temp = Path.Combine(local, "Temp");
         _processRoot = Path.Combine(temp, "pt", "goal-manual", child.Id.ToString(System.Globalization.CultureInfo.InvariantCulture));
         _bootstrap = Path.Combine(_processRoot, "scope-tool", "bin");
-        _child = new { pid = child.Id, startTimeUtc = child.StartTime.ToUniversalTime(), image = child.MainModule!.FileName, arguments = child.StartInfo.ArgumentList.ToArray(), bootstrap = _bootstrap };
+        var diagnostics = ReadProcessDiagnostics(() => child.StartTime.ToUniversalTime(), () => child.MainModule?.FileName);
+        _child = new { pid = child.Id, startTimeUtc = diagnostics.StartTimeUtc, startTimeError = diagnostics.StartTimeError,
+            image = diagnostics.Image, imageError = diagnostics.ImageError, arguments = child.StartInfo.ArgumentList.ToArray(), bootstrap = _bootstrap };
         _watcher = new FileSystemWatcher(temp)
         {
             IncludeSubdirectories = true, NotifyFilter = NotifyFilters.DirectoryName,
@@ -34,6 +37,35 @@ internal sealed class WorkerBuildBridgeBootstrapCapture : IDisposable
         _watcher.Error += (_, args) => ObserveFailure(args.GetException());
         _watcher.EnableRaisingEvents = true;
         ArmScopedWatcher();
+    }
+
+    // These optional observations are diagnostics only; they do not authorize or prove a bootstrap.
+    internal static (DateTime? StartTimeUtc, string? StartTimeError, string? Image, string? ImageError) ReadProcessDiagnostics(
+        Func<DateTime> readStartTimeUtc, Func<string?> readImage)
+    {
+        DateTime? startTimeUtc = null;
+        string? startTimeError = null;
+        string? image = null;
+        string? imageError = null;
+        try { startTimeUtc = readStartTimeUtc(); }
+        catch (Exception exception) when (exception is Win32Exception or InvalidOperationException or NotSupportedException or UnauthorizedAccessException)
+        {
+            startTimeError = exception.ToString();
+        }
+        try
+        {
+            image = readImage();
+            if (string.IsNullOrWhiteSpace(image))
+            {
+                image = null;
+                imageError = "Process module image metadata is unavailable: MainModule or FileName was null or empty.";
+            }
+        }
+        catch (Exception exception) when (exception is Win32Exception or InvalidOperationException or NotSupportedException or UnauthorizedAccessException)
+        {
+            imageError = exception.ToString();
+        }
+        return (startTimeUtc, startTimeError, image, imageError);
     }
 
     private void ArmScopedWatcher()
