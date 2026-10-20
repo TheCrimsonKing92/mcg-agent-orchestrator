@@ -440,37 +440,9 @@ internal sealed partial class ConductorDriver
 
     private bool HasCurrentPassedMergeTrainIdentity(
         ConductorMergeTrainSelection selection,
-        MergeTrainReceipt receipt)
-    {
-        if (_cohortKernel is null || _cohortWorkspace is null || _cohortAcceptanceVerifier is null)
-        {
-            return false;
-        }
-        var goalsById = _cohortKernel.Goals.ToDictionary(goal => goal.Id);
-        if (selection.Members.Any(member => !goalsById.ContainsKey(member.GoalId))) return false;
-        try
-        {
-            using var workspace = GoalWorktrees.CreateMergeTrainWorkspace(
-                _cohortWorkspace.ExecutionDirectory,
-                selection.Members[0].MainRevision,
-                selection.BindMembers(id => goalsById[id].AuthoritativeBrief.Version), _integrationBranch,
-                _cohortCleanupHooks);
-            if (workspace.Members.Count != receipt.Identity.Members.Count)
-            {
-                return false;
-            }
-            var changedFiles = workspace.Members.SelectMany(member => member.LandingPaths)
-                .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
-            var manifest = _cohortAcceptanceVerifier.ComputeEffectivePlanIdentity(workspace.Path, changedFiles);
-            return string.Equals(MergeTrainIdentity.Create(workspace.Members,
-                    selection.Members[0].MainRevision, workspace.TreeRevision, manifest).Value,
-                receipt.Identity.Value, StringComparison.Ordinal);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
-        {
-            return false;
-        }
-    }
+        MergeTrainReceipt receipt) =>
+        GroupedGateIdentityInspector.HasCurrentPassedMergeTrainIdentity(selection, receipt,
+            _cohortKernel, _cohortWorkspace, _cohortAcceptanceVerifier, _integrationBranch, _cohortCleanupHooks);
 
     private void RecoverMergeTrainLandingEffects(
         AgentOrchestratorKernel kernel,
