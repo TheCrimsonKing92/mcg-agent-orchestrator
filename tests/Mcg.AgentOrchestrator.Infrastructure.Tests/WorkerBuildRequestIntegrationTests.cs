@@ -70,7 +70,8 @@ public sealed class WorkerBuildRequestIntegrationTests(ITestOutputHelper output)
             Assert.Equal(new[] { "number", "status", "role", "description", "agent", "workerBuildInvocations" },
                 tasks[0].EnumerateObject().Select(p => p.Name));
             Assert.Equal(1, tasks[0].GetProperty("number").GetInt32());
-            Assert.Equal("Assigned", tasks[0].GetProperty("status").GetString());
+            // The fixture records process start before the helper requests its build.
+            Assert.Equal("Running", tasks[0].GetProperty("status").GetString());
             Assert.Equal("Developer", tasks[0].GetProperty("role").GetString());
             Assert.Equal("Implement fixture", tasks[0].GetProperty("description").GetString());
             Assert.Equal("fixture-", tasks[0].GetProperty("agent").GetString());
