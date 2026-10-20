@@ -154,7 +154,23 @@ public sealed class CliCommandTestsPersistentRunnerCommandsConductLoopHydration 
         Xunit.Assert.All(parkedGoalIds, id => Xunit.Assert.DoesNotContain(id.Value, initiallyParkedRepository.LoadedGoalIds));
 
         var unparkedGoalId = parkedGoalIds[42];
-        kernel = WithGoalStatus(kernel, unparkedGoalId, GoalStatus.Active);
+        var unparkedGoal = kernel.UnparkGoal(unparkedGoalId, "operator resumed hydration fixture");
+        Xunit.Assert.Equal(new GoalExplicitDisposition(2, GoalExplicitDispositionAction.Unpark), unparkedGoal.ExplicitDisposition);
+        Xunit.Assert.Null(unparkedGoal.ParkedLifecycleStatus);
+        Xunit.Assert.NotEqual(GoalStatus.Parked, unparkedGoal.Status);
+
+        kernel = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot());
+        var restoredGoal = kernel.GetGoal(unparkedGoalId);
+        Xunit.Assert.Equal(new GoalExplicitDisposition(2, GoalExplicitDispositionAction.Unpark), restoredGoal.ExplicitDisposition);
+        Xunit.Assert.Null(restoredGoal.ParkedLifecycleStatus);
+        Xunit.Assert.NotEqual(GoalStatus.Parked, restoredGoal.Status);
+        Xunit.Assert.All(parkedGoalIds.Where(id => id != unparkedGoalId), id =>
+        {
+            var parkedGoal = kernel.GetGoal(id);
+            Xunit.Assert.Equal(new GoalExplicitDisposition(1, GoalExplicitDispositionAction.Park), parkedGoal.ExplicitDisposition);
+            Xunit.Assert.Equal(GoalStatus.Parked, parkedGoal.Status);
+        });
+
         var nextTickRepository = new InMemoryTransactionalStateRepository(kernel);
         var nextTickLoaded = CliPersistentStateRunner.LoadConductLoopKernel(nextTickRepository);
 
