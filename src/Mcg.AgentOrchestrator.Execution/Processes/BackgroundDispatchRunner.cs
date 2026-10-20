@@ -404,21 +404,8 @@ public sealed partial class BackgroundDispatchRunner
             return DispatchProcessStartResult.Failed(registrationFailure);
         }
 
-        // A registry-free runner has no durable process-identity reader. Registration still owns
-        // the live process through its job, so preserve that supported degraded path; durable
-        // registries continue to supply the identity later used by successor recovery.
-        _ = WorkerProcessJobs.TryGetRegisteredIdentity(process.Id, out var dispatchHostIdentity);
-        if (runParameters.WorkerBuildHost is not null && dispatchHostIdentity is null)
-        {
-            // Enrollment cannot use the legacy registry-free identity degradation. This process is
-            // still behind its start gate, and we hold its real handle rather than reopening a PID.
-            try
-            {
-                var identity = WorkerBuildRequestChannel.ReadIdentity(process);
-                dispatchHostIdentity = new SpawnProcessIdentity(identity.Pid, identity.StartedAt, identity.ImagePath);
-            }
-            catch { TerminateUnreleasedDispatchHost(process); throw; }
-        }
+        var dispatchHostIdentity = DispatchHostLaunchOwnership.ReadIdentity(
+            process, runParameters.WorkerBuildHost is not null, _tryKillOwnedProcess);
 
         var sampleArtifacts = task.RequiredRole == AgentRole.Planner
             ? PlannerSampleDispatcher.CreateArtifacts(stdoutPath, dispatch.PlannerSampleCount)
@@ -504,7 +491,7 @@ public sealed partial class BackgroundDispatchRunner
             {
                 // The primary is already durable. A deferred optional-sample diagnostic failure must
                 // remain loud without stranding the authoritative dispatch behind its start gate.
-                ReleaseDispatchHostStartGate(startGatePath);
+                DispatchHostLaunchOwnership.ReleaseStartGate(startGatePath);
             }
 
             if (confirmWorkerStart is not null && !confirmWorkerStart())
@@ -522,26 +509,8 @@ public sealed partial class BackgroundDispatchRunner
         return DispatchProcessStartResult.Started(record);
     }
 
-    private void TerminateUnreleasedDispatchHost(Process process)
-    {
-        try
-        {
-            if (!_tryKillOwnedProcess(process.Id) && !process.HasExited)
-            {
-                process.Kill(entireProcessTree: true);
-            }
-        }
-        catch
-        {
-            // The checkpoint failure is the actionable fault; process cleanup is best-effort.
-        }
-    }
-
-    private static void ReleaseDispatchHostStartGate(string startGatePath)
-    {
-        Directory.CreateDirectory(Path.GetDirectoryName(startGatePath)!);
-        File.WriteAllText(startGatePath, "go");
-    }
+    private void TerminateUnreleasedDispatchHost(Process process) =>
+        DispatchHostLaunchOwnership.TerminateUnreleased(process, _tryKillOwnedProcess);
 
     private DispatchRefreshOutcome? TryBuildPlannerSampleHold(
         TaskSpec task,

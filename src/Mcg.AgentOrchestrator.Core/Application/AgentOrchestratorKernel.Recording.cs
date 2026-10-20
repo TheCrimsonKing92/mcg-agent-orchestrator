@@ -1965,30 +1965,7 @@ public sealed partial class AgentOrchestratorKernel
     {
         var goal = GetGoal(goalId);
         var task = goal.FindTask(taskId);
-
-        if (task.LastDispatch is null)
-        {
-            throw new InvalidOperationException($"Task '{taskId}' has no dispatch to start.");
-        }
-
-        if (!string.Equals(task.LastDispatch.Command, process.Command, StringComparison.Ordinal))
-        {
-            throw new InvalidOperationException("Process command does not match the recorded dispatch command.");
-        }
-
-        if (!string.Equals(task.LastDispatch.WorkingDirectory, process.WorkingDirectory, StringComparison.OrdinalIgnoreCase))
-        {
-            throw new InvalidOperationException("Process working directory does not match the recorded dispatch working directory.");
-        }
-
-        task.RecordProcess(process);
-        var ownerlessAdmission = task.RetryAdmissionHistory.LastOrDefault(receipt =>
-            receipt.LinkedDispatchAt == task.LastDispatch.DispatchedAt &&
-            receipt.Decision is RetryAdmissionDecision.Allowed or RetryAdmissionDecision.ResumedReservation &&
-            string.IsNullOrWhiteSpace(receipt.ReservationOwnerId));
-        if (ownerlessAdmission is not null)
-            task.MarkRetryAdmissionStarted(task.LastDispatch.DispatchedAt, process.StartedAt);
-        task.SetStatus(WorkTaskStatus.Running);
+        TaskProcessStartRecording.Record(task, process);
         if (!IsReopenProtectedGoalStatus(goal.Status))
             goal.SetStatus(GoalStatus.Active);
         Append(goal, taskId, ProgressKind.TaskProcessStarted, $"Started process {process.ProcessId}: {process.Command}");
