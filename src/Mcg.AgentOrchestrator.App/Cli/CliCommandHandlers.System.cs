@@ -384,6 +384,9 @@ internal static partial class CliCommandHandlers
                         if (showWaits.Count > 0 || context.Kernel.Goals.Any(goal => goal.GateTestObligations.Count > 0))
                         {
                             ConsoleViews.PrintHumanWaits(showWaits, DateTimeOffset.UtcNow, includeHistory, context.Kernel.Goals);
+                        }
+                        if (showWaits.Count > 0)
+                        {
                             if (includeHistory)
                             {
                                 var allItems = store.ListAsync().GetAwaiter().GetResult();
@@ -488,6 +491,9 @@ internal static partial class CliCommandHandlers
                         .Any(item => item.BriefVersion == goal.AuthoritativeBrief.Version)))
                 {
                     ConsoleViews.PrintHumanWaits(waits, DateTimeOffset.UtcNow, goals: context.Kernel.Goals);
+                }
+                if (waits.Count > 0)
+                {
                     return migratedHumanWaits > 0 || migratedCollaborationItems > 0;
                 }
 

@@ -732,12 +732,14 @@ internal sealed partial class ConductorDriver
         ConductorAcceptanceCohortSelection selection,
         AcceptanceCohortReceipt receipt)
     {
-        if (_cohortWorkspace is null || _cohortAcceptanceVerifier is null)
+        if (_cohortKernel is null || _cohortWorkspace is null || _cohortAcceptanceVerifier is null)
         {
             return false;
         }
 
-        var bindings = selection.BindMembers();
+        var goalsById = _cohortKernel.Goals.ToDictionary(goal => goal.Id);
+        if (selection.Members.Any(member => !goalsById.ContainsKey(member.GoalId))) return false;
+        var bindings = selection.BindMembers(id => goalsById[id].AuthoritativeBrief.Version);
         try
         {
             using var integration = GoalWorktrees.CreateAcceptanceCohortWorkspace(

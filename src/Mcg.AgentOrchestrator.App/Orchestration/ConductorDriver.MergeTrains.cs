@@ -442,16 +442,18 @@ internal sealed partial class ConductorDriver
         ConductorMergeTrainSelection selection,
         MergeTrainReceipt receipt)
     {
-        if (_cohortWorkspace is null || _cohortAcceptanceVerifier is null)
+        if (_cohortKernel is null || _cohortWorkspace is null || _cohortAcceptanceVerifier is null)
         {
             return false;
         }
+        var goalsById = _cohortKernel.Goals.ToDictionary(goal => goal.Id);
+        if (selection.Members.Any(member => !goalsById.ContainsKey(member.GoalId))) return false;
         try
         {
             using var workspace = GoalWorktrees.CreateMergeTrainWorkspace(
                 _cohortWorkspace.ExecutionDirectory,
                 selection.Members[0].MainRevision,
-                selection.BindMembers(), _integrationBranch,
+                selection.BindMembers(id => goalsById[id].AuthoritativeBrief.Version), _integrationBranch,
                 _cohortCleanupHooks);
             if (workspace.Members.Count != receipt.Identity.Members.Count)
             {

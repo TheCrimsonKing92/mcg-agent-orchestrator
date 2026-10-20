@@ -235,6 +235,56 @@ public sealed class CliAttentionShowAgentReadEnvelopeContractTests : CliTaskQuer
         finally { Directory.Delete(root, true); }
     }
 
+    [Theory]
+    [InlineData(false, GoalStatus.Active, 0)]
+    [InlineData(true, GoalStatus.Active, 0)]
+    [InlineData(false, GoalStatus.Completed, 0)]
+    [InlineData(true, GoalStatus.Completed, 0)]
+    [InlineData(false, GoalStatus.Failed, 0)]
+    [InlineData(true, GoalStatus.Failed, 0)]
+    [InlineData(false, GoalStatus.Parked, 0)]
+    [InlineData(true, GoalStatus.Parked, 0)]
+    [InlineData(true, GoalStatus.Active, -1)]
+    public async Task GateOnlyGoal_TextFormsKeepGlobalQueue(
+        bool show, GoalStatus status, int briefOffset)
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(root);
+            var original = new AgentOrchestratorKernel();
+            var goal = original.CreateGoal("Gate evidence without an operator wait");
+            var snapshot = original.ExportSnapshot();
+            var kernel = AgentOrchestratorKernel.FromSnapshot(snapshot with
+            {
+                Goals = [snapshot.Goals.Single() with
+                {
+                    Status = status,
+                    GateTestObligations = [new("gate-only", goal.AuthoritativeBrief.Version + briefOffset,
+                        ["RequiredTests"], null, "Acceptance evidence", DateTimeOffset.UnixEpoch)]
+                }]
+            });
+            Assert.Single(kernel.GetGoal(goal.Id).GateTestObligations);
+            Assert.Empty(kernel.ExportSnapshot().HumanInputRequests);
+            var store = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
+            foreach (var type in new[] { CollaborationItemType.Decision,
+                         CollaborationItemType.Clarification, CollaborationItemType.Verify })
+                await store.RaiseAsync(type, null, $"Visible {type}", "Required operator action");
+            Assert.Equal(3, (await store.GetAttentionQueueAsync()).Count);
+            var args = show ? new[] { "attention", "show" } : ["attention"];
+            var output = Run(args, workspace, kernel);
+            IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+            var profiles = WorkerProfileCatalog.Default();
+            Goal? selected = null;
+            var direct = CaptureConsole(() => Assert.False(CliCommandDispatcher.ExecuteCommand(args, kernel,
+                workspace, ref agents, new InMemoryModelProviderRegistry([]), ref profiles, ref selected)));
+            foreach (var rendered in new[] { output, direct })
+                foreach (var type in new[] { "Decision", "Clarification", "Verify" })
+                    Assert.Contains($"Visible {type}", rendered);
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
     private static JsonElement AssertEnvelope(JsonElement envelope)
     {
         Assert.Equal(new[] { "schema", "schemaVersion", "generatedAt", "payload" },
