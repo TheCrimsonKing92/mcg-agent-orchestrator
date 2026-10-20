@@ -3,6 +3,7 @@ using System.Runtime.CompilerServices;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
+using Microsoft.Win32.SafeHandles;
 
 // Parallel-safe: isolated repository, canonical stores, slot grid, pipe and native child handles.
 internal sealed class WorkerBuildRequestFixture : IDisposable
@@ -20,8 +21,10 @@ internal sealed class WorkerBuildRequestFixture : IDisposable
     internal readonly List<WorkerBuildInvocation> Observed = [];
     internal readonly CancellationTokenSource Lifetime = new();
     private readonly bool _lowIntegrity;
+    private SafeFileHandle? _workerGroupObserver;
     internal WorkerBuildRequestChannel? Channel;
     internal OwnedProcessGroup.SuspendedProcessStart? Worker;
+    internal bool PreserveArtifacts;
     internal const string Project = "src/Feature/Feature.csproj";
     internal const string Source = "src/Feature/Feature.cs";
 
@@ -29,47 +32,56 @@ internal sealed class WorkerBuildRequestFixture : IDisposable
     {
         _lowIntegrity = lowIntegrity;
         RepositoryRoot = Path.Combine(Root, "repository");
-        Directory.CreateDirectory(Path.Combine(RepositoryRoot, "src", "Feature"));
-        File.WriteAllText(Path.Combine(RepositoryRoot, Project), "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>");
-        File.WriteAllText(Path.Combine(RepositoryRoot, Source), "public sealed class Feature { }");
-        Git("init", "-b", "main");
-        Git("config", "user.email", "worker-build@fixture.invalid");
-        Git("config", "user.name", "Worker build fixture");
-        File.WriteAllText(Path.Combine(RepositoryRoot, ".git", "info", "exclude"), ".orchestrator-context/\nbin/\nobj/\n");
-        Git("add", ".");
-        Git("commit", "-m", "fixture seed");
-        var task = new TaskSpec(TaskId.New(), "Implement fixture", AgentRole.Developer);
-        var goal = Kernel.CreateGoal("Host worker build fixture", [task]);
-        var agent = new AgentDefinition(new AgentId("fixture-worker"), "Fixture worker", AgentRole.Developer,
-            new ModelProfile("OpenAI", "fixture", ModelCapability.Text, SubscriptionMode.ApiKey));
-        Kernel.ActivateGoal(goal.Id, [agent]);
-        GoalId = goal.Id;
-        TaskId = task.Id;
-        var at = DateTimeOffset.UtcNow;
-        var command = managedHost ? "& '" + Path.Combine(FindRepository(), "scripts", "Invoke-WorkerBuildCheck.ps1").Replace("'", "''") + "' '" + Project + "'" : "fixture-command";
-        Kernel.RecordTaskDispatch(GoalId, TaskId, new TaskDispatchRecord("fixture-worker", command, RepositoryRoot, at,
-            SandboxLowIntegrity: lowIntegrity));
-        WorkerBuildProjectScope.Prepare(RepositoryRoot, GoalId.Value, TaskId.Value, "main");
-        Kernel.RecordDispatchBaseCommit(GoalId, TaskId, Git("rev-parse", "HEAD").Trim(),
-            WorkerBuildProjectScope.ReadDispatchIdentity(RepositoryRoot));
-        StatePath = Path.Combine(Root, ".orchestrator", "state.db");
-        Directory.CreateDirectory(Path.GetDirectoryName(StatePath)!);
-        _ = StateDbMigrations.EnsureUpToDate(StatePath);
-        Storage = new DotnetBuildStorageRoot(Path.Combine(Root, "build-storage"));
-        Operations = new(StatePath, Root, Storage);
-        var prepared = Operations.Prepare(Kernel, GoalId, TaskId);
-        using var host = Process.GetCurrentProcess();
-        var hostIdentity = WorkerBuildRequestChannel.ReadIdentity(host);
-        if (!managedHost) Kernel.RecordTaskProcessStarted(GoalId, TaskId, new TaskProcessRecord(host.Id, command, RepositoryRoot,
-            Path.Combine(Root, "host.out.log"), Path.Combine(Root, "host.err.log"), Path.Combine(Root, "host.exit.txt"),
-            at, null, null, ProcessIdentityStartedAt: hostIdentity.StartedAt,
-            ProcessIdentityImagePath: hostIdentity.ImagePath));
-        var intents = new SqliteOperatorIntentStore(Path.Combine(Root, ".orchestrator", "operator-intents.db"), Root);
-        var admission = intents.CaptureAdmission(GoalId.Value, TaskId.Value) with { DispatchedAt = at };
-        intents.BindPreparedAdmission(admission, at);
-        Reference = prepared with { Admission = admission };
-        File.AppendAllText(Path.Combine(RepositoryRoot, Source), compilerFailure ? "\nthis is invalid C#;" : "\npublic sealed class Added { }");
-        Save();
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(RepositoryRoot, "src", "Feature"));
+            File.WriteAllText(Path.Combine(RepositoryRoot, Project), "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>");
+            File.WriteAllText(Path.Combine(RepositoryRoot, Source), "public sealed class Feature { }");
+            Git("init", "-b", "main");
+            Git("config", "user.email", "worker-build@fixture.invalid");
+            Git("config", "user.name", "Worker build fixture");
+            File.WriteAllText(Path.Combine(RepositoryRoot, ".git", "info", "exclude"), ".orchestrator-context/\nbin/\nobj/\n");
+            Git("add", ".");
+            Git("commit", "-m", "fixture seed");
+            var task = new TaskSpec(TaskId.New(), "Implement fixture", AgentRole.Developer);
+            var goal = Kernel.CreateGoal("Host worker build fixture", [task]);
+            var agent = new AgentDefinition(new AgentId("fixture-worker"), "Fixture worker", AgentRole.Developer,
+                new ModelProfile("OpenAI", "fixture", ModelCapability.Text, SubscriptionMode.ApiKey));
+            Kernel.ActivateGoal(goal.Id, [agent]);
+            GoalId = goal.Id;
+            TaskId = task.Id;
+            var at = DateTimeOffset.UtcNow;
+            var command = managedHost ? "& '" + Path.Combine(FindRepository(), "scripts", "Invoke-WorkerBuildCheck.ps1").Replace("'", "''") + "' '" + Project + "'" : "fixture-command";
+            Kernel.RecordTaskDispatch(GoalId, TaskId, new TaskDispatchRecord("fixture-worker", command, RepositoryRoot, at,
+                SandboxLowIntegrity: lowIntegrity));
+            WorkerBuildProjectScope.Prepare(RepositoryRoot, GoalId.Value, TaskId.Value, "main");
+            Kernel.RecordDispatchBaseCommit(GoalId, TaskId, Git("rev-parse", "HEAD").Trim(),
+                WorkerBuildProjectScope.ReadDispatchIdentity(RepositoryRoot));
+            StatePath = Path.Combine(Root, ".orchestrator", "state.db");
+            Directory.CreateDirectory(Path.GetDirectoryName(StatePath)!);
+            _ = StateDbMigrations.EnsureUpToDate(StatePath);
+            Storage = new DotnetBuildStorageRoot(Path.Combine(Root, "build-storage"));
+            Operations = new(StatePath, Root, Storage);
+            var prepared = Operations.Prepare(Kernel, GoalId, TaskId);
+            using var host = Process.GetCurrentProcess();
+            var hostIdentity = WorkerBuildRequestChannel.ReadIdentity(host);
+            if (!managedHost) Kernel.RecordTaskProcessStarted(GoalId, TaskId, new TaskProcessRecord(host.Id, command, RepositoryRoot,
+                Path.Combine(Root, "host.out.log"), Path.Combine(Root, "host.err.log"), Path.Combine(Root, "host.exit.txt"),
+                at, null, null, ProcessIdentityStartedAt: hostIdentity.StartedAt,
+                ProcessIdentityImagePath: hostIdentity.ImagePath));
+            var intents = new SqliteOperatorIntentStore(Path.Combine(Root, ".orchestrator", "operator-intents.db"), Root);
+            var admission = intents.CaptureAdmission(GoalId.Value, TaskId.Value) with { DispatchedAt = at };
+            intents.BindPreparedAdmission(admission, at);
+            Reference = prepared with { Admission = admission };
+            File.AppendAllText(Path.Combine(RepositoryRoot, Source), compilerFailure ? "\nthis is invalid C#;" : "\npublic sealed class Added { }");
+            Save();
+        }
+        catch (Exception setup)
+        {
+            try { Dispose(); }
+            catch (Exception cleanup) { throw new AggregateException("Worker build fixture setup and cleanup failed.", setup, cleanup); }
+            throw;
+        }
     }
 
     internal WorkerBuildRequestHost Host(Action<WorkerBuildInvocation>? observe = null) => new(Reference, Time,
@@ -87,6 +99,8 @@ internal sealed class WorkerBuildRequestFixture : IDisposable
         if (_lowIntegrity) Assert.True(new IcaclsIntegrityLabeler().SetIntegrity(workerTemp, "(OI)(CI)L", recursive: true));
         foreach (var arg in new[] { "-NoProfile", "-NonInteractive", "-File", helper, Project }) start.ArgumentList.Add(arg);
         Worker = OwnedProcessGroup.StartSuspendedContainedWithFileCapture(start, Path.Combine(Root, "worker.out.log"), Path.Combine(Root, "worker.err.log"));
+        if (!Worker.Group.TryDuplicateAccountingHandle(out _workerGroupObserver))
+            throw new InvalidOperationException("Worker fixture could not retain its owned job observer before resume.");
         Channel.Register(Worker.Process, Worker.Group);
         if (_lowIntegrity) Worker.LowerIntegrityBeforeResume();
         Worker.Resume();
@@ -117,12 +131,56 @@ internal sealed class WorkerBuildRequestFixture : IDisposable
 
     public void Dispose()
     {
-        Lifetime.Cancel();
-        if (Worker is not null) { Worker.Group.Kill(); _ = Worker.WaitForOwnedExit(TimeSpan.FromSeconds(10)); }
-        Channel?.Dispose();
-        Worker?.Dispose();
-        Lifetime.Dispose();
-        Directory.Delete(Root, recursive: true);
+        List<Exception> failures = [];
+        void Attempt(string phase, Action action)
+        {
+            try { action(); }
+            catch (Exception error) { failures.Add(new InvalidOperationException($"Fixture {phase} failed at '{Root}'.", error)); }
+        }
+
+        Attempt("cancellation", Lifetime.Cancel);
+        var exited = Worker is null;
+        if (Worker is not null)
+        {
+            Attempt("owned exit confirmation", () =>
+            {
+                // The worker-exit controls may already have closed Group. Keep an independent
+                // observer from before resume, so teardown still proves the whole job exited.
+                bool groupEmpty;
+                if (_workerGroupObserver is { IsClosed: false, IsInvalid: false })
+                {
+                    Worker.Group.Kill();
+                    groupEmpty = OwnedProcessGroup.WaitForJobExit(_workerGroupObserver, TimeSpan.FromSeconds(10));
+                }
+                else groupEmpty = Worker.Group.TerminateAndConfirmEmpty(TimeSpan.FromSeconds(10));
+                var workerExited = Worker.WaitForOwnedExit(TimeSpan.FromSeconds(10));
+                exited = groupEmpty && workerExited;
+                if (!exited) throw new InvalidOperationException("Owned worker/descendant termination is unconfirmed; retain fixture artifacts.");
+            });
+        }
+        Attempt("channel disposal", () => Channel?.Dispose());
+        Attempt("worker disposal", () => Worker?.Dispose());
+        Attempt("job observer disposal", () => _workerGroupObserver?.Dispose());
+        Attempt("lifetime disposal", Lifetime.Dispose);
+        // Git's loose objects are read-only on Windows. Use the shared bounded cleanup,
+        // and never replace a process-custody failure with a recursive-delete failure.
+        if (!PreserveArtifacts && exited && failures.Count == 0)
+            Attempt("directory cleanup", () => SharedTestSupport.RemoveTempDirectory(Root));
+        if (failures.Count != 0)
+            throw new AggregateException($"Worker build fixture cleanup failed. {DescribeResidual()}", failures);
+    }
+
+    private string DescribeResidual()
+    {
+        try
+        {
+            if (!Directory.Exists(Root)) return $"Root '{Root}' removed.";
+            var entries = new DirectoryInfo(Root).EnumerateFileSystemInfos("*", new EnumerationOptions
+            { RecurseSubdirectories = true, AttributesToSkip = FileAttributes.ReparsePoint }).Take(8)
+                .Select(entry => $"'{entry.FullName}' attributes={entry.Attributes}");
+            return $"Residual root '{Root}' attributes={File.GetAttributes(Root)}; " + string.Join("; ", entries);
+        }
+        catch (Exception error) { return $"Residual root '{Root}'; attribute inspection failed: {error.Message}"; }
     }
 
     internal sealed class FixtureTime : TimeProvider

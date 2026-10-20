@@ -21,22 +21,36 @@ public sealed class WorkerBuildRequestRecoveryTests
         File.WriteAllText(path, "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>" +
             "<Target Name=\"FixtureGate\" BeforeTargets=\"CoreCompile\"><Exec Command=\"" + SecurityElement.Escape(command) + "\" /></Target></Project>");
         Process? host = null;
-        var runner = new BackgroundDispatchRunner(disableProcessStart: false, startProcess: start => host = Process.Start(start))
+        Process? compiler = null;
+        SpawnProcessIdentity? hostIdentity = null;
+        var runner = new BackgroundDispatchRunner(disableProcessStart: false, startProcess: start =>
+        {
+            host = Process.Start(start);
+            if (host is not null) hostIdentity = SpawnProcessIdentityReader.ReadForRegistration(host).Identity;
+            return host;
+        })
         { WorkerBuildInvocations = fixture.Operations };
         try
         {
             var started = runner.StartLatestDispatch(fixture.Kernel, fixture.GoalId, fixture.TaskId, Path.Combine(fixture.Root, "logs"),
                 checkpointBeforeWorkerStart: (_, _, _, _) => fixture.Save(), taskIntentAdmission: fixture.Reference.Admission);
             Assert.NotNull(host);
+            Assert.NotNull(hostIdentity);
             Assert.Equal(started.ProcessId, host.Id);
             Assert.True(await Task.Run(() => ready.WaitOne(TimeSpan.FromMinutes(3))), "Owned compiler did not signal the named readiness event.");
             var before = Assert.Single(fixture.Operations.Load(fixture.GoalId.Value).GetTask(fixture.GoalId, fixture.TaskId).WorkerBuildInvocations);
             Assert.Equal(WorkerBuildPhase.CompilerStarted, before.Phase);
             var child = Assert.Single(before.Children!);
-            using var compiler = Process.GetProcessById(child.Pid);
+            compiler = Process.GetProcessById(child.Pid);
             Assert.Equal(child, WorkerBuildRequestChannel.ReadIdentity(compiler));
-            host.Kill();
-            await host.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(30));
+            foreach (var foreign in new[] { hostIdentity with { ProcessId = Environment.ProcessId },
+                hostIdentity with { StartedAt = hostIdentity.StartedAt.AddDays(-1) },
+                hostIdentity with { ImagePath = hostIdentity.ImagePath + ".foreign" } })
+                Assert.Throws<InvalidOperationException>(() =>
+                    TestOwnedProcessStop.StopRootIfSame(host, foreign, TimeSpan.FromSeconds(30)));
+            Assert.False(host.HasExited);
+            Assert.False(compiler.HasExited);
+            TestOwnedProcessStop.StopRootIfSame(host, hostIdentity, TimeSpan.FromSeconds(30));
             await compiler.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(30));
             var restarted = new Mcg.AgentOrchestrator.App.Orchestration.WorkerBuildInvocationOperations(fixture.StatePath, fixture.Root, fixture.Storage);
             Assert.True(restarted.ReconcileOutstanding(fixture.Kernel, fixture.GoalId, fixture.TaskId));
@@ -51,12 +65,33 @@ public sealed class WorkerBuildRequestRecoveryTests
         }
         finally
         {
-            release.Set();
-            if (host is not null)
+            try
             {
-                WorkerProcessJobs.TryKillOrFallbackAndWait(host.Id, TimeSpan.FromSeconds(20));
-                host.Dispose();
+                if (host is not null)
+                {
+                    Assert.NotNull(hostIdentity);
+                    TestOwnedProcessStop.StopRootIfSame(host, hostIdentity, TimeSpan.FromSeconds(20));
+                }
+                // Confirm owned custody reaped every recorded compiler before opening its
+                // gate, including assertion/setup failures before the observer was opened.
+                if (compiler is not null)
+                    await compiler.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(30));
+                foreach (var invocation in fixture.Operations.Load(fixture.GoalId.Value)
+                    .GetTask(fixture.GoalId, fixture.TaskId).WorkerBuildInvocations)
+                    Assert.All(invocation.Children ?? [], child => Assert.False(
+                        Mcg.AgentOrchestrator.App.Orchestration.WorkerBuildInvocationOperations.IsExactProcessAlive(child),
+                        "Host death did not reap its owned compiler; the release event remains closed."));
+                // The original host handle is still held, preventing PID reuse. Release
+                // only its matching registration, after the compiler has exited via custody.
+                if (hostIdentity is not null && WorkerProcessJobs.TryGetRegisteredIdentity(hostIdentity.ProcessId, out var registered))
+                {
+                    Assert.Equal(hostIdentity, registered);
+                    WorkerProcessJobs.Release(hostIdentity.ProcessId);
+                }
+                release.Set();
             }
+            catch { fixture.PreserveArtifacts = true; throw; }
+            finally { compiler?.Dispose(); host?.Dispose(); }
         }
     }
 
