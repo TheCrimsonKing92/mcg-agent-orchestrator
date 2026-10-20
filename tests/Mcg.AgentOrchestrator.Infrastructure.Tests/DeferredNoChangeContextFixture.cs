@@ -42,10 +42,11 @@ internal sealed class DeferredNoChangeContextFixture : IDisposable
         Kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec("Deliver evidence", ["Tester sees execution"], VerificationClass.TestVerifiable, [], []));
         foreach (var task in goal.Tasks.TakeWhile(task => task.Id != Developer.Id)) PassVerification(Kernel, goal, task);
         Kernel.RetryTask(goal.Id, Developer.Id, "Verify unchanged candidate.");
-        DispatchTask(Kernel, goal, Developer, baseCommit: Candidate);
+        DispatchTask(Kernel, goal, Developer, command: "fixture", workingDirectory: Worktree, baseCommit: Candidate);
+        const string rationale = "NO_CHANGE: candidate already contains the fix.";
         Kernel.RecordDispatchExecutionResult(goal.Id, Developer.Id, new TaskVerificationRecord("fixture", Worktree, 0,
-            "NO_CHANGE: candidate already contains the fix.\nWORKER_RESULT:\nfiles: none\ncommands: none\ntests: deferred - DeferredAlphaTests\ncommit: none\nblockers: none\nassigned_scope_complete: true\nmodel_fit: test/model - adequate - fixture\nskills: none\nconfidence: high\nEND_WORKER_RESULT",
-            new DeferredNoChangeOutcome(Candidate, ["DeferredAlphaTests"], "NO_CHANGE: already fixed").FormatMarker(),
+            rationale + "\nWORKER_RESULT:\nfiles: none\ncommands: none\ntests: deferred - DeferredAlphaTests\ncommit: none\nblockers: none\nassigned_scope_complete: true\nmodel_fit: test/model - adequate - fixture\nskills: none\nconfidence: high\nEND_WORKER_RESULT",
+            new DeferredNoChangeOutcome(Candidate, ["DeferredAlphaTests"], rationale).FormatMarker(),
             DateTimeOffset.UtcNow, WorkerResultPresent: true, HasCommittedChanges: false));
         Assert.Equal("deferred-no-change-round", Developer.LastVerification!.CompletionVerdictRule);
         Directory.CreateDirectory(GoalStore);
