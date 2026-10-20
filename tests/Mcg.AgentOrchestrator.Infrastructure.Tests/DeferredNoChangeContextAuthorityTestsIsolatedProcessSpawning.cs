@@ -141,7 +141,8 @@ public sealed class DeferredNoChangeContextAuthorityTestsIsolatedProcessSpawning
         var requester = fixture.Kernel.AddTask(fixture.Goal.Id, AgentRole.Developer, "Verify unchanged revision",
             ConductorDriverTests.DefaultAgents());
         fixture.Kernel.RetryTask(fixture.Goal.Id, requester.Id, "Recheck unchanged candidate");
-        ConductorDriverTests.DispatchTask(fixture.Kernel, fixture.Goal, requester, baseCommit: fixture.Candidate);
+        ConductorDriverTests.DispatchTask(fixture.Kernel, fixture.Goal, requester,
+            command: original.LastVerification!.Command, workingDirectory: fixture.Worktree, baseCommit: fixture.Candidate);
         fixture.Kernel.RecordDispatchExecutionResult(fixture.Goal.Id, requester.Id,
             original.LastVerification! with { CompletedAt = DateTimeOffset.UtcNow });
         Assert.Equal("deferred-no-change-round", requester.LastVerification!.CompletionVerdictRule);
