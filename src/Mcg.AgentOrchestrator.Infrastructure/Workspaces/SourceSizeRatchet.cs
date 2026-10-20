@@ -617,7 +617,9 @@ internal static class SourceSizeRatchet
             // Goal aa4f5017 adds the passive activation-probe ledger; measured 9421 lines in 56 partials at the merged head, no headroom.
             // Goal 568eb0fe separates owned terminal reconciliation from new admission for parked
             // goals at the existing tick and batch boundaries, without changing attempt custody.
-            new SourceClassCeiling("ConductorBatchLoop", 9315, 56),
+            // Its tick-context reset before the goal walk adds two lines after batch reconciliation;
+            // measured 9317 lines in the same 56 partial files, with no additional headroom.
+            new SourceClassCeiling("ConductorBatchLoop", 9317, 56),
             // Goal ec8903af moved the goal-prefix parser to CliGoalPrefixArguments.
             // Goal cd1f6380 adds four lines at the owning transaction boundary, forwarding both
             // registrars and invoking actions after commit; list behavior lives in PostCommitActions.
