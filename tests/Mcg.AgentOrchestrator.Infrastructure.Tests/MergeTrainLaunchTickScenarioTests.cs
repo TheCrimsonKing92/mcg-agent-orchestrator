@@ -228,7 +228,7 @@ public sealed class MergeTrainLaunchTickScenarioTests : AcceptanceCohortWorkflow
         internal void SaveFullCompositionRed(ConductorMergeTrainSelection selection)
         {
             using var integration = GoalWorktrees.CreateMergeTrainWorkspace(_repo,
-                selection.Members[0].MainRevision, selection.BindMembers(), TrunkBranchName.Default, _cleanup);
+                selection.Members[0].MainRevision, selection.BindMembers(id => _kernel.GetGoal(id).AuthoritativeBrief.Version), TrunkBranchName.Default, _cleanup);
             Assert.Equal(3, integration.Members.Count);
             Assert.Empty(integration.Ejections);
             var manifest = GoalAcceptanceVerifier.ComputeEffectiveAcceptancePlanIdentity(integration.Path,
