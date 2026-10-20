@@ -1,3 +1,5 @@
+using System.Text.Json;
+using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.Core;
 
 // Parallel-safe: fixture owns its stores, slot locks and processes.
@@ -27,7 +29,17 @@ public sealed class WorkerBuildRequestIntegrationTests(ITestOutputHelper output)
     public async Task OrdinaryHelper_ProducesHostOwnedCompilationAndTypedConsumption(bool invalidSource, WorkerBuildOutcome outcome)
     {
         using var fixture = new WorkerBuildRequestFixture(invalidSource);
-        var invocation = await fixture.RunHelper();
+        fixture.Kernel.AddTask(fixture.GoalId, AgentRole.Tester, "Legacy sibling");
+        fixture.Save();
+        var pendingObserved = false;
+        var invocation = await fixture.RunHelper(i =>
+        {
+            if (i.Phase != WorkerBuildPhase.Requested) return;
+            Assert.Null(i.Outcome);
+            AssertStatus(i);
+            pendingObserved = true;
+        });
+        Assert.True(pendingObserved);
         Assert.Equal(outcome, invocation.Outcome);
         Assert.Single(invocation.Children!);
         Assert.Contains(invocation.Observations, o => o.Phase == WorkerBuildPhase.CompilerStarted);
@@ -45,6 +57,44 @@ public sealed class WorkerBuildRequestIntegrationTests(ITestOutputHelper output)
         var stored = Assert.Single(fixture.Operations.Load(fixture.GoalId.Value).GetTask(fixture.GoalId, fixture.TaskId).WorkerBuildInvocations);
         Assert.True(stored.Consumed);
         Assert.Contains(stored.Id, consumption.Diagnostic);
+        AssertStatus(stored);
+
+        void AssertStatus(WorkerBuildInvocation expected)
+        {
+            var goal = fixture.Operations.Load(fixture.GoalId.Value).GetGoal(fixture.GoalId);
+            using var json = JsonDocument.Parse(StatusAgentReadView.Render(goal, null, "Active"));
+            var payload = json.RootElement.GetProperty("payload");
+            Assert.Equal(JsonValueKind.Null, payload.GetProperty("label").ValueKind);
+            var tasks = payload.GetProperty("tasks").EnumerateArray().ToArray();
+            Assert.Equal(2, tasks.Length);
+            Assert.Equal(new[] { "number", "status", "role", "description", "agent", "workerBuildInvocations" },
+                tasks[0].EnumerateObject().Select(p => p.Name));
+            Assert.Equal(1, tasks[0].GetProperty("number").GetInt32());
+            Assert.Equal("Assigned", tasks[0].GetProperty("status").GetString());
+            Assert.Equal("Developer", tasks[0].GetProperty("role").GetString());
+            Assert.Equal("Implement fixture", tasks[0].GetProperty("description").GetString());
+            Assert.Equal("fixture-", tasks[0].GetProperty("agent").GetString());
+            var metadata = Assert.Single(tasks[0].GetProperty("workerBuildInvocations").EnumerateArray());
+            Assert.Equal(new[] { "invocation", "dispatch", "candidate", "phase", "outcome", "consumed", "custodyReleased" },
+                metadata.EnumerateObject().Select(p => p.Name));
+            Assert.Equal(expected.Id, metadata.GetProperty("invocation").GetString());
+            Assert.Equal(expected.DispatchId, metadata.GetProperty("dispatch").GetString());
+            Assert.Equal(expected.TreeDigest, metadata.GetProperty("candidate").GetString());
+            Assert.Equal(expected.Phase.ToString(), metadata.GetProperty("phase").GetString());
+            if (expected.Outcome is null)
+                Assert.Equal(JsonValueKind.Null, metadata.GetProperty("outcome").ValueKind);
+            else
+                Assert.Equal(expected.Outcome.ToString(), metadata.GetProperty("outcome").GetString());
+            Assert.Equal(expected.Consumed, metadata.GetProperty("consumed").GetBoolean());
+            Assert.Equal(expected.CustodyReleased, metadata.GetProperty("custodyReleased").GetBoolean());
+            Assert.Equal(new[] { "number", "status", "role", "description", "agent" },
+                tasks[1].EnumerateObject().Select(p => p.Name));
+            Assert.Equal(2, tasks[1].GetProperty("number").GetInt32());
+            Assert.Equal("Pending", tasks[1].GetProperty("status").GetString());
+            Assert.Equal("Tester", tasks[1].GetProperty("role").GetString());
+            Assert.Equal("Legacy sibling", tasks[1].GetProperty("description").GetString());
+            Assert.Equal(JsonValueKind.Null, tasks[1].GetProperty("agent").ValueKind);
+        }
     }
 
     [Fact]
