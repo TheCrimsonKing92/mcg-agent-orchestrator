@@ -698,6 +698,8 @@ internal sealed partial class ConductorBatchLoop
                     CompletePersistedOperatorIntents(recoveredIntentGoalIds, preTickTimingLines);
                 }
             }
+            var intentBoundaryClock = StartDiagnosticTimer();
+            var intentBoundaryCpuStart = ReadProcessCpu();
             var intentBoundary = pendingSelfRelaunch is null
                 ? ServiceOperatorIntentBoundary(kernel, driver, onlyGoalId, checkpointHeldGoals,
                     nextTick, persistTick, persistGoalTick, checkpointGoalTick, busyWriteDelay)
@@ -712,6 +714,11 @@ internal sealed partial class ConductorBatchLoop
                 reapedGoals.Remove(goalId.Value);
                 goalProjectionCache.Invalidate(goalId);
             }
+            intentBoundaryClock.Stop();
+            if (_operatorIntents is not null)
+                preTickTimingLines.Add(FormatPhaseTiming(nextTick, "operator-intent", intentBoundaryClock.Elapsed,
+                    $"operator_intent_steps={_stepLedger!.FormatSteps(ConductorTickStepLedger.OperatorIntentNames)}",
+                    cpuMs: CpuDeltaMs(intentBoundaryCpuStart, ReadProcessCpu())));
             ReconcilePendingWakeMaintenance(nextTick, preTickTimingLines);
             var preSweepBaseline = GoalKernelChange.CaptureAll(kernel);
             TerminalGoalJournalMetadataCache.BeginMeasurement();

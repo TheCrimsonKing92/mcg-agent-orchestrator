@@ -30,13 +30,8 @@ public sealed class ConductorBatchLoopTestsStewardHarvestEscalation : ConductorB
                 MakeDriver(writeEscalation: (_, state, _) => escalations.Add(state)),
                 ConductorAutonomyPolicy.Conservative,
                 stopPath, maxIterations: 2, watchInterval: TimeSpan.FromMilliseconds(1),
-                sleepFunc: _ =>
-                {
-                    if (harness.Task.Status == WorkTaskStatus.Assigned) return true;
-                    harness.Model.Started.Task.GetAwaiter().GetResult();
-                    host.CurrentRound!.GetAwaiter().GetResult();
-                    return false;
-                },
+                // onTick harvests once after persistence; sleep must not reuse the cleared round.
+                sleepFunc: _ => harness.Task.Status == WorkTaskStatus.Assigned,
                 keepAliveWhenIdle: true,
                 persistGoalTick: (_, changed) =>
                 {
@@ -63,6 +58,7 @@ public sealed class ConductorBatchLoopTestsStewardHarvestEscalation : ConductorB
                 });
 
         Xunit.Assert.InRange(summary.Ticks, 1, 2);
+        Xunit.Assert.Equal(1, harness.Model.Calls);
         Xunit.Assert.True(persistedAfterClaim);
         Xunit.Assert.True(versionAfterEscalation > 7);
         Xunit.Assert.Contains(GoalLifecycleState.Failed, escalations);
