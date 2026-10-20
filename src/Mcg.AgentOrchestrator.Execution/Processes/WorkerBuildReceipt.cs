@@ -13,7 +13,8 @@ internal static class WorkerBuildReceipt
         => Evaluate(path, worktreeRoot, null);
 
     internal static WorkerBuildReceiptVerdict Evaluate(string path, string worktreeRoot,
-        Func<string, Dictionary<string, string>?, string[], WorktreeTreeDigestGitStep>? gitRunner)
+        Func<string, Dictionary<string, string>?, string[], WorktreeTreeDigestGitStep>? gitRunner,
+        WorkerBuildProjectScope.DispatchContext? completedDispatch = null)
     {
         if (!File.Exists(path)) return new(false, "receipt-missing");
         JsonDocument document;
@@ -65,11 +66,12 @@ internal static class WorkerBuildReceipt
             }
             catch (Exception exception) when (exception is ArgumentException or NotSupportedException or PathTooLongException)
             { return new(false, "receipt-malformed"); }
-            if (File.Exists(WorkerBuildProjectScope.MetadataPath(worktreeRoot)))
+            if (completedDispatch?.Dispatch.WorkerBuildScope is not null || File.Exists(WorkerBuildProjectScope.MetadataPath(worktreeRoot)))
             {
                 try
                 {
-                    var scope = WorkerBuildProjectScope.Resolve(worktreeRoot, []);
+                    var scope = completedDispatch is null ? WorkerBuildProjectScope.Resolve(worktreeRoot, [])
+                        : completedDispatch.Resolve(worktreeRoot, []);
                     var fullMatch = TryString(root, "scopeMetadataDigest", out var scopeDigest) && scopeDigest == scope.MetadataDigest;
                     var stableMatch = TryString(root, "scopeStableDigest", out var stableDigest) &&
                         stableDigest is not ("none" or "unresolved") &&

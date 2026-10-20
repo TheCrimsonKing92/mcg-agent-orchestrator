@@ -14,6 +14,11 @@ public static class WorkerBuildProjectScope
         string GoalBaseline, string DispatchBase, string IntegrationBranch);
     public sealed record Result(IReadOnlyList<string> RequestedProjects, IReadOnlyList<string> RequiredProjects,
         IReadOnlyList<string> Projects, string Identity, string MetadataDigest, string StableMetadataDigest);
+    internal sealed record DispatchContext(GoalId GoalId, TaskId TaskId, TaskDispatchRecord Dispatch)
+    {
+        internal Result Resolve(string root, IEnumerable<string> projects, IEnumerable<string>? paths = null) =>
+            ResolveForDispatch(root, projects, GoalId, TaskId, Dispatch, paths);
+    }
 
     public static string MetadataPath(string root) => Path.Combine(root, MetadataRelativePath);
 
@@ -82,7 +87,7 @@ public static class WorkerBuildProjectScope
         ValidateMetadata(Canonical(root), Git(root, "symbolic-ref", "--short", "HEAD").Trim(),
             Canonical(Git(root, "rev-parse", "--path-format=absolute", "--git-common-dir").Trim()),
             Git(root, "rev-parse", "HEAD").Trim(), metadata);
-        return new(metadata.GoalBaseline, Hash(bytes));
+        return new(metadata.GoalBaseline, Hash(bytes), Convert.ToBase64String(bytes));
     }
 
     internal static string? PinnedGoalBaseline(Goal goal) => goal.Tasks.SelectMany(task => task.DispatchHistory)
@@ -91,6 +96,61 @@ public static class WorkerBuildProjectScope
 
     public static Result Resolve(string root, IEnumerable<string> requestedProjects,
         IEnumerable<string>? additionalPaths = null, string? expectedMetadataDigest = null)
+        => ResolveCore(root, requestedProjects, additionalPaths, expectedMetadataDigest, null);
+
+    internal static Result ResolveForDispatch(string root, IEnumerable<string> requestedProjects,
+        GoalId goalId, TaskId taskId, TaskDispatchRecord dispatch, IEnumerable<string>? additionalPaths = null)
+    {
+        var identity = dispatch.WorkerBuildScope;
+        if (!SamePath(Canonical(root), Canonical(dispatch.WorkingDirectory)) ||
+            (dispatch.GoalId is { } recordedGoal && recordedGoal != goalId))
+            throw new IOException("Worker build scope has no matching dispatch owner.");
+        if (identity is null)
+        {
+            if (File.Exists(MetadataPath(root)))
+                throw new IOException("Dispatch has no captured worker build scope authority.");
+            return Resolve(root, requestedProjects, additionalPaths);
+        }
+        // Legacy records can only prove their scope while the exact current file is still present.
+        if (identity.RetainedMetadataBase64 is null && identity.CapturedDispatchAt is null)
+        {
+            var current = ReadDispatchIdentity(root, dispatch.BaseCommit);
+            if (current.MetadataDigest != identity.MetadataDigest)
+                throw new IOException("Worker build scope differs from conductor-captured dispatch identity.");
+            var currentBytes = Convert.FromBase64String(current.RetainedMetadataBase64!);
+            ValidateDispatchOwner(goalId, taskId, dispatch, identity, currentBytes);
+            return ResolveCore(root, requestedProjects, additionalPaths, identity.MetadataDigest, currentBytes);
+        }
+        var bytes = ReadRetainedDispatchMetadata(root, goalId, taskId, dispatch);
+        return ResolveCore(root, requestedProjects, additionalPaths, identity.MetadataDigest, bytes);
+    }
+
+    internal static byte[] ReadRetainedDispatchMetadata(string root, GoalId goalId, TaskId taskId, TaskDispatchRecord dispatch)
+    {
+        var identity = dispatch.WorkerBuildScope ?? throw new IOException("Retained worker build scope authority is missing.");
+        if (identity.RetainedMetadataBase64 is null || identity.CapturedDispatchAt is null ||
+            identity.CapturedDispatchAt != dispatch.DispatchedAt ||
+            !SamePath(Canonical(root), Canonical(dispatch.WorkingDirectory)) ||
+            (dispatch.GoalId is { } recordedGoal && recordedGoal != goalId))
+            throw new IOException("Retained worker build scope has no matching dispatch authority.");
+        var bytes = Convert.FromBase64String(identity.RetainedMetadataBase64);
+        if (Hash(bytes) != identity.MetadataDigest)
+            throw new IOException("Retained worker build scope contents differ from captured digest.");
+        ValidateDispatchOwner(goalId, taskId, dispatch, identity, bytes);
+        return bytes;
+    }
+
+    private static void ValidateDispatchOwner(GoalId goalId, TaskId taskId, TaskDispatchRecord dispatch,
+        WorkerBuildScopeIdentity identity, byte[] bytes)
+    {
+        var metadata = JsonSerializer.Deserialize<Metadata>(bytes) ?? throw new IOException("Empty retained worker build scope metadata.");
+        if (metadata.GoalId != goalId.Value || metadata.TaskId != taskId.Value ||
+            metadata.DispatchBase != dispatch.BaseCommit || metadata.GoalBaseline != identity.GoalBaseline)
+            throw new IOException("Retained worker build scope differs from authoritative owner or baseline.");
+    }
+
+    private static Result ResolveCore(string root, IEnumerable<string> requestedProjects,
+        IEnumerable<string>? additionalPaths, string? expectedMetadataDigest, byte[]? retainedBytes)
     {
         root = Canonical(root);
         if (!SamePath(Canonical(Git(root, "rev-parse", "--show-toplevel").Trim()), root))
@@ -101,10 +161,10 @@ public static class WorkerBuildProjectScope
         var metadataDigest = "none";
         var stableMetadataDigest = "none";
         var baseline = head;
-        if (File.Exists(metadataPath))
+        if (retainedBytes is not null || File.Exists(metadataPath))
         {
-            ValidatePath(root, metadataPath, mustExist: true);
-            var bytes = File.ReadAllBytes(metadataPath);
+            if (retainedBytes is null) ValidatePath(root, metadataPath, mustExist: true);
+            var bytes = retainedBytes ?? File.ReadAllBytes(metadataPath);
             metadataDigest = Hash(bytes);
             var metadata = JsonSerializer.Deserialize<Metadata>(bytes) ?? throw new IOException("Empty worker build scope metadata.");
             var common = Canonical(Git(root, "rev-parse", "--path-format=absolute", "--git-common-dir").Trim());
