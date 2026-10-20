@@ -539,6 +539,8 @@ public sealed class DotnetBuildEnvironmentManagerTestsFocusedRunner : DotnetBuil
                 Assert.Fail(diagnostics);
             }
             Assert.Equal(0, harness.ExitCode);
+            using var diagnosticDocument = JsonDocument.Parse(diagnostics);
+            Assert.Equal("exited:0", diagnosticDocument.RootElement.GetProperty("harnessState").GetString());
             Assert.True(File.Exists(resultPath), diagnostics);
             using var result = JsonDocument.Parse(File.ReadAllText(resultPath));
             Assert.False(result.RootElement.GetProperty("TimedOut").GetBoolean());

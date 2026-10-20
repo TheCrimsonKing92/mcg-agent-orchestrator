@@ -37,6 +37,10 @@ internal sealed class DotnetBuildEnvironmentManagerFocusedChildFixture : IAsyncD
         startInfo.RedirectStandardOutput = true;
         startInfo.RedirectStandardError = true;
         launch = OwnedProcessGroup.StartSuspendedContainedRedirected(startInfo);
+        // Process is attached by PID rather than started by this managed object. Retain its
+        // handle while the owned launch is still suspended so ExitCode remains readable after
+        // exit (also for Diagnostics), without reopening a potentially reused PID.
+        _ = Harness.SafeHandle;
         var identity = launch.ReadLifecycleIdentity(Harness.Id);
         heldIdentity = new
         {
