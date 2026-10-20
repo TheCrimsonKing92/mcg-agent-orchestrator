@@ -14,9 +14,13 @@ internal sealed class OwnerConsoleHarness
     internal readonly FakeLiveness Liveness = new();
     internal readonly FakeConductor Conductor = new();
     internal readonly FakeDigestReport DigestReport = new();
-    internal readonly TimeProvider Clock = new FixedClock();
+    internal readonly TimeProvider Clock;
 
-    internal OwnerConsoleHarness() => State = new FakeState(Kernel);
+    internal OwnerConsoleHarness(TimeProvider? clock = null)
+    {
+        Clock = clock ?? new FixedClock();
+        State = new FakeState(Kernel);
+    }
 
     internal Goal AddGoal(string id, string title, AgentRole role)
     {
