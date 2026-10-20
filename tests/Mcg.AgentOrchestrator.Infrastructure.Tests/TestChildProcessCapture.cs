@@ -8,17 +8,23 @@ internal sealed class TestChildProcessCapture : IDisposable
     private readonly Func<Task, TimeSpan, bool> _wait;
     private readonly Action<Process> _stopTree;
     private readonly int _retentionBytes;
+    private readonly TestChildProcessCaptureDiagnostics _diagnostics;
+    private readonly Controls? _controls;
     private readonly Stopwatch _elapsed = Stopwatch.StartNew();
     private readonly Task _exit;
     private readonly Task<StreamCapture> _stdout;
     private readonly Task<StreamCapture> _stderr;
     private readonly TaskCompletionSource<string> _overflow = new(TaskCreationOptions.RunContinuationsAsynchronously);
-    private long _stdoutBytes;
-    private long _stderrBytes;
     private int _stopped;
     private bool _disposed;
 
     internal sealed record Result(int ExitCode, string Stdout, string Stderr);
+
+    // Instance-scoped controls observe committed drain state; callbacks never run
+    // under the diagnostic lock and cannot delay overflow publication/cleanup.
+    internal sealed record Controls(
+        Func<Stream, bool, Stream>? OpenStream = null,
+        Action<bool, long, bool>? Progress = null);
 
     private sealed record StreamCapture(byte[] Bytes, long ObservedBytes);
 
@@ -27,13 +33,16 @@ internal sealed class TestChildProcessCapture : IDisposable
         Process process,
         Func<Task, TimeSpan, bool> wait,
         Action<Process> stopTree,
-        int retentionBytes)
+        int retentionBytes,
+        Controls? controls)
     {
         _startInfo = startInfo;
         _process = process;
         _wait = wait;
         _stopTree = stopTree;
         _retentionBytes = retentionBytes;
+        _controls = controls;
+        _diagnostics = new(process.StandardOutput.CurrentEncoding, process.StandardError.CurrentEncoding);
         _stdout = Task.Factory.StartNew(
             () => Drain(process.StandardOutput.BaseStream, true),
             CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
@@ -51,13 +60,14 @@ internal sealed class TestChildProcessCapture : IDisposable
         Func<ProcessStartInfo, Process?>? start = null,
         Func<Task, TimeSpan, bool>? wait = null,
         Action<Process>? stopTree = null,
-        int retentionBytes = DefaultRetentionBytes)
+        int retentionBytes = DefaultRetentionBytes,
+        Controls? controls = null)
     {
         var bound = hangBound ?? TestHangGuard.Bound;
         if (bound < TimeSpan.FromSeconds(30))
             throw new ArgumentOutOfRangeException(nameof(hangBound), "The hang bound must be at least 30 seconds.");
 
-        using var capture = Start(startInfo, start, wait, stopTree, retentionBytes);
+        using var capture = Start(startInfo, start, wait, stopTree, retentionBytes, controls);
         return capture.Complete(bound);
     }
 
@@ -66,7 +76,8 @@ internal sealed class TestChildProcessCapture : IDisposable
         Func<ProcessStartInfo, Process?>? start = null,
         Func<Task, TimeSpan, bool>? wait = null,
         Action<Process>? stopTree = null,
-        int retentionBytes = DefaultRetentionBytes)
+        int retentionBytes = DefaultRetentionBytes,
+        Controls? controls = null)
     {
         ArgumentNullException.ThrowIfNull(startInfo);
         if (!startInfo.RedirectStandardOutput || !startInfo.RedirectStandardError)
@@ -80,7 +91,7 @@ internal sealed class TestChildProcessCapture : IDisposable
         {
             return new TestChildProcessCapture(startInfo, process,
                 wait ?? ((task, bound) => task.Wait(bound)),
-                stopTree ?? (child => child.Kill(entireProcessTree: true)), retentionBytes);
+                stopTree ?? (child => child.Kill(entireProcessTree: true)), retentionBytes, controls);
         }
         catch
         {
@@ -134,37 +145,46 @@ internal sealed class TestChildProcessCapture : IDisposable
         int read;
         try
         {
+            stream = _controls?.OpenStream?.Invoke(stream, isStdout) ?? stream;
             while ((read = stream.Read(buffer, 0, buffer.Length)) != 0)
             {
                 observed += read;
-                if (isStdout)
-                    Interlocked.Exchange(ref _stdoutBytes, observed);
-                else
-                    Interlocked.Exchange(ref _stderrBytes, observed);
+                _diagnostics.Publish(isStdout, buffer.AsSpan(0, read));
                 var keep = (int)Math.Min(read, Math.Max(0, _retentionBytes - retained.Length));
                 retained.Write(buffer, 0, keep);
                 if (observed > _retentionBytes)
                 {
+                    _diagnostics.Freeze();
                     _overflow.TrySetResult(isStdout ? "stdout" : "stderr");
                     StopOwnedTree();
                 }
+                _controls?.Progress?.Invoke(isStdout, observed, false);
             }
+            _diagnostics.End(isStdout);
+            _controls?.Progress?.Invoke(isStdout, observed, true);
         }
-        catch (IOException) when (Volatile.Read(ref _stopped) != 0) { }
-        catch (ObjectDisposedException) when (Volatile.Read(ref _stopped) != 0) { }
+        catch (Exception error)
+        {
+            _diagnostics.End(isStdout, unavailable: true);
+            _controls?.Progress?.Invoke(isStdout, observed, false);
+            if (Volatile.Read(ref _stopped) == 0 || error is not (IOException or ObjectDisposedException))
+                throw;
+        }
         return new StreamCapture(retained.ToArray(), observed);
     }
 
     private void Fail(string stream, TimeSpan bound)
     {
+        var snapshot = _diagnostics.ReadFrozen();
         StopOwnedTree();
         Assert.Fail($"Child {Describe(_startInfo)} exceeded {bound.TotalSeconds:g} s while capturing {stream}; " +
-            $"stdout={Interlocked.Read(ref _stdoutBytes)} bytes; stderr={Interlocked.Read(ref _stderrBytes)} bytes; " +
-            $"retention limit={_retentionBytes} bytes.");
+            $"stdout={snapshot.StdoutBytes} bytes; stderr={snapshot.StderrBytes} bytes; " +
+            $"retention limit={_retentionBytes} bytes.\n{snapshot.Stdout}\n{snapshot.Stderr}");
     }
 
     private void StopOwnedTree()
     {
+        _diagnostics.Freeze();
         if (Interlocked.Exchange(ref _stopped, 1) != 0)
             return;
         try { _stopTree(_process); }
