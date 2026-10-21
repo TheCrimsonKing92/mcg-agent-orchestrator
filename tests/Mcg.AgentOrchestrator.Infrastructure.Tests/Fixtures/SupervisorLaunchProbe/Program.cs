@@ -3,6 +3,7 @@ using System.Text.Json;
 using Mcg.AgentOrchestrator.App.Orchestration;
 
 if (!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException("Windows job fixture required.");
+if (args[0] == "acceptance-claim") return AcceptanceCustodyProbe.Run(args[1], args[2]);
 var root = args[1];
 var token = args[2];
 if (args[0] == "supervisor") return await RealSupervisorProbe.RunAsync(root, token,

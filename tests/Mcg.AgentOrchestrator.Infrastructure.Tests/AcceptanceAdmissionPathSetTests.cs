@@ -7,7 +7,7 @@ public sealed class AcceptanceAdmissionPathSetTests
     {
         string[] appFiles =
         [
-            "AcceptanceHolderIdentity.cs", "AcceptanceHolderLease.cs",
+            "AcceptanceHolderIdentity.cs", "AcceptanceHolderLease.cs", "AcceptanceJobCustodianHost.cs",
             "ConductorBatchLoop.LiveAcceptanceAdmission.cs", "ConductorBatchLoop.ParallelAcceptanceAdmission.cs",
             "ConductorDriver.AcceptanceCohortExecution.cs", "ConductorDriver.FollowerGates.cs",
             "ConductorDriver.GroupedGateAttempts.cs", "ConductorDriver.MergeTrains.cs",
@@ -18,7 +18,8 @@ public sealed class AcceptanceAdmissionPathSetTests
             "OwnedChildAttemptCoordinatorFactory.cs", "StorageRetentionMaintenance.AcceptanceHolders.cs"
         ];
         var paths = appFiles.Select(name => "src/Mcg.AgentOrchestrator.App/Orchestration/" + name)
-            .Concat(new[] { "AcceptanceJobCustodian.cs", "DurableAcceptanceJob.cs" }
+            .Concat(new[] { "AcceptanceJobCustodian.cs", "AcceptanceJobCustodianNative.cs",
+                "AcceptanceJobCustodianLaunchSpecification.cs", "DurableAcceptanceJob.cs" }
                 .Select(name => "src/Mcg.AgentOrchestrator.Execution/Processes/" + name));
         foreach (var path in paths)
         {

@@ -4,106 +4,172 @@ using System.Text.Json;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
-// A separate Windows handle owner survives both the conductor and acceptance root.
-// Job completion notifications gate settlement; no process ancestry or elapsed-time guess is used.
-internal static class AcceptanceJobCustodian
+// Startup owns no lasting job handle. The child owns native lifetime custody.
+internal sealed class AcceptanceJobCustodian : IDisposable
 {
-    internal static Process Start(string name, SpawnProcessIdentity holder, string? settlementPath)
+    private readonly Process _process;
+    private readonly AcceptanceJobCustodianProtocol _protocol;
+    private readonly AcceptanceJobCustodianBounds _bounds;
+    private readonly AcceptanceJobCustodianDiagnostics _diagnostics;
+    private readonly Task _drain;
+    internal SpawnProcessIdentity Identity { get; }
+
+    private AcceptanceJobCustodian(Process process, AcceptanceJobCustodianProtocol protocol,
+        AcceptanceJobCustodianBounds bounds, AcceptanceJobCustodianDiagnostics diagnostics, Task drain)
+    {
+        _process = process;
+        _protocol = protocol;
+        _bounds = bounds;
+        _diagnostics = diagnostics;
+        _drain = drain;
+        Identity = SpawnProcessIdentityReader.ReadForRegistration(process).Identity
+            ?? throw new InvalidOperationException("Acceptance custodian identity is unavailable.");
+    }
+
+    internal static AcceptanceJobCustodian Start(AcceptanceJobCustodianLaunchSpecification launch,
+        string name, SpawnProcessIdentity holder, string? settlementPath,
+        AcceptanceJobCustodianBounds? bounds = null)
     {
         if (settlementPath is not null && File.Exists(settlementPath))
             throw new InvalidOperationException("Acceptance job already has a settlement receipt.");
-        var receipt = JsonSerializer.Serialize(new AcceptanceJobSettlement(name, holder, true));
-        static string Literal(string value) => "'" + value.Replace("'", "''") + "'";
-        var script = "$ErrorActionPreference='Stop';Add-Type -TypeDefinition @'\n" + NativeSource +
-            "\n'@;[AcceptanceCustodian]::Run(" + Literal(name) + "," +
-            Literal(settlementPath ?? "") + "," + Literal(receipt) + ")";
-        var executable = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System),
-            "WindowsPowerShell", "v1.0", "powershell.exe");
-        var startInfo = new ProcessStartInfo(executable)
-        {
-            UseShellExecute = false, CreateNoWindow = true,
-            RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true
-        };
-        foreach (var arg in new[] { "-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand",
-            Convert.ToBase64String(Encoding.Unicode.GetBytes(script)) }) startInfo.ArgumentList.Add(arg);
-        var process = ProcessTreeGuiSuppression.Start(startInfo)
+        var process = ProcessTreeGuiSuppression.Start(launch.CreateStartInfo())
             ?? throw new InvalidOperationException("Acceptance custodian did not start.");
+        var diagnostics = new AcceptanceJobCustodianDiagnostics();
+        var drain = diagnostics.DrainAsync(process.StandardError);
+        var limits = bounds ?? new();
+        AcceptanceJobCustodian? session = null;
         try
         {
-            var ready = process.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(30))
-                .GetAwaiter().GetResult();
-            if (ready != "custody-ready")
-                throw new InvalidOperationException("Acceptance custodian could not acquire job custody: " +
-                    process.StandardError.ReadToEndAsync().WaitAsync(TimeSpan.FromSeconds(5)).GetAwaiter().GetResult());
-            return process;
+            session = new(process, new("request", name, holder, null, settlementPath), limits, diagnostics, drain);
+            process.StandardInput.WriteLine(JsonSerializer.Serialize(session._protocol));
+            process.StandardInput.Flush();
+            session.Expect("ready");
+            return session;
         }
-        catch
+        catch (Exception ex)
         {
-            try { if (!process.HasExited) { process.Kill(); process.WaitForExit(5000); } }
-            finally { process.Dispose(); }
+            if (session is not null) session.Dispose();
+            else
+            {
+                try
+                {
+                    if (!process.HasExited) process.Kill();
+                    try { drain.WaitAsync(limits.DiagnosticDrain, limits.TimeProvider).GetAwaiter().GetResult(); }
+                    catch (TimeoutException) { }
+                    throw new InvalidOperationException($"Acceptance custodian startup failed: {ex.Message}; stderr: {diagnostics.Snapshot()}", ex);
+                }
+                finally { process.Dispose(); }
+            }
             throw;
         }
     }
 
-    // Windows PowerShell is a separate .NET Framework host; this small native bridge uses only
-    // kernel32 and System.IO. A completion port stays exclusively owned by this custodian.
-    private const string NativeSource = """
-        using System;
-        using System.IO;
-        using System.ComponentModel;
-        using System.Runtime.InteropServices;
-        public static class AcceptanceCustodian
+    internal void Attached()
+    {
+        _process.StandardInput.WriteLine(JsonSerializer.Serialize(_protocol with
+            { Phase = "attach", Custodian = Identity }));
+        _process.StandardInput.Close();
+        Expect("attached");
+    }
+
+    private void Expect(string phase)
+    {
+        try
         {
-            [StructLayout(LayoutKind.Sequential)] struct Association { public IntPtr Key, Port; }
-            [StructLayout(LayoutKind.Sequential)] struct Accounting
-            {
-                public long User, Kernel, PeriodUser, PeriodKernel;
-                public uint Faults, Total, Active, Terminated;
-            }
-            [DllImport("kernel32.dll", SetLastError=true, CharSet=CharSet.Unicode)]
-            static extern IntPtr OpenJobObject(uint access, bool inherit, string name);
-            [DllImport("kernel32.dll", SetLastError=true)]
-            static extern IntPtr CreateIoCompletionPort(IntPtr file, IntPtr existing, IntPtr key, uint threads);
-            [DllImport("kernel32.dll", SetLastError=true)]
-            static extern bool SetInformationJobObject(IntPtr job, int kind, ref Association info, uint length);
-            [DllImport("kernel32.dll", SetLastError=true)]
-            static extern bool QueryInformationJobObject(IntPtr job, int kind, out Accounting info, uint length, IntPtr returned);
-            [DllImport("kernel32.dll", SetLastError=true)]
-            static extern bool GetQueuedCompletionStatus(IntPtr port, out uint message, out IntPtr key, out IntPtr value, uint timeout);
-            [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr handle);
-            static void Check(bool ok) { if (!ok) throw new Win32Exception(Marshal.GetLastWin32Error()); }
-            public static void Run(string name, string path, string receipt)
-            {
-                IntPtr job = OpenJobObject(2 | 4, false, name);
-                Check(job != IntPtr.Zero);
-                IntPtr port = IntPtr.Zero;
-                try
-                {
-                    port = CreateIoCompletionPort(new IntPtr(-1), IntPtr.Zero, IntPtr.Zero, 1);
-                    Check(port != IntPtr.Zero);
-                    var association = new Association { Key = new IntPtr(1), Port = port };
-                    Check(SetInformationJobObject(job, 7, ref association, (uint)Marshal.SizeOf(typeof(Association))));
-                    Console.WriteLine("custody-ready");
-                    Console.Out.Flush();
-                    // EOF after parent death also triggers accounting. No gate ran before assignment.
-                    Console.ReadLine();
-                    for (;;)
-                    {
-                        Accounting info;
-                        Check(QueryInformationJobObject(job, 1, out info, (uint)Marshal.SizeOf(typeof(Accounting)), IntPtr.Zero));
-                        if (info.Active == 0) break;
-                        uint message; IntPtr key, value;
-                        Check(GetQueuedCompletionStatus(port, out message, out key, out value, uint.MaxValue));
-                    }
-                    if (path.Length != 0)
-                    {
-                        string temporary = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
-                        try { File.WriteAllText(temporary, receipt); File.Move(temporary, path); }
-                        finally { if (File.Exists(temporary)) File.Delete(temporary); }
-                    }
-                }
-                finally { if (port != IntPtr.Zero) CloseHandle(port); CloseHandle(job); }
-            }
+            var line = _bounds.ReadLineAsync(_process.StandardOutput).GetAwaiter().GetResult();
+            if (line is null)
+                throw new EndOfStreamException("Acceptance custodian closed its protocol stream before " + phase + ".");
+            AcceptanceJobCustodianProtocol.Validate(line, phase, _protocol, Identity);
+            if (_process.HasExited)
+                throw new InvalidOperationException("Acceptance custodian exited during attachment.");
         }
-        """;
+        catch (Exception ex)
+        {
+            var exit = _process.HasExited ? _process.ExitCode.ToString() : "unconfirmed";
+            Stop();
+            try { _drain.WaitAsync(_bounds.DiagnosticDrain, _bounds.TimeProvider).GetAwaiter().GetResult(); }
+            catch (TimeoutException) { }
+            throw new InvalidOperationException($"Acceptance custodian {phase} failed: {ex.Message}; observed_exit={exit}; failure={ex.GetType().Name}; stderr: {_diagnostics.Snapshot()}", ex);
+        }
+    }
+
+    // Drain both streams until exit, without retaining a native job handle.
+    internal void Release() => _ = DrainUntilExitAsync();
+    private async Task DrainUntilExitAsync()
+    {
+        try
+        {
+            await Task.WhenAll(_diagnostics.DrainAsync(_process.StandardOutput), _drain,
+                _process.WaitForExitAsync()).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is IOException or InvalidOperationException) { }
+        finally { _process.Dispose(); }
+    }
+
+    private void Stop()
+    {
+        if (!_process.HasExited) _process.Kill();
+        _process.WaitForExitAsync().WaitAsync(_bounds.DiagnosticDrain, _bounds.TimeProvider)
+            .GetAwaiter().GetResult();
+    }
+    public void Dispose() { try { Stop(); } finally { _process.Dispose(); } }
+}
+
+internal sealed record AcceptanceJobCustodianBounds
+{
+    internal TimeSpan Readiness { get; init; } = TimeSpan.FromSeconds(30);
+    internal TimeSpan DiagnosticDrain { get; init; } = TimeSpan.FromSeconds(5);
+    internal TimeProvider TimeProvider { get; init; } = TimeProvider.System;
+    internal Task<string?> ReadLineAsync(TextReader reader) => AcceptanceJobCustodianProtocol.ReadLineAsync(reader)
+        .WaitAsync(Readiness, TimeProvider);
+}
+
+internal sealed record AcceptanceJobCustodianProtocol(string Phase, string JobName,
+    SpawnProcessIdentity Holder, SpawnProcessIdentity? Custodian, string? SettlementPath)
+{
+    internal static async Task<string?> ReadLineAsync(TextReader reader)
+    {
+        var line = new StringBuilder();
+        var buffer = new char[1];
+        while (await reader.ReadAsync(buffer.AsMemory()).ConfigureAwait(false) != 0)
+        {
+            if (buffer[0] == '\n') return line.ToString().TrimEnd('\r');
+            if (line.Length == 16384) throw new InvalidOperationException("Custody protocol line exceeds its bound.");
+            line.Append(buffer[0]);
+        }
+        return line.Length == 0 ? null : throw new InvalidOperationException("Incomplete custody protocol line.");
+    }
+
+    internal static void Validate(string? line, string phase, AcceptanceJobCustodianProtocol expected,
+        SpawnProcessIdentity custodian)
+    {
+        var actual = line is null ? null : JsonSerializer.Deserialize<AcceptanceJobCustodianProtocol>(line);
+        if (actual is null || actual.Phase != phase || actual.JobName != expected.JobName ||
+            actual.SettlementPath != expected.SettlementPath || actual.Holder is null || actual.Custodian is null ||
+            !ProcessImageResolution.SameProcess(actual.Holder, expected.Holder) ||
+            !ProcessImageResolution.SameProcess(actual.Custodian, custodian))
+            throw new InvalidOperationException("Acceptance custodian protocol identity mismatch.");
+    }
+}
+
+internal sealed class AcceptanceJobCustodianDiagnostics
+{
+    internal const int Capacity = 8192;
+    private readonly StringBuilder _tail = new();
+    internal async Task DrainAsync(TextReader reader)
+    {
+        var buffer = new char[1024];
+        try
+        {
+            int count;
+            while ((count = await reader.ReadAsync(buffer.AsMemory()).ConfigureAwait(false)) != 0)
+                lock (_tail)
+                {
+                    _tail.Append(buffer, 0, count);
+                    if (_tail.Length > Capacity) _tail.Remove(0, _tail.Length - Capacity);
+                }
+        }
+        catch (Exception ex) when (ex is IOException or ObjectDisposedException) { }
+    }
+    internal string Snapshot() { lock (_tail) return _tail.ToString(); }
 }

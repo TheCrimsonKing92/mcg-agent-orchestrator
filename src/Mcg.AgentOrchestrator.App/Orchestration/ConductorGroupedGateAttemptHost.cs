@@ -36,7 +36,8 @@ internal static class ConductorGroupedGateAttemptHost
                 Path.GetDirectoryName(metadataPath)!);
             using var holderContainment = attempt.HolderContractVersion == 1
                 ? new AcceptanceHolderLease().Claim(AcceptanceHolderBinding.For(attempt),
-                    AcceptanceHolderLease.CurrentGeneration()) : null;
+                    AcceptanceHolderLease.CurrentGeneration(),
+                    OwnedChildWorkspaceResolver.ForGroupedGateAttempt(attempt)) : null;
             using var self = Process.GetCurrentProcess();
             // Parent metadata may still contain pid 0 if a relaunch interrupts its post-spawn write.
             var claimed = ConductorGroupedGateAttemptCoordinator.TryClaimOwner(
