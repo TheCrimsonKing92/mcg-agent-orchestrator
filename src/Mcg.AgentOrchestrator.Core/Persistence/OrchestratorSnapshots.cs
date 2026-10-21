@@ -148,7 +148,8 @@ public sealed record TaskSnapshot(
     DateTimeOffset? CriterionRetryFeedbackRoundAt = null,
     bool LatestRetryInherited = false,
     DateTimeOffset? SubscriptionDeferralReleasedAt = null,
-    CompletionBuildEvidenceOperation? CompletionBuildEvidence = null);
+    CompletionBuildEvidenceOperation? CompletionBuildEvidence = null,
+    IReadOnlyList<WorkerBuildInvocation>? WorkerBuildInvocations = null);
 
 public sealed record TaskExecutionSnapshot(
     string AgentId,
@@ -266,7 +267,8 @@ public sealed record TaskDispatchSnapshot(
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     IReadOnlyList<string>? SelectedSkills = null,
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
-    WorkerBuildScopeIdentity? WorkerBuildScope = null);
+    WorkerBuildScopeIdentity? WorkerBuildScope = null,
+    int WorkerBuildProtocolVersion = 0);
 
 public sealed record TaskProcessSnapshot(
     int ProcessId,
@@ -289,7 +291,8 @@ public sealed record TaskProcessSnapshot(
     string? ExitArtifactReason = null,
     bool WasGracefullyDetachedByConductor = false,
     IReadOnlyList<int>? NonBlockingProcessIds = null,
-    DateTimeOffset? ProcessIdentityStartedAt = null);
+    DateTimeOffset? ProcessIdentityStartedAt = null,
+    string? ProcessIdentityImagePath = null);
 
 public sealed record TaskProcessResourceAccountingSnapshot(
     long CpuMilliseconds,

@@ -265,7 +265,7 @@ internal static class SourceSizeRatchet
             // Goal ffa0471e extracts historical/current completion-build policy to its owning collaborator.
             // Integrated build-scope extraction and task-intent admission: measured 2736, no headroom.
             // Goal e7c4bc06 adds Tester submission ingestion: measured 2743, no headroom.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Execution/Processes/BackgroundDispatchRunner.cs", 2743),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Execution/Processes/BackgroundDispatchRunner.cs", 2737),
             // Goal 5a75fed0 extracted typed projection parsing and literal restoration into
             // WorkerContextProjectionResidual, leaving the dispatcher to sequence package assembly.
             // Goal fd252fe4 adds retry fingerprints for the resolved provider, model, paid route, and
@@ -591,7 +591,7 @@ internal static class SourceSizeRatchet
             // measured increase is exactly 10 lines (9319 total), with the same 28 partials and no headroom.
             // Goal 568eb0fe retains exhausted retry outcomes and recomputes lifecycle on explicit
             // unpark; these transitions use the kernel's existing aggregate/lifecycle ownership.
-            new SourceClassCeiling("AgentOrchestratorKernel", 9336, 28), // Persist bounded provider hold substitution with its routing event.
+            new SourceClassCeiling("AgentOrchestratorKernel", 9331, 28), // Persist bounded provider hold substitution with its routing event.
             // Goal d6033045 extracted the pre-admission receipt pass to PassedMergeTrainReceiptAdmission; goal 1d0f2317
             // adds one admission predicate to exclude stream-complete children before slot reservation. Measured 9255.
             // Goal 679eee57 added a one-line tick call to the separately owned ConductorExperimentWatch (+1); goal 80de5cb2 extracted

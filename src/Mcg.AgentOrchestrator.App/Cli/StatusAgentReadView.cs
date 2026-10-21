@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Mcg.AgentOrchestrator.App.Application;
 using Mcg.AgentOrchestrator.Core;
 
@@ -14,13 +15,21 @@ internal static class StatusAgentReadView
                 label,
                 objective = OutputTextPreview.CreateSummary(goal.Objective).Text,
                 status,
-                tasks = goal.Tasks.Select((task, index) => new
-                {
-                    number = index + 1,
-                    status = task.Status.ToString(),
-                    role = task.RequiredRole.ToString(),
-                    description = OutputTextPreview.CreateSummary(task.Description).Text,
-                    agent = task.AssignedAgentId is null ? null : CliIdentifierText.ShortId(task.AssignedAgentId.Value)
-                }).ToArray()
+                tasks = goal.Tasks.Select((task, index) => new TaskRow(
+                    index + 1,
+                    task.Status.ToString(),
+                    task.RequiredRole.ToString(),
+                    OutputTextPreview.CreateSummary(task.Description).Text,
+                    task.AssignedAgentId is null ? null : CliIdentifierText.ShortId(task.AssignedAgentId.Value),
+                    task.WorkerBuildInvocations.Count == 0 ? null : task.WorkerBuildInvocations.Select(i =>
+                        new InvocationRow(i.Id, i.DispatchId, i.TreeDigest, i.Phase.ToString(),
+                            i.Outcome?.ToString(), i.Consumed, i.CustodyReleased)).ToArray())).ToArray()
             }, new JsonSerializerOptions(JsonSerializerDefaults.Web), time);
+
+    private sealed record TaskRow(int Number, string Status, string Role, string Description, string? Agent,
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        InvocationRow[]? WorkerBuildInvocations);
+
+    private sealed record InvocationRow(string Invocation, string Dispatch, string Candidate, string Phase,
+        string? Outcome, bool Consumed, bool CustodyReleased);
 }
