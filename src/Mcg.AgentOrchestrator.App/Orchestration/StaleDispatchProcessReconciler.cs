@@ -9,8 +9,10 @@ internal static class StaleDispatchProcessReconciler
     internal static readonly IReadOnlySet<WorkTaskStatus> AssignedOnly =
         new HashSet<WorkTaskStatus> { WorkTaskStatus.Assigned };
 
-    internal static int Reconcile(AgentOrchestratorKernel kernel) =>
-        Reconcile(kernel, new BackgroundDispatchRunner());
+    internal static int Reconcile(AgentOrchestratorKernel kernel, OrchestratorWorkspace? workspace = null) =>
+        Reconcile(kernel, workspace is null
+            ? new BackgroundDispatchRunner()
+            : OperatorCancelAwareDispatchRunner.ForWorkspace(workspace));
 
     internal static int Reconcile(
         AgentOrchestratorKernel kernel,

@@ -32,7 +32,7 @@ internal sealed class WorkerBuildRequestFixture : IDisposable
     internal const string OtherSource = "src/Other/Other.cs";
 
     internal WorkerBuildRequestFixture(bool compilerFailure = false, bool lowIntegrity = false, bool managedHost = false,
-        bool goalBranch = false, bool extraProject = false)
+        bool goalBranch = false, bool extraProject = false, bool reportWorkerResult = false)
     {
         _lowIntegrity = lowIntegrity;
         RepositoryRoot = Path.Combine(Root, "repository");
@@ -64,6 +64,17 @@ internal sealed class WorkerBuildRequestFixture : IDisposable
             if (goalBranch) Git("switch", "-c", "goal/" + GoalId.Value[..8]);
             var at = DateTimeOffset.UtcNow;
             var command = managedHost ? "& '" + Path.Combine(FindRepository(), "scripts", "Invoke-WorkerBuildCheck.ps1").Replace("'", "''") + "' '" + Project + "'" : "fixture-command";
+            if (reportWorkerResult)
+            {
+                if (!managedHost) throw new ArgumentException("Completion output requires a managed native host.");
+                var result = string.Join('\n', "WORKER_RESULT:", "files: " + Source,
+                    "commands: Invoke-WorkerBuildCheck.ps1", "tests: deferred - host build recorded",
+                    "commit: none", "blockers: none", "assigned_scope_complete: true",
+                    "model_fit: fixture/native - adequate - composition - owned compilation",
+                    "skills: none", "confidence: high", "END_WORKER_RESULT");
+                command += "; $buildExit = $LASTEXITCODE; [Console]::WriteLine([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('" +
+                    Convert.ToBase64String(Encoding.UTF8.GetBytes(result)) + "'))); exit $buildExit";
+            }
             Kernel.RecordTaskDispatch(GoalId, TaskId, new TaskDispatchRecord("fixture-worker", command, RepositoryRoot, at,
                 SandboxLowIntegrity: lowIntegrity));
             WorkerBuildProjectScope.Prepare(RepositoryRoot, GoalId.Value, TaskId.Value, "main");
@@ -73,7 +84,7 @@ internal sealed class WorkerBuildRequestFixture : IDisposable
             Directory.CreateDirectory(Path.GetDirectoryName(StatePath)!);
             _ = StateDbMigrations.EnsureUpToDate(StatePath);
             Storage = new DotnetBuildStorageRoot(Path.Combine(Root, "build-storage"));
-            Operations = new(StatePath, Root, Storage);
+            Operations = new(StatePath, reportWorkerResult ? RepositoryRoot : Root, Storage);
             var prepared = Operations.Prepare(Kernel, GoalId, TaskId);
             using var host = Process.GetCurrentProcess();
             var hostIdentity = WorkerBuildRequestChannel.ReadIdentity(host);
