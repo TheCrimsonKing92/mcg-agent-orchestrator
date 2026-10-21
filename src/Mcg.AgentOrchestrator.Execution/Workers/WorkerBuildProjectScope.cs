@@ -98,7 +98,8 @@ public static class WorkerBuildProjectScope
         IEnumerable<string>? additionalPaths = null, string? expectedMetadataDigest = null)
         => ResolveCore(root, requestedProjects, additionalPaths, expectedMetadataDigest, null);
 
-    internal static Result ResolveForDispatch(string root, IEnumerable<string> requestedProjects,
+    /// <summary>Validates captured dispatch authority before resolving its historical project scope.</summary>
+    public static Result ResolveForDispatch(string root, IEnumerable<string> requestedProjects,
         GoalId goalId, TaskId taskId, TaskDispatchRecord dispatch, IEnumerable<string>? additionalPaths = null)
     {
         var identity = dispatch.WorkerBuildScope;

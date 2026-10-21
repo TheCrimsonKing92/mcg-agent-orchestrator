@@ -95,7 +95,7 @@ internal sealed class WorkerBuildInvocationOperations(string statePath, string e
         var required = WorkerBuildEvidenceRequirement.FindRequiredProjects(dispatch.WorkingDirectory, task.RequiredRole, changedPaths, dirtyPaths);
         if (required.Count == 0 && invocations.Length == 0) return new(false, false, "worker_build_host=not-required");
         WorkerBuildProjectScope.Result scope;
-        try { scope = WorkerBuildProjectScope.Resolve(dispatch.WorkingDirectory, required, expectedMetadataDigest: dispatch.WorkerBuildScope?.MetadataDigest); }
+        try { scope = WorkerBuildProjectScope.ResolveForDispatch(dispatch.WorkingDirectory, required, goalId, taskId, dispatch); }
         catch (Exception ex) when (ex is not OutOfMemoryException) { return new(true, false, "worker_build_host=scope-invalid; " + ex.Message); }
         if (!WorktreeTreeDigest.TryCompute(dispatch.WorkingDirectory, out var digest, out var reason))
             return new(true, false, "worker_build_host=candidate-unavailable; " + reason);
@@ -118,8 +118,8 @@ internal sealed class WorkerBuildInvocationOperations(string statePath, string e
             var canonical = canonicalTask.WorkerBuildInvocations.Single(i => i.Id == applicable.Id);
             if (!canonical.SameOrigin(applicable) || !canonical.IsTerminal || !canonical.CustodyReleased ||
                 !WorktreeTreeDigest.TryCompute(dispatch.WorkingDirectory, out var nowDigest, out _) || nowDigest != canonical.TreeDigest ||
-                WorkerBuildProjectScope.Resolve(dispatch.WorkingDirectory, required,
-                    expectedMetadataDigest: canonicalTask.LastDispatch!.WorkerBuildScope?.MetadataDigest).Projects
+                WorkerBuildProjectScope.ResolveForDispatch(dispatch.WorkingDirectory, required,
+                    goalId, taskId, canonicalTask.LastDispatch!).Projects
                     .Except(canonical.Projects, StringComparer.OrdinalIgnoreCase).Any())
                 throw new UnauthorizedAccessException("Worker build consumption lost candidate/scope applicability.");
             if (canonical.Consumed) return Task.FromResult((false, state, canonical));
