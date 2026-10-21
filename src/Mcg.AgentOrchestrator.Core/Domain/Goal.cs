@@ -913,7 +913,7 @@ public sealed class Goal
     public void RetainAcceptanceAttributionPending(AcceptanceAttributionPending pending)
     {
         ArgumentNullException.ThrowIfNull(pending);
-        if (Status is not (GoalStatus.Verified or GoalStatus.AcceptanceFailed) ||
+        if (LifecycleStatus is not (GoalStatus.Verified or GoalStatus.AcceptanceFailed) ||
             LatestAcceptanceFailure is not { } failure || string.IsNullOrWhiteSpace(pending.CandidateSha) ||
             string.IsNullOrWhiteSpace(pending.MainSha) || pending.CandidateSha != failure.BranchHeadSha ||
             pending.MainSha != failure.MainHeadSha || string.IsNullOrWhiteSpace(pending.AttemptId) ||
