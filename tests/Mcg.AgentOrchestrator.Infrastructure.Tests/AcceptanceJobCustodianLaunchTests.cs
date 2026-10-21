@@ -34,6 +34,7 @@ public sealed class AcceptanceJobCustodianLaunchTests
             var custodyIdentity = root.GetProperty("Custodian").Deserialize<SpawnProcessIdentity>()!;
             Assert.Equal("dotnet", Path.GetFileNameWithoutExtension(custodyIdentity.ImagePath));
             custody = Process.GetProcessById(custodyIdentity.ProcessId);
+            Assert.False(custody.SafeHandle.IsInvalid);
             Assert.True(SpawnProcessIdentityReader.TryRead(custody, out var live));
             Assert.Equal(SpawnTrackedProcessStatus.LiveMatch,
                 SpawnProcessIdentityReader.EvaluateRecordedIdentity(custodyIdentity, live, out _));
