@@ -58,13 +58,7 @@ public sealed class AcceptanceJobCustodianLaunchTests
         }
         finally
         {
-            if (!holder.HasExited)
-            {
-                Assert.True(SpawnProcessIdentityReader.TryRead(holder, out var live));
-                Assert.Equal(SpawnTrackedProcessStatus.LiveMatch,
-                    SpawnProcessIdentityReader.EvaluateRecordedIdentity(identity, live, out _));
-                holder.Kill();
-            }
+            TestOwnedProcessStop.StopRootIfSame(holder, identity, TimeSpan.FromSeconds(30));
             await holder.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(30));
             if (custody is not null)
             {

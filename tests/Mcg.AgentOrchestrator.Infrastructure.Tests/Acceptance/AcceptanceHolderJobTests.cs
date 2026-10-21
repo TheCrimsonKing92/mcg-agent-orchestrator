@@ -49,6 +49,7 @@ public sealed class AcceptanceHolderJobTests
         try
         {
             using var job = DurableAcceptanceJob.Attach(holder, jobName, fixture.Launch);
+            fixture.TrackCustodian(job.CustodianIdentity);
             Assert.NotNull(identity);
             Assert.Equal("ready", await holder.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(30)));
             holder.StandardInput.WriteLine("start-shards");
@@ -236,12 +237,10 @@ public sealed class AcceptanceHolderJobTests
             Assert.Equal("ready", await holder.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(30)));
             Assert.Equal("ready", await healthy.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(30)));
             using var job = DurableAcceptanceJob.Attach(holder, name, fixture.Launch);
+            var custody = fixture.TrackCustodian(job.CustodianIdentity);
             using var other = DurableAcceptanceJob.Attach(healthy, healthyName, fixture.Launch);
-            using var custody = Process.GetProcessById(job.CustodianIdentity.ProcessId);
-            Assert.True(SpawnProcessIdentityReader.TryRead(custody, out var live));
-            Assert.Equal(SpawnTrackedProcessStatus.LiveMatch,
-                SpawnProcessIdentityReader.EvaluateRecordedIdentity(job.CustodianIdentity, live, out _));
-            if (loseCustody) custody.Kill();
+            fixture.TrackCustodian(other.CustodianIdentity);
+            if (loseCustody) StopHolderIfSame(custody, job.CustodianIdentity);
             else Assert.True(DurableAcceptanceJob.Observe(name, identity,
                 SpawnTrackedProcessStatus.LiveMatch, cancel: true).Settled);
             await holder.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(30));
@@ -340,11 +339,38 @@ public sealed class AcceptanceHolderJobTests
 
     private sealed class CustodyFixture : IDisposable
     {
+        private readonly List<Process> _custodians = [];
         internal string Root { get; } = Directory.CreateTempSubdirectory("native-custody-").FullName;
         internal OrchestratorWorkspace Workspace => OrchestratorWorkspace.ForDirectory(Root, Root, null,
             new OrchestratorProjectRegistry(Path.Combine(Root, "registry"), Path.Combine(Root, "data")));
         internal AcceptanceJobCustodianLaunchSpecification Launch => AcceptanceJobCustodianHost.Bind(Workspace);
-        public void Dispose() => Directory.Delete(Root, recursive: true);
+        internal Process TrackCustodian(SpawnProcessIdentity identity)
+        {
+            var process = Process.GetProcessById(identity.ProcessId);
+            try
+            {
+                _ = process.SafeHandle;
+                Assert.True(SpawnProcessIdentityReader.TryRead(process, out var live));
+                Assert.Equal(SpawnTrackedProcessStatus.LiveMatch,
+                    SpawnProcessIdentityReader.EvaluateRecordedIdentity(identity, live, out _));
+                _custodians.Add(process);
+                return process;
+            }
+            catch { process.Dispose(); throw; }
+        }
+
+        public void Dispose()
+        {
+            // An empty job can be observed before its independent custodian exits.
+            // Wait on each recorded process before deleting its working directory.
+            try
+            {
+                foreach (var process in _custodians)
+                    Assert.True(process.WaitForExit(30_000), "Custodian did not exit after its owned job settled.");
+            }
+            finally { foreach (var process in _custodians) process.Dispose(); }
+            Directory.Delete(Root, recursive: true);
+        }
     }
 
     private static void StopHolderIfSame(Process holder, SpawnProcessIdentity? identity)
