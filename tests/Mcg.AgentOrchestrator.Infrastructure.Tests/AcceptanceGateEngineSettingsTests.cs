@@ -96,6 +96,7 @@ public sealed class AcceptanceGateEngineSettingsTests
                 "ConductorLoopHandoffTests",
                 "DispatchHostLifetimeHandoffTests",
                 "GoalBacklogLinkTests",
+                "GoalWorktreeTestsAcceptanceRetry",
                 "GoalLifecycleEventWriterTests",
                 "RealWorkerProcessGuardTests",
                 "SqliteOrchestratorStateRepositoryTests",
