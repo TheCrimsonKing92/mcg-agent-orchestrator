@@ -506,7 +506,9 @@ internal static partial class GoalOperationJournal
     public static OrchestratorStateOutboxProcessingResult ApplyAcceptanceRetryAuditMessage(
         OrchestratorWorkspace workspace,
         Goal goal,
-        OrchestratorStateOutboxMessage message)
+        OrchestratorStateOutboxMessage message,
+        ICollaborationItemStore? collaborationStore = null,
+        CancellationToken cancellationToken = default)
     {
         if (!message.Kind.Equals(AcceptanceRetryAuditOutboxKind, StringComparison.Ordinal))
         {
@@ -525,7 +527,9 @@ internal static partial class GoalOperationJournal
             workspace,
             goal,
             payload.OperatorReason,
-            payload.AcceptanceFailureOccurredAt);
+            payload.AcceptanceFailureOccurredAt,
+            collaborationStore: collaborationStore,
+            cancellationToken: cancellationToken);
         if (escalationResolution == OperatorInbox.LandingEscalationResolution.Missing)
         {
             return OrchestratorStateOutboxProcessingResult.Quarantined(

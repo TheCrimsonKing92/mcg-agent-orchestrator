@@ -875,6 +875,22 @@ public sealed class Goal
         _acceptanceFailureDeferredForRetry = false;
     }
 
+    public void RetainAcceptanceAttributionPending(AcceptanceAttributionPending pending)
+    {
+        ArgumentNullException.ThrowIfNull(pending);
+        if (Status is not (GoalStatus.Verified or GoalStatus.AcceptanceFailed) ||
+            LatestAcceptanceFailure is not { } failure || string.IsNullOrWhiteSpace(pending.CandidateSha) ||
+            string.IsNullOrWhiteSpace(pending.MainSha) || pending.CandidateSha != failure.BranchHeadSha ||
+            pending.MainSha != failure.MainHeadSha || string.IsNullOrWhiteSpace(pending.AttemptId) ||
+            pending.Tests is not { Count: > 0 } || pending.Tests.Any(test =>
+                !failure.FailedChecks.Contains(test.CheckName, StringComparer.Ordinal) ||
+                string.IsNullOrWhiteSpace(test.TestIdentity) || string.IsNullOrWhiteSpace(test.BaselineEvidence) ||
+                test.FirstReceipts is not { Count: > 0 } || test.RerunReceipts is not { Count: > 0 }))
+            throw new InvalidOperationException("Pending attribution requires a bound retained acceptance failure and executed receipts.");
+        _retainedAcceptanceFailure = failure with { AttributionPending = pending };
+        SetStatus(GoalStatus.AcceptanceFailed);
+    }
+
     internal void IncrementAutomaticAcceptanceRetryCount() => AutomaticAcceptanceRetryCount++;
 
     internal void ResetAutomaticAcceptanceRetryCount() => AutomaticAcceptanceRetryCount = 0;
@@ -1120,7 +1136,7 @@ public sealed class Goal
                     RetainedAcceptanceFailure.BranchHeadSha,
                     RetainedAcceptanceFailure.MainHeadSha,
                     RetainedAcceptanceFailure.CheckAttributions?.ToList(),
-                    RetainedAcceptanceFailure.BaselineAttestation),
+                    RetainedAcceptanceFailure.BaselineAttestation, RetainedAcceptanceFailure.AttributionPending),
             _effectiveAcceptanceCriteriaCorrections.Count == 0
                 ? null
                 : _effectiveAcceptanceCriteriaCorrections.Select(correction => new EffectiveAcceptanceCriteriaCorrectionSnapshot(
@@ -1244,6 +1260,8 @@ public sealed class Goal
                 failure.MainHeadSha,
                 failure.CheckAttributions,
                 failure.BaselineAttestation);
+            if (failure.AttributionPending is { } pending)
+                goal._retainedAcceptanceFailure = goal._retainedAcceptanceFailure! with { AttributionPending = pending };
             var acceptanceFailureDeferredForRetry = snapshot.AcceptanceFailureDeferredForRetry ??
                 (snapshot.Status == GoalStatus.Active &&
                  goal.Tasks.Any(task =>
@@ -1470,7 +1488,8 @@ public sealed record AcceptanceFailureSummary(
     string? BranchHeadSha = null,
     string? MainHeadSha = null,
     IReadOnlyList<AcceptanceCheckAttribution>? CheckAttributions = null,
-    string? BaselineAttestation = null)
+    string? BaselineAttestation = null,
+    AcceptanceAttributionPending? AttributionPending = null)
 {
     public bool IsEnvironmentalApparatus =>
         FailedChecks.Count > 0 &&

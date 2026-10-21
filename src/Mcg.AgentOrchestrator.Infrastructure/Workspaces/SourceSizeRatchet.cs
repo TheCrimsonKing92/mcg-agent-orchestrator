@@ -67,7 +67,7 @@ internal static class SourceSizeRatchet
             // Goal 56ff780e adds three lines at the existing shard-progress seam to carry the result,
             // outcome and failed-test count to the owner gate view; measured 4976 lines, no extra headroom.
             // Goal bd3c0539 adds one settled-check progress call.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs", 4977),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs", 4970),
             // Goal c0cfa8ae test telemetry collaborator measured at 423 lines.
             // Goal 402c1005 moved TRX completion inspection and shard decisions into AcceptanceShardCompletionAdjudicator.
             // Goal ad3fafc0 extracted run ownership publication and stale-receipt clearing into AcceptanceTestRunPreparation.
@@ -131,7 +131,7 @@ internal static class SourceSizeRatchet
             // branch through it (one field and its wiring). Measured 1789 lines after both; no extra headroom.
             // Goal f62c7f67 extracts owned gate/evidence coordinator construction into
             // OwnedChildAttemptCoordinatorFactory; measured 1783 lines, no extra headroom.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs", 1715),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs", 1710),
             // Goal 0e30d5e9 extracted impact-plan mapping to PreReviewEvidenceContextBuilder.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.PreReviewEvidence.cs", 467),
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.ReviewRecovery.cs", 439),
@@ -502,7 +502,7 @@ internal static class SourceSizeRatchet
             // Goal 2c245bc3 restores overlapping holders and derives a recoverable admission hold.
             // The recovery sweep also settles non-reserving attempts once their holder is proven settled.
             // Measured 14888 lines across the same 70 partial files; no extra headroom.
-            new SourceClassCeiling("ConductorDriver", 14770, 70), // Provider hold redispatch hook and injected recovery seam.
+            new SourceClassCeiling("ConductorDriver", 14767, 70), // Provider hold redispatch hook and injected recovery seam.
             // Goal b7c2f833: epic-at-creation validation and post-commit inheritance call sites
             // require handler glue; resolution/assignment remain in the separate EpicAtCreation type.
             // Measured 12223 total lines across the existing 30 partial files after integrating main; no extra headroom.
@@ -550,7 +550,7 @@ internal static class SourceSizeRatchet
             // Goal bd3c0539 adds three lane progress call lines across existing partials.
             // Measured 8683 lines in the same 28 partials after integrating main at 6dff3b77a.
             // Goal 3651d0e4: the offer-context call site binds the remote-lane occupancy owner.
-            new SourceClassCeiling("GoalAcceptanceVerifier", 8686, 28),
+            new SourceClassCeiling("GoalAcceptanceVerifier", 8679, 28),
             // Goal d647b5f3 extracts premise-invalid clarification construction to PremiseInvalidClarification.
             // Goal 439c80ae extracts Reviewer evidence brief projection to ReviewerEvidenceBriefSection;
             // measured 9319 total lines across the existing 27 partial files, with no extra headroom.
