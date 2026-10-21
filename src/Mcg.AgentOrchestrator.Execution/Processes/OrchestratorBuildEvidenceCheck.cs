@@ -66,7 +66,8 @@ public static class OrchestratorBuildEvidenceCheck
         Func<OrchestratorBuildCheckRequest, OrchestratorBuildCheckResult> runBuildCheck,
         Func<OrchestratorBuildCheckRequest, CompletionBuildEvidenceOperation>? reconcileOperation = null,
         bool hasOperation = false,
-        string? expectedScopeMetadataDigest = null)
+        string? expectedScopeMetadataDigest = null,
+        WorkerBuildProjectScope.DispatchContext? completedDispatch = null)
     {
         if (failedWorkerBuildCheck)
         {
@@ -79,12 +80,13 @@ public static class OrchestratorBuildEvidenceCheck
             changedPaths,
             dirtyPaths);
         if (role is AgentRole.Developer or AgentRole.Tester &&
-            (expectedScopeMetadataDigest is not null || File.Exists(WorkerBuildProjectScope.MetadataPath(worktreeRoot))))
+            (completedDispatch?.Dispatch.WorkerBuildScope is not null || expectedScopeMetadataDigest is not null || File.Exists(WorkerBuildProjectScope.MetadataPath(worktreeRoot))))
         {
             try
             {
-                projects = WorkerBuildProjectScope.Resolve(worktreeRoot, projects,
-                    changedPaths.Concat(dirtyPaths), expectedScopeMetadataDigest).Projects;
+                projects = (completedDispatch is null
+                    ? WorkerBuildProjectScope.Resolve(worktreeRoot, projects, changedPaths.Concat(dirtyPaths), expectedScopeMetadataDigest)
+                    : completedDispatch.Resolve(worktreeRoot, projects, changedPaths.Concat(dirtyPaths))).Projects;
             }
             catch (Exception exception) when (exception is not OutOfMemoryException)
             {

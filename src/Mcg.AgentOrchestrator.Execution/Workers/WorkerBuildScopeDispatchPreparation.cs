@@ -30,7 +30,14 @@ internal static class WorkerBuildScopeDispatchPreparation
                 ?? throw new IOException("Worker build scope metadata missing at dispatch start.");
             WorkerBuildProjectScope.Prepare(workingDirectory, goalId.Value, task.Id.Value, scope.IntegrationBranch,
                 WorkerBuildProjectScope.PinnedGoalBaseline(kernel.GetGoal(goalId)));
-            buildScopeIdentity = WorkerBuildProjectScope.ReadDispatchIdentity(workingDirectory, worktreeHeadSha);
+            var dispatch = task.LastDispatch ?? throw new IOException("Build scope capture requires a tracked dispatch.");
+            buildScopeIdentity = WorkerBuildProjectScope.ReadDispatchIdentity(workingDirectory, worktreeHeadSha) with
+            {
+                CapturedDispatchAt = dispatch.DispatchedAt
+            };
+            // Validate against the authoritative owner before retaining anything in its record.
+            WorkerBuildProjectScope.ReadRetainedDispatchMetadata(workingDirectory, goalId, task.Id,
+                dispatch with { BaseCommit = worktreeHeadSha, WorkerBuildScope = buildScopeIdentity });
         }
         if (worktreeHeadSha is not null)
             kernel.RecordDispatchBaseCommit(goalId, task.Id, worktreeHeadSha, buildScopeIdentity);

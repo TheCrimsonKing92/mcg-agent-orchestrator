@@ -28,8 +28,11 @@ internal sealed class WorkerBuildRequestFixture : IDisposable
     internal bool PreserveArtifacts;
     internal const string Project = "src/Feature/Feature.csproj";
     internal const string Source = "src/Feature/Feature.cs";
+    internal const string OtherProject = "src/Other/Other.csproj";
+    internal const string OtherSource = "src/Other/Other.cs";
 
-    internal WorkerBuildRequestFixture(bool compilerFailure = false, bool lowIntegrity = false, bool managedHost = false)
+    internal WorkerBuildRequestFixture(bool compilerFailure = false, bool lowIntegrity = false, bool managedHost = false,
+        bool goalBranch = false, bool extraProject = false)
     {
         _lowIntegrity = lowIntegrity;
         RepositoryRoot = Path.Combine(Root, "repository");
@@ -38,6 +41,13 @@ internal sealed class WorkerBuildRequestFixture : IDisposable
             Directory.CreateDirectory(Path.Combine(RepositoryRoot, "src", "Feature"));
             File.WriteAllText(Path.Combine(RepositoryRoot, Project), "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>");
             File.WriteAllText(Path.Combine(RepositoryRoot, Source), "public sealed class Feature { }");
+            if (extraProject)
+            {
+                Directory.CreateDirectory(Path.Combine(RepositoryRoot, "src", "Other"));
+                File.WriteAllText(Path.Combine(RepositoryRoot, OtherProject),
+                    "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>");
+                File.WriteAllText(Path.Combine(RepositoryRoot, OtherSource), "public sealed class Other { }");
+            }
             Git("init", "-b", "main");
             Git("config", "user.email", "worker-build@fixture.invalid");
             Git("config", "user.name", "Worker build fixture");
@@ -51,13 +61,14 @@ internal sealed class WorkerBuildRequestFixture : IDisposable
             Kernel.ActivateGoal(goal.Id, [agent]);
             GoalId = goal.Id;
             TaskId = task.Id;
+            if (goalBranch) Git("switch", "-c", "goal/" + GoalId.Value[..8]);
             var at = DateTimeOffset.UtcNow;
             var command = managedHost ? "& '" + Path.Combine(FindRepository(), "scripts", "Invoke-WorkerBuildCheck.ps1").Replace("'", "''") + "' '" + Project + "'" : "fixture-command";
             Kernel.RecordTaskDispatch(GoalId, TaskId, new TaskDispatchRecord("fixture-worker", command, RepositoryRoot, at,
                 SandboxLowIntegrity: lowIntegrity));
             WorkerBuildProjectScope.Prepare(RepositoryRoot, GoalId.Value, TaskId.Value, "main");
-            Kernel.RecordDispatchBaseCommit(GoalId, TaskId, Git("rev-parse", "HEAD").Trim(),
-                WorkerBuildProjectScope.ReadDispatchIdentity(RepositoryRoot));
+            WorkerBuildScopeDispatchPreparation.RecordDispatchBaseCommit(Kernel, GoalId, task,
+                RepositoryRoot, Git("rev-parse", "HEAD").Trim());
             StatePath = Path.Combine(Root, ".orchestrator", "state.db");
             Directory.CreateDirectory(Path.GetDirectoryName(StatePath)!);
             _ = StateDbMigrations.EnsureUpToDate(StatePath);
