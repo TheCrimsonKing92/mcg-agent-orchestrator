@@ -16,6 +16,7 @@ public sealed class ConductorDriverTestsExplicitParkAttributionPending
     {
         using var fixture = new Fixture();
         var workspace = OrchestratorWorkspace.ForDirectory(fixture.Root);
+        StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath);
         var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
         var kernel = fixture.Kernel;
         var goal = fixture.Goal;
