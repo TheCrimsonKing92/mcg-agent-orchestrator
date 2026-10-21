@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text;
 using System.Text.Json;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
@@ -40,12 +41,34 @@ internal sealed class ExitReconcileBuildFixture : IDisposable
     internal async Task<WorkerBuildInvocation> CompleteNativeDispatch()
     {
         Assert.True(WorktreeTreeDigest.TryCompute(Build.RepositoryRoot, out var candidateDigest, out var digestReason), digestReason);
+        var readyPath = Path.Combine(Workspace.LogDirectory, "worker-child-ready");
+        var releaseName = "Local\\mcg-exit-reconcile-" + Guid.NewGuid().ToString("N");
+        using var release = new EventWaitHandle(false, EventResetMode.ManualReset, releaseName);
+        string? heartbeatPath = null;
         var starter = new BackgroundDispatchRunner(disableProcessStart: false, startProcess: start =>
         {
             var gate = start.Environment[DispatchProcessHost.StartGatePathVariable];
-            var parameters = DispatchProcessHost.ReadParameters(start.ArgumentList[^1]);
+            var parametersPath = start.ArgumentList[^1];
+            var parameters = DispatchProcessHost.ReadParameters(parametersPath);
             _hostDiagnosticPath = parameters.HostDiagnosticPath;
             _childExitPath = parameters.ChildExitRecordPath;
+            heartbeatPath = parameters.HeartbeatPath;
+            // A build directly in the worker shell has no selected CLI child. Run the
+            // unchanged command in a real descendant and hold it after compilation until
+            // the host has retained that child's handle. Runtime files stay off the tree.
+            var scriptPath = Path.Combine(Build.Root, "native-worker.ps1");
+            File.WriteAllText(scriptPath, parameters.Command, new UTF8Encoding(false));
+            var childCommand = "& '" + scriptPath.Replace("'", "''") + "'; $workerExit = $LASTEXITCODE; " +
+                "[IO.File]::WriteAllText('" + readyPath.Replace("'", "''") + "', [string]$PID); " +
+                "$release = [Threading.EventWaitHandle]::OpenExisting('" + releaseName + "'); " +
+                "try { [void]$release.WaitOne() } finally { $release.Dispose() }; exit $workerExit";
+            DispatchProcessHost.WriteParameters(parametersPath, parameters with
+            {
+                Command = "& '" + WorkerShell.Executable.Replace("'", "''") +
+                    "' -NoProfile -NonInteractive -InputFormat None -EncodedCommand " +
+                    Convert.ToBase64String(Encoding.Unicode.GetBytes(childCommand)) + "; exit $LASTEXITCODE",
+                HeartbeatIntervalMilliseconds = 100
+            });
             // Retain runtime prerequisites only; no inherited provider, sandbox or gate switches.
             var allowed = new[] { "SystemRoot", "WINDIR", "PATH", "COMSPEC", "PATHEXT", "ProgramFiles",
                 "ProgramFiles(x86)", "ProgramW6432", "USERPROFILE", "LOCALAPPDATA", "APPDATA",
@@ -69,6 +92,13 @@ internal sealed class ExitReconcileBuildFixture : IDisposable
         var started = Assert.IsType<TaskProcessRecord>(result.ProcessRecord);
         Assert.NotNull(_host);
         Assert.Equal(started.ProcessId, _host.Id);
+        Assert.NotNull(heartbeatPath);
+        int selectedChildPid;
+        try
+        {
+            selectedChildPid = await AwaitSelectedChild(readyPath, heartbeatPath);
+        }
+        finally { release.Set(); }
         // Hang-only failsafe. Completion is the host exit event, never an elapsed-time verdict.
         await _host.WaitForExitAsync().WaitAsync(TimeSpan.FromMinutes(5));
         Kernel = Build.Operations.Load(Build.GoalId.Value);
@@ -93,12 +123,46 @@ internal sealed class ExitReconcileBuildFixture : IDisposable
         var childExit = JsonSerializer.Deserialize<DispatchProcessHost.DispatchChildExitRecord>(
             File.ReadAllText(_childExitPath!), new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
         Assert.NotNull(childExit);
+        Assert.Equal(selectedChildPid, childExit.ProcessId);
+        Assert.Equal("exited", childExit.State);
         Assert.Equal(_host.ExitCode, childExit.ExitCode);
         Assert.True(WorkerResultBlockers.HasCompleteWorkerResult(File.ReadAllText(Task.LastProcess.StandardOutputPath)), Describe());
         Assert.Null(Task.LastVerification);
         // Reproduce the stale Assigned state consumed by batch recovery and dispatch preflight.
         RewriteTask(task => task with { Status = WorkTaskStatus.Assigned });
         return invocation;
+    }
+
+    private async Task<int> AwaitSelectedChild(string readyPath, string heartbeatPath)
+    {
+        var observed = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var watcher = new FileSystemWatcher(Workspace.LogDirectory);
+        watcher.Created += Check;
+        watcher.Changed += Check;
+        watcher.Renamed += Check;
+        watcher.Error += (_, args) => observed.TrySetException(args.GetException());
+        watcher.EnableRaisingEvents = true;
+        Check(null, null); // Close the subscription/read race if the child was already observed.
+        var hostExit = _host!.WaitForExitAsync();
+        var signal = await System.Threading.Tasks.Task.WhenAny(observed.Task, hostExit)
+            .WaitAsync(TimeSpan.FromMinutes(5)); // Hang-only: waiting for child selection, not pacing.
+        Assert.True(signal == observed.Task, "Native host exited before selecting the fixture child. " + Describe());
+        return await observed.Task;
+
+        void Check(object? sender, FileSystemEventArgs? args)
+        {
+            try
+            {
+                if (!File.Exists(readyPath) || !File.Exists(heartbeatPath) ||
+                    !int.TryParse(File.ReadAllText(readyPath), out var pid)) return;
+                using var heartbeat = JsonDocument.Parse(File.ReadAllText(heartbeatPath));
+                var child = heartbeat.RootElement.GetProperty("childPid");
+                if (child.ValueKind == JsonValueKind.Number && child.TryGetInt32(out var selected) && selected == pid)
+                    observed.TrySetResult(pid);
+            }
+            catch (IOException) { } // The next owned file event retries an in-progress write.
+            catch (JsonException) { }
+        }
     }
 
     internal WorkerBuildInvocation StoredInvocation() => Assert.Single(
