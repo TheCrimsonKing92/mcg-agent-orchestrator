@@ -428,9 +428,14 @@ internal static class RepoProcessCliCommand
             ContainsOrdinalIgnoreCase(command, "Find-OrchestratorLocks.ps1");
     }
 
-    private static string ClassifyKind(ProcessSnapshot snapshot)
+    internal static string ClassifyKind(ProcessSnapshot snapshot)
     {
         var command = snapshot.CommandLine ?? string.Empty;
+        var tokens = command.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+        if (IsPotentialLockHolder(snapshot) && IsLockHolder(snapshot) && tokens.Length > 0 &&
+            tokens[^1].Trim('"').Equals("__acceptance-custodian", StringComparison.Ordinal) &&
+            !tokens.Any(token => token is "repo-process-info" or "repo-process-stop"))
+            return "acceptance-custodian";
         if (ContainsOrdinalIgnoreCase(command, "__dispatch-run") ||
             ContainsOrdinalIgnoreCase(command, "DispatchProcessHost"))
         {

@@ -937,12 +937,43 @@ it is separate from physical build permits and goal leases. Conductor stop check
 durable holder detach (or exact cancellation and terminal publication). A successor reconciles
 these records every admission tick, including holders of terminal or out-of-scope goals.
 Result publication, heartbeat age, lease expiry and root exit do not release an occupied job.
-An independent Windows PowerShell custodian acquires the named job handle before holder
+An independent compiled managed custodian (`dotnet App.dll __acceptance-custodian`) acquires the named job handle before holder
 assignment, outside that job. It survives conductor and holder exit, waits for job completion
 notifications, and publishes `<metadata>.holder-settled.json` only after accounting proves zero
 active processes. The receipt binds the job name and full holder identity. A missing job name
 without this receipt remains a hold. Kill-on-close remains enabled so loss of the final custody
-handle cancels the bound tree. The `claim` lease receipt measures custody startup latency.
+handle cancels the bound tree. App supplies the absolute muxer from its loaded shared runtime and
+the current App assembly closure with explicit repository/state/project/tenant selectors. The
+internal command verifies workspace binding before custody and opens no state database or conductor
+lock. Readiness and attachment messages bind the exact job, holder and custodian identities; only
+validated native assignment permits transfer of the holder's transient job handle. Startup failure
+retains up to 8192 diagnostic characters while draining stderr concurrently. Readiness retains its
+30-second production bound and diagnostic draining its five-second bound.
+The `claim` lease receipt measures custody startup latency.
+
+Custody performance evidence is Operator-owned and stays pending until the immutable final candidate
+exists. In an idle window, use isolated old/new workspaces (never roll back the live runtime), the same
+absolute dotnet host, Windows host, configuration and bounded holder fixture. On each revision collect
+at least five fresh successful production `AcceptanceHolderLease.Claim` admissions; record immutable
+revision, application/host paths, configuration and every `claim` receipt's `DurationMilliseconds`.
+Use the same count per revision and record raw values, median, minimum and maximum; keep unsuccessful
+attempts separate. Run the holder fixture through natural exit and bound native settlement for every
+sample. Do not measure during live acceptance. An unchanged or slower result is valid; removal of the
+second runtime/compiler path is the architectural delivery, and no speed-up is presumed. After landing,
+record activated native custody on that runtime: exact host/App identity, job name, holder and custodian
+PID/start/image, membership excluding the custodian, and successful bound durable settlement. Pre-landing
+test receipts do not satisfy this activation observation.
+
+The bounded fixture entrypoint is the test-only `Mcg.AgentOrchestrator.SupervisorLaunchProbe.dll
+acceptance-claim <absolute-fixture-root> <fresh-token>`. Launch it with the selected absolute dotnet
+host and redirected stdin/stdout/stderr. Read its JSON admission receipt, retain the exact reported
+custodian process handle, send `exit` on stdin, and require both processes to exit zero and the
+reported settlement file to match the job/holder identity. Bound readiness and exit waits at 60 seconds
+as hang detectors. The receipt includes raw `AdmissionMilliseconds`, host/App paths, custodian identity,
+and the production lease's `claim` timing. Repeat with a fresh root/token per sample. The fixture adapts
+the old/new `Claim` signatures only in test code; use the same fixture source/hash on both isolated
+application revisions. `AcceptanceJobCustodianLaunchTests.ProductionClaimLaunchesCompiledCustodyAndSettles`
+exercises this entrypoint and verifies that custody startup creates no state directory.
 Retention also preserves unsettled holder artifacts, including evidence whose goal owner is absent.
 Unreadable claims and legacy attempts with live or uninspectable identities remain capacity holds;
 do not clear them by changing lease age or lowering gate width. For a complete recorded PID/start/image

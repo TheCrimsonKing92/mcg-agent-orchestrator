@@ -51,7 +51,8 @@ public sealed class OwnedChildGateReceiptTests
             var binding = AcceptanceHolderBinding.For(attempt);
             var lease = new AcceptanceHolderLease(attach: _ => new EmptyDisposable());
             lease.Reserve(binding, generation);
-            using var job = DurableAcceptanceJob.Attach(holder, binding.JobName, binding.SettlementPath);
+            using var job = DurableAcceptanceJob.Attach(holder, binding.JobName,
+                AcceptanceJobCustodianHost.Bind(workspace), binding.SettlementPath);
             custodian = Process.GetProcessById(job.CustodianIdentity.ProcessId);
             Assert.False(custodian.SafeHandle.IsInvalid);
             Assert.Equal(job.CustodianIdentity.StartedAt, new DateTimeOffset(custodian.StartTime.ToUniversalTime()));

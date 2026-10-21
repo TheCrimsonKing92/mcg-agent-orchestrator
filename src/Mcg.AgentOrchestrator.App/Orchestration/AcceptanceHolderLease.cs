@@ -90,7 +90,8 @@ internal sealed class AcceptanceHolderLease
         Save(new(binding, binding.JobName, generation, null, "Reserved", []));
     }
 
-    internal IDisposable Claim(AcceptanceHolderBinding binding, SpawnProcessIdentity holder)
+    internal IDisposable Claim(AcceptanceHolderBinding binding, SpawnProcessIdentity holder,
+        OrchestratorWorkspace? workspace = null)
     {
         using var gate = Lock(binding);
         var record = Read(binding);
@@ -98,7 +99,9 @@ internal sealed class AcceptanceHolderLease
             throw new InvalidOperationException($"Acceptance holder claim refused: {record.Phase}.");
         var started = _utcNow();
         var containment = _attach?.Invoke(record.JobName) ??
-            DurableAcceptanceJob.AttachCurrent(record.JobName, binding.SettlementPath);
+            DurableAcceptanceJob.AttachCurrent(record.JobName,
+                AcceptanceJobCustodianHost.Bind(workspace ?? throw new InvalidOperationException(
+                    "Acceptance custody requires an explicit workspace.")), binding.SettlementPath);
         try
         {
             var observation = ObserveJob(record, holder, _classify(holder), false);
