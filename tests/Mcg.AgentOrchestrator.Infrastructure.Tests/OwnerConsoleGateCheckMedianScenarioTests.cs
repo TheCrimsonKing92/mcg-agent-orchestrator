@@ -39,7 +39,7 @@ public sealed class OwnerConsoleGateCheckMedianScenarioTests : IDisposable
         Assert.False(core.IsManifestLane);
         Assert.Contains("/ 100s", OwnerConsoleGateFormatter.LaneLine(core));
         Assert.DoesNotContain("?", OwnerConsoleGateFormatter.LaneLine(core));
-        Assert.Equal(0, running.Fraction);
+        Assert.Equal(0, running.Fraction); // Every event is at the injected gate start.
         Assert.Equal(400, running.RemainingSeconds);
         AssertManifestCounts(running);
 
@@ -47,7 +47,7 @@ public sealed class OwnerConsoleGateCheckMedianScenarioTests : IDisposable
         var completed = Load(loader);
         Assert.Equal(OwnerConsoleGateLaneState.Done, Row(completed, "core tests").State);
         Assert.Equal("passed", Row(completed, "core tests").Outcome);
-        Assert.Equal(0.25, completed.Fraction, precision: 6);
+        Assert.Equal(0, completed.Fraction); // Completion duration is not gate wall time.
         Assert.Equal(300, completed.RemainingSeconds);
         AssertManifestCounts(completed);
 
@@ -55,7 +55,7 @@ public sealed class OwnerConsoleGateCheckMedianScenarioTests : IDisposable
         var unknown = Load(loader);
         Assert.Null(Row(unknown, "cli tests").MedianSeconds);
         Assert.Contains("?", OwnerConsoleGateFormatter.LaneLine(Row(unknown, "cli tests")));
-        Assert.Equal(0.25, unknown.Fraction, precision: 6);
+        Assert.Equal(0, unknown.Fraction); // Unknown checks do not advance the clock.
         Assert.Equal(300, unknown.RemainingSeconds);
         AssertManifestCounts(unknown);
 
@@ -85,7 +85,7 @@ public sealed class OwnerConsoleGateCheckMedianScenarioTests : IDisposable
         Assert.False(cli.IsEstimate);
         Assert.Contains("/ 30s", OwnerConsoleGateFormatter.LaneLine(cli));
         Assert.DoesNotContain("?", OwnerConsoleGateFormatter.LaneLine(cli));
-        Assert.Equal(100d / 430, learned.Fraction, precision: 6);
+        Assert.Equal(0, learned.Fraction); // Learning a duration model does not advance the clock.
         Assert.Equal(330, learned.RemainingSeconds);
         AssertManifestCounts(learned);
     }

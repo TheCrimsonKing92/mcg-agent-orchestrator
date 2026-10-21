@@ -7,7 +7,7 @@ internal static class OwnerConsoleGateFormatter
     {
         var fraction = Math.Clamp(gate.Fraction, 0, 1);
         var cells = (int)Math.Floor(fraction * 10);
-        return $"[{new string('#', cells)}{new string('-', 10 - cells)}] {(int)Math.Floor(fraction * 100)}%  {Remaining(gate.RemainingSeconds)} left";
+        return $"[{new string('#', cells)}{new string('-', 10 - cells)}] estimate {(int)Math.Floor(fraction * 100)}%  {Remaining(gate.RemainingSeconds)} left";
     }
 
     internal static string StatusSegment(OwnerConsoleGateProgress gate)

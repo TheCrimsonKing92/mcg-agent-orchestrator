@@ -71,6 +71,34 @@ public sealed class OwnerConsoleGateRemainingEstimateTests
     }
 
     [Fact]
+    public void ChangingConcurrencyReprojectsProgressWithoutChangingLaneTruth()
+    {
+        var running = Running("A", 20000);
+        var serial = Build([100, 100, 100], [running, Breakdown(-3600, "1")]);
+        var parallel = Build([100, 100, 100], [running, Breakdown(-3600, "1"), Breakdown(-1800, "3")]);
+        var fallback = Build([100, 100, 100],
+            [running, Breakdown(-3600, "3"), Breakdown(-1800, "unavailable")]);
+
+        Assert.Equal(280, serial.RemainingSeconds);
+        Assert.Equal(3d / 17, serial.Fraction, 10); // 60 / (60 + 280).
+        Assert.Equal(100, parallel.RemainingSeconds);
+        Assert.Equal(3d / 8, parallel.Fraction, 10); // 60 / (60 + 100).
+        Assert.Equal(serial.Fraction, fallback.Fraction);
+        Assert.True(fallback.Fraction < parallel.Fraction); // Estimates need not be monotonic.
+        Assert.Equal(serial.Lanes, parallel.Lanes);
+        Assert.Equal(serial.Lanes, fallback.Lanes);
+        foreach (var gate in new[] { serial, parallel, fallback })
+        {
+            Assert.Equal(TimeSpan.FromSeconds(60), gate.Elapsed);
+            Assert.True(double.IsFinite(gate.Fraction));
+            Assert.InRange(gate.Fraction, 0, 0.99);
+            Assert.Equal(0, gate.DoneCount);
+            Assert.Equal(3, gate.TotalCount);
+            Assert.False(gate.Failing);
+        }
+    }
+
+    [Fact]
     public void RunningManifestLanesRaiseConcurrencyFloor()
     {
         var gate = Build([300, 250, 200, 150, 100, 50], [Running("A", 0), Running("B", 0)]);
