@@ -28,6 +28,22 @@ internal sealed class OwnedProcessGroup : IDisposable
 
     public IReadOnlyList<int> ProcessIds => _processIds;
 
+    internal bool Contains(SafeProcessHandle process)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        return _jobHandle is not null && WindowsJob.Contains(process, _jobHandle);
+    }
+
+    internal bool TerminateAndConfirmEmpty(TimeSpan timeout)
+    {
+        if (!TryDuplicateAccountingHandle(out var observer)) { Kill(); return false; }
+        using (observer)
+        {
+            Kill();
+            return WaitForJobExit(observer, timeout);
+        }
+    }
+
     public static OwnedProcessGroup Create() => new(allowBreakaway: true);
 
     internal static OwnedProcessGroup CreateContained() => new(allowBreakaway: false);
@@ -528,6 +544,13 @@ internal sealed class OwnedProcessGroup : IDisposable
             {
                 throw new Win32Exception(Marshal.GetLastWin32Error(), "Failed to resume owned process initial thread.");
             }
+        }
+
+        internal void LowerIntegrityBeforeResume()
+        {
+            if (_initialThread is null || _processHandle is null)
+                throw new InvalidOperationException("Low-integrity preparation requires a suspended owned process.");
+            WorkerBuildProcessIntegrity.Lower(_processHandle);
         }
 
         internal Process TransferOwnership()
@@ -1303,6 +1326,9 @@ internal sealed class OwnedProcessGroup : IDisposable
             IntPtr processHandle,
             IntPtr jobHandle,
             [MarshalAs(UnmanagedType.Bool)] out bool result);
+
+        internal static bool Contains(SafeProcessHandle process, SafeFileHandle job) =>
+            IsProcessInJob(process.DangerousGetHandle(), job.DangerousGetHandle(), out var member) && member;
 
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
         private static extern bool CreateProcessW(
