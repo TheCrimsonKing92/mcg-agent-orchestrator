@@ -110,9 +110,13 @@ internal sealed class WorkerBuildRequestHost : IWorkerBuildRequestService
                 // create it. Keep invocation isolation without nesting below the logs.
                 var tempRoot = Path.Combine(slot.Environment.ArtifactsPath, "tmp", invocation.Id);
                 Directory.CreateDirectory(tempRoot);
-                if (task.LastDispatch.SandboxLowIntegrity &&
-                    !new IcaclsIntegrityLabeler().SetIntegrity(slot.Environment.ArtifactsPath, "(OI)(CI)L", recursive: true))
-                    throw new UnauthorizedAccessException("Host compiler output LowIL preparation failed.");
+                if (task.LastDispatch.SandboxLowIntegrity)
+                {
+                    var labeling = new IcaclsIntegrityLabeler().SetIntegrityWithDiagnostics(
+                        slot.Environment.ArtifactsPath, "(OI)(CI)L", recursive: true);
+                    if (!labeling.Succeeded)
+                        throw new UnauthorizedAccessException($"Host compiler output LowIL preparation failed. {labeling.Diagnostic}");
+                }
                 foreach (var project in scope.Projects)
                 {
                     CheckCurrent();
