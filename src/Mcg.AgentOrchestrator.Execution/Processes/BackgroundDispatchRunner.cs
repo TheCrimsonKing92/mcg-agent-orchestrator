@@ -1536,11 +1536,11 @@ public sealed partial class BackgroundDispatchRunner
                 : CompletionBuildDispatchReconciliationPolicy.Resolve(
                 task, processRecord.WorkingDirectory,
                 worktreeEvidence.ChangedPaths, worktreeEvidence.DirtyPaths, failedWorkerBuildCheck,
-                () => _completionClassifier.EvaluateWorkerBuildReceipt(processRecord.WorkingDirectory, goal.Id),
+                () => _completionClassifier.EvaluateWorkerBuildReceipt(processRecord.WorkingDirectory, goal.Id, task),
                 _runOrchestratorBuildCheck,
                 _completionBuildEvidence is null ? null : request => _completionBuildEvidence.Reconcile(
                     kernel, goalId, taskId, request, processRecord with
-                    { CompletedAt = processRecord.CompletedAt ?? _clock.UtcNow, ExitCode = observedExitCode }));
+                    { CompletedAt = processRecord.CompletedAt ?? _clock.UtcNow, ExitCode = observedExitCode }), goal.Id);
             if (buildEvidence.Pending)
                 return new DispatchRefreshOutcome(
                     processRecord with { CompletedAt = processRecord.CompletedAt ?? _clock.UtcNow, ExitCode = observedExitCode }, null,
@@ -1590,7 +1590,7 @@ public sealed partial class BackgroundDispatchRunner
 
             if (buildEvidence.Operation is { Phase: CompletionBuildEvidencePhase.Success } built)
             {
-                var currentReceipt = _completionClassifier.EvaluateWorkerBuildReceipt(processRecord.WorkingDirectory, goal.Id);
+                var currentReceipt = _completionClassifier.EvaluateWorkerBuildReceipt(processRecord.WorkingDirectory, goal.Id, task);
                 if (!WorktreeTreeDigest.TryCompute(processRecord.WorkingDirectory, out var currentDigest, out _) ||
                     currentDigest != built.TreeDigest || !currentReceipt.Matches ||
                     WorkerBuildReceiptCoverage.FindMissingProjects(built.Projects, currentReceipt.Projects).Count != 0)

@@ -692,7 +692,8 @@ internal sealed class IcaclsIntegrityLabeler : IWorkerIntegrityLabeler
     // Win32 security APIs and icacls do not inherit .NET's long-path handling.
     // Resolve ordinary paths before adding the extended prefix so relative segments
     // and forward slashes retain their normal filesystem meaning.
-    internal static string NativeFilePath(string path)
+    // A short recursive root can contain descendants beyond MAX_PATH.
+    internal static string NativeFilePath(string path, bool recursive = false)
     {
         if (!OperatingSystem.IsWindows() || path.StartsWith(@"\\?\", StringComparison.Ordinal)
             || path.StartsWith(@"\\.\", StringComparison.Ordinal))
@@ -701,7 +702,7 @@ internal sealed class IcaclsIntegrityLabeler : IWorkerIntegrityLabeler
         }
 
         var fullPath = Path.GetFullPath(path);
-        if (fullPath.Length < 260)
+        if (fullPath.Length < 260 && !recursive)
         {
             return path;
         }
@@ -711,7 +712,10 @@ internal sealed class IcaclsIntegrityLabeler : IWorkerIntegrityLabeler
             : @"\\?\" + fullPath;
     }
 
-    public bool SetIntegrity(string path, string level, bool recursive)
+    public bool SetIntegrity(string path, string level, bool recursive) =>
+        SetIntegrityWithDiagnostics(path, level, recursive).Succeeded;
+
+    internal IntegrityLabelCommandResult SetIntegrityWithDiagnostics(string path, string level, bool recursive)
     {
         try
         {
@@ -723,7 +727,7 @@ internal sealed class IcaclsIntegrityLabeler : IWorkerIntegrityLabeler
                 RedirectStandardOutput = true,
                 RedirectStandardError = true
             };
-            psi.ArgumentList.Add(NativeFilePath(path));
+            psi.ArgumentList.Add(NativeFilePath(path, recursive));
             psi.ArgumentList.Add("/setintegritylevel");
             psi.ArgumentList.Add(level);
             if (recursive)
@@ -734,18 +738,21 @@ internal sealed class IcaclsIntegrityLabeler : IWorkerIntegrityLabeler
             using var process = startProcess(psi);
             if (process is null)
             {
-                return false;
+                return IntegrityLabelCommandResult.Failed(null);
             }
 
-            var copyOut = process.StandardOutput.BaseStream.CopyToAsync(Stream.Null);
-            var copyErr = process.StandardError.BaseStream.CopyToAsync(Stream.Null);
+            var output = new IntegrityLabelCommandResult.OutputCapture(keepTail: true);
+            var error = new IntegrityLabelCommandResult.OutputCapture(keepTail: false);
+            var copyOut = output.DrainAsync(process.StandardOutput);
+            var copyErr = error.DrainAsync(process.StandardError);
             var completed = DispatchProcessHost.WaitForIntegrityLabeler(process, TimeSpan.FromMinutes(2));
             try { Task.WaitAll([copyOut, copyErr], 2000); } catch { }
-            return completed && process.ExitCode == 0;
+            return IntegrityLabelCommandResult.Completed(completed, process.HasExited ? process.ExitCode : null,
+                copyOut.IsCompletedSuccessfully && copyErr.IsCompletedSuccessfully, output, error);
         }
-        catch
+        catch (Exception exception)
         {
-            return false;
+            return IntegrityLabelCommandResult.Failed(exception);
         }
     }
 }
