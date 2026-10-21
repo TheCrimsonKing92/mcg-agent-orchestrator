@@ -290,6 +290,81 @@ public sealed class PlannerEvidenceBatchLifecycleTests
         File.WriteAllText(path, json.ToJsonString());
     }
 
+    [Theory]
+    [InlineData(null)]
+    [InlineData("candidate")]
+    [InlineData("main")]
+    public async Task PendingAttribution_ReloadHoldsWithoutConsumingPlannerSiblings(string? mismatch)
+    {
+        using var f = new Fixture();
+        f.Record(PlannerMultipleEvidenceRequestMergeTests.MixedRequests);
+        var history = Assert.Single(f.Kernel.GetPendingBlockingHumanInput(f.Goal.Id));
+        f.Kernel.SubmitHumanInput(history.Id, "retrieved historical receipt");
+        Assert.Equal(WorkTaskStatus.Completed, f.Planner.Status);
+        ConductorDriverTests.PassVerification(f.Kernel, f.Goal, f.Kernel.GetTask(f.Goal.Id, f.DeveloperId));
+        Assert.Equal(GoalStatus.Verified, f.Goal.Status);
+        Assert.True(f.Kernel.BeginGoalAcceptanceVerification(f.Goal.Id, "controlled native attempt"));
+        const string check = "infrastructure tests";
+        var candidate = new string('a', 40);
+        var main = new string('b', 40);
+        var attributions = new[] { new AcceptanceCheckAttribution(check, AcceptanceFailureOrigin.Introduced,
+            "candidate executed RED; baseline unavailable") };
+        Assert.True(f.Kernel.ReconcileGoalAcceptanceFailed(f.Goal.Id, [check], "native RED",
+            candidate, main, attributions, "baseline not executed"));
+        var pending = new AcceptanceAttributionPending(candidate, main, "native-attempt",
+            [new(check, "AlphaTests.Check", "baseline unavailable",
+                [new("first.trx", "first-hash", "first-run")],
+                [new("rerun.trx", "rerun-hash", "rerun-run")])], "none");
+        f.Goal.RetainAcceptanceAttributionPending(pending);
+        var occurrence = f.Goal.LatestAcceptanceFailure!.OccurredAt;
+        if (mismatch is not null)
+        {
+            pending = mismatch == "candidate" ? pending with { CandidateSha = new string('c', 40) }
+                : pending with { MainSha = new string('d', 40) };
+            Assert.Throws<InvalidOperationException>(() => f.Goal.RetainAcceptanceAttributionPending(pending));
+            // Restore deliberately retains historical facts. Its consumer must hold even a mismatched
+            // marker, rather than turning it into authority to retry, land or consume sibling evidence.
+            var snapshot = f.Kernel.ExportSnapshot();
+            var saved = Assert.Single(snapshot.Goals);
+            f.Kernel = AgentOrchestratorKernel.FromSnapshot(snapshot with { Goals = [saved with
+                { LatestAcceptanceFailure = saved.LatestAcceptanceFailure! with { AttributionPending = pending } }] });
+        }
+        var before = f.Kernel.ExportSnapshot();
+        var requests = JsonSerializer.Serialize(before.HumanInputRequests);
+        var obligations = JsonSerializer.Serialize(Assert.Single(before.Goals).GateTestObligations);
+        await f.Reload();
+        var failure = f.Goal.LatestAcceptanceFailure!;
+        Assert.Equal(occurrence, failure.OccurredAt);
+        Assert.Equal(candidate, failure.BranchHeadSha);
+        Assert.Equal(main, failure.MainHeadSha);
+        Assert.Equal(attributions, failure.CheckAttributions);
+        Assert.Equal("baseline not executed", failure.BaselineAttestation);
+        Assert.Equal(JsonSerializer.Serialize(pending), JsonSerializer.Serialize(failure.AttributionPending));
+        Assert.Equal(requests, JsonSerializer.Serialize(f.Kernel.ExportSnapshot().HumanInputRequests));
+        Assert.Equal(obligations, JsonSerializer.Serialize(Assert.Single(f.Kernel.ExportSnapshot().Goals).GateTestObligations));
+
+        var escalations = new List<string>();
+        var driver = ConductorDriverTests.MakeDriver(
+            runAcceptanceSummary: _ => throw new InvalidOperationException("Unexpected acceptance admission"),
+            retryTaskWithCause: (_, _, _, _, _) => throw new InvalidOperationException("Unexpected Developer retry"),
+            dispatchAndStart: _ => throw new InvalidOperationException("Unexpected worker dispatch"),
+            writeEscalation: (_, _, reason) => escalations.Add(reason));
+        var held = ConductorDriverTestsAttributionPending.AssertPending(
+            driver.AdvanceOnce(f.Goal, Mcg.AgentOrchestrator.Core.Conductor.ConductorAutonomyPolicy.Conservative), f.Goal);
+        Assert.Equal(pending.Identity, held.StableIdentity);
+        Assert.Contains("--confirm-acceptance-retry", Assert.Single(escalations));
+        Assert.True(f.Kernel.GetHumanInputRequest(history.Id).IsCompleted);
+        var op = Assert.Single(f.Kernel.GetPendingHumanInput(f.Goal.Id));
+        Assert.Equal("operator", op.EvidenceOwner);
+        Assert.Equal("live-check", op.PlannerIdentity!.EvidenceKey);
+        Assert.Single(f.Goal.GateTestObligations);
+        Assert.Equal(requests, JsonSerializer.Serialize(f.Kernel.ExportSnapshot().HumanInputRequests));
+        var brief = f.Kernel.BuildTaskBrief(f.Goal.Id, f.DeveloperId).Content;
+        Assert.Contains("owner=operator", brief);
+        Assert.Contains("AlphaTests", brief);
+        Assert.Contains("history", brief);
+    }
+
     private sealed class Fixture : IDisposable
     {
         internal string Root { get; } = Path.Combine(Path.GetTempPath(), "mcg-planner-batch-" + Guid.NewGuid().ToString("N"));
