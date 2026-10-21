@@ -3,7 +3,7 @@ using System.Text.Json;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 [Xunit.Collection(TestCollections.ProcessSpawning)]
-public sealed class IcaclsIntegrityLabelerRecursivePathTests
+public sealed class IcaclsIntegrityLabelerTestsRecursivePath
 {
     [Fact]
     public void RecursivePathsPrefixShortRootsAndPreserveOtherPathForms()

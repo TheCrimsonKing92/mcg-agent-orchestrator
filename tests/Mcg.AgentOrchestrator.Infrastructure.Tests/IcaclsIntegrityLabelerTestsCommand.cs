@@ -4,7 +4,7 @@ using System.Text.Json;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 [Xunit.Collection(TestCollections.ProcessSpawning)]
-public sealed class IcaclsIntegrityLabelerCommandTests
+public sealed class IcaclsIntegrityLabelerTestsCommand
 {
     [Theory]
     [InlineData(0, true)]
