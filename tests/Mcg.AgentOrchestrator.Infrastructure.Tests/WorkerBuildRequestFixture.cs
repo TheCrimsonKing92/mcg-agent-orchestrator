@@ -51,7 +51,8 @@ internal sealed class WorkerBuildRequestFixture : IDisposable
             Git("init", "-b", "main");
             Git("config", "user.email", "worker-build@fixture.invalid");
             Git("config", "user.name", "Worker build fixture");
-            File.WriteAllText(Path.Combine(RepositoryRoot, ".git", "info", "exclude"), ".orchestrator-context/\nbin/\nobj/\n");
+            // Match repository hygiene: host custody journals are runtime state, not candidate content.
+            File.WriteAllText(Path.Combine(RepositoryRoot, ".git", "info", "exclude"), ".orchestrator/\n.orchestrator-context/\nbin/\nobj/\n");
             Git("add", ".");
             Git("commit", "-m", "fixture seed");
             var task = new TaskSpec(TaskId.New(), "Implement fixture", AgentRole.Developer);

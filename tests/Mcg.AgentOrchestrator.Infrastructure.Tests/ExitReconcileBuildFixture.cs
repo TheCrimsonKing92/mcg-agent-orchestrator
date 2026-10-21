@@ -15,11 +15,13 @@ internal sealed class ExitReconcileBuildFixture : IDisposable
     private SpawnProcessIdentity? _hostIdentity;
     private string? _hostDiagnosticPath;
     private string? _childExitPath;
+    private readonly WorkerBuildOutcome _expectedBuildOutcome;
     internal TaskSpec Task => Kernel.GetTask(Build.GoalId, Build.TaskId);
     internal Goal Goal => Kernel.GetGoal(Build.GoalId);
 
     internal ExitReconcileBuildFixture(bool compilerFailure = false, bool extraProject = false)
     {
+        _expectedBuildOutcome = compilerFailure ? WorkerBuildOutcome.CompilerFailure : WorkerBuildOutcome.Success;
         Build = new(compilerFailure: compilerFailure, managedHost: true, goalBranch: true,
             extraProject: extraProject, reportWorkerResult: true);
         Kernel = Build.Kernel;
@@ -37,6 +39,7 @@ internal sealed class ExitReconcileBuildFixture : IDisposable
 
     internal async Task<WorkerBuildInvocation> CompleteNativeDispatch()
     {
+        Assert.True(WorktreeTreeDigest.TryCompute(Build.RepositoryRoot, out var candidateDigest, out var digestReason), digestReason);
         var starter = new BackgroundDispatchRunner(disableProcessStart: false, startProcess: start =>
         {
             var gate = start.Environment[DispatchProcessHost.StartGatePathVariable];
@@ -70,6 +73,8 @@ internal sealed class ExitReconcileBuildFixture : IDisposable
         await _host.WaitForExitAsync().WaitAsync(TimeSpan.FromMinutes(5));
         Kernel = Build.Operations.Load(Build.GoalId.Value);
         var invocation = StoredInvocation();
+        Assert.True(WorktreeTreeDigest.TryCompute(Build.RepositoryRoot, out var completedDigest, out digestReason), digestReason);
+        Assert.True(candidateDigest == completedDigest, "Native host runtime state changed candidate content. " + Describe());
         Assert.True(invocation.IsTerminal, Describe());
         Assert.True(invocation.CustodyReleased, Describe());
         Assert.False(invocation.Consumed, Describe());
@@ -79,7 +84,8 @@ internal sealed class ExitReconcileBuildFixture : IDisposable
         Assert.Equal(Task.LastProcess.ProcessIdentityImagePath, invocation.Host.ImagePath);
         Assert.Equal(BackgroundDispatchRunner.BuildDispatchId(Build.GoalId, Build.TaskId,
             Task.LastDispatch! with { ProviderSessionId = null }), invocation.DispatchId);
-        Assert.NotEmpty(invocation.Children!);
+        Assert.True(invocation.Outcome == _expectedBuildOutcome, Describe());
+        Assert.True(invocation.Children is { Count: > 0 }, Describe());
         Assert.All(invocation.Children!, child => Assert.False(WorkerBuildInvocationOperations.IsExactProcessAlive(child)));
         Assert.True(DispatchExitArtifacts.TryRead(Task.LastProcess.ExitCodePath, out var exit), Describe());
         Assert.Equal(DispatchExitArtifactOrigin.Native, exit.Origin);
