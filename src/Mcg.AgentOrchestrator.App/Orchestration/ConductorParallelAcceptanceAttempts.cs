@@ -1261,11 +1261,11 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
                 Path.GetDirectoryName(metadataPath) ?? throw new InvalidOperationException(
                     "acceptance attempt metadata path has no parent directory"),
                 attemptWriterLeaseTimeout);
+            var workspace = OwnedChildWorkspaceResolver.ForParallelAcceptanceAttempt(attempt);
             using var holderContainment = attempt.HolderContractVersion == 1
                 ? new AcceptanceHolderLease().Claim(AcceptanceHolderBinding.For(attempt),
-                    AcceptanceHolderLease.CurrentGeneration()) : null;
+                    AcceptanceHolderLease.CurrentGeneration(), workspace) : null;
             attemptLogWriters = RedirectConsole(attempt);
-            var workspace = OwnedChildWorkspaceResolver.ForParallelAcceptanceAttempt(attempt);
             var stateRepository = SqliteOrchestratorStateRepository.OpenReadOnly(workspace.SqliteStatePath);
             var kernel = stateRepository.LoadGoalsAsync([new GoalId(attempt.GoalId)]).GetAwaiter().GetResult();
             var goal = kernel.Goals.FirstOrDefault(g => g.Id.Value == attempt.GoalId)
