@@ -10,7 +10,8 @@ public enum AcceptanceApparatusDisposition
     ApparatusRedRegateHold,
     ApparatusRedBoundExhausted,
     WithinAttemptRerunRegateHold,
-    WithinAttemptRerunBoundExhausted
+    WithinAttemptRerunBoundExhausted,
+    AttributionPending
 }
 
 /// <summary>Observed disposition inputs; absent heads denote inputs not read on this path.</summary>
@@ -30,12 +31,23 @@ public sealed record AcceptanceApparatusDispositionFacts(string GoalId, Acceptan
             : throw new InvalidOperationException("Acceptance apparatus disposition requires test identities.");
     }
     public string Reason { get; init; } = string.Empty;
+    public string? AttemptId { get; init; }
+    public string? ReceiptReferences { get; init; }
+    public string? BaselineEvidence { get; init; }
 
     public static string CanonicalTestIdentities(IEnumerable<string> identities) =>
         string.Join("\n", identities.OrderBy(identity => identity, StringComparer.Ordinal));
 
     public IReadOnlyList<PolicyDecisionFact> ToRecordedFacts()
     {
+        var pending = Disposition == AcceptanceApparatusDisposition.AttributionPending;
+        if (pending ? string.IsNullOrWhiteSpace(BranchHeadSha) || string.IsNullOrWhiteSpace(MainHeadSha) ||
+                string.IsNullOrWhiteSpace(AttemptId) || string.IsNullOrWhiteSpace(ReceiptReferences) ||
+                string.IsNullOrWhiteSpace(BaselineEvidence) || string.IsNullOrWhiteSpace(TestIdentities) ||
+                EvidenceKind != AcceptanceAttributionPending.EvidenceKind ||
+                RegateOrdinal is not null || RegateCount is not null || RegateCap is not null
+            : AttemptId is not null || ReceiptReferences is not null || BaselineEvidence is not null)
+            throw new InvalidOperationException("Acceptance attribution pending facts require exact heads, attempt, identities and evidence without re-gate counts.");
         if (Disposition == AcceptanceApparatusDisposition.ApparatusRedBoundExhausted &&
             (BranchHeadSha is not null || MainHeadSha is not null))
             throw new InvalidOperationException("Apparatus RED bound facts cannot contain unobserved heads.");
@@ -54,7 +66,14 @@ public sealed record AcceptanceApparatusDispositionFacts(string GoalId, Acceptan
             if (BranchHeadSha is not null) facts.Add(new("branchHeadSha", BranchHeadSha));
             if (MainHeadSha is not null) facts.Add(new("mainHeadSha", MainHeadSha));
         }
-        if (Disposition != AcceptanceApparatusDisposition.ExcludedUnattributableHold)
+        if (pending)
+        {
+            facts.Add(new("evidenceKind", EvidenceKind));
+            facts.Add(new("attemptId", AttemptId!));
+            facts.Add(new("receiptReferences", ReceiptReferences!));
+            facts.Add(new("baselineEvidence", BaselineEvidence!));
+        }
+        else if (Disposition != AcceptanceApparatusDisposition.ExcludedUnattributableHold)
         {
             facts.Add(new("evidenceKind", EvidenceKind));
             if (IsRegate(Disposition)) facts.Add(new("regateOrdinal", FormatCount(RegateOrdinal)));
@@ -89,6 +108,7 @@ public sealed record AcceptanceApparatusDispositionFacts(string GoalId, Acceptan
             "apparatus-red-bound-exhausted" => AcceptanceApparatusDisposition.ApparatusRedBoundExhausted,
             "within-attempt-rerun-regate-hold" => AcceptanceApparatusDisposition.WithinAttemptRerunRegateHold,
             "within-attempt-rerun-bound-exhausted" => AcceptanceApparatusDisposition.WithinAttemptRerunBoundExhausted,
+            "attribution-pending" => AcceptanceApparatusDisposition.AttributionPending,
             var name => throw new InvalidOperationException($"Invalid acceptance apparatus disposition '{name}'.")
         };
         var allowed = new HashSet<string>(StringComparer.Ordinal) { "goalId", "disposition", "testIdentities", "reason" };
@@ -98,7 +118,12 @@ public sealed record AcceptanceApparatusDispositionFacts(string GoalId, Acceptan
             allowed.Add("mainHeadSha");
         }
         var excluded = disposition == AcceptanceApparatusDisposition.ExcludedUnattributableHold;
-        if (!excluded)
+        var pending = disposition == AcceptanceApparatusDisposition.AttributionPending;
+        if (pending)
+        {
+            allowed.UnionWith(["evidenceKind", "attemptId", "receiptReferences", "baselineEvidence"]);
+        }
+        else if (!excluded)
         {
             allowed.Add("evidenceKind");
             allowed.Add(IsRegate(disposition) ? "regateOrdinal" : "regateCount");
@@ -110,17 +135,22 @@ public sealed record AcceptanceApparatusDispositionFacts(string GoalId, Acceptan
         if (identities != CanonicalTestIdentities(identities.Split('\n')))
             throw new InvalidOperationException("Recorded acceptance apparatus test identities must be ordinal-sorted.");
 
-        return new(Read("goalId"), disposition)
+        var result = new AcceptanceApparatusDispositionFacts(Read("goalId"), disposition)
         {
             BranchHeadSha = values.GetValueOrDefault("branchHeadSha"),
             MainHeadSha = values.GetValueOrDefault("mainHeadSha"),
             EvidenceKind = excluded ? string.Empty : Read("evidenceKind"),
             RegateOrdinal = !excluded && IsRegate(disposition) ? ReadCount("regateOrdinal") : null,
-            RegateCount = !excluded && !IsRegate(disposition) ? ReadCount("regateCount") : null,
-            RegateCap = excluded ? null : ReadCount("regateCap"),
+            RegateCount = !excluded && !pending && !IsRegate(disposition) ? ReadCount("regateCount") : null,
+            RegateCap = excluded || pending ? null : ReadCount("regateCap"),
+            AttemptId = pending ? Read("attemptId") : null,
+            ReceiptReferences = pending ? Read("receiptReferences") : null,
+            BaselineEvidence = pending ? Read("baselineEvidence") : null,
             TestIdentities = identities,
             Reason = Read("reason")
         };
+        result.ToRecordedFacts();
+        return result;
     }
 
     private static bool IsRegate(AcceptanceApparatusDisposition disposition) =>
@@ -136,6 +166,7 @@ public sealed record AcceptanceApparatusDispositionFacts(string GoalId, Acceptan
         AcceptanceApparatusDisposition.ApparatusRedBoundExhausted => "apparatus-red-bound-exhausted",
         AcceptanceApparatusDisposition.WithinAttemptRerunRegateHold => "within-attempt-rerun-regate-hold",
         AcceptanceApparatusDisposition.WithinAttemptRerunBoundExhausted => "within-attempt-rerun-bound-exhausted",
+        AcceptanceApparatusDisposition.AttributionPending => "attribution-pending",
         _ => throw new InvalidOperationException($"Invalid acceptance apparatus disposition '{disposition}'.")
     };
 }
@@ -156,6 +187,18 @@ public sealed record AcceptanceApparatusDispositionDecision(
 public static class AcceptanceApparatusDispositionPolicy
 {
     public const string StageName = "acceptance-apparatus-disposition";
+
+    public static AcceptanceApparatusDispositionDecision AttributionPendingHold(
+        string goalId, string reason, AcceptanceAttributionPending pending) =>
+        Evaluate(new(goalId, AcceptanceApparatusDisposition.AttributionPending)
+        {
+            Reason = reason, BranchHeadSha = pending.CandidateSha, MainHeadSha = pending.MainSha,
+            EvidenceKind = AcceptanceAttributionPending.EvidenceKind, AttemptId = pending.AttemptId,
+            TestIdentities = AcceptanceApparatusDispositionFacts.CanonicalTestIdentities(pending.Tests.Select(test => test.TestIdentity)),
+            ReceiptReferences = string.Join("\n", pending.Tests.SelectMany(test => test.FirstReceipts.Concat(test.RerunReceipts))
+                .Distinct().Select(receipt => $"{receipt.Path} sha256={receipt.Sha256} run={receipt.RunId}").Order(StringComparer.Ordinal)),
+            BaselineEvidence = string.Join("\n", pending.Tests.Select(test => $"{test.TestIdentity}: {test.BaselineEvidence}").Order(StringComparer.Ordinal))
+        });
 
     public static AcceptanceApparatusDispositionDecision ExcludedHold(
         string goalId, string reason, string? branchHeadSha, string? mainHeadSha, IEnumerable<string> identities) =>
@@ -207,6 +250,7 @@ public static class AcceptanceApparatusDispositionPolicy
             AcceptanceApparatusDisposition.ApparatusRedBoundExhausted => (AcceptanceApparatusDispositionAction.Escalate, 3, facts.EvidenceKind),
             AcceptanceApparatusDisposition.WithinAttemptRerunRegateHold => (AcceptanceApparatusDispositionAction.Hold, 4, facts.EvidenceKind),
             AcceptanceApparatusDisposition.WithinAttemptRerunBoundExhausted => (AcceptanceApparatusDispositionAction.Escalate, 5, facts.EvidenceKind),
+            AcceptanceApparatusDisposition.AttributionPending => (AcceptanceApparatusDispositionAction.Hold, 6, facts.EvidenceKind),
             _ => throw new InvalidOperationException($"Invalid acceptance apparatus disposition '{facts.Disposition}'.")
         };
         return new(action, rung, evidence, facts.Reason, facts);
