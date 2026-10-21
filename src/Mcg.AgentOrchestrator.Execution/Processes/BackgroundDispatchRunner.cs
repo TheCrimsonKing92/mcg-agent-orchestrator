@@ -65,6 +65,7 @@ public sealed partial class BackgroundDispatchRunner
     private readonly Func<OrchestratorBuildCheckRequest, OrchestratorBuildCheckResult> _runOrchestratorBuildCheck;
     private readonly Func<ProcessCommandLineSnapshot> _processCommandLineSnapshotFactory;
     private readonly ICompletionBuildEvidenceOperation? _completionBuildEvidence;
+    public IWorkerBuildInvocationOperations? WorkerBuildInvocations { get; init; }
 
     public BackgroundDispatchRunner(
         IClock? clock = null,
@@ -373,6 +374,13 @@ public sealed partial class BackgroundDispatchRunner
         startInfo.ArgumentList.Add(parametersPath);
 
         WorkerBuildScopeDispatchPreparation.RecordDispatchBaseCommit(kernel, goalId, task, dispatch.WorkingDirectory, spawnReceipt.WorktreeHeadSha);
+        if (WorkerBuildInvocations is not null && task.RequiredRole is AgentRole.Developer or AgentRole.Tester &&
+            task.LastDispatch?.WorkerBuildScope is not null)
+        {
+            var buildReference = WorkerBuildInvocations.Prepare(kernel, goalId, taskId) with { Admission = taskIntentAdmission };
+            runParameters = runParameters with { WorkerBuildHost = buildReference };
+            DispatchProcessHost.WriteParameters(parametersPath, runParameters);
+        }
 
         if (TryRejectInterruptedDispatchRecovery(kernel, goalId, taskId, readCurrentState))
         {
@@ -396,10 +404,8 @@ public sealed partial class BackgroundDispatchRunner
             return DispatchProcessStartResult.Failed(registrationFailure);
         }
 
-        // A registry-free runner has no durable process-identity reader. Registration still owns
-        // the live process through its job, so preserve that supported degraded path; durable
-        // registries continue to supply the identity later used by successor recovery.
-        _ = WorkerProcessJobs.TryGetRegisteredIdentity(process.Id, out var dispatchHostIdentity);
+        var dispatchHostIdentity = DispatchHostLaunchOwnership.ReadIdentity(
+            process, runParameters.WorkerBuildHost is not null, _tryKillOwnedProcess);
 
         var sampleArtifacts = task.RequiredRole == AgentRole.Planner
             ? PlannerSampleDispatcher.CreateArtifacts(stdoutPath, dispatch.PlannerSampleCount)
@@ -453,7 +459,8 @@ public sealed partial class BackgroundDispatchRunner
             OwnedProcessIds: sampleLaunches.Select(launch => launch.Process.Id).Prepend(process.Id).ToArray(),
             ChildExitRecordPath: childExitRecordPath,
             NonBlockingProcessIds: sampleLaunches.Select(launch => launch.Process.Id).ToArray(),
-            ProcessIdentityStartedAt: dispatchHostIdentity?.StartedAt);
+            ProcessIdentityStartedAt: dispatchHostIdentity?.StartedAt,
+            ProcessIdentityImagePath: dispatchHostIdentity?.ImagePath);
 
         try
         {
@@ -484,7 +491,7 @@ public sealed partial class BackgroundDispatchRunner
             {
                 // The primary is already durable. A deferred optional-sample diagnostic failure must
                 // remain loud without stranding the authoritative dispatch behind its start gate.
-                ReleaseDispatchHostStartGate(startGatePath);
+                DispatchHostLaunchOwnership.ReleaseStartGate(startGatePath);
             }
 
             if (confirmWorkerStart is not null && !confirmWorkerStart())
@@ -502,26 +509,8 @@ public sealed partial class BackgroundDispatchRunner
         return DispatchProcessStartResult.Started(record);
     }
 
-    private void TerminateUnreleasedDispatchHost(Process process)
-    {
-        try
-        {
-            if (!_tryKillOwnedProcess(process.Id) && !process.HasExited)
-            {
-                process.Kill(entireProcessTree: true);
-            }
-        }
-        catch
-        {
-            // The checkpoint failure is the actionable fault; process cleanup is best-effort.
-        }
-    }
-
-    private static void ReleaseDispatchHostStartGate(string startGatePath)
-    {
-        Directory.CreateDirectory(Path.GetDirectoryName(startGatePath)!);
-        File.WriteAllText(startGatePath, "go");
-    }
+    private void TerminateUnreleasedDispatchHost(Process process) =>
+        DispatchHostLaunchOwnership.TerminateUnreleased(process, _tryKillOwnedProcess);
 
     private DispatchRefreshOutcome? TryBuildPlannerSampleHold(
         TaskSpec task,
@@ -1528,11 +1517,12 @@ public sealed partial class BackgroundDispatchRunner
                 processRecord.WorkingDirectory,
                 decisionStandardOutput,
                 decisionStandardError);
-            var failedWorkerBuildCheck = _completionClassifier.TryFindFailedWorkerBuildCheck(
+            var failedBuildCheckDiagnostic = string.Empty;
+            var failedWorkerBuildCheck = task.LastDispatch?.WorkerBuildProtocolVersion != 1 && _completionClassifier.TryFindFailedWorkerBuildCheck(
                     processRecord.WorkingDirectory,
                     decisionStandardOutput,
                     decisionStandardError,
-                    out var failedBuildCheckDiagnostic);
+                    out failedBuildCheckDiagnostic);
             if (failedWorkerBuildCheck)
             {
                 exitCode = 1;
@@ -1543,7 +1533,9 @@ public sealed partial class BackgroundDispatchRunner
                     DispatchFailureDiagnosticMarker.Format(DispatchFailureDiagnosticMarker.WorkerBuildCheckFailed));
             }
 
-            var buildEvidence = CompletionBuildDispatchReconciliationPolicy.Resolve(
+            var buildEvidence = task.LastDispatch?.WorkerBuildProtocolVersion == 1
+                ? ResolveWorkerBuildInvocation(kernel, goalId, taskId, worktreeEvidence.ChangedPaths, worktreeEvidence.DirtyPaths)
+                : CompletionBuildDispatchReconciliationPolicy.Resolve(
                 task, processRecord.WorkingDirectory,
                 worktreeEvidence.ChangedPaths, worktreeEvidence.DirtyPaths, failedWorkerBuildCheck,
                 () => _completionClassifier.EvaluateWorkerBuildReceipt(processRecord.WorkingDirectory, goal.Id),
@@ -2228,6 +2220,8 @@ public sealed partial class BackgroundDispatchRunner
         }
 
         var resourceAccounting = ReapForCancellation(processRecord, bypassTrackedJobRegistry);
+        if (task.LastDispatch?.WorkerBuildProtocolVersion == 1 || task.WorkerBuildInvocations.Count != 0)
+            WorkerBuildInvocations?.ReconcileOutstanding(kernel, goalId, taskId, cancelled: true);
         var cancelledAt = _clock.UtcNow;
         var cancelled = processRecord with
         {

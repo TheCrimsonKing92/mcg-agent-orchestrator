@@ -9,7 +9,7 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 internal static class CompletionBuildOriginPredicates
 {
     internal sealed record Context(TaskSpec Task, GoalId GoalId, CompletionBuildEvidenceOperation Operation,
-        string StatePath, string ExecutionDirectory, TaskDispatchRecord? Dispatch);
+        string StatePath, string ExecutionDirectory, TaskDispatchRecord? Dispatch, DotnetBuildStorageRoot StorageRoot);
     internal sealed record Entry(string Name, Func<Context, (string Observed, string Expected)?> Evaluate);
     internal sealed record Failure(string PredicateName, string Observed, string Expected);
 
@@ -74,7 +74,7 @@ internal static class CompletionBuildOriginPredicates
             ? Values(c.Operation.TreeDigest, "non-blank digest") : null),
         new("ResultPathMatches", c =>
         {
-            var expected = Path.Combine(DotnetBuildStorageLayout.GoalArtifactsPath(c.GoalId),
+            var expected = Path.Combine(DotnetBuildStorageLayout.GoalArtifactsPath(c.GoalId, c.StorageRoot),
                 "completion-build-evidence", c.Operation.Id + ".result.json");
             return !string.Equals(c.Operation.ResultPath, expected, StringComparison.OrdinalIgnoreCase)
                 ? Values(c.Operation.ResultPath, expected) : null;
@@ -82,11 +82,11 @@ internal static class CompletionBuildOriginPredicates
     ]);
 
     internal static Failure? FirstFailure(TaskSpec task, GoalId goalId, CompletionBuildEvidenceOperation operation,
-        string statePath, string executionDirectory)
+        string statePath, string executionDirectory, DotnetBuildStorageRoot storageRoot)
     {
         // Keep the eager SingleOrDefault: duplicate timestamps retain their original exception.
         var dispatch = task.DispatchHistory.SingleOrDefault(d => d.DispatchedAt == operation.DispatchAt);
-        var context = new Context(task, goalId, operation, statePath, executionDirectory, dispatch);
+        var context = new Context(task, goalId, operation, statePath, executionDirectory, dispatch, storageRoot);
         foreach (var predicate in Ordered)
             if (predicate.Evaluate(context) is { } values)
                 return new(predicate.Name, values.Observed, values.Expected);

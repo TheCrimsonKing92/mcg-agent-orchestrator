@@ -164,7 +164,7 @@ public sealed class CompletionBuildEvidenceRecoveryTests
         f.ResetWorkerMetadata();
         var coordinator = new CompletionBuildEvidenceCoordinator(f.StatePath, f.Root,
             utcNow: () => f.Clock.UtcNow, probe: _ => CompletionBuildChildLiveness.Dead,
-            finish: (_, _) => throw new IOException("controlled lease-release failure"));
+            finish: (_, _) => throw new IOException("controlled lease-release failure"), storageRoot: f.Storage);
         Assert.Throws<IOException>(() => coordinator.ReconcileAttached(f.Kernel, f.GoalId, f.TaskId, CompletionBuildEvidenceTarget.From(operation)));
         f.Reload();
         Assert.Equal(CompletionBuildEvidencePhase.Success, f.Task.CompletionBuildEvidence!.Phase);
@@ -348,7 +348,7 @@ public sealed class CompletionBuildEvidenceRecoveryTests
         var f = new CompletionBuildEvidenceFixture();
         using var child = new CompletionBuildEvidenceLaunchTests.SacrificialChild(holdAfterPermit: true);
         var coordinator = new CompletionBuildEvidenceCoordinator(f.StatePath, f.Root,
-            utcNow: () => f.Clock.UtcNow, startProcess: child.Start);
+            utcNow: () => f.Clock.UtcNow, startProcess: child.Start, storageRoot: f.Storage);
         f.Runner(coordinator).RefreshLatestProcess(f.Kernel, f.GoalId, f.TaskId);
         var operation = f.Task.CompletionBuildEvidence!;
         f.ResetWorkerMetadata();
@@ -363,7 +363,7 @@ public sealed class CompletionBuildEvidenceRecoveryTests
             f.Reload();
             // Probe reads the still-held live OS process and refuses the mismatching start identity.
             Assert.Equal(CompletionBuildChildLiveness.Unknown, CompletionBuildEvidenceChildIdentity.Probe(forged));
-            var held = new CompletionBuildEvidenceCoordinator(f.StatePath, f.Root).CancelAttached(f.Kernel, f.GoalId, f.TaskId,
+            var held = new CompletionBuildEvidenceCoordinator(f.StatePath, f.Root, storageRoot: f.Storage).CancelAttached(f.Kernel, f.GoalId, f.TaskId,
                 CompletionBuildEvidenceTarget.From(forged));
             Assert.True(held.IsPending);
             Assert.Equal(operation.LeaseOwner, Lease(f));
@@ -380,7 +380,7 @@ public sealed class CompletionBuildEvidenceRecoveryTests
         else
         {
             f.Reload();
-            var restarted = new CompletionBuildEvidenceCoordinator(f.StatePath, f.Root);
+            var restarted = new CompletionBuildEvidenceCoordinator(f.StatePath, f.Root, storageRoot: f.Storage);
             var result = restarted.CancelAttached(f.Kernel, f.GoalId, f.TaskId, CompletionBuildEvidenceTarget.From(operation));
             Assert.True(child.Observer!.HasExited);
             Assert.Equal(CompletionBuildEvidencePhase.Cancelled, result.Phase);

@@ -15,6 +15,7 @@ internal sealed class CompletionBuildEvidenceCoordinator : ICompletionBuildEvide
     internal const string OperationName = "conductor:completion-build-evidence";
     private readonly string _statePath;
     private readonly string _executionDirectory;
+    private readonly DotnetBuildStorageRoot _storageRoot;
     private readonly Func<DateTimeOffset> _utcNow;
     private readonly Func<string, TimeSpan> _remoteBuildBudget;
     private readonly Func<CompletionBuildEvidenceOperation, CompletionBuildEvidenceOperation?, CompletionBuildEvidenceOperation> _persist;
@@ -39,10 +40,12 @@ internal sealed class CompletionBuildEvidenceCoordinator : ICompletionBuildEvide
         Func<ProcessStartInfo, Process>? startProcess = null,
         Func<Process, SpawnProcessIdentityReadResult>? readIdentity = null,
         Func<Process, (TextReader Output, TextReader Error)>? hostReaders = null,
-        Func<string, TimeSpan>? remoteBuildBudget = null)
+        Func<string, TimeSpan>? remoteBuildBudget = null,
+        DotnetBuildStorageRoot? storageRoot = null)
     {
         _statePath = statePath;
         _executionDirectory = executionDirectory;
+        _storageRoot = storageRoot ?? DotnetBuildStorageLayout.CaptureStorageRoot();
         _utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
         _remoteBuildBudget = remoteBuildBudget ?? (worktree =>
         {
@@ -89,7 +92,7 @@ internal sealed class CompletionBuildEvidenceCoordinator : ICompletionBuildEvide
                 Path.GetFullPath(request.WorktreeRoot), digest, NormalizeProjects(request.Projects), workerProcess,
                 _utcNow() + request.Timeout + _remoteBuildBudget(request.WorktreeRoot), CompletionBuildEvidencePhase.Launching,
                 _statePath, _executionDirectory,
-                Path.Combine(DotnetBuildStorageLayout.GoalArtifactsPath(goalId), "completion-build-evidence", id + ".result.json"),
+                Path.Combine(DotnetBuildStorageLayout.GoalArtifactsPath(goalId, _storageRoot), "completion-build-evidence", id + ".result.json"),
                 Environment.ProcessId, new DateTimeOffset(owner.StartTime.ToUniversalTime()));
             try { operation = Store(kernel, operation, null); }
             catch (Exception ex)
@@ -297,7 +300,7 @@ internal sealed class CompletionBuildEvidenceCoordinator : ICompletionBuildEvide
 
     private void ValidateOrigin(TaskSpec task, GoalId goalId, CompletionBuildEvidenceOperation operation)
     {
-        if (CompletionBuildOriginPredicates.FirstFailure(task, goalId, operation, _statePath, _executionDirectory) is { } failure)
+        if (CompletionBuildOriginPredicates.FirstFailure(task, goalId, operation, _statePath, _executionDirectory, _storageRoot) is { } failure)
             throw new CompletionBuildOriginRejectedException(failure.PredicateName, failure.Observed, failure.Expected);
         if (operation.ChildPid is not null && (operation.ChildStartedAt is null || string.IsNullOrWhiteSpace(operation.ChildImagePath) ||
             !GoalEvidenceOperationOwner.TryParse(operation.LeaseOwner, out var owner) || owner is null ||
@@ -404,6 +407,7 @@ internal sealed class CompletionBuildEvidenceCoordinator : ICompletionBuildEvide
             RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true
         };
         info.ArgumentList.Add(typeof(CompletionBuildEvidenceCoordinator).Assembly.Location);
+        info.Environment[DotnetBuildStorageLayout.IsolatedRootOverrideVariable] = _storageRoot.RootPath;
         foreach (var argument in new[] { Subcommand, _statePath, operation.GoalId, operation.TaskId, operation.Id })
             info.ArgumentList.Add(argument);
         try
