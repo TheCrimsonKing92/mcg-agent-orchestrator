@@ -30,7 +30,9 @@ public sealed class HumanInputRequest
         long suppressionRevision = 0,
         string? evidenceOwner = null,
         PlannerEvidenceStoreReference? storeReference = null,
-        IReadOnlyList<string>? testNames = null)
+        IReadOnlyList<string>? testNames = null,
+        PlannerEvidenceIdentity? plannerIdentity = null,
+        PlannerEvidencePayload? plannerEvidence = null)
     {
         Id = id;
         GoalId = goalId;
@@ -61,6 +63,8 @@ public sealed class HumanInputRequest
         EvidenceOwner = string.IsNullOrWhiteSpace(evidenceOwner) ? null : evidenceOwner.Trim();
         StoreReference = storeReference;
         TestNames = testNames is null ? null : Array.AsReadOnly(testNames.ToArray());
+        PlannerIdentity = plannerIdentity;
+        PlannerEvidence = plannerEvidence;
     }
 
     public HumanInputRequestId Id { get; }
@@ -98,6 +102,15 @@ public sealed class HumanInputRequest
     public PlannerEvidenceStoreReference? StoreReference { get; }
 
     public IReadOnlyList<string>? TestNames { get; }
+
+    public PlannerEvidenceIdentity? PlannerIdentity { get; }
+    public PlannerEvidencePayload? PlannerEvidence { get; }
+
+    public bool IsCurrentForBrief(int briefVersion) => PlannerIdentity is null || PlannerIdentity.BriefVersion == briefVersion;
+
+    public bool HasSameIdentity(HumanInputRequest other) => PlannerIdentity is null && other.PlannerIdentity is null
+        ? string.Equals(QuestionFingerprint, other.QuestionFingerprint, StringComparison.Ordinal)
+        : PlannerIdentity is not null && PlannerIdentity == other.PlannerIdentity;
 
     public string? DerivedBlockerEvidence
     {
@@ -321,7 +334,7 @@ public sealed class HumanInputRequest
             SuppressionRevision,
             EvidenceOwner,
             StoreReference,
-            TestNames);
+            TestNames, PlannerIdentity, PlannerEvidence);
     }
 
     internal static HumanInputRequest FromSnapshot(HumanInputRequestSnapshot snapshot)
@@ -347,7 +360,7 @@ public sealed class HumanInputRequest
             snapshot.SuppressionRevision,
             snapshot.EvidenceOwner,
             snapshot.StoreReference,
-            snapshot.TestNames);
+            snapshot.TestNames, snapshot.PlannerIdentity, snapshot.PlannerEvidence);
 
         if (snapshot.IsCompleted)
         {
@@ -471,7 +484,7 @@ internal static class HumanInputSubmission
         bool supersedeSiblings, IGoalLifecycleEventWriter eventWriter, Action refreshGoalStatus)
     {
         if (supersedeSiblings || request.Kind != HumanWaitKind.ProspectiveAcceptanceEvidence ||
-            !string.Equals(request.EvidenceOwner, "acceptance-gate", StringComparison.OrdinalIgnoreCase) ||
+            !GateTestObligation.IsAcceptanceGateOwner(request.EvidenceOwner) ||
             request.TestNames is not { Count: > 0 })
             return false;
 

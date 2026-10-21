@@ -114,6 +114,8 @@ public sealed class ConductorBatchLoopTestsTrainReceiptRevalidation : Acceptance
     public void NoMainAdvance_LandsOriginalReceiptWithoutRevalidationJournal()
     {
         using var fixture = CreatePassedTrain();
+        Assert.All(fixture.Source.Identity.Members, member => Assert.Equal(
+            fixture.Kernel.GetGoal(member.GoalId).AuthoritativeBrief.Version, member.BriefVersion));
         var tick = RunTick(fixture);
 
         Assert.Contains($"receipt={fixture.Source.ReceiptId}", string.Join(" | ", tick.ProgressLines ?? []));

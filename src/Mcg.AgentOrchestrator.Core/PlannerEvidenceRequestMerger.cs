@@ -2,34 +2,24 @@ namespace Mcg.AgentOrchestrator.Core;
 
 internal static class PlannerEvidenceRequestMerger
 {
+    // Validation and exact deduplication, never a union of unrelated requirements.
     internal static HumanInputDirectiveParseResult? TryMerge(IReadOnlyList<HumanInputDirective> requests)
     {
-        // A gate may resolve the whole wait, so every obligation must belong to that gate.
-        if (requests.Count == 0 || requests.Any(request =>
-            request.Kind != HumanWaitKind.ProspectiveAcceptanceEvidence ||
-            !string.Equals(request.EvidenceOwner, "acceptance-gate", StringComparison.OrdinalIgnoreCase)))
-        {
-            return null;
-        }
-
-        var first = requests[0];
-        var seen = new HashSet<string>(StringComparer.Ordinal);
-        var testNames = new List<string>();
+        var distinct = new List<HumanInputDirective>();
         foreach (var request in requests)
         {
-            foreach (var testName in request.TestNames ?? [])
+            var payload = request.PlannerEvidence!;
+            var existing = distinct.FirstOrDefault(item => item.PlannerEvidence!.CriterionIndex == payload.CriterionIndex &&
+                item.PlannerEvidence.EvidenceKey == payload.EvidenceKey);
+            if (existing is not null)
             {
-                if (seen.Add(testName))
-                {
-                    testNames.Add(testName);
-                }
+                if (!payload.SemanticallyEquals(existing.PlannerEvidence))
+                    return new(null, $"Conflicting PLANNER_EVIDENCE_REQUEST identity criterion={payload.CriterionIndex} key={payload.EvidenceKey}; re-emit the original payload or request a new brief.");
+                continue;
             }
+            distinct.Add(request);
         }
-
-        return new HumanInputDirectiveParseResult(first with
-        {
-            Question = string.Join(" ", requests.Select(request => request.Question)),
-            TestNames = testNames.Count == 0 ? null : testNames.ToArray()
-        }, null);
+        return new HumanInputDirectiveParseResult(distinct.Count == 1 ? distinct[0] : null, null)
+            { Directives = distinct.ToArray() };
     }
 }

@@ -14,7 +14,7 @@ public sealed record MergeTrainMemberBinding(
     ConductorTransitionDecision AutoPromotionDisposition,
     string MergeStatus,
     string MergeReason,
-    string? RebasedTrainHeadRevision = null)
+    string? RebasedTrainHeadRevision = null, int? BriefVersion = null)
 {
     public MergeTrainMemberBinding WithRebasedHead(string revision) =>
         this with { RebasedTrainHeadRevision = NormalizeRevision(revision, nameof(revision)) };
@@ -75,7 +75,7 @@ public sealed class MergeTrainIdentity
                          member.GoalId.Value,
                          member.BranchRevision,
                          member.CandidateRevision
-                     })))
+                     }.Concat(member.BriefVersion is { } version ? new[] { $"brief:{version}" } : Array.Empty<string>()))))
         {
             var bytes = Encoding.UTF8.GetBytes(field);
             stream.Write(BitConverter.GetBytes(bytes.Length));

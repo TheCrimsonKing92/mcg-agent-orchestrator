@@ -6,7 +6,7 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 internal static class GroupedGateReceiptTrxEvidence
 {
     internal sealed record Receipt(
-        string Kind, string ReceiptId, DateTimeOffset CompletedAt, IReadOnlyList<string> TrxPaths);
+        string Kind, string ReceiptId, DateTimeOffset CompletedAt, IReadOnlyList<string> TrxPaths, int? BriefVersion = null);
 
     internal sealed record SelectorEvidence(
         string Selector, int Passed, int Failed, int Superseded, bool Satisfied,
@@ -30,7 +30,8 @@ internal static class GroupedGateReceiptTrxEvidence
                     .Where(receipt => receipt.Identity.Members.Any(member => member.GoalId == goalId &&
                         string.Equals(member.CandidateRevision, candidate, StringComparison.OrdinalIgnoreCase)))
                     .Select(receipt => new Receipt("merge-train", receipt.ReceiptId,
-                        receipt.CompletedAt, receipt.GateTestResultPaths)));
+                        receipt.CompletedAt, receipt.GateTestResultPaths,
+                        receipt.Identity.Members.Single(member => member.GoalId == goalId).BriefVersion)));
             }
             var cohortPath = Path.Combine(orchestratorDirectory, "cohort-acceptance.db");
             if (File.Exists(cohortPath))
@@ -40,7 +41,8 @@ internal static class GroupedGateReceiptTrxEvidence
                     .Where(receipt => receipt.Identity.Members.Any(member => member.GoalId == goalId &&
                         string.Equals(member.CandidateRevision, candidate, StringComparison.OrdinalIgnoreCase)))
                     .Select(receipt => new Receipt("cohort", receipt.ReceiptId,
-                        receipt.CompletedAt, receipt.GateTestResultPaths)));
+                        receipt.CompletedAt, receipt.GateTestResultPaths,
+                        receipt.Identity.Members.Single(member => member.GoalId == goalId).BriefVersion)));
             }
             return receipts.OrderByDescending(receipt => receipt.CompletedAt)
                 .ThenBy(receipt => receipt.Kind == "merge-train" ? 0 : 1)

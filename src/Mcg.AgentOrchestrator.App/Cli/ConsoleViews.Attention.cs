@@ -5,46 +5,9 @@ namespace Mcg.AgentOrchestrator.App.Cli;
 internal static partial class ConsoleViews
 {
     public static void PrintHumanWaits(
-        IReadOnlyList<HumanInputRequest> requests,
-        DateTimeOffset now,
-        bool includeHistory = false)
-    {
-        Console.WriteLine();
-        Console.WriteLine(includeHistory
-            ? $"Human waits: {requests.Count} wait(s)"
-            : $"Human waits: {requests.Count} active wait(s)");
-
-        if (requests.Count == 0)
-        {
-            Console.WriteLine("  none");
-            Console.WriteLine();
-            return;
-        }
-
-        foreach (var request in requests)
-        {
-            var ageSeconds = Math.Max(0, (long)(now - request.CreatedAt).TotalSeconds);
-            Console.WriteLine($"  [{request.Kind}] {request.Id.Value[..8]} goal={request.GoalId.Value[..8]} task={request.TaskId?.Value[..8] ?? "goal"} age={ageSeconds}s");
-            if (request.IsCompleted)
-            {
-                var status = request.WasDismissed ? "dismissed" : "answered";
-                Console.WriteLine($"    status: {status} at {request.AnsweredAt:u}");
-                if (!string.IsNullOrWhiteSpace(request.Answer))
-                    Console.WriteLine($"    resolution: {request.Answer}");
-            }
-            Console.WriteLine($"    flags: auto-defaultable={request.IsAutoDefaultable}; dismissible={request.IsDismissible}; answer-required={request.IsAnswerRequired}; externally-blocked={request.IsExternallyBlocked}");
-            Console.WriteLine($"    question: {request.Question}");
-            var resumeCommand = string.Equals(
-                request.ResumeCommand,
-                HumanInputRequest.BuildDefaultResumeCommand(request.Id),
-                StringComparison.Ordinal)
-                ? $"attention answer {request.GoalId.Value[..8]} {request.Id.Value[..8]} <answer>"
-                : request.ResumeCommand;
-            Console.WriteLine($"    resume: {resumeCommand}");
-        }
-
-        Console.WriteLine();
-    }
+        IReadOnlyList<HumanInputRequest> requests, DateTimeOffset now,
+        bool includeHistory = false, IReadOnlyCollection<Goal>? goals = null) =>
+        HumanWaitsTextView.Print(requests, now, includeHistory, goals);
 
     public static void PrintAttentionQueue(IReadOnlyList<CollaborationItem> items)
     {

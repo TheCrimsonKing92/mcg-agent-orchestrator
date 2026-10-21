@@ -2,6 +2,27 @@ using Mcg.AgentOrchestrator.Core;
 
 public sealed class AcceptanceApparatusDispositionPolicyTests
 {
+    [Fact]
+    public void PendingAttributionReplaysBoundEvidenceWithoutAnyRegateBudgetFields()
+    {
+        var receipt = new AcceptanceAttributionPendingReceipt("candidate.trx", "digest", "run");
+        var pending = new AcceptanceAttributionPending("candidate", "main", "attempt",
+            [new("lane", "Case(value: 1)", "baseline not executed: slot unavailable", [receipt], [receipt])], "cross-goal-flake");
+        var decision = AcceptanceApparatusDispositionPolicy.AttributionPendingHold("goal", "retained RED", pending);
+        var recorded = decision.ToRecord();
+        Assert.Equal("Hold", recorded.Action);
+        Assert.Equal(6, recorded.Rung);
+        Assert.Equal(AcceptanceAttributionPending.EvidenceKind, recorded.DiscriminatingEvidence);
+        var restored = AcceptanceApparatusDispositionFacts.FromRecordedFacts(recorded.Facts.Reverse().ToArray());
+        Assert.Equal(decision.Facts, restored);
+        Assert.Throws<InvalidOperationException>(() => (restored with { RegateCount = 0 }).ToRecordedFacts());
+        foreach (var required in new[] { "branchHeadSha", "mainHeadSha", "attemptId", "receiptReferences", "baselineEvidence", "testIdentities" })
+            Assert.Throws<InvalidOperationException>(() => AcceptanceApparatusDispositionFacts.FromRecordedFacts(
+                recorded.Facts.Where(fact => fact.Name != required).ToArray()));
+        Assert.Throws<InvalidOperationException>(() => AcceptanceApparatusDispositionFacts.FromRecordedFacts(
+            recorded.Facts.Append(new("regateCap", "2")).ToArray()));
+    }
+
     [Theory]
     [InlineData(AcceptanceApparatusDisposition.ExcludedUnattributableHold, 1, "", "excluded-outside-scope", "Hold")]
     [InlineData(AcceptanceApparatusDisposition.ApparatusRedRegateHold, 2, "cross-goal-flake", "cross-goal-flake", "Hold")]

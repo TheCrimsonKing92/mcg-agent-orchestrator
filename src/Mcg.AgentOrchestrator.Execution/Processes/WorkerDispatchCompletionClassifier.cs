@@ -288,8 +288,9 @@ internal sealed class WorkerDispatchCompletionClassifier
         return true;
     }
 
-    internal WorkerBuildReceiptVerdict EvaluateWorkerBuildReceipt(string workingDirectory, GoalId goalId) =>
-        WorkerBuildReceipt.Evaluate(_resolveWorkerBuildReceiptPath(goalId), workingDirectory);
+    internal WorkerBuildReceiptVerdict EvaluateWorkerBuildReceipt(string workingDirectory, GoalId goalId, TaskSpec? task = null) =>
+        WorkerBuildReceipt.Evaluate(_resolveWorkerBuildReceiptPath(goalId), workingDirectory, null,
+            task?.LastDispatch is { } dispatch ? new(goalId, task.Id, dispatch) : null);
 
     internal bool HasWorkerBuildEvidence(
         string workingDirectory,

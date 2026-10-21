@@ -25,7 +25,7 @@ public sealed class CliAttentionShowAgentReadEnvelopeContractTests : CliTaskQuer
                 Assert.Equal(args.Length == 3 ? null : seed.First.Id.Value,
                     payload.GetProperty("goalId").GetString());
                 var wait = Assert.Single(payload.GetProperty("waits").EnumerateArray());
-                Assert.Equal(new[] { "id", "goalId", "taskId", "kind", "question", "requestedAt",
+                Assert.Equal(new[] { "id", "goalId", "taskId", "kind", "question", "plannerIdentity", "plannerEvidence", "owner", "availability", "nextAction", "requestedAt",
                     "isAutoDefaultable", "isDismissible", "isAnswerRequired", "isExternallyBlocked", "resumeCommand" },
                     wait.EnumerateObject().Select(property => property.Name));
                 Assert.Equal(seed.Wait.Id.Value, wait.GetProperty("id").GetString());
@@ -208,10 +208,14 @@ public sealed class CliAttentionShowAgentReadEnvelopeContractTests : CliTaskQuer
                 waits = new[] { new
                 {
                     id = seed.Wait.Id.Value, goalId = seed.First.Id.Value, taskId = (string?)null,
-                    kind = "SpecClarification", question = "Literal question", requestedAt = "2100-01-01T00:00:00.0000000Z",
+                    kind = "SpecClarification", question = "Literal question",
+                    plannerIdentity = (object?)null, plannerEvidence = (object?)null,
+                    owner = "operator", availability = (string?)null, nextAction = seed.Wait.ResumeCommand,
+                    requestedAt = "2100-01-01T00:00:00.0000000Z",
                     isAutoDefaultable = true, isDismissible = false, isAnswerRequired = true, isExternallyBlocked = false,
                     resumeCommand = seed.Wait.ResumeCommand
                 } },
+                gateEvidence = Array.Empty<object>(),
                 items = (await seed.Store.GetAttentionQueueAsync()).Select(item => new
                 {
                     id = item.Id, type = item.Type.ToString(), goalId = item.GoalId, status = "Raised",
@@ -231,6 +235,70 @@ public sealed class CliAttentionShowAgentReadEnvelopeContractTests : CliTaskQuer
         finally { Directory.Delete(root, true); }
     }
 
+    [Theory]
+    [InlineData(false, GoalStatus.Active, 0)]
+    [InlineData(true, GoalStatus.Active, 0)]
+    [InlineData(false, GoalStatus.Completed, 0)]
+    [InlineData(true, GoalStatus.Completed, 0)]
+    [InlineData(false, GoalStatus.Failed, 0)]
+    [InlineData(true, GoalStatus.Failed, 0)]
+    [InlineData(false, GoalStatus.Parked, 0)]
+    [InlineData(true, GoalStatus.Parked, 0)]
+    [InlineData(true, GoalStatus.Active, -1)]
+    public async Task GateOnlyGoal_TextFormsKeepGlobalQueue(
+        bool show, GoalStatus status, int briefOffset)
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(root);
+            var original = new AgentOrchestratorKernel();
+            var goal = original.CreateGoal("Gate evidence without an operator wait");
+            var snapshot = original.ExportSnapshot();
+            var kernel = AgentOrchestratorKernel.FromSnapshot(snapshot with
+            {
+                Goals = [snapshot.Goals.Single() with
+                {
+                    Status = status,
+                    GateTestObligations = [new("gate-only", goal.AuthoritativeBrief.Version + briefOffset,
+                        ["RequiredTests"], null, "Acceptance evidence", DateTimeOffset.UnixEpoch)]
+                }]
+            });
+            Assert.Single(kernel.GetGoal(goal.Id).GateTestObligations);
+            Assert.Empty(kernel.ExportSnapshot().HumanInputRequests);
+            var store = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
+            foreach (var type in new[] { CollaborationItemType.Decision,
+                         CollaborationItemType.Clarification, CollaborationItemType.Verify })
+                await store.RaiseAsync(type, null, $"Visible {type}", "Required operator action");
+            Assert.Equal(3, (await store.GetAttentionQueueAsync()).Count);
+            var args = show ? new[] { "attention", "show" } : ["attention"];
+            IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+            var profiles = WorkerProfileCatalog.Default();
+            Goal? selected = null;
+            // Text show deliberately falls back to the writer for any parked goal so it can sweep
+            // stale waits. Gate obligations must not change that routing contract.
+            var expectsReadOnly = !show || status != GoalStatus.Parked;
+            var output = CaptureConsole(() =>
+            {
+                CliCommandHelp.ThrowIfInvalidFlags(args);
+                Assert.Equal(expectsReadOnly, CliReadOnlyCommandRunner.TryExecute(args,
+                    new ProbeStateRepository(kernel) { ThrowOnOutbox = true }, workspace,
+                    new InMemoryModelProviderRegistry([]), null, ref agents, ref profiles, ref selected,
+                    out var changed));
+                Assert.False(changed);
+                Assert.Null(selected);
+            });
+            if (!expectsReadOnly)
+                Assert.Empty(output);
+            var direct = CaptureConsole(() => Assert.False(CliCommandDispatcher.ExecuteCommand(args, kernel,
+                workspace, ref agents, new InMemoryModelProviderRegistry([]), ref profiles, ref selected)));
+            foreach (var rendered in expectsReadOnly ? new[] { output, direct } : [direct])
+                foreach (var type in new[] { "Decision", "Clarification", "Verify" })
+                    Assert.Contains($"Visible {type}", rendered);
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
     private static JsonElement AssertEnvelope(JsonElement envelope)
     {
         Assert.Equal(new[] { "schema", "schemaVersion", "generatedAt", "payload" },
@@ -244,7 +312,7 @@ public sealed class CliAttentionShowAgentReadEnvelopeContractTests : CliTaskQuer
         Assert.Equal(TimeSpan.Zero, DateTimeOffset.ParseExact(timestamp, "O", CultureInfo.InvariantCulture).Offset);
         Assert.EndsWith("Z", timestamp);
         var payload = envelope.GetProperty("payload");
-        Assert.Equal(new[] { "goalId", "waits", "items" }, payload.EnumerateObject().Select(property => property.Name));
+        Assert.Equal(new[] { "goalId", "waits", "gateEvidence", "items" }, payload.EnumerateObject().Select(property => property.Name));
         return payload;
     }
 

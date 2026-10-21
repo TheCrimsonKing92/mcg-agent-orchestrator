@@ -30,7 +30,8 @@ internal static class AcceptanceExecutionRunner
                 changedFiles,
                 stableSlotIndex,
                 stableSlotLease,
-                executionOwner).GetAwaiter().GetResult());
+                executionOwner).GetAwaiter().GetResult()) with
+        { AttemptId = (executionOwner as AcceptanceAttemptExecutionOwner)?.Identity.AttemptId };
     }
 
     internal static FocusedEvidenceRunResult RunFocusedVerification(

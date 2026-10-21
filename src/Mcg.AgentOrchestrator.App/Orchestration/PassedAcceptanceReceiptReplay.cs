@@ -89,6 +89,7 @@ internal static class PassedAcceptanceReceiptReplay
         ConductorParallelAcceptanceAttempt attempt,
         out bool evidenceMutationLeaseHeld)
     {
+        run = run with { Acceptance = run.Acceptance! with { AttemptId = attempt.AttemptId } };
         evidenceMutationLeaseHeld = false;
         // A pass published between draining and admission still needs replay custody and freshness.
         if (attempt.ReconciledAt is not null && run.Acceptance!.Passed)

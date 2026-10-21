@@ -16,9 +16,9 @@ internal static class GateTestObligationEvaluator
         if (obligations.Length == 0) return [];
 
         var sources = ProspectiveEvidenceGateResolver.ReadAttempts(orchestratorDirectory, goal.Id, candidateSha)
-            .Select(attempt => new Source(attempt.Id, attempt.CompletedAt, attempt.Paths))
+            .Select(attempt => new Source(attempt.Id, attempt.CompletedAt, attempt.Paths, attempt.BriefVersion))
             .Concat(GroupedGateReceiptTrxEvidence.ReadPassedReceipts(orchestratorDirectory, goal.Id, candidateSha)
-                .Select(receipt => new Source(receipt.ReceiptId, receipt.CompletedAt, receipt.TrxPaths)))
+                .Select(receipt => new Source(receipt.ReceiptId, receipt.CompletedAt, receipt.TrxPaths, receipt.BriefVersion)))
             .Where(source => AllPathsExist(source.Paths, orchestratorDirectory))
             .OrderByDescending(source => source.CompletedAt)
             .ThenBy(source => source.Id, StringComparer.Ordinal).ToArray();
@@ -32,6 +32,7 @@ internal static class GateTestObligationEvaluator
         Result? newest = null;
         foreach (var source in sources)
         {
+            if (obligation.PlannerIdentity is not null && source.BriefVersion != obligation.PlannerIdentity.BriefVersion) continue;
             var evidence = GroupedGateReceiptTrxEvidence.Evaluate(
                 obligation.Selectors, source.Paths, orchestratorDirectory);
             if (evidence.All(item => item.Satisfied))
@@ -55,5 +56,5 @@ internal static class GateTestObligationEvaluator
         catch (Exception) { return false; }
     }
 
-    private sealed record Source(string Id, DateTimeOffset CompletedAt, IReadOnlyList<string> Paths);
+    private sealed record Source(string Id, DateTimeOffset CompletedAt, IReadOnlyList<string> Paths, int? BriefVersion);
 }
