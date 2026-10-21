@@ -340,7 +340,8 @@ public sealed record TaskDispatchRecord(
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     IReadOnlyList<string>? SelectedSkills = null,
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
-    WorkerBuildScopeIdentity? WorkerBuildScope = null)
+    WorkerBuildScopeIdentity? WorkerBuildScope = null,
+    int WorkerBuildProtocolVersion = 0)
 {
     public int BriefVersion { get; internal set; } = BriefVersion;
 
@@ -506,7 +507,8 @@ public sealed record TaskProcessRecord(
     string? ExitArtifactReason = null,
     bool WasGracefullyDetachedByConductor = false,
     IReadOnlyList<int>? NonBlockingProcessIds = null,
-    DateTimeOffset? ProcessIdentityStartedAt = null)
+    DateTimeOffset? ProcessIdentityStartedAt = null,
+    string? ProcessIdentityImagePath = null)
 {
     public bool IsRunning => CompletedAt is null && ExitCode is null;
 

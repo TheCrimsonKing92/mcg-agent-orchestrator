@@ -2024,30 +2024,7 @@ public sealed partial class AgentOrchestratorKernel
     {
         var goal = GetGoal(goalId);
         var task = goal.FindTask(taskId);
-
-        if (task.LastDispatch is null)
-        {
-            throw new InvalidOperationException($"Task '{taskId}' has no dispatch to start.");
-        }
-
-        if (!string.Equals(task.LastDispatch.Command, process.Command, StringComparison.Ordinal))
-        {
-            throw new InvalidOperationException("Process command does not match the recorded dispatch command.");
-        }
-
-        if (!string.Equals(task.LastDispatch.WorkingDirectory, process.WorkingDirectory, StringComparison.OrdinalIgnoreCase))
-        {
-            throw new InvalidOperationException("Process working directory does not match the recorded dispatch working directory.");
-        }
-
-        task.RecordProcess(process);
-        var ownerlessAdmission = task.RetryAdmissionHistory.LastOrDefault(receipt =>
-            receipt.LinkedDispatchAt == task.LastDispatch.DispatchedAt &&
-            receipt.Decision is RetryAdmissionDecision.Allowed or RetryAdmissionDecision.ResumedReservation &&
-            string.IsNullOrWhiteSpace(receipt.ReservationOwnerId));
-        if (ownerlessAdmission is not null)
-            task.MarkRetryAdmissionStarted(task.LastDispatch.DispatchedAt, process.StartedAt);
-        task.SetStatus(WorkTaskStatus.Running);
+        TaskProcessStartRecording.Record(task, process);
         if (!IsReopenProtectedGoalStatus(goal.Status))
             goal.SetStatus(GoalStatus.Active);
         Append(goal, taskId, ProgressKind.TaskProcessStarted, $"Started process {process.ProcessId}: {process.Command}");
@@ -2058,6 +2035,23 @@ public sealed partial class AgentOrchestratorKernel
         if (operation.GoalId != goalId.Value)
             throw new InvalidOperationException("Completion build evidence belongs to another goal.");
         GetTask(goalId, taskId).RecordCompletionBuildEvidence(operation);
+    }
+
+    public void RecordWorkerBuildProtocol(GoalId goalId, TaskId taskId, int version) =>
+        GetTask(goalId, taskId).SetWorkerBuildProtocol(version);
+
+    public void RecordWorkerBuildInvocation(GoalId goalId, TaskId taskId, WorkerBuildInvocation invocation)
+    {
+        if (invocation.GoalId != goalId.Value)
+            throw new InvalidOperationException("Worker build invocation belongs to another goal.");
+        GetTask(goalId, taskId).RecordWorkerBuildInvocation(invocation);
+    }
+
+    public void ReconcileWorkerBuildInvocations(GoalId goalId, TaskId taskId, IReadOnlyList<WorkerBuildInvocation> canonical)
+    {
+        if (canonical.Any(i => i.GoalId != goalId.Value))
+            throw new InvalidOperationException("Canonical worker build history belongs to another goal.");
+        GetTask(goalId, taskId).ReconcileWorkerBuildInvocations(canonical);
     }
 
     public void RecordTaskProcessRefreshed(
