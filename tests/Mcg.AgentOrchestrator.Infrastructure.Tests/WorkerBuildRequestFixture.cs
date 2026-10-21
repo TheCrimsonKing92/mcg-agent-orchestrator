@@ -62,7 +62,15 @@ internal sealed class WorkerBuildRequestFixture : IDisposable
             Kernel.ActivateGoal(goal.Id, [agent]);
             GoalId = goal.Id;
             TaskId = task.Id;
-            if (goalBranch) Git("switch", "-c", "goal/" + GoalId.Value[..8]);
+            if (reportWorkerResult)
+            {
+                // Completion inspects a linked goal worktree, including its .git file.
+                // Keep the seed repository and shared git metadata fixture-owned too.
+                var worktree = GoalWorktreeLayout.WorktreePath(RepositoryRoot, GoalId);
+                Git("worktree", "add", "-b", GoalWorktreeLayout.BranchName(GoalId), worktree, "HEAD");
+                RepositoryRoot = worktree;
+            }
+            else if (goalBranch) Git("switch", "-c", GoalWorktreeLayout.BranchName(GoalId));
             var at = DateTimeOffset.UtcNow;
             var command = managedHost ? "& '" + Path.Combine(FindRepository(), "scripts", "Invoke-WorkerBuildCheck.ps1").Replace("'", "''") + "' '" + Project + "'" : "fixture-command";
             if (reportWorkerResult)

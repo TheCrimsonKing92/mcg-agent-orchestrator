@@ -40,6 +40,10 @@ internal sealed class ExitReconcileBuildFixture : IDisposable
 
     internal async Task<WorkerBuildInvocation> CompleteNativeDispatch()
     {
+        var inspection = new DispatchWorktreeCommitter().InspectGoalWorktree(
+            Build.RepositoryRoot, Build.GoalId, Task.LastDispatch!.DispatchedAt);
+        Assert.True(inspection.IsAvailable,
+            $"Native reconciliation requires an inspectable goal worktree: {inspection.UnavailableReason}; {inspection.GitReceipt}");
         Assert.True(WorktreeTreeDigest.TryCompute(Build.RepositoryRoot, out var candidateDigest, out var digestReason), digestReason);
         var readyPath = Path.Combine(Workspace.LogDirectory, "worker-child-ready");
         var releaseName = "Local\\mcg-exit-reconcile-" + Guid.NewGuid().ToString("N");
@@ -136,11 +140,22 @@ internal sealed class ExitReconcileBuildFixture : IDisposable
     private async Task<int> AwaitSelectedChild(string readyPath, string heartbeatPath)
     {
         var observed = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
-        using var watcher = new FileSystemWatcher(Workspace.LogDirectory);
+        using var watcher = new FileSystemWatcher(Workspace.LogDirectory)
+        {
+            NotifyFilter = NotifyFilters.FileName | NotifyFilters.LastWrite
+        };
+        watcher.Filters.Add(Path.GetFileName(readyPath));
+        watcher.Filters.Add(Path.GetFileName(heartbeatPath));
         watcher.Created += Check;
         watcher.Changed += Check;
         watcher.Renamed += Check;
-        watcher.Error += (_, args) => observed.TrySetException(args.GetException());
+        watcher.Error += (_, args) =>
+        {
+            // Notifications are wakeups, not evidence. Both readiness and selection are
+            // durable, so rescan them if a notification was lost to buffer overflow.
+            if (args.GetException() is InternalBufferOverflowException) Check(null, null);
+            else observed.TrySetException(args.GetException());
+        };
         watcher.EnableRaisingEvents = true;
         Check(null, null); // Close the subscription/read race if the child was already observed.
         var hostExit = _host!.WaitForExitAsync();
