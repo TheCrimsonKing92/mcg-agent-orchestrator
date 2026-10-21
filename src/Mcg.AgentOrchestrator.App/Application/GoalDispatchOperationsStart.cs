@@ -36,7 +36,7 @@ internal sealed partial class GoalDispatchOperations
         Func<DateTimeOffset>? utcNow = null)
     {
         utcNow ??= () => DateTimeOffset.UtcNow;
-        ReconcileExitedAssignedProcessRecords(kernel, goal);
+        ReconcileExitedAssignedProcessRecords(kernel, workspace, goal);
         goal = kernel.GetGoal(goal.Id);
         var intentStore = SqliteOperatorIntentStore.ForDirectories(workspace.OrchestratorDirectory, workspace.LogDirectory);
         var intentAdmissions = goal.Tasks.ToDictionary(task => task.Id,

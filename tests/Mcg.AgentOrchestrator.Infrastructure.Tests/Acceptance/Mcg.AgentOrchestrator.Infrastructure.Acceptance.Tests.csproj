@@ -9,6 +9,7 @@
     <UseMicrosoftTestingPlatformRunner>true</UseMicrosoftTestingPlatformRunner>
   </PropertyGroup>
   <ItemGroup>
+    <ProjectReference Include="..\..\..\src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj" />
     <Compile Include="..\AssemblyTempRedirect.cs" Link="AssemblyTempRedirect.cs" />
     <Compile Include="..\AssemblyTempRootCleanupFixture.cs" Link="AssemblyTempRootCleanupFixture.cs" />
     <Compile Include="..\AssemblyTempRootCleanupHolderDiagnostics.cs" Link="AssemblyTempRootCleanupHolderDiagnostics.cs" />
