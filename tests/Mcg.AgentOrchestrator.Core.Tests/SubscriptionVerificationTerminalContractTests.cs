@@ -1,9 +1,54 @@
 using Mcg.AgentOrchestrator.Core;
+using System.Text.Json;
 using Xunit;
 
 // Pure recorded-evidence fixtures: no provider invocation, filesystem or process environment.
 public sealed class SubscriptionVerificationTerminalContractTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void LargeReviewerFindingsUseCompleteCapturedTerminalBlock(bool corruptJson)
+    {
+        var mutationText = new string('x', VerificationTextBounds.MaxRetainedChars + 1024);
+        var findings = JsonSerializer.Serialize(new[] { new
+        {
+            stable_id = "large-mutation", state = "open", severity = "blocking", category = "test-evidence",
+            location = new { file = "src/Example.cs", region = "Example" }, description = "Execute the requested control.",
+            evidence_request = new
+            {
+                selections = new[] { new { test_project = "Core", test_class = "ExampleTests" } },
+                negative_control = "revert-src",
+                mutation = new { path = "src/Example.cs", old_text = mutationText, new_text = "previous" }
+            }
+        } });
+        var parsed = ReviewFindingConvergence.ParseJson(findings, "[]");
+        Assert.Null(parsed.FatalDiagnostic);
+        Assert.Empty(parsed.AdvisoryRejections);
+        Assert.Single(parsed.Round.Findings);
+        if (corruptJson)
+            findings = findings[..^1];
+        var output = Contract(AgentRole.Reviewer).Replace("findings: []", "findings: " + findings);
+        var (_, _, task, at) = Dispatch(AgentRole.Reviewer);
+        var evidence = Evidence(task, at, output);
+        Assert.True(evidence.StandardOutput.Length < output.Length);
+        Assert.Equal(corruptJson ? VerificationTerminalContractStatus.Malformed : VerificationTerminalContractStatus.Valid,
+            WorkerResultBlockers.AssessSubscriptionVerification(task, evidence).Status);
+    }
+
+    [Fact]
+    public void TerminalContractInStderrCannotSupplyMissingStdoutContract()
+    {
+        var (_, _, task, at) = Dispatch(AgentRole.Reviewer);
+        var evidence = Evidence(task, at, "Review still in progress.") with
+        {
+            StandardError = Contract(AgentRole.Reviewer),
+            AuthoritativeStandardError = Contract(AgentRole.Reviewer)
+        };
+        Assert.Equal(VerificationTerminalContractStatus.Missing,
+            WorkerResultBlockers.AssessSubscriptionVerification(task, evidence).Status);
+    }
+
     [Theory]
     [InlineData(AgentRole.Reviewer)]
     [InlineData(AgentRole.Tester)]

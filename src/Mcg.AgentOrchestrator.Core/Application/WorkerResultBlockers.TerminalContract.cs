@@ -99,8 +99,13 @@ public static partial class WorkerResultBlockers
             return Malformed("Terminal tests/blockers status is malformed.");
 
         // Parse only the captured final block: no mutable artifact re-read or stderr fallback.
+        var capturedBlock = string.Join('\n', lines[start..(end + 1)]);
         var terminal = new TaskVerificationRecord("contract", "", 0,
-            string.Join('\n', lines[start..(end + 1)]), "", DateTimeOffset.MinValue);
+            capturedBlock, "", DateTimeOffset.MinValue)
+        {
+            // Transient parsing must not discard decision evidence through the preview retention bound.
+            StandardOutput = capturedBlock
+        };
         if (role == AgentRole.Reviewer)
         {
             var verdict = fields["verdict"].ToLowerInvariant();
