@@ -12,6 +12,7 @@ public static class OperatorCancelAwareDispatchRunner
         new(completionBuildEvidence: completionBuildEvidence ?? new CompletionBuildEvidenceCoordinator(
             workspace.SqliteStatePath, workspace.ExecutionDirectory))
         {
+            WorkerBuildInvocations = new WorkerBuildInvocationOperations(workspace.SqliteStatePath, workspace.ExecutionDirectory),
             OperatorIntents = SqliteOperatorIntentStore.ForDirectories(
                 workspace.OrchestratorDirectory, workspace.LogDirectory)
         };

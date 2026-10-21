@@ -710,15 +710,8 @@ internal sealed partial class ConductorDriver
                     acceptanceAttemptStartedAt,
                     GoalOperationJournal.TryExtractBaseBuildCacheReceipt(verification),
                     failedChecks);
-            return ClassifyInheritedBaselineApparatus(new AcceptanceVerificationSummary(
-                verification.Passed,
-                unmetCriteria,
-                verification.Passed ? null : verification.OutputTail,
-                failedChecks,
-                branchHeadSha,
-                mainHeadSha,
-                testResultPaths,
-                checkAttributions,
+            return ClassifyInheritedBaselineApparatus(AcceptanceVerificationSummary.FromVerification(
+                verification, unmetCriteria, failedChecks, branchHeadSha, mainHeadSha, testResultPaths, checkAttributions,
                 verification.Passed ? null : CleanTestBaseline.FormatFailureAttestation(baselineReceipt)));
         };
 
@@ -1352,6 +1345,8 @@ internal sealed partial class ConductorDriver
 
         if (state == GoalLifecycleState.CleanedUp)
             return MakeResult(goalId, goalPrefix, policy, new ConductorAdvanceOutcome.Done(state));
+
+        if (AcceptanceAttributionPendingHandler.TryHoldRetained(goal, goalPrefix, policy, RecordEscalation) is { } pendingAttribution) return pendingAttribution;
 
         if (TryDecideLifecycleEntry(goal, goalPrefix, policy, state, out var lifecycleEntryResult, out var lifecycleEntryDecision))
             return lifecycleEntryResult;

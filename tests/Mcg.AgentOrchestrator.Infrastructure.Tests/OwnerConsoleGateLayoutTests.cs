@@ -113,7 +113,7 @@ public sealed class OwnerConsoleGateLayoutTests
         var lines = Render(gate);
         Assert.Equal(new[] { "GATE train | elapsed 29m", "ca798e7c First + 171a09ca Second",
             " x 0 failed   > 0 running   + 1 passed   = 0 cached   . 0 queued",
-            "[######----] 62%  ~9m left", "PASSED  1 lanes (Enter to expand)", "WHERE   local [##########]" }, lines);
+            "[######----] estimate 62%  ~9m left", "PASSED  1 lanes (Enter to expand)", "WHERE   local [##########]" }, lines);
         Assert.DoesNotContain(Render(gate, 120, true), line => line.StartsWith("  "));
     }
 

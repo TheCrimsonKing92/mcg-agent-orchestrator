@@ -10,6 +10,10 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+if (Test-Path -LiteralPath (Join-Path (Get-Location).Path '.orchestrator-context\worker-build-channel.json') -PathType Leaf) {
+    & (Join-Path $PSScriptRoot 'Request-HostWorkerBuild.ps1') -Projects $Projects -Configuration $Configuration
+    exit $LASTEXITCODE
+}
 Import-Module (Join-Path $PSScriptRoot "WorkerBuildReceipt.psm1") -Force
 
 function ConvertTo-SafePathSegment {

@@ -24,7 +24,8 @@ internal static class CompletionBuildDispatchReconciliationPolicy
         bool failedWorkerBuildCheck,
         Func<WorkerBuildReceiptVerdict> workerBuildReceipt,
         Func<OrchestratorBuildCheckRequest, OrchestratorBuildCheckResult> runBuildCheck,
-        Func<OrchestratorBuildCheckRequest, CompletionBuildEvidenceOperation>? reconcileOperation)
+        Func<OrchestratorBuildCheckRequest, CompletionBuildEvidenceOperation>? reconcileOperation,
+        GoalId? goalId = null)
     {
         var historical = task.CompletionBuildEvidence is { } attached && !HasCurrentWorker(task) ? attached : null;
         // A newer round needs its own matching receipt. Once historical custody releases,
@@ -34,6 +35,8 @@ internal static class CompletionBuildDispatchReconciliationPolicy
             historical is null ? runBuildCheck : _ => new(false, -1,
                 $"Historical completion build {historical.Id} cannot certify this dispatch; current build receipt is required, or retry after custody release."),
             historical is null ? reconcileOperation : null,
-            HasCurrentWorker(task), task.LastDispatch?.WorkerBuildScope?.MetadataDigest);
+            HasCurrentWorker(task), task.LastDispatch?.WorkerBuildScope?.MetadataDigest,
+            goalId is { } owner && task.LastDispatch is { } dispatch
+                ? new(owner, task.Id, dispatch) : null);
     }
 }

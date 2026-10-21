@@ -19,15 +19,24 @@ public sealed class ExcessWorkerRoundAnalysisScriptTests
             ["PROGRAMDATA"] = null
         };
 
-        var result = RunProcessWithAmbientOverrides(
-            Directory.GetCurrentDirectory(),
-            TestPowerShell.Executable,
-            ambientOverrides,
-            "-NoProfile",
-            "-Command",
-            "if ($env:MCG_ORCHESTRATOR_REPOSITORY_ROOT -or $env:GIT_DIR -or $env:GIT_CONFIG_GLOBAL -ne 'NUL') { exit 41 }; if (-not $env:PATH -or -not $env:SYSTEMROOT) { exit 42 }");
+        var privateDirectory = Path.Combine(Path.GetTempPath(), "mcg-hermetic-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(privateDirectory);
+        try
+        {
+            var result = RunProcessWithAmbientOverrides(
+                privateDirectory,
+                TestPowerShell.Executable,
+                ambientOverrides,
+                "-NoProfile",
+                "-Command",
+                "if ($env:MCG_ORCHESTRATOR_REPOSITORY_ROOT -or $env:GIT_DIR -or $env:GIT_CONFIG_GLOBAL -ne 'NUL') { exit 41 }; if (-not $env:PATH -or -not $env:SYSTEMROOT) { exit 42 }");
 
-        Xunit.Assert.True(result.ExitCode == 0, result.Stdout + result.Stderr);
+            Xunit.Assert.True(result.ExitCode == 0, result.Stdout + result.Stderr);
+        }
+        finally
+        {
+            Directory.Delete(privateDirectory, recursive: true);
+        }
     }
 
     [Xunit.Fact(DisplayName = "Excess_round_analyzer_is_bounded_deterministic_and_preserves_missing_data")]

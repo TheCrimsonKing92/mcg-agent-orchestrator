@@ -16,6 +16,9 @@ public sealed record AcceptanceLaneRerunEvidence(
     string? RerunPredicate,
     string Outcome)
 {
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public AcceptanceLaneRerunAttribution? Attribution { get; init; }
+
     public const string Flake = "flake";
     public const string ConfirmedFailure = "confirmed-failure";
 }

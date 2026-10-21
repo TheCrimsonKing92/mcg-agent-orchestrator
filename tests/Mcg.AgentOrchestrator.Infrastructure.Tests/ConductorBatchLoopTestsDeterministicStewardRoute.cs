@@ -32,11 +32,12 @@ public sealed class ConductorBatchLoopTestsDeterministicStewardRoute : Conductor
         using var harness = new StewardHarness("B");
         var original = ResearchPlan() + "\n" + string.Join("\n", OriginalRequests(count));
         var parsed = AgentOutputDirectives.ParseHumanInputRequest(original, AgentRole.Planner);
-        Xunit.Assert.True(parsed.IsMalformed);
+        Xunit.Assert.False(parsed.IsMalformed, parsed.Diagnostic);
         Xunit.Assert.Null(parsed.Directive);
-        Xunit.Assert.Equal(MultipleRequests, parsed.Diagnostic);
+        Xunit.Assert.Equal(count, parsed.Directives.Count);
         Xunit.Assert.True(PlannerOutputContract.TryValidate(original, out _, out var diagnostic, Criteria), diagnostic);
-        SeedPlanner(harness, "[orchestrator Planner output contract rejection]\n" + parsed.Diagnostic, original);
+        // Retained receipt from the former protocol, not a rejection produced by today's parser.
+        SeedPlanner(harness, "[orchestrator Planner output contract rejection]\n" + MultipleRequests, original);
         var rejected = Xunit.Assert.Single(harness.Task.VerificationHistory);
         var originalBytes = File.ReadAllBytes(rejected.StandardOutputPath!);
         var host = CreateHost(harness, new ConductorStewardDeterministicRoute());
@@ -61,7 +62,7 @@ public sealed class ConductorBatchLoopTestsDeterministicStewardRoute : Conductor
         Xunit.Assert.Same(rejected, Xunit.Assert.Single(harness.Task.VerificationHistory));
         Xunit.Assert.False(rejected.Succeeded);
         Xunit.Assert.Null(harness.Task.LastVerification);
-        Xunit.Assert.Contains(MultipleRequests, harness.Task.AcceptedRetryFeedback?.Message);
+        Xunit.Assert.Contains("Historical Planner contract recovery", harness.Task.AcceptedRetryFeedback?.Message);
         Xunit.Assert.Contains("Operator obligations", harness.Task.AcceptedRetryFeedback?.Message);
         var decision = await harness.Decisions.GetDecisionStateAsync($"adjudicate-{intent.Id}");
         Xunit.Assert.NotNull(decision?.Receipt);
@@ -85,23 +86,93 @@ public sealed class ConductorBatchLoopTestsDeterministicStewardRoute : Conductor
         Xunit.Assert.Equal(WorkerContextArtifact.Hash(originalBytes), artifact.ContentHash);
         Xunit.Assert.Contains("MANDATORY READ: identity=task/rejected-planner/stdout", WorkerContextPackageBuilder.Render(package));
 
-        // Simulate the Planner's format-only resubmission; routing itself does not merge or accept requests.
-        var corrected = ResearchPlan() + "\n" + AcceptanceRequest("combined", RequiredSelections);
+        // Simulate resubmission under the plural recovery procedure. Routing never merges identities.
+        var corrected = ResearchPlan() + "\n" + string.Join("\n", OriginalRequests(count));
         var correctedRequest = AgentOutputDirectives.ParseHumanInputRequest(corrected, AgentRole.Planner);
         Xunit.Assert.False(correctedRequest.IsMalformed);
-        Xunit.Assert.NotNull(correctedRequest.Directive);
-        Xunit.Assert.Equal("acceptance-gate", correctedRequest.Directive.EvidenceOwner);
-        Xunit.Assert.Equal(RequiredSelections, correctedRequest.Directive.TestNames);
-        var originalSelections = OriginalRequests(count).Select(request =>
-            AgentOutputDirectives.ParseHumanInputRequest(request, AgentRole.Planner).Directive!)
-            .Where(request => request.EvidenceOwner == "acceptance-gate")
+        Xunit.Assert.Null(correctedRequest.Directive);
+        Xunit.Assert.Equal(count, correctedRequest.Directives.Count);
+        for (var index = 0; index < count; index++)
+            Xunit.Assert.True(parsed.Directives[index].PlannerEvidence!
+                .SemanticallyEquals(correctedRequest.Directives[index].PlannerEvidence));
+        var originalSelections = parsed.Directives.Where(request => GateTestObligation.IsAcceptanceGateOwner(request.EvidenceOwner))
             .SelectMany(request => request.TestNames!).Distinct(StringComparer.Ordinal).ToArray();
-        Xunit.Assert.Equal(originalSelections, correctedRequest.Directive.TestNames);
+        Xunit.Assert.Equal(RequiredSelections, originalSelections);
+        Xunit.Assert.Equal(originalSelections, correctedRequest.Directives
+            .Where(request => GateTestObligation.IsAcceptanceGateOwner(request.EvidenceOwner))
+            .SelectMany(request => request.TestNames!).Distinct(StringComparer.Ordinal));
+
+        // Exercise the actual owner routing: all Acceptance identities and the Operator request are tracked.
+        Xunit.Assert.DoesNotContain(harness.Goal.Timeline, evt => evt.Kind == ProgressKind.TaskCompleted);
+        RecordResubmission(harness, corrected);
+        Xunit.Assert.Equal(count - 1, harness.Goal.GateTestObligations.Count);
+        foreach (var request in correctedRequest.Directives.Where(item => GateTestObligation.IsAcceptanceGateOwner(item.EvidenceOwner)))
+        {
+            var obligation = Xunit.Assert.Single(harness.Goal.GateTestObligations.Where(item =>
+                item.PlannerIdentity?.EvidenceKey == request.PlannerEvidence!.EvidenceKey));
+            Xunit.Assert.Equal(request.TestNames, obligation.Selectors);
+            Xunit.Assert.True(request.PlannerEvidence!.SemanticallyEquals(obligation.PlannerEvidence));
+        }
+        var operatorWait = Xunit.Assert.Single(harness.Kernel.HumanInputRequests);
+        Xunit.Assert.Equal("operator", operatorWait.EvidenceOwner);
+        Xunit.Assert.Equal("family-review", operatorWait.PlannerIdentity?.EvidenceKey);
+        Xunit.Assert.False(operatorWait.IsCompleted);
         Xunit.Assert.True(PlannerOutputContract.TryValidate(corrected, out _, out diagnostic, Criteria), diagnostic);
         Xunit.Assert.StartsWith(ResearchPlan(), corrected);
         Xunit.Assert.Contains("Operator owns; pending", corrected);
-        Xunit.Assert.Single(harness.Task.VerificationHistory);
-        Xunit.Assert.DoesNotContain(harness.Goal.Timeline, evt => evt.Kind == ProgressKind.TaskCompleted);
+        Xunit.Assert.Equal(2, harness.Task.VerificationHistory.Count);
+        Xunit.Assert.Contains(rejected, harness.Task.VerificationHistory);
+        Xunit.Assert.False(rejected.Succeeded);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(3)]
+    [Xunit.InlineData(4)]
+    public void Former_single_request_workaround_loses_tracked_owner_and_distinct_requirements(int count)
+    {
+        using var harness = new StewardHarness("B");
+        harness.Kernel.SetGoalRefinedSpec(harness.Goal.Id, new RefinedSpec("Repair the evidence", Criteria,
+            VerificationClass.TestVerifiable, [], []));
+        // Negative control: the former advice retained the Operator mapping in prose and combined Acceptance keys.
+        var lossyOutput = ResearchPlan() + "\n" + AcceptanceRequest("combined", RequiredSelections);
+        var lossy = AgentOutputDirectives.ParseHumanInputRequest(lossyOutput, AgentRole.Planner);
+        Xunit.Assert.False(lossy.IsMalformed);
+        RecordResubmission(harness, lossyOutput);
+        Xunit.Assert.Single(harness.Goal.GateTestObligations);
+        Xunit.Assert.Empty(harness.Kernel.HumanInputRequests);
+        var required = AgentOutputDirectives.ParseHumanInputRequest(string.Join("\n", OriginalRequests(count)), AgentRole.Planner);
+        Xunit.Assert.Equal(count, required.Directives.Count);
+        Xunit.Assert.All(required.Directives, request =>
+            Xunit.Assert.DoesNotContain(harness.Goal.GateTestObligations, obligation =>
+                obligation.PlannerIdentity?.EvidenceKey == request.PlannerEvidence!.EvidenceKey));
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(true)]
+    [Xunit.InlineData(false)]
+    public async Task Current_none_mixture_uses_model_path_instead_of_historical_recovery(bool noneFirst)
+    {
+        using var harness = new StewardHarness("B");
+        const string none = "PLANNER_EVIDENCE_REQUEST: none";
+        var request = AcceptanceRequest("current", RequiredSelections);
+        var output = noneFirst ? none + "\n" + request : request + "\n" + none;
+        var parsed = AgentOutputDirectives.ParseHumanInputRequest(output, AgentRole.Planner);
+        Xunit.Assert.True(parsed.IsMalformed);
+        Xunit.Assert.Empty(parsed.Directives);
+        Xunit.Assert.NotEqual(MultipleRequests, parsed.Diagnostic);
+        SeedPlanner(harness, "[orchestrator Planner output contract rejection]\n" + parsed.Diagnostic, output);
+        harness.Model.Reply("{\"kind\":\"no-action\",\"reason\":\"current invalid batch requires clarification\"}");
+        var host = CreateHost(harness, new ConductorStewardDeterministicRoute());
+        host.ServiceTick(harness.Kernel);
+        await host.CurrentRound!;
+        host.ServiceTick(harness.Kernel);
+
+        // Reverting the diagnostic split deterministically routes this as a historical failure (zero model calls).
+        Xunit.Assert.Equal(1, harness.Model.Calls);
+        Xunit.Assert.Empty(await harness.Intents.ListForGoalAsync(harness.Goal.Id.Value));
+        Xunit.Assert.Equal(WorkTaskStatus.Failed, harness.Task.Status);
+        Xunit.Assert.Empty(harness.Goal.GateTestObligations);
+        Xunit.Assert.Empty(harness.Kernel.HumanInputRequests);
     }
 
     [Xunit.Theory]
@@ -333,6 +404,19 @@ public sealed class ConductorBatchLoopTestsDeterministicStewardRoute : Conductor
         new GoalLifecycleEventWriter(Path.Combine(harness.Root, "lifecycle")),
         new ConductEventLogWriter(harness.ConductPath), deterministicRoute: route);
 
+    private static void RecordResubmission(StewardHarness harness, string output)
+    {
+        var started = (harness.Task.LatestRetryAt ?? DateTimeOffset.UtcNow).AddSeconds(1);
+        harness.Kernel.RecordTaskDispatch(harness.Goal.Id, harness.Task.Id,
+            new TaskDispatchRecord("test-worker", "test.exe", harness.Root, started, BaseCommit: StewardHarness.Sha));
+        Xunit.Assert.NotNull(harness.Task.LastDispatch!.BriefSnapshot);
+        const string result = "\nWORKER_RESULT:\nfiles: none\ncommands: source inspection\ntests: not-run - Planner role\ncommit: none\nblockers: none\nmodel_fit: adequate\nskills: none\nconfidence: high\nEND_WORKER_RESULT";
+        harness.Kernel.RecordDispatchExecutionResult(harness.Goal.Id, harness.Task.Id,
+            new TaskVerificationRecord("test.exe", harness.Root, 0, output + result, "", started.AddSeconds(1),
+                WorkerResultPresent: true, DispatchAttemptAt: started));
+        Xunit.Assert.True(harness.Task.LastVerification!.Succeeded);
+    }
+
     private static void SeedPlanner(StewardHarness harness, string stderr, string? output = null, DateTimeOffset? dispatchedAt = null)
     {
         if (output is not null)
@@ -371,7 +455,7 @@ public sealed class ConductorBatchLoopTestsDeterministicStewardRoute : Conductor
     // Synthetic reproduction of the observed shapes; no claim that these are historical captured payloads.
     private static string ResearchPlan() => """
         ## Source findings
-        Current parser rejects multiple evidence directives while retained research remains useful for the next Planner round.
+        The former parser rejected multiple evidence directives; the current plural protocol must retain every requirement.
         ## Premise validity
         Source confirms the existing rejection mechanism and the missing deterministic correction. The captured plan retains useful research findings.
         ## Acceptance criteria mapping

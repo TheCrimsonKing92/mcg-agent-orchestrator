@@ -281,9 +281,13 @@ public sealed class Goal
 
     internal void RecordGateTestObligation(GateTestObligation obligation)
     {
-        var index = _gateTestObligations.FindIndex(existing =>
-            existing.Id == obligation.Id && existing.BriefVersion == obligation.BriefVersion);
+        var index = _gateTestObligations.FindIndex(existing => existing.HasSameIdentity(obligation));
         if (index < 0) _gateTestObligations.Add(obligation);
+        else if (obligation.PlannerIdentity is not null)
+        {
+            if (!obligation.PlannerEvidence!.SemanticallyEquals(_gateTestObligations[index].PlannerEvidence))
+                throw new InvalidOperationException("Conflicting stored Planner evidence payload.");
+        }
         else _gateTestObligations[index] = obligation;
     }
 
@@ -292,9 +296,11 @@ public sealed class Goal
         _gateTestObligations.Clear();
         foreach (var obligation in obligations ?? [])
         {
-            if (_gateTestObligations.Any(existing =>
-                existing.Id == obligation.Id && existing.BriefVersion == obligation.BriefVersion)) continue;
-            _gateTestObligations.Add(obligation with { Selectors = obligation.Selectors?.ToArray() ?? [] });
+            // Legacy restore kept the first matching fingerprint. Typed records additionally
+            // validate their immutable payload, without crossing the typed/untyped boundary.
+            if (obligation.PlannerIdentity is null && _gateTestObligations.Any(existing =>
+                    existing.PlannerIdentity is null && existing.HasSameIdentity(obligation))) continue;
+            RecordGateTestObligation(obligation with { Selectors = obligation.Selectors?.ToArray() ?? [] });
         }
     }
 
@@ -869,6 +875,22 @@ public sealed class Goal
         _acceptanceFailureDeferredForRetry = false;
     }
 
+    public void RetainAcceptanceAttributionPending(AcceptanceAttributionPending pending)
+    {
+        ArgumentNullException.ThrowIfNull(pending);
+        if (Status is not (GoalStatus.Verified or GoalStatus.AcceptanceFailed) ||
+            LatestAcceptanceFailure is not { } failure || string.IsNullOrWhiteSpace(pending.CandidateSha) ||
+            string.IsNullOrWhiteSpace(pending.MainSha) || pending.CandidateSha != failure.BranchHeadSha ||
+            pending.MainSha != failure.MainHeadSha || string.IsNullOrWhiteSpace(pending.AttemptId) ||
+            pending.Tests is not { Count: > 0 } || pending.Tests.Any(test =>
+                !failure.FailedChecks.Contains(test.CheckName, StringComparer.Ordinal) ||
+                string.IsNullOrWhiteSpace(test.TestIdentity) || string.IsNullOrWhiteSpace(test.BaselineEvidence) ||
+                test.FirstReceipts is not { Count: > 0 } || test.RerunReceipts is not { Count: > 0 }))
+            throw new InvalidOperationException("Pending attribution requires a bound retained acceptance failure and executed receipts.");
+        _retainedAcceptanceFailure = failure with { AttributionPending = pending };
+        SetStatus(GoalStatus.AcceptanceFailed);
+    }
+
     internal void IncrementAutomaticAcceptanceRetryCount() => AutomaticAcceptanceRetryCount++;
 
     internal void ResetAutomaticAcceptanceRetryCount() => AutomaticAcceptanceRetryCount = 0;
@@ -1114,7 +1136,7 @@ public sealed class Goal
                     RetainedAcceptanceFailure.BranchHeadSha,
                     RetainedAcceptanceFailure.MainHeadSha,
                     RetainedAcceptanceFailure.CheckAttributions?.ToList(),
-                    RetainedAcceptanceFailure.BaselineAttestation),
+                    RetainedAcceptanceFailure.BaselineAttestation, RetainedAcceptanceFailure.AttributionPending),
             _effectiveAcceptanceCriteriaCorrections.Count == 0
                 ? null
                 : _effectiveAcceptanceCriteriaCorrections.Select(correction => new EffectiveAcceptanceCriteriaCorrectionSnapshot(
@@ -1238,6 +1260,8 @@ public sealed class Goal
                 failure.MainHeadSha,
                 failure.CheckAttributions,
                 failure.BaselineAttestation);
+            if (failure.AttributionPending is { } pending)
+                goal._retainedAcceptanceFailure = goal._retainedAcceptanceFailure! with { AttributionPending = pending };
             var acceptanceFailureDeferredForRetry = snapshot.AcceptanceFailureDeferredForRetry ??
                 (snapshot.Status == GoalStatus.Active &&
                  goal.Tasks.Any(task =>
@@ -1464,7 +1488,8 @@ public sealed record AcceptanceFailureSummary(
     string? BranchHeadSha = null,
     string? MainHeadSha = null,
     IReadOnlyList<AcceptanceCheckAttribution>? CheckAttributions = null,
-    string? BaselineAttestation = null)
+    string? BaselineAttestation = null,
+    AcceptanceAttributionPending? AttributionPending = null)
 {
     public bool IsEnvironmentalApparatus =>
         FailedChecks.Count > 0 &&

@@ -2671,7 +2671,7 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
         // exercises LOCAL MATERIAL presence, never live authentication.
         File.WriteAllText(
             Path.Combine(credentialSource, ".credentials.json"),
-            "{\"claudeAiOauth\":{\"accessToken\":\"sk-ant-oat01-synthetic-not-a-real-token\"}}");
+            "{\"claudeAiOauth\":{\"accessToken\":\"synthetic-local-oauth-fixture\"}}");
         File.WriteAllText(Path.Combine(credentialSource, "settings.json"), "{\"theme\":\"dark\"}");
         var startInfo = CreateSandboxStartInfo(root);
         var sandboxRoot = Path.Combine(root, ".mcg-sandbox");
@@ -2688,7 +2688,7 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
         Assert.False(startInfo.Environment.ContainsKey("ANTHROPIC_API_KEY"));
         Assert.True(startInfo.Environment.TryGetValue("CLAUDE_CONFIG_DIR", out var claudeConfigDir));
         Assert.Equal(
-            "{\"claudeAiOauth\":{\"accessToken\":\"sk-ant-oat01-synthetic-not-a-real-token\"}}",
+            "{\"claudeAiOauth\":{\"accessToken\":\"synthetic-local-oauth-fixture\"}}",
             File.ReadAllText(Path.Combine(claudeConfigDir!, ".credentials.json")));
         Assert.Equal(
             "{\"theme\":\"dark\"}",
@@ -4055,8 +4055,8 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
         var kernel = new AgentOrchestratorKernel();
         var task = new TaskSpec(
             TaskId.New(),
-            "Update DispatchFailureClassifier behavior.",
-            AgentRole.Developer,
+            "Verify dependent DispatchFailureClassifier behavior.",
+            AgentRole.Tester,
             "Run focused dependent tests.");
         var goal = kernel.CreateGoal("Select dependent integration tests", [task]);
 

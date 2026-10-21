@@ -33,7 +33,7 @@ public sealed class CliAttentionAgentReadEnvelopeContractTests : CliTaskQueryTes
             var payload = AssertEnvelope(bare.RootElement);
             Assert.Equal(payload.GetRawText(), AssertEnvelope(list.RootElement).GetRawText());
             var row = Assert.Single(payload.GetProperty("waits").EnumerateArray());
-            Assert.Equal(new[] { "id", "goalId", "taskId", "kind", "question", "requestedAt",
+            Assert.Equal(new[] { "id", "goalId", "taskId", "kind", "question", "plannerIdentity", "plannerEvidence", "owner", "availability", "nextAction", "requestedAt",
                 "isAutoDefaultable", "isDismissible", "isAnswerRequired", "isExternallyBlocked", "resumeCommand" },
                 row.EnumerateObject().Select(property => property.Name));
             Assert.Equal(wait.Id.Value, row.GetProperty("id").GetString());
@@ -120,7 +120,7 @@ public sealed class CliAttentionAgentReadEnvelopeContractTests : CliTaskQueryTes
         Assert.Equal(TimeSpan.Zero, DateTimeOffset.ParseExact(timestamp, "O", CultureInfo.InvariantCulture).Offset);
         Assert.EndsWith("Z", timestamp);
         var payload = envelope.GetProperty("payload");
-        Assert.Equal(new[] { "waits", "items", "providerHolds" }, payload.EnumerateObject().Select(property => property.Name));
+        Assert.Equal(new[] { "waits", "gateEvidence", "items", "providerHolds" }, payload.EnumerateObject().Select(property => property.Name));
         return payload;
     }
 

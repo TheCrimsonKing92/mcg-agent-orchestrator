@@ -9,6 +9,10 @@ internal static class ExitedDispatchReconciliationExecutor
         AgentOrchestratorKernel kernel, GoalId goalId, TaskId taskId, BackgroundDispatchRunner dispatchRunner)
     {
         var task = kernel.GetTask(goalId, taskId);
+        if ((task.LastDispatch?.WorkerBuildProtocolVersion == 1 || task.WorkerBuildInvocations.Count != 0) &&
+            dispatchRunner.WorkerBuildInvocations is { } builds &&
+            !builds.ReconcileOutstanding(kernel, goalId, taskId)) return false;
+        task = kernel.GetTask(goalId, taskId);
         if (task.CompletionBuildEvidence is { } operation &&
             (!BackgroundDispatchRunner.HasCurrentCompletionBuildWorker(task) || !operation.IsPending && !operation.CustodyReleased))
         {
@@ -32,7 +36,8 @@ internal static class ExitedDispatchReconciliationExecutor
         Func<Goal, Goal> readCurrentGoal)
     {
         var exitedUnappliedTaskIds = goal.Tasks
-            .Where(task => task.CompletionBuildEvidence is { } operation &&
+            .Where(task => task.WorkerBuildInvocations.Any(i => !i.IsTerminal || !i.CustodyReleased) ||
+                           task.CompletionBuildEvidence is { } operation &&
                            (operation.IsPending || !operation.CustodyReleased) ||
                            task.LastProcess is { } process &&
                            DispatchProcessCompletionState.IsExitedWithoutAppliedCompletion(task, process))

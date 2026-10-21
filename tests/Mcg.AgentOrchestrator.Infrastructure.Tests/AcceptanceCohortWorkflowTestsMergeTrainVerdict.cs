@@ -53,10 +53,11 @@ public sealed class AcceptanceCohortWorkflowTestsMergeTrainVerdict : AcceptanceC
                 AgentCatalog.Default().Agents, WorkerProfileCatalog.Default(), cleanupHooks: cleanup.Hooks);
             var selection = ProjectTrainSelection(driver, goals);
             var mainBefore = selection.Members[0].MainRevision;
-            var originalIdentity = MaterializeIdentity(selection.BindMembers());
+            var bindings = selection.BindMembers(id => kernel.GetGoal(id).AuthoritativeBrief.Version);
+            var originalIdentity = MaterializeIdentity(bindings);
             // A binary red drops the newest member, then records a second red for the shorter train.
             var decidingIdentity = infrastructureFailure
-                ? originalIdentity : MaterializeIdentity(selection.BindMembers().Take(2).ToArray());
+                ? originalIdentity : MaterializeIdentity(bindings.Take(2).ToArray());
             var expectedOutcome = infrastructureFailure
                 ? MergeTrainGateOutcome.InfrastructureFailure : MergeTrainGateOutcome.Failed;
             var store = new MergeTrainAcceptanceStore(

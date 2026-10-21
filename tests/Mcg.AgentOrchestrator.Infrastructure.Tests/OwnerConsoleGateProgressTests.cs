@@ -38,7 +38,7 @@ public sealed class OwnerConsoleGateProgressTests
         Assert.Equal("local slot 2", gate.Lanes[1].Location);
         Assert.Equal("machine-two", gate.Lanes[2].Location);
         Assert.Equal(300d, gate.Lanes[2].MedianSeconds);
-        Assert.Equal(2d / 3, gate.Fraction, 10);
+        Assert.Equal(6d / 7, gate.Fraction, 10); // 600s gate elapsed / (600s + 100s remaining).
         Assert.Equal(100, gate.RemainingSeconds);
         Assert.Equal(2, gate.DoneCount);
         Assert.Equal(3, gate.TotalCount);
@@ -114,12 +114,143 @@ public sealed class OwnerConsoleGateProgressTests
     }
 
     [Fact]
+    public void RunningProgressKeepsFractionalModeledRemainingBeforeDisplayTruncation()
+    {
+        var gate = OwnerConsoleGateProgress.Build(Now,
+        [
+            Event(-1, "acceptance-cohort", "ACCEPTANCE_COHORT_ENTRY members=776a132e,eade84cb"),
+            Event(0, "gate-progress", Progress("verification-check", "A", 500))
+        ], [new("A", 1.25)], []);
+
+        Assert.Equal(TimeSpan.FromSeconds(1), gate.Elapsed);
+        Assert.Equal(TimeSpan.FromSeconds(0.5), Assert.Single(gate.Lanes).Elapsed);
+        Assert.Equal(0, gate.RemainingSeconds); // The raw model has 0.75s left.
+        Assert.Equal(4d / 7, gate.Fraction, 10);
+        Assert.Equal("[#####-----] estimate 57%  ~0m left", OwnerConsoleGateFormatter.ProgressLine(gate));
+        Assert.Equal(0, gate.DoneCount);
+    }
+
+    [Theory]
+    [InlineData("ACCEPTANCE goal=776a132e result=started", "solo", 1)]
+    [InlineData("ACCEPTANCE_COHORT_ENTRY members=776a132e,eade84cb", "cohort", 2)]
+    [InlineData("ACCEPTANCE_COHORT_ENTRY members=776a132e,eade84cb train=abc", "train", 2)]
+    public void GateWallTimeBeforeLaneStartEarnsEstimatedProgress(
+        string entry, string kind, int members)
+    {
+        var gate = OwnerConsoleGateProgress.Build(Now,
+        [
+            Event(-60, "acceptance-cohort", entry),
+            Event(-40, "gate-progress", "PHASE_PROGRESS goal=776a132e phase=verification-check target=A elapsed_ms=0")
+        ], [new("A", 100), new("B", 100)], []);
+
+        Assert.True(gate.Live);
+        Assert.Equal(kind, gate.Kind);
+        Assert.Equal(members, gate.Members.Count);
+        Assert.Equal(TimeSpan.FromSeconds(60), gate.Elapsed);
+        Assert.Equal(TimeSpan.FromSeconds(40), gate.Lanes[0].Elapsed);
+        Assert.Equal([OwnerConsoleGateLaneState.Running, OwnerConsoleGateLaneState.Queued],
+            gate.Lanes.Select(lane => lane.State));
+        Assert.Equal(160, gate.RemainingSeconds);
+        Assert.Equal(3d / 11, gate.Fraction, 10);
+        Assert.Equal(0, gate.DoneCount);
+        Assert.Equal(2, gate.TotalCount);
+        Assert.False(gate.Failing);
+        Assert.Contains("0/2", OwnerConsoleGateFormatter.StatusSegment(gate));
+        var lines = OwnerConsoleGateLayout.Lines(gate, 120, false);
+        Assert.Equal(" x 0 failed   > 1 running   + 0 passed   = 0 cached   . 1 queued", lines[2]);
+        Assert.Equal("[##--------] estimate 27%  ~3m left", lines[3]);
+    }
+
+    [Theory]
+    [InlineData(100, 0, 0, 0, 100)] // No gate elapsed, positive remaining.
+    [InlineData(100, 100000, 0, 0, 0)] // Zero denominator with unfinished work.
+    [InlineData(100, 120000, 10, 0.99, 0)] // Running beyond its median is still unfinished.
+    [InlineData(100, 0, 1000000, 0.99, 100)] // Long pre-lane wait must also cap at 99%.
+    [InlineData(0, 0, 60, 0, 0)] // No modeled duration, despite positive elapsed time.
+    public void UnfinishedEstimatesAreFiniteBoundedAndNeverDisplayCompletion(
+        double modeledSeconds, int laneElapsedMs, int gateElapsedSeconds, double fraction, int remaining)
+    {
+        var gate = OwnerConsoleGateProgress.Build(Now,
+        [
+            Event(-gateElapsedSeconds, "acceptance-cohort", "ACCEPTANCE_COHORT_ENTRY members=776a132e,eade84cb"),
+            Event(0, "gate-progress", Progress("verification-check", "A", laneElapsedMs))
+        ], [new("A", modeledSeconds)], []);
+
+        Assert.True(gate.Live);
+        Assert.True(double.IsFinite(gate.Fraction));
+        Assert.InRange(gate.Fraction, 0, 0.99);
+        Assert.Equal(fraction, gate.Fraction, 10);
+        Assert.Equal(remaining, gate.RemainingSeconds);
+        Assert.Equal(OwnerConsoleGateLaneState.Running, Assert.Single(gate.Lanes).State);
+        Assert.Equal(0, gate.DoneCount);
+        Assert.Equal(1, gate.TotalCount);
+        var percent = (int)Math.Floor(fraction * 100);
+        Assert.Contains($"estimate {percent}%", OwnerConsoleGateFormatter.ProgressLine(gate));
+        Assert.DoesNotContain("100%", OwnerConsoleGateFormatter.ProgressLine(gate));
+    }
+
+    [Theory]
+    [InlineData("shard-complete", "passed", false)]
+    [InlineData("shard-complete", "failed", true)]
+    [InlineData("cache-hit", "unknown", false)]
+    public void FinishedModeledWorkAtZeroElapsedPreservesCountsAndOutcomes(
+        string phase, string outcome, bool failing)
+    {
+        var gate = OwnerConsoleGateProgress.Build(Now,
+            [Event(0, "gate-progress", Progress(phase, "A", 1000) + " outcome=" + outcome)],
+            [new("A", 100)], []);
+
+        Assert.Equal(TimeSpan.Zero, gate.Elapsed);
+        Assert.Equal(0, gate.RemainingSeconds);
+        Assert.Equal(1, gate.Fraction);
+        Assert.Equal(1, gate.DoneCount);
+        Assert.Equal(1, gate.TotalCount);
+        Assert.Equal(failing, gate.Failing);
+        var lane = Assert.Single(gate.Lanes);
+        Assert.Equal(outcome, lane.Outcome);
+        Assert.Equal(phase == "cache-hit" ? OwnerConsoleGateLaneState.Cached : OwnerConsoleGateLaneState.Done, lane.State);
+        var lines = OwnerConsoleGateLayout.Lines(gate, 120, false);
+        if (failing) Assert.DoesNotContain(lines, line => line.Contains("estimate"));
+        else Assert.Contains("[##########] estimate 100%  ~0m left", lines);
+    }
+
+    [Fact]
+    public void UnknownChecksWithoutAnyDurationModelKeepZeroProgress()
+    {
+        var gate = OwnerConsoleGateProgress.Build(Now,
+            [Event(-60, "gate-progress", Progress("verification-check", "unknown", 0))], [], []);
+
+        Assert.True(gate.Live);
+        Assert.Equal(TimeSpan.FromSeconds(60), gate.Elapsed);
+        Assert.Null(Assert.Single(gate.Lanes).MedianSeconds);
+        Assert.Equal(0, gate.Fraction);
+        Assert.Equal(0, gate.RemainingSeconds);
+        Assert.Equal(0, gate.DoneCount);
+        Assert.Equal(0, gate.TotalCount);
+    }
+
+    [Fact]
+    public void FutureGateStartUsesNonnegativeElapsed()
+    {
+        var gate = OwnerConsoleGateProgress.Build(Now,
+        [
+            Event(1, "acceptance-cohort", "ACCEPTANCE_COHORT_ENTRY members=776a132e,eade84cb"),
+            Event(2, "gate-progress", Progress("verification-check", "A", 0))
+        ], [new("A", 100)], []);
+
+        Assert.True(gate.Live);
+        Assert.Equal(TimeSpan.Zero, gate.Elapsed);
+        Assert.Equal(0, gate.Fraction);
+        Assert.Equal(100, gate.RemainingSeconds);
+    }
+
+    [Fact]
     public void MissingHistoryUsesManifestEstimateInFractionAndRemaining()
     {
         var gate = OwnerConsoleGateProgress.Build(Now,
             [Event(-10, "gate-progress", "PHASE_PROGRESS goal=776a132e phase=shard-complete target=A elapsed_ms=1000 outcome=failed failed=2")],
             Manifest, [new("A", 100, Now)]);
-        Assert.Equal(1d / 6, gate.Fraction, 10);
+        Assert.Equal(1d / 51, gate.Fraction, 10); // 10s gate elapsed, not the failed lane's 1s.
         Assert.Equal(500, gate.RemainingSeconds);
         Assert.True(gate.Lanes[1].IsEstimate);
         Assert.Equal(200d, gate.Lanes[1].MedianSeconds);
@@ -168,7 +299,7 @@ public sealed class OwnerConsoleGateProgressTests
         Assert.Null(gate.Lanes[3].MedianSeconds);
         Assert.False(gate.Lanes[3].IsManifestLane);
         Assert.Equal(3, gate.TotalCount);
-        Assert.Equal(0, gate.Fraction);
+        Assert.Equal(90d / 640, gate.Fraction, 10); // Rerunning A still earns elapsed modeled progress.
         Assert.Equal(550, gate.RemainingSeconds);
         Assert.Equal(OwnerConsoleGateLaneState.Running, gate.Lanes[0].State);
     }

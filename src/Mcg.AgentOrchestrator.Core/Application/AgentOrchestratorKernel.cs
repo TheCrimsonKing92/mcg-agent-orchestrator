@@ -267,6 +267,7 @@ public sealed partial class AgentOrchestratorKernel
                         request.GoalId == goal.Id &&
                         request.TaskId == task.Id &&
                         !request.IsCompleted &&
+                        request.IsCurrentForBrief(goal.AuthoritativeBrief.Version) &&
                         HumanWaitPolicyDefaults.BlocksActiveWork(request.Kind)))
                 {
                     continue;

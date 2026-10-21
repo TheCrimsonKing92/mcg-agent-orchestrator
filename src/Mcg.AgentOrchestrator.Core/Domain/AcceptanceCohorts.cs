@@ -17,7 +17,7 @@ public sealed class AcceptanceCohortMemberBinding : IEquatable<AcceptanceCohortM
         ChangeRiskTier changeRiskTier,
         ConductorTransitionDecision autoPromotionDisposition,
         string mergeStatus,
-        string mergeReason)
+        string mergeReason, int? briefVersion = null)
     {
         ArgumentNullException.ThrowIfNull(landingPaths);
         ArgumentNullException.ThrowIfNull(resourceKeys);
@@ -49,8 +49,10 @@ public sealed class AcceptanceCohortMemberBinding : IEquatable<AcceptanceCohortM
         AutoPromotionDisposition = autoPromotionDisposition;
         MergeStatus = mergeStatus.Trim();
         MergeReason = mergeReason.Trim();
+        BriefVersion = briefVersion;
     }
 
+    public int? BriefVersion { get; }
     public GoalId GoalId { get; }
     public string BranchRevision { get; }
     public string CandidateRevision { get; }
@@ -63,7 +65,7 @@ public sealed class AcceptanceCohortMemberBinding : IEquatable<AcceptanceCohortM
 
     public bool Equals(AcceptanceCohortMemberBinding? other) =>
         other is not null &&
-        GoalId == other.GoalId &&
+        GoalId == other.GoalId && BriefVersion == other.BriefVersion &&
         BranchRevision.Equals(other.BranchRevision, StringComparison.Ordinal) &&
         CandidateRevision.Equals(other.CandidateRevision, StringComparison.Ordinal) &&
         LandingPaths.SequenceEqual(other.LandingPaths, StringComparer.Ordinal) &&
@@ -78,7 +80,7 @@ public sealed class AcceptanceCohortMemberBinding : IEquatable<AcceptanceCohortM
     public override int GetHashCode()
     {
         var hash = new HashCode();
-        hash.Add(GoalId);
+        hash.Add(GoalId); hash.Add(BriefVersion);
         hash.Add(BranchRevision, StringComparer.Ordinal);
         hash.Add(CandidateRevision, StringComparer.Ordinal);
         foreach (var path in LandingPaths) hash.Add(path, StringComparer.Ordinal);
@@ -165,6 +167,7 @@ public sealed class AcceptanceCohortIdentity : IEquatable<AcceptanceCohortIdenti
             WriteField(stream, member.AutoPromotionDisposition.ToString());
             WriteField(stream, member.MergeStatus);
             WriteField(stream, member.MergeReason);
+            if (member.BriefVersion is { } version) WriteField(stream, $"brief:{version}");
         }
         WriteField(stream, main);
         WriteField(stream, tree);

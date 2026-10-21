@@ -65,20 +65,21 @@ internal sealed class ConductorStewardDeterministicRoute(
         if (string.IsNullOrWhiteSpace(evidence)) return null;
         if (trigger.Kind == ConductorStewardTriggerKind.PlannerOutputContractRejected && standaloneMarker &&
             string.Equals(evidence.Trim(), MultipleEvidenceRequests, StringComparison.Ordinal))
-            return "Format-only correction: " + MultipleEvidenceRequests + " " +
-                "Read the complete rejected plan in the authoritative task/rejected-planner/stdout context artifact. " +
+            return "Historical Planner contract recovery: the retained rejection used the former single-request protocol. " +
+                "Mandatory read: read the complete rejected plan in the authoritative task/rejected-planner/stdout context artifact. " +
                 "Preserve the research sections, source findings, " +
                 "and every criterion mapping; change only evidence-directive formatting. " +
-                "Group the original requests by owner and availability. For compatible post-implementation Acceptance requests, " +
-                "emit exactly one well-formed PLANNER_EVIDENCE_REQUEST JSON directive with a valid one-based criterion_index, " +
-                "owner=acceptance-gate, availability=post-implementation, no store, non-empty evidence_key, needed and reason, " +
-                "and the exact deduplicated union of all required test class, method and theory selections, preserving their spelling. " +
-                "Retain separately owned Operator obligations in their criterion mappings with their required proof and pending status; " +
-                "do not emit an additional directive or claim that removing it satisfies the obligation. " +
-                "If evidence requests are incompatible or ownership is uncertain, retain that uncertainty and use the existing " +
-                "clarification/escalation procedure; never guess a merge or invent evidence. " +
-                "Self-check before resubmitting: count exactly one directive line, validate its JSON against the existing schema, " +
-                "compare its tests with every original Acceptance selection, and confirm all research and mappings remain " +
+                "Emit a separate PLANNER_EVIDENCE_REQUEST JSON-object line for each distinct criterion_index/evidence_key requirement. " +
+                "Retain each owner, availability, needed, reason, store/store_ref and exact ordered test selections, preserving their spelling. " +
+                "Do not combine distinct Acceptance identities even when their test selections can run together. " +
+                "Keep Operator obligations tracked as separate evidence directives with their required proof and pending status. " +
+                "Clarify genuine payload conflicts or uncertain ownership through the existing clarification/escalation procedure; " +
+                "never drop a requirement, guess a merge or invent evidence. " +
+                "Self-check before resubmitting: validate the whole batch against the current schema and bounds " +
+                "(at most 16 evidence lines and 64 KiB combined UTF-8 payload); none is valid only alone, " +
+                "and substantive HUMAN_INPUT cannot accompany substantive evidence directives. " +
+                "Compare every original identity, owner and payload with the resubmission, including the exact Acceptance selection union. " +
+                "Confirm all research and mappings remain " +
                 "and no pending test, review or Operator check is described as executed.";
         var corrections = new List<string>();
         var section = Section.Match(evidence);

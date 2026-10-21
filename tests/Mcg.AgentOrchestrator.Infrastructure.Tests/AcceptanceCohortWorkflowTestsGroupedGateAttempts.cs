@@ -92,7 +92,7 @@ public sealed class AcceptanceCohortWorkflowTestsGroupedGateAttempts : Acceptanc
                 Assert.Contains("outcome=inflight", result.Detail, StringComparison.Ordinal);
                 expectedMembers = selection.Members;
                 using var integration = GoalWorktrees.CreateMergeTrainWorkspace(repo,
-                    expectedMembers[0].MainRevision, selection.BindMembers(), Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, cleanup.Hooks);
+                    expectedMembers[0].MainRevision, selection.BindMembers(id => kernel.GetGoal(id).AuthoritativeBrief.Version), Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, cleanup.Hooks);
                 expectedTreeRevision = integration.TreeRevision;
                 expectedManifestIdentity = GoalAcceptanceVerifier.ComputeEffectiveAcceptancePlanIdentity(
                     integration.Path, integration.Members.SelectMany(member => member.LandingPaths)
@@ -107,7 +107,7 @@ public sealed class AcceptanceCohortWorkflowTestsGroupedGateAttempts : Acceptanc
                     ConductorAutonomyPolicy.Permissive, runGateInBackground: true);
                 Assert.Contains("outcome=inflight", result.Detail, StringComparison.Ordinal);
                 expectedMembers = selection.Members;
-                var bindings = selection.BindMembers();
+                var bindings = selection.BindMembers(id => kernel.GetGoal(id).AuthoritativeBrief.Version);
                 using var integration = GoalWorktrees.CreateAcceptanceCohortWorkspace(repo,
                     expectedMembers[0].MainRevision, bindings, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, cleanup.Hooks);
                 expectedTreeRevision = integration.TreeRevision;
@@ -178,7 +178,7 @@ public sealed class AcceptanceCohortWorkflowTestsGroupedGateAttempts : Acceptanc
 
             var landings = new List<ConductorLandingReceipt>();
             second.SuccessfulLandingSink = landings.Add;
-            PublishPassingReceipt(record, workspace, repo);
+            PublishPassingReceipt(record, workspace, repo, id => kernel.GetGoal(id).AuthoritativeBrief.Version);
             File.WriteAllText(record.ResultPath, "passed");
             File.WriteAllText(record.ExitCodePath, "0");
             Assert.Equal(1, second.CountLiveGroupedGateAttempts());
@@ -364,14 +364,14 @@ public sealed class AcceptanceCohortWorkflowTestsGroupedGateAttempts : Acceptanc
     }
 
     private static void PublishPassingReceipt(ConductorGroupedGateAttempt attempt,
-        OrchestratorWorkspace workspace, string repo)
+        OrchestratorWorkspace workspace, string repo, Func<GoalId, int?> briefVersion)
     {
         var trx = WritePassingTrx(repo, "grouped-gate-adopted.trx");
         if (attempt.Kind == "cohort")
         {
             var identity = AcceptanceCohortIdentity.Create(
                 new ConductorAcceptanceCohortSelection(attempt.Members
-                    .Select(member => member.ToProjection(attempt.MainRevision)).ToArray(), []).BindMembers(),
+                    .Select(member => member.ToProjection(attempt.MainRevision)).ToArray(), []).BindMembers(briefVersion),
                 attempt.MainRevision, attempt.CombinedTreeRevision, attempt.ManifestIdentity);
             Assert.Equal(attempt.IdentityValue, identity.Value);
             new CohortAcceptanceStore(Path.Combine(workspace.OrchestratorDirectory,
@@ -384,7 +384,7 @@ public sealed class AcceptanceCohortWorkflowTestsGroupedGateAttempts : Acceptanc
             // The train store persists the same identity that the admitting call materialized.
             using var materialized = GoalWorktrees.CreateMergeTrainWorkspace(repo,
                 attempt.MainRevision, new ConductorMergeTrainSelection(attempt.Members
-                    .Select(member => member.ToProjection(attempt.MainRevision)).ToArray()).BindMembers(), Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default);
+                    .Select(member => member.ToProjection(attempt.MainRevision)).ToArray()).BindMembers(briefVersion), Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default);
             var identity = MergeTrainIdentity.Create(materialized.Members,
                 attempt.MainRevision, materialized.TreeRevision, attempt.ManifestIdentity);
             Assert.Equal(attempt.IdentityValue, identity.Value);

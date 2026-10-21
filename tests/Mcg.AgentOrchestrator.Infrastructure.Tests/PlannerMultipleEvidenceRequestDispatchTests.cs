@@ -48,23 +48,34 @@ public sealed class PlannerMultipleEvidenceRequestDispatchTests
                 .RefreshLatestProcess(kernel, goal.Id, planner.Id);
 
             Assert.True(livenessChecked);
+            Assert.True(planner.LastVerification!.Succeeded,
+                $"{planner.LastVerification.OrchestratorFailureReason}\n{planner.LastVerification.StandardError}");
+            Assert.Equal(planner.LastDispatch!.DispatchedAt, planner.LastVerification.DispatchAttemptAt);
             Assert.Equal(WorkTaskStatus.Completed, planner.Status);
             Assert.Equal(WorkTaskStatus.Assigned, developer.Status);
-            var obligation = Assert.Single(goal.GateTestObligations);
+            Assert.Equal(2, goal.GateTestObligations.Count);
+            Assert.All(goal.GateTestObligations, item =>
+            {
+                Assert.NotNull(item.PlannerIdentity);
+                Assert.Equal(goal.AuthoritativeBrief.Version, item.PlannerIdentity.BriefVersion);
+                Assert.Equal(planner.Id.Value, item.PlannerIdentity.RequestingTaskId);
+            });
+            var obligation = goal.GateTestObligations[0];
             Assert.Empty(kernel.GetPendingHumanInput(goal.Id));
-            Assert.Equal(new[] { "AlphaTests", "BetaTests", "GammaTests.Row" }, obligation.Selectors);
+            Assert.Equal(new[] { "AlphaTests", "BetaTests" }, obligation.Selectors);
+            Assert.Equal(new[] { "BetaTests", "GammaTests.Row" }, goal.GateTestObligations[1].Selectors);
             Assert.Empty(kernel.GetPendingBlockingHumanInput(goal.Id));
             Assert.NotNull(planner.LastVerification);
             Assert.True(planner.LastVerification.Succeeded);
             Assert.Equal(0, planner.LastVerification.ExitCode);
-            Assert.Equal(HumanWaitKind.ProspectiveAcceptanceEvidence, planner.LastVerification.HumanInputKind);
-            Assert.Equal("acceptance-gate", planner.LastVerification.HumanInputEvidenceOwner);
+            Assert.Equal(2, planner.LastVerification.PlannerEvidenceBatch!.Directives.Count);
+            Assert.All(planner.LastVerification.PlannerEvidenceBatch!.Directives, item => Assert.Equal("acceptance-gate", item.EvidenceOwner));
             var fullOutput = Assert.IsType<string>(planner.LastVerification.AuthoritativeStandardOutput);
             Assert.Contains(PlannerOutputContract.DurablePlanBeginMarker, fullOutput, StringComparison.Ordinal);
             Assert.Equal(4, fullOutput.Split("PLANNER_EVIDENCE_REQUEST:", StringSplitOptions.None).Length - 1);
             Assert.DoesNotContain("PLANNER_EVIDENCE_REQUEST:", planner.LastVerification.StandardOutput, StringComparison.Ordinal);
             Assert.Equal(AgentOutputDirectives.ParseHumanInputRequest(
-                PlannerMultipleEvidenceRequestMergeTests.GateRequests, AgentRole.Planner).Directive!.Question,
+                PlannerMultipleEvidenceRequestMergeTests.FirstRequest, AgentRole.Planner).Directive!.Question,
                 obligation.Question);
             Assert.DoesNotContain("planner-output-contract-rejected", planner.LastVerification.CompletionVerdictRule ?? "", StringComparison.Ordinal);
             Assert.DoesNotContain("[orchestrator Planner output contract rejection]", planner.LastVerification.StandardError, StringComparison.Ordinal);
@@ -76,41 +87,25 @@ public sealed class PlannerMultipleEvidenceRequestDispatchTests
     }
 
     [Fact]
-    public void Resolve_MergedSelections_RequiresOneCompleteGateAttempt()
+    public void Resolve_IndependentSelections_CanUseIndependentExactCandidateAttempts()
     {
         using var fixture = new ProspectiveEvidenceGateFixture();
         var parsed = AgentOutputDirectives.ParseHumanInputRequest(
             PlannerMultipleEvidenceRequestMergeTests.GateRequests, AgentRole.Planner);
         Assert.False(parsed.IsMalformed);
-        var directive = Assert.IsType<HumanInputDirective>(parsed.Directive);
-        var wait = fixture.Kernel.RequestHumanInputDeduplicated(fixture.Goal.Id, null,
-            directive.Question, questionFingerprint: directive.QuestionFingerprint,
-            blockerFingerprint: directive.BlockerFingerprint,
-            kind: directive.Kind, evidenceOwner: directive.EvidenceOwner, testNames: directive.TestNames).Request;
-        Assert.Equal(new[] { "AlphaTests", "BetaTests", "GammaTests.Row" }, wait.TestNames);
+        var waits = parsed.Directives.Select(directive => fixture.Kernel.RequestHumanInputDeduplicated(
+            fixture.Goal.Id, null, directive.Question, questionFingerprint: directive.QuestionFingerprint,
+            blockerFingerprint: directive.BlockerFingerprint, kind: directive.Kind,
+            evidenceOwner: directive.EvidenceOwner, testNames: directive.TestNames).Request).ToArray();
+        Assert.Equal(2, waits.Length);
         fixture.WriteAttempt([("AlphaTests.Check", "Passed"), ("BetaTests.Check", "Passed")]);
-
-        var partial = fixture.Resolve();
-
-        Assert.Empty(partial.ResolvedRequestIds);
-        Assert.Equal(new[] { "GammaTests.Row" }, Assert.Single(partial.UnresolvedWaits).MissingOrFailedTestNames);
-        Assert.False(wait.IsCompleted);
-        Assert.Same(wait, Assert.Single(fixture.Kernel.GetPendingHumanInput(fixture.Goal.Id)));
-
-        // Separate passing attempts must not accumulate coverage for a single merged wait.
-        fixture.WriteAttempt([("GammaTests.Row", "Passed")]);
-        Assert.Empty(fixture.Resolve().ResolvedRequestIds);
-        Assert.False(wait.IsCompleted);
-
-        var (attemptId, trxPath, _) = fixture.WriteAttempt(
-            [("AlphaTests.Check", "Passed"), ("BetaTests.Check", "Passed"), ("GammaTests.Row", "Passed")]);
-        var complete = fixture.Resolve();
-
-        Assert.Equal(new[] { wait.Id }, complete.ResolvedRequestIds);
-        Assert.Empty(complete.UnresolvedWaits);
-        Assert.True(wait.IsCompleted);
-        Assert.Contains(attemptId, wait.Answer, StringComparison.Ordinal);
-        Assert.Contains(trxPath, wait.Answer, StringComparison.Ordinal);
-        Assert.Empty(fixture.Kernel.GetPendingHumanInput(fixture.Goal.Id));
+        var first = fixture.Resolve();
+        Assert.Single(first.ResolvedRequestIds);
+        Assert.True(waits[0].IsCompleted);
+        Assert.False(waits[1].IsCompleted);
+        fixture.WriteAttempt([("BetaTests.Check", "Passed"), ("GammaTests.Row", "Passed")]);
+        var second = fixture.Resolve();
+        Assert.Single(second.ResolvedRequestIds);
+        Assert.All(waits, wait => Assert.True(wait.IsCompleted));
     }
 }

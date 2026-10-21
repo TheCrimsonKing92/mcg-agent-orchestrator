@@ -100,7 +100,7 @@ public sealed record TaskVerificationRecord(
     PlannerEvidenceStoreReference? HumanInputStoreReference = null,
     VerificationEvidenceSource EvidenceSource = VerificationEvidenceSource.Unspecified,
     DateTimeOffset? DispatchAttemptAt = null,
-    IReadOnlyList<FindingEvidenceRequestDisposition>? FindingEvidenceRequestDispositions = null)
+    IReadOnlyList<FindingEvidenceRequestDisposition>? FindingEvidenceRequestDispositions = null, HumanInputDirectiveParseResult? PlannerEvidenceBatch = null)
 {
     public string? AuthoritativeStandardOutput { get; init; } = FullStandardOutput ??
         (StandardOutputIsAuthoritative && FullStandardOutputUnavailableReason is null ? StandardOutput : null);
@@ -169,6 +169,7 @@ public sealed record TaskVerificationRecord(
             ReviewFindingTouchProofDiagnostic = preferred.ReviewFindingTouchProofDiagnostic ?? ReviewFindingTouchProofDiagnostic,
             HumanInputQuestionFingerprint = preferred.HumanInputQuestionFingerprint ?? HumanInputQuestionFingerprint,
             HumanInputBlockerFingerprint = preferred.HumanInputBlockerFingerprint ?? HumanInputBlockerFingerprint,
+            PlannerEvidenceBatch = preferred.PlannerEvidenceBatch ?? PlannerEvidenceBatch,
             HumanInputKind = preferred.HumanInputKind ?? HumanInputKind,
             HumanInputEvidenceOwner = preferred.HumanInputEvidenceOwner ?? HumanInputEvidenceOwner,
             HumanInputStoreReference = preferred.HumanInputStoreReference ?? HumanInputStoreReference,
@@ -339,7 +340,8 @@ public sealed record TaskDispatchRecord(
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     IReadOnlyList<string>? SelectedSkills = null,
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
-    WorkerBuildScopeIdentity? WorkerBuildScope = null)
+    WorkerBuildScopeIdentity? WorkerBuildScope = null,
+    int WorkerBuildProtocolVersion = 0)
 {
     public int BriefVersion { get; internal set; } = BriefVersion;
 
@@ -505,7 +507,8 @@ public sealed record TaskProcessRecord(
     string? ExitArtifactReason = null,
     bool WasGracefullyDetachedByConductor = false,
     IReadOnlyList<int>? NonBlockingProcessIds = null,
-    DateTimeOffset? ProcessIdentityStartedAt = null)
+    DateTimeOffset? ProcessIdentityStartedAt = null,
+    string? ProcessIdentityImagePath = null)
 {
     public bool IsRunning => CompletedAt is null && ExitCode is null;
 

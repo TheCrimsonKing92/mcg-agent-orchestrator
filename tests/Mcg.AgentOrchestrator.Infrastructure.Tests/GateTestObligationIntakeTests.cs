@@ -5,6 +5,20 @@ using Mcg.AgentOrchestrator.Infrastructure;
 // Parallel-safe: only in-memory kernels, with a fixed injected clock.
 public sealed class GateTestObligationIntakeTests
 {
+    [Fact]
+    public void LegacyDuplicateSnapshot_RetainsFirstSelection()
+    {
+        var (kernel, goal, _) = CreatePlanner();
+        var snapshot = kernel.ExportSnapshot();
+        var saved = snapshot.Goals.Single();
+        var restored = AgentOrchestratorKernel.FromSnapshot(snapshot with { Goals = [saved with
+        {
+            GateTestObligations = [new("legacy", 1, ["FirstTests"], null, "first", RecordedAt),
+                new("legacy", 1, ["SecondTests"], null, "second", RecordedAt)]
+        }] });
+        Assert.Equal(new[] { "FirstTests" }, Assert.Single(restored.GetGoal(goal.Id).GateTestObligations).Selectors);
+    }
+
     private static readonly DateTimeOffset RecordedAt = DateTimeOffset.UnixEpoch.AddDays(1);
 
     [Theory]
@@ -71,14 +85,14 @@ public sealed class GateTestObligationIntakeTests
     }
 
     [Fact]
-    public void AbsentTests_RecordsEmptyObligationWithoutWait()
+    public void AbsentTests_RequiresExplicitProspectiveAnswer()
     {
         var (kernel, goal, planner) = CreatePlanner();
         Record(kernel, goal, planner, Directive("acceptance-gate", null));
 
-        Assert.Empty(Assert.Single(goal.GateTestObligations).Selectors);
-        Assert.Empty(kernel.GetPendingHumanInput(goal.Id));
-        Assert.Empty(kernel.ExportSnapshot().HumanInputRequests);
+        Assert.Empty(goal.GateTestObligations);
+        Assert.Null(Assert.Single(kernel.GetPendingHumanInput(goal.Id)).TestNames);
+        Assert.Single(kernel.ExportSnapshot().HumanInputRequests);
     }
 
     [Fact]

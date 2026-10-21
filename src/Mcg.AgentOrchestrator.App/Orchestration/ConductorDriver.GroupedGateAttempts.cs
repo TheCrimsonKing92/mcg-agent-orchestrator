@@ -296,7 +296,9 @@ internal sealed partial class ConductorDriver
         if (attempt.Kind == "cohort")
         {
             var selection = new ConductorAcceptanceCohortSelection(members, []);
-            var bindings = selection.BindMembers();
+            var kernel = _cohortKernel ?? throw new InvalidOperationException("Cohort kernel is unavailable.");
+            var goalsById = kernel.Goals.ToDictionary(goal => goal.Id);
+            var bindings = selection.BindMembers(id => goalsById[id].AuthoritativeBrief.Version);
             using var integration = GoalWorktrees.CreateAcceptanceCohortWorkspace(
                 workspace.ExecutionDirectory, attempt.MainRevision, bindings, _integrationBranch, _cohortCleanupHooks);
             var manifest = verifier.ComputeEffectivePlanIdentity(integration.Path,
