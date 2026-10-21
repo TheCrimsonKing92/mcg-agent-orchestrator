@@ -443,9 +443,11 @@ internal static partial class TerminalGoalSweep
             Path.Combine(orchestratorDirectory, "merge-train-acceptance.db"));
         cohortAcceptanceStore ??= new CohortAcceptanceStore(
             Path.Combine(orchestratorDirectory, "cohort-acceptance.db"));
+        var reconciliationStatePath = Path.Combine(orchestratorDirectory, "state.db");
         var dispatchRunner = new BackgroundDispatchRunner(completionBuildEvidence:
-            new CompletionBuildEvidenceCoordinator(workspace.SqliteStatePath, workspace.ExecutionDirectory))
+            new CompletionBuildEvidenceCoordinator(reconciliationStatePath, executionDirectory))
         {
+            WorkerBuildInvocations = new WorkerBuildInvocationOperations(reconciliationStatePath, executionDirectory),
             OperatorIntents = SqliteOperatorIntentStore.ForDirectories(orchestratorDirectory, workspace.LogDirectory)
         };
         var ownedRootTiming = System.Diagnostics.Stopwatch.StartNew();
