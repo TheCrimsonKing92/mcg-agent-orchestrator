@@ -1346,6 +1346,9 @@ internal sealed class GoalWorktreeCleanupHooksBuilder
     }
 }
 
+// Audit fault hooks are process-wide and accept no workspace/goal scope. Exclude other
+// collections while these injectors run, including callers with independently owned stores.
+[Xunit.Collection(TestCollections.CliProcessEnvironment)]
 public sealed class GoalWorktreeTestsAcceptanceRetry : GoalWorktreeTestBase
 {
     [Xunit.Fact(DisplayName = "acceptance-retry_returns_failed_goal_to_verified_without_mutating_tasks")]

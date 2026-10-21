@@ -509,7 +509,7 @@ internal sealed partial class ConductorDriver
             acceptance.MainHeadSha,
             acceptance.TestResultPaths,
             acceptance.CheckAttributions,
-            acceptance.BaselineAttestation);
+            acceptance.BaselineAttestation, acceptance.AttemptId);
     }
 
     internal static AcceptanceVerificationSummary ClassifyInheritedBaselineApparatus(
@@ -544,7 +544,7 @@ internal sealed partial class ConductorDriver
             acceptance.MainHeadSha,
             acceptance.TestResultPaths,
             attributions,
-            acceptance.BaselineAttestation);
+            acceptance.BaselineAttestation, acceptance.AttemptId);
     }
 
     internal static bool IsEnvironmentalApparatusAcceptanceRun(AcceptanceVerificationSummary acceptance)
