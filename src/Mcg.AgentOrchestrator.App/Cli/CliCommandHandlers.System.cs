@@ -65,17 +65,8 @@ internal static partial class CliCommandHandlers
     }
 
     internal static IReadOnlyList<HumanInputRequest> HumanWaitsForAttention(
-        AgentOrchestratorKernel kernel,
-        GoalId? goalId,
-        bool includeHistory)
-    {
-        return kernel.HumanInputRequests
-            .Where(request => goalId is null || request.GoalId == goalId)
-            .Where(request => includeHistory || !request.IsCompleted)
-            .Where(request => includeHistory || IsLiveAttentionGoal(kernel, request.GoalId))
-            .OrderBy(request => request.CreatedAt)
-            .ToList();
-    }
+        AgentOrchestratorKernel kernel, GoalId? goalId, bool includeHistory) =>
+        AttentionHumanWaitQuery.Read(kernel, goalId, includeHistory);
 
     internal static IReadOnlyList<CollaborationItem> CollaborationItemsForAttention(
         IReadOnlyList<CollaborationItem> items,
@@ -86,18 +77,8 @@ internal static partial class CliCommandHandlers
         return items
             .Where(item => CollaborationItemLifecycle.IsReachUpType(item.Type))
             .Where(item => goalId is null || string.Equals(item.GoalId, goalId.Value, StringComparison.OrdinalIgnoreCase))
-            .Where(item => includeHistory || item.GoalId is null || IsLiveAttentionGoal(kernel, new GoalId(item.GoalId)))
+            .Where(item => includeHistory || item.GoalId is null || AttentionHumanWaitQuery.IsLiveAttentionGoal(kernel, new GoalId(item.GoalId)))
             .ToList();
-    }
-
-    private static bool IsLiveAttentionGoal(AgentOrchestratorKernel kernel, GoalId goalId)
-    {
-        var goal = kernel.Goals.FirstOrDefault(candidate => candidate.Id == goalId);
-        return goal is not null && goal.Status is not GoalStatus.Parked
-            and not GoalStatus.Completed
-            and not GoalStatus.Failed
-            and not GoalStatus.Cancelled
-            and not GoalStatus.Superseded;
     }
 
     private static int ResolveParkedAttentionItems(AgentOrchestratorKernel kernel, CollaborationItemStore store)
@@ -400,9 +381,12 @@ internal static partial class CliCommandHandlers
                     if (goalPrefix is null)
                     {
                         var showWaits = HumanWaitsForAttention(context.Kernel, null, includeHistory);
+                        if (showWaits.Count > 0 || context.Kernel.Goals.Any(goal => goal.GateTestObligations.Count > 0))
+                        {
+                            ConsoleViews.PrintHumanWaits(showWaits, DateTimeOffset.UtcNow, includeHistory, context.Kernel.Goals);
+                        }
                         if (showWaits.Count > 0)
                         {
-                            ConsoleViews.PrintHumanWaits(showWaits, DateTimeOffset.UtcNow, includeHistory);
                             if (includeHistory)
                             {
                                 var allItems = store.ListAsync().GetAwaiter().GetResult();
@@ -431,8 +415,8 @@ internal static partial class CliCommandHandlers
                         .Where(item => string.Equals(item.GoalId, goal.Id.Value, StringComparison.OrdinalIgnoreCase))
                         .ToList();
                     var waitsForGoal = HumanWaitsForAttention(context.Kernel, goal.Id, includeHistory);
-                    if (waitsForGoal.Count > 0)
-                        ConsoleViews.PrintHumanWaits(waitsForGoal, DateTimeOffset.UtcNow, includeHistory);
+                    if (waitsForGoal.Count > 0 || goal.GateTestObligations.Count > 0)
+                        ConsoleViews.PrintHumanWaits(waitsForGoal, DateTimeOffset.UtcNow, includeHistory, [goal]);
 
                     if (includeHistory)
                     {
@@ -503,9 +487,13 @@ internal static partial class CliCommandHandlers
                 var migratedHumanWaits = context.IsReadOnlyQuery ? 0 : context.Kernel.SweepParkedGoalHumanWaits();
                 var migratedCollaborationItems = context.IsReadOnlyQuery ? 0 : ResolveParkedAttentionItems(context.Kernel, store);
                 var waits = HumanWaitsForAttention(context.Kernel, null, includeHistory: false);
+                if (waits.Count > 0 || context.Kernel.Goals.Any(goal => goal.GateTestObligations
+                        .Any(item => item.BriefVersion == goal.AuthoritativeBrief.Version)))
+                {
+                    ConsoleViews.PrintHumanWaits(waits, DateTimeOffset.UtcNow, goals: context.Kernel.Goals);
+                }
                 if (waits.Count > 0)
                 {
-                    ConsoleViews.PrintHumanWaits(waits, DateTimeOffset.UtcNow);
                     return migratedHumanWaits > 0 || migratedCollaborationItems > 0;
                 }
 

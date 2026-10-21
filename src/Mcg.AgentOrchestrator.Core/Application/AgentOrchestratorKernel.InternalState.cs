@@ -24,6 +24,7 @@ public sealed partial class AgentOrchestratorKernel
         if (_humanInputRequests.Values.Any(candidate =>
                 candidate.GoalId == goal.Id &&
                 !candidate.IsCompleted &&
+                candidate.IsCurrentForBrief(goal.AuthoritativeBrief.Version) &&
                 HumanWaitPolicyDefaults.BlocksActiveWork(candidate.Kind)))
         {
             goal.SetStatus(GoalStatus.WaitingForHuman);

@@ -100,7 +100,7 @@ public sealed record TaskVerificationRecord(
     PlannerEvidenceStoreReference? HumanInputStoreReference = null,
     VerificationEvidenceSource EvidenceSource = VerificationEvidenceSource.Unspecified,
     DateTimeOffset? DispatchAttemptAt = null,
-    IReadOnlyList<FindingEvidenceRequestDisposition>? FindingEvidenceRequestDispositions = null)
+    IReadOnlyList<FindingEvidenceRequestDisposition>? FindingEvidenceRequestDispositions = null, HumanInputDirectiveParseResult? PlannerEvidenceBatch = null)
 {
     public string? AuthoritativeStandardOutput { get; init; } = FullStandardOutput ??
         (StandardOutputIsAuthoritative && FullStandardOutputUnavailableReason is null ? StandardOutput : null);
@@ -169,6 +169,7 @@ public sealed record TaskVerificationRecord(
             ReviewFindingTouchProofDiagnostic = preferred.ReviewFindingTouchProofDiagnostic ?? ReviewFindingTouchProofDiagnostic,
             HumanInputQuestionFingerprint = preferred.HumanInputQuestionFingerprint ?? HumanInputQuestionFingerprint,
             HumanInputBlockerFingerprint = preferred.HumanInputBlockerFingerprint ?? HumanInputBlockerFingerprint,
+            PlannerEvidenceBatch = preferred.PlannerEvidenceBatch ?? PlannerEvidenceBatch,
             HumanInputKind = preferred.HumanInputKind ?? HumanInputKind,
             HumanInputEvidenceOwner = preferred.HumanInputEvidenceOwner ?? HumanInputEvidenceOwner,
             HumanInputStoreReference = preferred.HumanInputStoreReference ?? HumanInputStoreReference,

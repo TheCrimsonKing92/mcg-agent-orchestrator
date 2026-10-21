@@ -44,7 +44,7 @@ public static class StoreSchemaRegistry
         new("operator-directives", Persistence + "OperatorDirectiveStoreSetup.cs", "operator-directives.db", "backlog", 1);
 
     public static StoreSchemaEntry CohortAcceptance { get; } =
-        new("cohort-acceptance", Persistence + "CohortAcceptanceStore.cs", "cohort-acceptance.db", "cohort", 1);
+        new("cohort-acceptance", Persistence + "CohortAcceptanceStore.cs", "cohort-acceptance.db", "cohort", 2);
 
     public static StoreSchemaEntry CohortAttributionRetractions { get; } =
         new("cohort-attribution-retractions", Persistence + "CohortAcceptanceStore.AttributionRetractions.cs", "cohort-acceptance.db", "cohort", 1);

@@ -158,6 +158,7 @@ internal sealed record ConductorParallelAcceptanceAttempt(
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     FindingEvidenceMutation? FocusedEvidenceMutation = null)
 {
+    public int? BriefVersion { get; init; }
     public string? IntegrationBranch { get; init; }
     public string? StateDirectory { get; init; }
     public string? ProjectName { get; init; }
@@ -2162,6 +2163,7 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
             ExecutionProtocol: _runInline ? "in-process" : "out-of-process",
             ConductorGenerationId: _conductorGenerationId)
         {
+            BriefVersion = candidate.Goal.AuthoritativeBrief.Version,
             IntegrationBranch = _integrationBranch,
             StateDirectory = _stateDirectory,
             ProjectName = _projectName,

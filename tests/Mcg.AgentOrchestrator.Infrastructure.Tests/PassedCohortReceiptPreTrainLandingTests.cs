@@ -60,6 +60,8 @@ public sealed class PassedCohortReceiptPreTrainLandingTests : AcceptanceCohortWo
                 driver.GetActiveCohortGateMemberGoalIds().Count == 0,
                 TimeSpan.FromSeconds(15)), "The pair's passed receipt was not ready for landing.");
             var passedReceipt = Assert.Single(cohortStore.ReadPassedReceiptsForGoal(first.Id));
+            Assert.All(passedReceipt.Identity.Members, member => Assert.Equal(
+                kernel.GetGoal(member.GoalId).AuthoritativeBrief.Version, member.BriefVersion));
 
             var third = CreateCompletedGoal(kernel, "Third ready goal", repo);
             var thirdCandidate = CreateWorktreeCandidate(repo, third.Id,

@@ -6,7 +6,7 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal sealed record ConductorMergeTrainSelection(IReadOnlyList<GateReadyCandidateProjection> Members)
 {
-    internal IReadOnlyList<MergeTrainMemberBinding> BindMembers() => Members.Select(member =>
+    internal IReadOnlyList<MergeTrainMemberBinding> BindMembers(Func<GoalId, int?>? briefVersion = null) => Members.Select(member =>
         new MergeTrainMemberBinding(
             member.GoalId,
             member.BranchRevision,
@@ -16,7 +16,7 @@ internal sealed record ConductorMergeTrainSelection(IReadOnlyList<GateReadyCandi
             member.ChangeRiskTier,
             member.AutoPromotionDisposition,
             member.MergeEvidence.Status.ToString(),
-            member.MergeEvidence.Reason.ToString())).ToArray();
+            member.MergeEvidence.Reason.ToString(), BriefVersion: briefVersion?.Invoke(member.GoalId))).ToArray();
 }
 
 internal sealed record ConductorMergeTrainRunResult(

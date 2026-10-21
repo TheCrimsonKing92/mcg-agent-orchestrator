@@ -89,6 +89,7 @@ public sealed class AgentTaskRunner
             preservePrimaryContext: _preservePrimaryContext);
         _kernel.ReportWorkerTaskProgress(goal.Id, task.Id, WorkTaskStatus.Running, startMessage);
 
+        var executionBriefVersion = goal.AuthoritativeBrief.Version;
         ModelResponse response;
         try
         {
@@ -130,6 +131,17 @@ public sealed class AgentTaskRunner
             return new AgentTaskRunResult(goal, task, execution);
         }
 
+        if (humanInputDirective.Directives.Any(item => item.PlannerEvidence is not null))
+        {
+            var diagnostic = _kernel.RecordPlannerEvidenceBatch(goal, task, humanInputDirective, executionBriefVersion, out var blocked);
+            if (diagnostic is not null)
+            {
+                _kernel.ReportWorkerTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, diagnostic);
+                return new AgentTaskRunResult(goal, task, execution);
+            }
+            if (blocked) return new AgentTaskRunResult(goal, task, execution);
+            humanInputQuestion = null;
+        }
         var hasCompleteWorkerResult = WorkerResultBlockers.HasCompleteWorkerResult(output);
         var completedRound = goal.Timeline.Count(evt =>
             evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskOutputRecorded);
