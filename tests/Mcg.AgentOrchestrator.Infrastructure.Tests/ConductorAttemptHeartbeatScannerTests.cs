@@ -84,6 +84,16 @@ public sealed class ConductorAttemptHeartbeatScannerTests : IDisposable
         Assert.True(File.Exists(locked));
     }
 
+    [Fact]
+    public void Scan_IgnoresHeartbeatsBelowTheGoalFolder()
+    {
+        Write("goal/check.heartbeat.json", "running", Now.AddMinutes(-2), Now);
+        Write("goal/r-abc/check.heartbeat.json", "running", Now.AddMinutes(-1), Now);
+
+        Assert.Equal(1, ConductorAttemptHeartbeatScanner.CountLive(_root, Now, Window));
+        Assert.Equal(Now.AddMinutes(-2), ConductorAttemptHeartbeatScanner.LatestProgress(_root, Now, Window));
+    }
+
     private string Write(string relative, string state, DateTimeOffset progress, DateTimeOffset written)
     {
         var path = Path.Combine(_root, relative);

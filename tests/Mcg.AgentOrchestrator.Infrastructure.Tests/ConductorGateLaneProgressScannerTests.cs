@@ -93,6 +93,30 @@ public sealed class ConductorGateLaneProgressScannerTests
         Assert.Equal(Now.AddMinutes(-1), ConductorGateLaneProgressScanner.LatestProgress(fixture.Root, Now, Window));
     }
 
+    [Fact]
+    public void LatestProgress_IgnoresHeartbeatsBelowTheGoalFolder()
+    {
+        using var fixture = new Fixture();
+        Write(fixture.Root, "goal/check.gate-heartbeat.json", Now.AddMinutes(-2), Now);
+        Write(fixture.Root, "goal/r-abc/check.gate-heartbeat.json", Now.AddMinutes(-1), Now);
+
+        Assert.Equal(Now.AddMinutes(-2), ConductorGateLaneProgressScanner.LatestProgress(fixture.Root, Now, Window));
+    }
+
+    [Fact]
+    public void LatestProgress_ReadsRootAndGoalFolderHeartbeats()
+    {
+        using var fixture = new Fixture();
+        Write(fixture.Root, "check.gate-heartbeat.json", Now.AddMinutes(-3), Now);
+        Assert.Equal(Now.AddMinutes(-3), ConductorGateLaneProgressScanner.LatestProgress(fixture.Root, Now, Window));
+
+        Write(fixture.Root, "goal-a/check.gate-heartbeat.json", Now.AddMinutes(-2), Now);
+        Assert.Equal(Now.AddMinutes(-2), ConductorGateLaneProgressScanner.LatestProgress(fixture.Root, Now, Window));
+
+        Write(fixture.Root, "goal-b/check.gate-heartbeat.json", Now.AddMinutes(-1), Now);
+        Assert.Equal(Now.AddMinutes(-1), ConductorGateLaneProgressScanner.LatestProgress(fixture.Root, Now, Window));
+    }
+
     private static string Write(string root, string name, DateTimeOffset progress, DateTimeOffset writeTime)
     {
         var path = Path.Combine(root, name);
