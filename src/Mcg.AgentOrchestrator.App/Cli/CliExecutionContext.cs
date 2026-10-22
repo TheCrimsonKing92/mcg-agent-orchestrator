@@ -38,7 +38,8 @@ internal sealed class CliExecutionContext(
     Action? reportGoalCreationProgress = null,
     Action<AgentOrchestratorKernel, IReadOnlyCollection<GoalId>>? persistCriticalGoalKernel = null,
     Action<GoalSnapshot>? recordDurableGoalBaseline = null,
-    Action<Action>? registerPostCommitAction = null)
+    Action<Action>? registerPostCommitAction = null,
+    Func<IReadOnlyCollection<GoalId>, AgentOrchestratorKernel>? loadOperatorIntentTargets = null)
 {
 public AgentOrchestratorKernel Kernel { get; } = kernel;
 
@@ -49,6 +50,10 @@ public IClock? DiagnosticsClock { get; init; }
 public TransientSqliteLoadHold? InitialConductLoopLoadHold { get; } = initialConductLoopLoadHold;
 
 public AgentOrchestratorKernel ReloadKernel() => reloadKernel?.Invoke() ?? Kernel;
+
+public AgentOrchestratorKernel LoadOperatorIntentTargets(IReadOnlyCollection<GoalId> goalIds) =>
+    loadOperatorIntentTargets?.Invoke(goalIds)
+    ?? throw new InvalidOperationException("Target-scoped operator-intent loading is unavailable.");
 
 public AgentOrchestratorKernel ReloadKernel(IReadOnlyCollection<string> additionalHydratedGoalIds) =>
     reloadKernelForGoals?.Invoke(additionalHydratedGoalIds) ?? ReloadKernel();

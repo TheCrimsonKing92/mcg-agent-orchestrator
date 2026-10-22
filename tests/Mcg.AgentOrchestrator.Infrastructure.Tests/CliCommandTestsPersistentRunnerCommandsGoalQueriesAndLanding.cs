@@ -372,7 +372,7 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalQueriesAndLanding
         loaded.RequestHumanInput(existing.Id, null, "External update after tick start.");
         var added = loaded.CreateGoal("Dynamically ingested goal");
 
-        CliPersistentStateRunner.CaptureMissingConductLoopTickBaselines(baselines, loaded);
+        ConductLoopTargetLoader.CaptureMissingTickBaselines(baselines, loaded);
 
         Xunit.Assert.Equal(originalExisting, baselines[existing.Id.Value]);
         Xunit.Assert.Equal(

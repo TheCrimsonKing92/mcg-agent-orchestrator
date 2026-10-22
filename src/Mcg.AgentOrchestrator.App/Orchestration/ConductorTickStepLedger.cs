@@ -8,10 +8,14 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 // but is restored on every exit and cannot keep recording after the tick ends.
 internal sealed class ConductorTickStepLedger
 {
+    internal static readonly IReadOnlyList<string> OperatorIntentNames = Array.AsReadOnly(new[]
+    {
+        "operator-intent-list"
+    });
     internal static readonly IReadOnlyList<string> PrewalkNames = Array.AsReadOnly(new[]
     {
         "retire-until-goal-lessons", "workspace-intents", "steward", "author", "store-evidence",
-        "judge-panel", "board-fill", "operator-intent-list", "eligibility"
+        "judge-panel", "board-fill", "eligibility"
     });
     internal static readonly IReadOnlyList<string> SweepNames = Array.AsReadOnly(new[]
     {

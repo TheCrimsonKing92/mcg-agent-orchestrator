@@ -5,6 +5,7 @@ using System.Text.Json;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Microsoft.Win32.SafeHandles;
 using Xunit;
+using Mcg.AgentOrchestrator.App.Orchestration;
 
 namespace Mcg.AgentOrchestrator.Infrastructure.Acceptance.Tests;
 
@@ -15,6 +16,7 @@ public sealed class AcceptanceHolderJobTests
     public async Task NamedJob_SuccessorStillSeesTwoShardsAfterHolderExit_AndCancelsOnlyThatJob()
     {
         if (!OperatingSystem.IsWindows()) return;
+        using var fixture = new CustodyFixture();
         var token = Guid.NewGuid().ToString("N");
         var doneName = $"Local\\acceptance-done-{token}";
         var readyNames = new[] { $"Local\\acceptance-ready-0-{token}", $"Local\\acceptance-ready-1-{token}" };
@@ -46,7 +48,8 @@ public sealed class AcceptanceHolderJobTests
         var identity = SpawnProcessIdentityReader.ReadForRegistration(holder).Identity;
         try
         {
-            using var job = DurableAcceptanceJob.Attach(holder, jobName);
+            using var job = DurableAcceptanceJob.Attach(holder, jobName, fixture.Launch);
+            fixture.TrackCustodian(job.CustodianIdentity);
             Assert.NotNull(identity);
             Assert.Equal("ready", await holder.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(30)));
             holder.StandardInput.WriteLine("start-shards");
@@ -169,6 +172,7 @@ public sealed class AcceptanceHolderJobTests
     public async Task CustodianPublishesBoundSettlementAfterNaturalHolderExit()
     {
         if (!OperatingSystem.IsWindows()) return;
+        using var fixture = new CustodyFixture();
         var path = Path.Combine(Path.GetTempPath(), $"acceptance-settlement-{Guid.NewGuid():N}.json");
         var name = $"Local\\acceptance-natural-{Guid.NewGuid():N}";
         var executable = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System),
@@ -185,7 +189,7 @@ public sealed class AcceptanceHolderJobTests
         var identity = SpawnProcessIdentityReader.ReadForRegistration(holder).Identity!;
         try
         {
-            using var job = DurableAcceptanceJob.Attach(holder, name, path);
+            using var job = DurableAcceptanceJob.Attach(holder, name, fixture.Launch, path);
             // Retain the exact custodian process handle before the root can exit.
             using var custodian = Process.GetProcessById(job.CustodianIdentity.ProcessId);
             // A PID lookup alone does not retain the handle required by ExitCode after exit.
@@ -212,6 +216,160 @@ public sealed class AcceptanceHolderJobTests
             _ = DurableAcceptanceJob.Observe(name, identity, SpawnTrackedProcessStatus.DeadOrRecycled,
                 cancel: true, settlementPath: path);
             File.Delete(path);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task CustodyLossOrCancellationTerminatesOnlyOwnedJob(bool loseCustody)
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        using var fixture = new CustodyFixture();
+        using var holder = StartGatedHolder();
+        using var healthy = StartGatedHolder();
+        var identity = SpawnProcessIdentityReader.ReadForRegistration(holder).Identity!;
+        var healthyIdentity = SpawnProcessIdentityReader.ReadForRegistration(healthy).Identity!;
+        var name = $"Local\\custody-loss-{Guid.NewGuid():N}";
+        var healthyName = $"Local\\custody-healthy-{Guid.NewGuid():N}";
+        try
+        {
+            Assert.Equal("ready", await holder.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(30)));
+            Assert.Equal("ready", await healthy.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(30)));
+            using var job = DurableAcceptanceJob.Attach(holder, name, fixture.Launch);
+            var custody = fixture.TrackCustodian(job.CustodianIdentity);
+            using var other = DurableAcceptanceJob.Attach(healthy, healthyName, fixture.Launch);
+            fixture.TrackCustodian(other.CustodianIdentity);
+            if (loseCustody) StopHolderIfSame(custody, job.CustodianIdentity);
+            else Assert.True(DurableAcceptanceJob.Observe(name, identity,
+                SpawnTrackedProcessStatus.LiveMatch, cancel: true).Settled);
+            await holder.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(30));
+            Assert.True(holder.HasExited);
+            var unrelated = DurableAcceptanceJob.Observe(healthyName, healthyIdentity,
+                SpawnTrackedProcessStatus.LiveMatch, cancel: false);
+            Assert.True(unrelated.HolderMatches, unrelated.Detail);
+            Assert.False(unrelated.Settled, unrelated.Detail);
+            Assert.False(healthy.HasExited);
+        }
+        finally
+        {
+            _ = DurableAcceptanceJob.Observe(name, identity, holder.HasExited ?
+                SpawnTrackedProcessStatus.DeadOrRecycled : SpawnTrackedProcessStatus.LiveMatch, cancel: true);
+            _ = DurableAcceptanceJob.Observe(healthyName, healthyIdentity, healthy.HasExited ?
+                SpawnTrackedProcessStatus.DeadOrRecycled : SpawnTrackedProcessStatus.LiveMatch, cancel: true);
+            StopHolderIfSame(holder, identity);
+            StopHolderIfSame(healthy, healthyIdentity);
+        }
+    }
+
+    [Fact]
+    public async Task ReadinessPrecedesAssignmentAndEofCannotPublishSettlement()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        using var fixture = new CustodyFixture();
+        using var holder = StartGatedHolder();
+        var identity = SpawnProcessIdentityReader.ReadForRegistration(holder).Identity!;
+        var name = $"Local\\custody-ready-{Guid.NewGuid():N}";
+        var path = Path.Combine(fixture.Root, "settlement.json");
+        using var job = OwnedProcessGroup.WindowsJob.CreateKillOnCloseJob(allowBreakaway: false, name: name);
+        using var host = ProcessTreeGuiSuppression.Start(fixture.Launch.CreateStartInfo())!;
+        var error = host.StandardError.ReadToEndAsync();
+        try
+        {
+            var request = new AcceptanceJobCustodianProtocol("request", name, identity, null, path);
+            host.StandardInput.WriteLine(JsonSerializer.Serialize(request));
+            host.StandardInput.Flush();
+            var ready = await host.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(30));
+            var custodyIdentity = SpawnProcessIdentityReader.ReadForRegistration(host).Identity!;
+            AcceptanceJobCustodianProtocol.Validate(ready, "ready", request, custodyIdentity);
+            Assert.Equal("dotnet", Path.GetFileNameWithoutExtension(custodyIdentity.ImagePath));
+            Assert.True(OwnedProcessGroup.WindowsJob.TryGetActiveProcessCount(job, out var active));
+            Assert.Equal(0u, active);
+            Assert.False(holder.HasExited);
+            host.StandardInput.Close();
+            await host.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(30));
+            Assert.Equal(1, host.ExitCode);
+            Assert.Contains("protocol identity mismatch", await error);
+            Assert.False(File.Exists(path));
+            Assert.False(holder.HasExited);
+        }
+        finally
+        {
+            if (!host.HasExited) host.Kill();
+            await host.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(30));
+            StopHolderIfSame(holder, identity);
+        }
+    }
+
+    [Fact]
+    public async Task FailedWorkspaceStartupDoesNotAssignHolderOrRunGate()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        using var fixture = new CustodyFixture();
+        using var holder = StartGatedHolder();
+        var identity = SpawnProcessIdentityReader.ReadForRegistration(holder).Identity!;
+        var name = $"Local\\custody-failed-{Guid.NewGuid():N}";
+        try
+        {
+            Assert.Equal("ready", await holder.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(30)));
+            var workspace = fixture.Workspace with { OrchestratorDirectory = Path.Combine(fixture.Root, "wrong-state") };
+            var failure = Assert.Throws<InvalidOperationException>(() =>
+                DurableAcceptanceJob.Attach(holder, name, AcceptanceJobCustodianHost.Bind(workspace)));
+            Assert.Contains("differs from expected", failure.Message);
+            using var job = OpenJobObjectW(0x0004, false, name);
+            Assert.True(job.IsInvalid);
+            Assert.False(holder.HasExited);
+        }
+        finally { StopHolderIfSame(holder, identity); }
+    }
+
+    private static Process StartGatedHolder()
+    {
+        var executable = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System),
+            "WindowsPowerShell", "v1.0", "powershell.exe");
+        var start = new ProcessStartInfo(executable)
+        {
+            UseShellExecute = false, CreateNoWindow = true,
+            RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true
+        };
+        foreach (var arg in new[] { "-NoLogo", "-NoProfile", "-NonInteractive", "-Command",
+            "[Console]::WriteLine('ready');[void][Console]::ReadLine()" }) start.ArgumentList.Add(arg);
+        return ProcessTreeGuiSuppression.Start(start)!;
+    }
+
+    private sealed class CustodyFixture : IDisposable
+    {
+        private readonly List<Process> _custodians = [];
+        internal string Root { get; } = Directory.CreateTempSubdirectory("native-custody-").FullName;
+        internal OrchestratorWorkspace Workspace => OrchestratorWorkspace.ForDirectory(Root, Root, null,
+            new OrchestratorProjectRegistry(Path.Combine(Root, "registry"), Path.Combine(Root, "data")));
+        internal AcceptanceJobCustodianLaunchSpecification Launch => AcceptanceJobCustodianHost.Bind(Workspace);
+        internal Process TrackCustodian(SpawnProcessIdentity identity)
+        {
+            var process = Process.GetProcessById(identity.ProcessId);
+            try
+            {
+                _ = process.SafeHandle;
+                Assert.True(SpawnProcessIdentityReader.TryRead(process, out var live));
+                Assert.Equal(SpawnTrackedProcessStatus.LiveMatch,
+                    SpawnProcessIdentityReader.EvaluateRecordedIdentity(identity, live, out _));
+                _custodians.Add(process);
+                return process;
+            }
+            catch { process.Dispose(); throw; }
+        }
+
+        public void Dispose()
+        {
+            // An empty job can be observed before its independent custodian exits.
+            // Wait on each recorded process before deleting its working directory.
+            try
+            {
+                foreach (var process in _custodians)
+                    Assert.True(process.WaitForExit(30_000), "Custodian did not exit after its owned job settled.");
+            }
+            finally { foreach (var process in _custodians) process.Dispose(); }
+            Directory.Delete(Root, recursive: true);
         }
     }
 

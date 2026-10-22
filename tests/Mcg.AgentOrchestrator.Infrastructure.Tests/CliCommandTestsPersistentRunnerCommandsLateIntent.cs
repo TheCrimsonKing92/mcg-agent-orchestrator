@@ -28,6 +28,9 @@ public sealed class CliCommandTestsPersistentRunnerCommandsLateIntent : CliComma
             var context = new CliExecutionContext(kernel, workspace, new InMemoryModelProviderRegistry([]),
                 AgentCatalog.Default().Agents, WorkerProfileCatalog.Default(), currentGoal: null,
                 reloadKernel: () => CliPersistentStateRunner.LoadConductLoopKernel(repository),
+                loadOperatorIntentTargets: ids => reloadSucceeds
+                    ? repository.LoadGoalsAsync(ids).GetAwaiter().GetResult()
+                    : throw new IOException("Injected reload read failure"),
                 persistKernel: _ => persistCalls++, persistGoalKernel: (_, _) => persistCalls++,
                 reloadResolvedParkedHumanWaitKernel: () => new AgentOrchestratorKernel(),
                 reloadParkedGoalSafetyNetKernel: () => new AgentOrchestratorKernel(),
@@ -92,6 +95,7 @@ public sealed class CliCommandTestsPersistentRunnerCommandsLateIntent : CliComma
             var context = new CliExecutionContext(loopKernel, workspace, new InMemoryModelProviderRegistry([]),
                 AgentCatalog.Default().Agents, WorkerProfileCatalog.Default(), currentGoal: null,
                 reloadKernel: () => Reload([]), persistKernel: _ => { },
+                loadOperatorIntentTargets: ids => repository.LoadGoalsAsync(ids).GetAwaiter().GetResult(),
                 persistGoalKernel: (current, ids) =>
                 {
                     Xunit.Assert.NotEqual(OperatorIntentStatus.Applied, store.GetAsync(intent.Id).GetAwaiter().GetResult()!.Status);

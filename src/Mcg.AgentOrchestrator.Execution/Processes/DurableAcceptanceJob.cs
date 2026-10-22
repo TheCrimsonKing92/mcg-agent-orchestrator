@@ -10,47 +10,45 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 // The independent custodian keeps the name discoverable after conductor and holder death.
 internal sealed class DurableAcceptanceJob : IDisposable
 {
-    private readonly SafeFileHandle _handle;
     internal SpawnProcessIdentity CustodianIdentity { get; }
-    private DurableAcceptanceJob(SafeFileHandle handle, SpawnProcessIdentity custodianIdentity)
-    { _handle = handle; CustodianIdentity = custodianIdentity; }
+    private DurableAcceptanceJob(SpawnProcessIdentity custodianIdentity)
+    { CustodianIdentity = custodianIdentity; }
 
-    internal static DurableAcceptanceJob AttachCurrent(string name, string? settlementPath = null)
+    internal static DurableAcceptanceJob AttachCurrent(string name,
+        AcceptanceJobCustodianLaunchSpecification launch, string? settlementPath = null)
     {
         using var self = Process.GetCurrentProcess();
-        return Attach(self, name, settlementPath);
+        return Attach(self, name, launch, settlementPath);
     }
 
-    internal static DurableAcceptanceJob Attach(Process holder, string name, string? settlementPath = null)
+    internal static DurableAcceptanceJob Attach(Process holder, string name,
+        AcceptanceJobCustodianLaunchSpecification launch, string? settlementPath = null,
+        AcceptanceJobCustodianBounds? bounds = null)
     {
         if (!OperatingSystem.IsWindows())
             throw new PlatformNotSupportedException("Durable acceptance containment requires Windows.");
         var handle = OwnedProcessGroup.WindowsJob.CreateKillOnCloseJob(allowBreakaway: false, name: name);
-        Process? custodian = null;
+        AcceptanceJobCustodian? custodian = null;
         try
         {
             var identity = SpawnProcessIdentityReader.ReadForRegistration(holder).Identity
                 ?? throw new InvalidOperationException("Acceptance holder identity is unavailable.");
             // Start before assignment: the custodian must not be a member of the job it owns.
             // Its final handle retains kill-on-close, so custody loss terminates that exact job.
-            custodian = AcceptanceJobCustodian.Start(name, identity, settlementPath);
-            var custodianIdentity = SpawnProcessIdentityReader.ReadForRegistration(custodian).Identity
-                ?? throw new InvalidOperationException("Acceptance custodian identity is unavailable.");
+            custodian = AcceptanceJobCustodian.Start(launch, name, identity, settlementPath, bounds);
+            var custodianIdentity = custodian.Identity;
             if (!OwnedProcessGroup.WindowsJob.AssignProcessToJobObject(handle, holder.Handle))
                 throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not contain acceptance holder.");
-            custodian.StandardInput.WriteLine("attached");
-            custodian.StandardInput.Close();
-            custodian.Dispose();
-            return new DurableAcceptanceJob(handle, custodianIdentity);
+            custodian.Attached();
+            // Transfer sole handle custody only after the child verified actual membership.
+            handle.Dispose();
+            custodian.Release();
+            return new DurableAcceptanceJob(custodianIdentity);
         }
         catch
         {
-            if (custodian is not null)
-            {
-                try { if (!custodian.HasExited) { custodian.Kill(); custodian.WaitForExit(5000); } }
-                finally { custodian.Dispose(); }
-            }
-            handle.Dispose();
+            try { custodian?.Dispose(); }
+            finally { handle.Dispose(); }
             throw;
         }
     }
@@ -96,7 +94,8 @@ internal sealed class DurableAcceptanceJob : IDisposable
             : new(false, false, "job-query-failed");
     }
 
-    public void Dispose() => _handle.Dispose();
+    // The independent owner survives the holder and conductor. Cancellation uses exact-job Observe.
+    public void Dispose() { }
 
     private static bool HasSettlementReceipt(string? path, string name, SpawnProcessIdentity holder)
     {

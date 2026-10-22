@@ -70,6 +70,7 @@ internal sealed partial class ConductorBatchLoop
     private readonly GoalDispatchRefresh _refreshGoalDispatchesBeforeAdvance;
     private readonly ConductorWatchProgressReporter _watchProgressReporter;
     private readonly OperatorIntentCoordinator? _operatorIntents;
+    private readonly Func<AgentOrchestratorKernel, GoalId, bool>? _prepareOperatorIntentTarget;
     private readonly ProgressiveReviewGlanceCoordinator? _progressiveReviewGlances;
     private readonly ProgressiveReviewSteeringCoordinator? _progressiveReviewSteering;
     private readonly Func<ConductorLoopHandoffRequest, ConductorLoopHandoffResult>? _handoffOnMaxDuration;
@@ -127,7 +128,8 @@ internal sealed partial class ConductorBatchLoop
         PromptRolloutWatchCoordinator? promptRolloutWatch = null,
         Func<TimeSpan>? processCpuTime = null,
         Action<string>? loadTrxCoherenceVerdicts = null,
-        Func<int>? countLiveGroupedGates = null)
+        Func<int>? countLiveGroupedGates = null,
+        Func<AgentOrchestratorKernel, GoalId, bool>? prepareOperatorIntentTarget = null)
     {
         _sweep = measuredSweepWithCheckpointHolds is not null
             ? measuredSweepWithCheckpointHolds
@@ -141,10 +143,11 @@ internal sealed partial class ConductorBatchLoop
         }
         _reapGoalRunningDispatches = reapGoalRunningDispatches ?? ((_, _) => { });
         _detachGoalRunningDispatches = detachGoalRunningDispatches ?? _reapGoalRunningDispatches;
-        _recoverInterruptedDispatches = kernel => { StaleDispatchProcessReconciler.Reconcile(kernel); recoverInterruptedDispatches?.Invoke(kernel); };
+        _recoverInterruptedDispatches = kernel => { StaleDispatchProcessReconciler.Reconcile(kernel, workspace); recoverInterruptedDispatches?.Invoke(kernel); };
         _refreshGoalDispatchesBeforeAdvance = refreshGoalDispatchesBeforeAdvance ?? ((_, _) => null);
         _watchProgressReporter = watchProgressReporter ?? new ConductorWatchProgressReporter();
         _operatorIntents = operatorIntents;
+        _prepareOperatorIntentTarget = prepareOperatorIntentTarget;
         _progressiveReviewGlances = progressiveReviewGlances;
         _progressiveReviewSteering = progressiveReviewSteering;
         _handoffOnMaxDuration = handoffOnMaxDuration;
@@ -233,6 +236,7 @@ internal sealed partial class ConductorBatchLoop
         var totalBlockedRechecks = 0;
         var dispatchRecordWriteSkips = new Dictionary<string, int>(StringComparer.Ordinal);
         var checkpointHeldGoals = new Dictionary<string, GoalSnapshotCheckpointResult>(StringComparer.Ordinal);
+        string? pendingWakeMaintenanceKind = null;
         var blockedRecheckRecurrences = new Dictionary<string, BlockedRecheckRecurrence>(StringComparer.Ordinal);
         DateTimeOffset? lastBlockedRecheckHeartbeatAt = null;
         string? stopReason = null;
@@ -549,6 +553,22 @@ internal sealed partial class ConductorBatchLoop
             return new(SelfRelaunchDrainDisposition.Proceed);
         }
 
+        void ReconcilePendingWakeMaintenance(int tick, List<string> timingLines)
+        {
+            if (pendingWakeMaintenanceKind is not { } kind) return;
+            pendingWakeMaintenanceKind = null;
+            RunJanitorialPhase(kind, tick,
+                () => _sweep(kernel, ProtectedOperatorIntentGoalIds(kernel, checkpointHeldGoals)));
+            RunJanitorialPhase(kind.Replace("-sweep", "-recover-interrupted-dispatches", StringComparison.Ordinal), tick, () =>
+            {
+                _recoverInterruptedDispatches(kernel);
+                return true;
+            });
+            TryPersistCheckpoint(persistTick, persistGoalTick, kernel, tick, onlyGoalId,
+                kind, timingLines, busyWriteDelay,
+                checkpointGoalTick: checkpointGoalTick, checkpointHeldGoalIds: checkpointHeldGoals);
+        }
+
         while (true)
         {
             using var writeOperationTag = SqliteOrchestratorStateRepository.UseWriteOperationTag("loop:tick");
@@ -565,6 +585,7 @@ internal sealed partial class ConductorBatchLoop
 
             if (IsStopRequested(stopFilePath))
             {
+                ReconcilePendingWakeMaintenance(totalTicks, []);
                 stopRequested = true;
                 StopLoop("stop-file");
                 Console.WriteLine($"[conduct --loop] Stop signal detected at tick {totalTicks + 1}; no new dispatches will be started.");
@@ -579,6 +600,7 @@ internal sealed partial class ConductorBatchLoop
                 maxIterations.HasValue &&
                 totalTicks >= maxIterations.Value)
             {
+                ReconcilePendingWakeMaintenance(totalTicks, []);
                 StopLoop("max-iter", $"max={maxIterations.Value}");
                 Console.WriteLine($"[conduct --loop] Max iterations ({maxIterations.Value}) reached after {totalTicks} ticks.");
                 DetachNonTerminalEligibleGoals(kernel, driver, onlyGoalId, excludedGoals, reapedGoals);
@@ -613,6 +635,7 @@ internal sealed partial class ConductorBatchLoop
                 }
                 else
                 {
+                    ReconcilePendingWakeMaintenance(totalTicks, []);
                     onMaxDurationDeferralStateChanged?.Invoke(false);
                     StopLoop("max-duration", ConductorMaxDurationStopDeferral.FormatStopDetail(maxDuration.Value, verdict, snapshot.Failure));
                     Console.WriteLine($"[conduct --loop] Max duration ({maxDuration.Value.TotalSeconds:0}s) reached after {totalTicks} ticks.");
@@ -664,7 +687,7 @@ internal sealed partial class ConductorBatchLoop
                     .ToArray();
                 if (recoveryGoalIds.Length > 0)
                 {
-                    ApplyCheckpointOutcomes(
+                    var recoveredIntentGoalIds = ApplyCheckpointOutcomes(
                         checkpointGoalTick(kernel, recoveryGoalIds),
                         recoveryGoalIds,
                         checkpointHeldGoals,
@@ -672,8 +695,23 @@ internal sealed partial class ConductorBatchLoop
                         "recovery",
                         preTickTimingLines,
                         deferEmission: true);
+                    CompletePersistedOperatorIntents(recoveredIntentGoalIds, preTickTimingLines);
                 }
             }
+            var intentBoundaryClock = StartDiagnosticTimer();
+            var intentBoundaryCpuStart = ReadProcessCpu();
+            var intentBoundary = pendingSelfRelaunch is null
+                ? ServiceOperatorIntentBoundary(kernel, driver, onlyGoalId, checkpointHeldGoals,
+                    nextTick, persistTick, persistGoalTick, checkpointGoalTick, busyWriteDelay)
+                : new ConductorOperatorIntentBoundary.Result();
+            intentBoundary.ReadmitAppliedGoals(excludedGoals, setAsideGoals, selfClearedSetAsideEntries,
+                escalatedGoals, completedGoals, reapedGoals, goalProjectionCache);
+            intentBoundaryClock.Stop();
+            if (_operatorIntents is not null)
+                preTickTimingLines.Add(FormatPhaseTiming(nextTick, "operator-intent", intentBoundaryClock.Elapsed,
+                    $"operator_intent_steps={_stepLedger!.FormatSteps(ConductorTickStepLedger.OperatorIntentNames)}",
+                    cpuMs: CpuDeltaMs(intentBoundaryCpuStart, ReadProcessCpu())));
+            ReconcilePendingWakeMaintenance(nextTick, preTickTimingLines);
             var preSweepBaseline = GoalKernelChange.CaptureAll(kernel);
             TerminalGoalJournalMetadataCache.BeginMeasurement();
             var sweepClock = StartDiagnosticTimer();
@@ -681,7 +719,7 @@ internal sealed partial class ConductorBatchLoop
             var sweepResult = RunJanitorialPhase(
                 "sweep",
                 nextTick,
-                () => _sweep(kernel, checkpointHeldGoals.Keys.ToHashSet(StringComparer.Ordinal)));
+                () => _sweep(kernel, ProtectedOperatorIntentGoalIds(kernel, checkpointHeldGoals)));
             foreach (var sweepEvent in (sweepResult?.Events ?? []).Concat(sweepResult?.OwnedRoots?.OperatorEvents ?? []))
             {
                 EmitProgress(sweepEvent);
@@ -748,26 +786,29 @@ internal sealed partial class ConductorBatchLoop
             var preWalkCpuStart = ReadProcessCpu();
             RunJanitorialPhase("retire-until-goal-lessons", nextTick, () => ConductorTickStepLedger.Measure("retire-until-goal-lessons", () => RetireUntilGoalLessons(kernel)));
             var hostedChangedGoalIds = ServiceStewardAndAuthor(kernel, onlyGoalId);
-            var actionableIntentGoalIds = new HashSet<string>(StringComparer.Ordinal);
-            var preWalkIntentLines = ConductorTickStepLedger.Measure("workspace-intents", () => ServiceWorkspaceIntents(kernel));
-            var preWalkIntentProcessed = preWalkIntentLines.Count > 0;
-            var intentsAwaitingReload = 0;
-            if (_operatorIntents is not null)
+            if (intentBoundary.DeferredIntents.Count > 0)
             {
-                try
-                {
-                    actionableIntentGoalIds.UnionWith(ConductorTickStepLedger.Measure("operator-intent-list", () => _operatorIntents.ListActionableGoalIds()));
-                }
-                catch (Exception ex)
-                {
-                    EmitProgress(
-                        $"OPERATOR_INTENT result=store-unavailable phase=list reason={SanitizeReason(ex.Message)}");
-                }
+                // Maintenance owns interrupted-work and landing/evidence reconciliation. Retry
+                // only deferred members of the original snapshot against its current working set.
+                var reconciled = ServiceOperatorIntentBoundary(kernel, driver, onlyGoalId, checkpointHeldGoals,
+                    nextTick, persistTick, persistGoalTick, checkpointGoalTick, busyWriteDelay,
+                    intentBoundary.DeferredIntents);
+                intentBoundary.IncludeAfterMaintenance(reconciled);
+                reconciled.ReadmitAppliedGoals(excludedGoals, setAsideGoals, selfClearedSetAsideEntries,
+                    escalatedGoals, completedGoals, reapedGoals, goalProjectionCache);
             }
+            var actionableIntentGoalIds = intentBoundary.ActionableGoalIds;
+            var preWalkIntentLines = intentBoundary.Lines;
+            preWalkIntentLines.AddRange(ConductorTickStepLedger.Measure("workspace-intents", () => ServiceWorkspaceIntents(kernel)));
+            var preWalkIntentProcessed = preWalkIntentLines.Count > 0;
+            var intentsAwaitingReload = intentBoundary.AwaitingReload +
+                ConductorOperatorIntentBoundary.ObserveDeferredArrivals(_operatorIntents, onlyGoalId,
+                    actionableIntentGoalIds, checkpointHeldGoals);
 
             _slotContentionHolds.Retain(kernel.Goals.Select(goal => goal.Id));
             var scopedGoals = kernel.Goals
                 .Where(g => (onlyGoalId is null || g.Id.Value == onlyGoalId)
+                    && !intentBoundary.UnavailableGoalIds.Contains(g.Id.Value)
                     && !sweepTerminalizedGoalIds.Contains(g.Id)
                     && !checkpointHeldGoals.ContainsKey(g.Id.Value)
                     && (!ConductorOwnerQuestionHolds.ExcludesFromWalk(g.CurrentHold?.State) || actionableIntentGoalIds.Contains(g.Id.Value))
@@ -776,76 +817,10 @@ internal sealed partial class ConductorBatchLoop
                 .ToArray();
             var verifiedGoalIdsAtTickStart = scopedGoals.Where(goal => goal.Status == GoalStatus.Verified)
                 .Select(goal => goal.Id).ToHashSet();
-            var scopedGoalsById = scopedGoals.ToDictionary(goal => goal.Id.Value, StringComparer.Ordinal);
             var preWalkIntentChangedGoalIds = new HashSet<GoalId>(hostedChangedGoalIds);
-            if (_operatorIntents is not null)
-            {
-                foreach (var actionableGoalId in actionableIntentGoalIds)
-                {
-                    if (!scopedGoalsById.TryGetValue(actionableGoalId, out var scopedGoal))
-                    {
-                        if (checkpointHeldGoals.ContainsKey(actionableGoalId))
-                        {
-                            EmitProgress(
-                                $"OPERATOR_INTENT goal={ShortGoalId(actionableGoalId)} result=deferred reason=checkpoint-held");
-                            continue;
-                        }
-
-                        var disposition = UnloadedGoalIntentDisposition.Decide(actionableGoalId, onlyGoalId, _goalReloadObservation);
-                        if (disposition is UnloadedGoalIntentDisposition.AwaitingReload)
-                        {
-                            intentsAwaitingReload++;
-                            EmitProgress($"OPERATOR_INTENT goal={ShortGoalId(actionableGoalId)} result=deferred reason=awaiting-goal-reload");
-                            continue;
-                        }
-                        var rejection = (UnloadedGoalIntentDisposition.Rejected)disposition;
-                        try
-                        {
-                            var rejectedLines = _operatorIntents.RejectPending(actionableGoalId, rejection.Reason, rejection.ReasonCode);
-                            preWalkIntentLines.AddRange(rejectedLines);
-                            preWalkIntentProcessed |= rejectedLines.Count > 0;
-                        }
-                        catch (Exception ex)
-                        {
-                            EmitProgress(
-                                $"OPERATOR_INTENT goal={ShortGoalId(actionableGoalId)} result=store-unavailable phase=reject reason={SanitizeReason(ex.Message)}");
-                        }
-
-                        continue;
-                    }
-
-                    OperatorIntentExecutionResult intentResult;
-                    OperatorIntentGoalApplicationResult application;
-                    try
-                    {
-                        application = OperatorIntentGoalApplication.ApplyPending(
-                            kernel, scopedGoal, _operatorIntents, driver.ParallelAcceptanceAttemptCoordinator);
-                        intentResult = application.Result;
-                    }
-                    catch (Exception ex)
-                    {
-                        EmitProgress(
-                            $"OPERATOR_INTENT goal={ShortGoalId(scopedGoal.Id.Value)} result=store-unavailable phase=execute reason={SanitizeReason(ex.Message)}");
-                        continue;
-                    }
-
-                    preWalkIntentLines.AddRange(application.Lines);
-                    preWalkIntentProcessed |= intentResult.ProgressLines.Count > 0;
-                    if (intentResult.RejectedAdjudication)
-                        preWalkIntentChangedGoalIds.Add(scopedGoal.Id);
-                    if (intentResult.MutatedGoalState)
-                    {
-                        preWalkIntentChangedGoalIds.Add(scopedGoal.Id);
-                        excludedGoals.Remove(scopedGoal.Id.Value);
-                        setAsideGoals.Remove(scopedGoal.Id.Value);
-                        selfClearedSetAsideEntries.Remove(scopedGoal.Id.Value);
-                        escalatedGoals.Remove(scopedGoal.Id.Value);
-                        completedGoals.Remove(scopedGoal.Id.Value);
-                        reapedGoals.Remove(scopedGoal.Id.Value);
-                        goalProjectionCache.Invalidate(scopedGoal.Id);
-                    }
-                }
-            }
+            preWalkIntentChangedGoalIds.UnionWith(intentBoundary.ChangedGoalIds);
+            var unpersistedIntentGoalIds = hostedChangedGoalIds
+                .Concat(intentBoundary.ChangedGoalIds.Except(intentBoundary.DurableGoalIds)).ToHashSet();
 
             var parkedExcludedCount = scopedGoals.Count(g => g.Status == GoalStatus.Parked);
             var terminalExcludedCount = scopedGoals.Count(IsPreWalkExcludedTerminalGoal);
@@ -875,10 +850,10 @@ internal sealed partial class ConductorBatchLoop
                     EmitProgress(
                         $"TICK_END tick={totalTicks} advanced=0 held={preWalkIntentChangedGoalIds.Count} escalated=0 done=0",
                         intentTickLines);
-                    var intentStatePersisted = preWalkIntentChangedGoalIds.Count == 0;
-                    if (preWalkIntentChangedGoalIds.Count > 0 && checkpointGoalTick is not null)
+                    var intentStatePersisted = unpersistedIntentGoalIds.Count == 0;
+                    if (unpersistedIntentGoalIds.Count > 0 && checkpointGoalTick is not null)
                     {
-                        var requested = preWalkIntentChangedGoalIds.ToArray();
+                        var requested = unpersistedIntentGoalIds.ToArray();
                         var durable = ApplyCheckpointOutcomes(
                             checkpointGoalTick(kernel, requested),
                             requested,
@@ -890,32 +865,32 @@ internal sealed partial class ConductorBatchLoop
                         if (durable.Count > 0)
                             CompletePersistedOperatorIntents(durable, intentTickLines);
                     }
-                    else if (preWalkIntentChangedGoalIds.Count > 0 && persistGoalTick is not null)
+                    else if (unpersistedIntentGoalIds.Count > 0 && persistGoalTick is not null)
                     {
                         PersistGoalTickOrThrow(
                             persistGoalTick,
                             kernel,
-                            preWalkIntentChangedGoalIds.ToArray(),
+                            unpersistedIntentGoalIds.ToArray(),
                             totalTicks,
                             intentTickLines,
                             busyWriteDelay);
                         intentStatePersisted = true;
                     }
-                    else if (preWalkIntentChangedGoalIds.Count > 0)
+                    else if (unpersistedIntentGoalIds.Count > 0)
                     {
                         intentStatePersisted = TryPersistTick(
                             persistTick,
                             kernel,
                             totalTicks,
-                            ResolveGoalContext(preWalkIntentChangedGoalIds, onlyGoalId),
+                            ResolveGoalContext(unpersistedIntentGoalIds, onlyGoalId),
                             "operator-intent",
                             intentTickLines,
                             busyWriteDelay);
                     }
 
-                    if (checkpointGoalTick is null && intentStatePersisted && preWalkIntentChangedGoalIds.Count > 0)
+                    if (checkpointGoalTick is null && intentStatePersisted && unpersistedIntentGoalIds.Count > 0)
                     {
-                        CompletePersistedOperatorIntents(preWalkIntentChangedGoalIds, intentTickLines);
+                        CompletePersistedOperatorIntents(unpersistedIntentGoalIds, intentTickLines);
                     }
 
                     totalHeld += preWalkIntentChangedGoalIds.Count;
@@ -1034,21 +1009,14 @@ internal sealed partial class ConductorBatchLoop
                         : SleepUntilNextTick(idleInterval, stopFilePath, wakeSignal, GetRunningDispatchExitCodePaths(kernel, onlyGoalId), GetRunningAttemptExitCodePaths(driver, kernel, onlyGoalId));
                     if (idleSleep == WatchSleepResult.WakeSignaled)
                     {
-                        RunJanitorialPhase(
-                            "idle-wake-sweep",
-                            nextTick,
-                            () => _sweep(kernel, checkpointHeldGoals.Keys.ToHashSet(StringComparer.Ordinal)));
-                        RunJanitorialPhase("idle-wake-recover-interrupted-dispatches", nextTick, () =>
-                        {
-                            _recoverInterruptedDispatches(kernel);
-                            return true;
-                        });
-                        TryPersistCheckpoint(persistTick, persistGoalTick, kernel, totalTicks, onlyGoalId, "idle-wake-sweep", null, busyWriteDelay,
-                            checkpointGoalTick: checkpointGoalTick, checkpointHeldGoalIds: checkpointHeldGoals);
+                        pendingWakeMaintenanceKind = "idle-wake-sweep";
                     }
 
                     if (idleSleep == WatchSleepResult.StopRequested || IsStopRequested(stopFilePath))
                     {
+                        // A wake still owns exit reconciliation even when shutdown wins admission.
+                        // Do not capture or apply another intent batch on this stopping path.
+                        ReconcilePendingWakeMaintenance(nextTick, preTickTimingLines);
                         stopRequested = true;
                         StopLoop("stop-while-idle");
                         DetachNonTerminalEligibleGoals(kernel, driver, onlyGoalId, excludedGoals, reapedGoals);
@@ -1088,7 +1056,7 @@ internal sealed partial class ConductorBatchLoop
             }
 
             var changedGoalLines = new List<string>();
-            var changedGoalIds = new HashSet<GoalId>(preWalkIntentChangedGoalIds.Concat(GoalKernelChange.ChangedSince(kernel, sweepResult?.ReloadBaseline ?? preSweepBaseline, checkpointHeldGoals.Keys, sweepTerminalizedGoalIds)).Concat(GoalEffectivePriorityIndex.ApplyPending(kernel.Goals, line => EmitProgress(line, tickLines), _utcNow, _priorityStarvationGuard.BeginTick(kernel, totalTicks), recordDecision: kernel.RecordGoalPolicyDecision)));
+            var changedGoalIds = new HashSet<GoalId>(unpersistedIntentGoalIds.Concat(GoalKernelChange.ChangedSince(kernel, sweepResult?.ReloadBaseline ?? preSweepBaseline, checkpointHeldGoals.Keys, sweepTerminalizedGoalIds)).Concat(GoalEffectivePriorityIndex.ApplyPending(kernel.Goals, line => EmitProgress(line, tickLines), _utcNow, _priorityStarvationGuard.BeginTick(kernel, totalTicks), recordDecision: kernel.RecordGoalPolicyDecision)));
             var liveChangeSnapshots = new Dictionary<(string Worktree, string? BaseCommit), DispatchLiveChangeSnapshot>();
 
             DispatchLiveChangeSnapshot LiveChangesFor(TaskSpec task)
@@ -1678,21 +1646,12 @@ internal sealed partial class ConductorBatchLoop
                 if (sleepResult == WatchSleepResult.WakeSignaled)
                 {
                     EmitProgress(FormatWatchWake(totalTicks, stopFilePath, wakeSignal));
-                    RunJanitorialPhase(
-                        "wake-sweep",
-                        totalTicks,
-                        () => _sweep(kernel, checkpointHeldGoals.Keys.ToHashSet(StringComparer.Ordinal)));
-                    RunJanitorialPhase("wake-recover-interrupted-dispatches", totalTicks, () =>
-                    {
-                        _recoverInterruptedDispatches(kernel);
-                        return true;
-                    });
-                    TryPersistCheckpoint(persistTick, persistGoalTick, kernel, totalTicks, onlyGoalId, "wake-sweep", tickLines, busyWriteDelay,
-                        checkpointGoalTick: checkpointGoalTick, checkpointHeldGoalIds: checkpointHeldGoals);
+                    pendingWakeMaintenanceKind = "wake-sweep";
                 }
 
                 if (sleepResult == WatchSleepResult.StopRequested || IsStopRequested(stopFilePath))
                 {
+                    ReconcilePendingWakeMaintenance(totalTicks, tickLines);
                     stopRequested = true;
                     StopLoop("stop-file-during-sleep");
                     Console.WriteLine($"[conduct --loop --watch] Stop signal detected during sleep after tick {totalTicks}; no new dispatches.");
@@ -2057,7 +2016,46 @@ internal sealed partial class ConductorBatchLoop
         return onlyGoalId is null ? "none" : ShortGoalId(onlyGoalId);
     }
 
-    private static string ShortGoalId(string goalId) =>
+    private IReadOnlySet<string> ProtectedOperatorIntentGoalIds(
+        AgentOrchestratorKernel kernel, Dictionary<string, GoalSnapshotCheckpointResult> checkpointHeldGoals) =>
+        checkpointHeldGoals.Keys.Concat(kernel.Goals
+                .Where(goal => _operatorIntents?.HasPendingCompletion(goal.Id.Value) == true)
+                .Select(goal => goal.Id.Value))
+            .ToHashSet(StringComparer.Ordinal);
+
+    private ConductorOperatorIntentBoundary.Result ServiceOperatorIntentBoundary(
+        AgentOrchestratorKernel kernel, ConductorDriver driver, string? onlyGoalId,
+        Dictionary<string, GoalSnapshotCheckpointResult> checkpointHeldGoals,
+        int tick, Action<AgentOrchestratorKernel>? persistTick,
+        Action<AgentOrchestratorKernel, IReadOnlyCollection<GoalId>>? persistGoalTick,
+        Func<AgentOrchestratorKernel, IReadOnlyCollection<GoalId>, IReadOnlyList<GoalSnapshotCheckpointResult>>? checkpointGoalTick,
+        Action<TimeSpan>? busyWriteDelay,
+        IReadOnlyList<OperatorIntentRecord>? capturedBatch = null)
+    {
+        var result = ConductorOperatorIntentBoundary.Apply(
+            kernel, driver, onlyGoalId, checkpointHeldGoals, _operatorIntents,
+            capturedBatch is null ? _prepareOperatorIntentTarget : null, _goalReloadObservation, capturedBatch);
+        if (result.ChangedGoalIds.Count == 0) return result;
+        var requested = result.ChangedGoalIds.ToArray();
+        if (checkpointGoalTick is not null)
+            result.DurableGoalIds.UnionWith(ApplyCheckpointOutcomes(
+                checkpointGoalTick(kernel, requested), requested, checkpointHeldGoals, tick,
+                "operator-intent", result.Lines));
+        else if (persistGoalTick is not null)
+        {
+            PersistGoalTickOrThrow(persistGoalTick, kernel, requested, tick, result.Lines, busyWriteDelay);
+            result.DurableGoalIds.UnionWith(requested);
+        }
+        else if (TryPersistTick(persistTick, kernel, tick, ResolveGoalContext(requested, onlyGoalId),
+                     "operator-intent", result.Lines, busyWriteDelay))
+            result.DurableGoalIds.UnionWith(requested);
+
+        if (result.DurableGoalIds.Count > 0)
+            CompletePersistedOperatorIntents(result.DurableGoalIds, result.Lines);
+        return result;
+    }
+
+    internal static string ShortGoalId(string goalId) =>
         goalId.Length <= 8 ? goalId : goalId[..8];
 
     private static bool RecordChangedDisposition(

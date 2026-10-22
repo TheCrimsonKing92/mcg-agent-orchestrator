@@ -1532,7 +1532,7 @@ public sealed partial class BackgroundDispatchRunner
             }
 
             var buildEvidence = task.LastDispatch?.WorkerBuildProtocolVersion == 1
-                ? ResolveWorkerBuildInvocation(kernel, goalId, taskId, worktreeEvidence.ChangedPaths, worktreeEvidence.DirtyPaths)
+                ? ResolveWorkerBuildInvocation(kernel, goalId, taskId, worktreeEvidence.ChangedPaths, worktreeEvidence.DirtyPaths, ref orchestratorFailureReason)
                 : CompletionBuildDispatchReconciliationPolicy.Resolve(
                 task, processRecord.WorkingDirectory,
                 worktreeEvidence.ChangedPaths, worktreeEvidence.DirtyPaths, failedWorkerBuildCheck,

@@ -46,7 +46,8 @@ public static bool ExecuteCommand(
     Action<GoalSnapshot>? recordDurableGoalBaseline = null,
     WorktreeCleanupContext? cleanupContext = null,
     IClock? diagnosticsClock = null,
-    Action<Action>? registerPostCommitAction = null)
+    Action<Action>? registerPostCommitAction = null,
+    Func<IReadOnlyCollection<GoalId>, AgentOrchestratorKernel>? loadOperatorIntentTargets = null)
 {
     eventWriter ??= new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory, kernel: kernel, integrationBranch: workspace.IntegrationBranch);
     kernel.SetEventWriter(eventWriter);
@@ -84,7 +85,8 @@ public static bool ExecuteCommand(
         reportGoalCreationProgress: reportGoalCreationProgress,
         persistCriticalGoalKernel: persistCriticalGoalKernel,
         recordDurableGoalBaseline: recordDurableGoalBaseline,
-        registerPostCommitAction: registerPostCommitAction)
+        registerPostCommitAction: registerPostCommitAction,
+        loadOperatorIntentTargets: loadOperatorIntentTargets)
     {
         EventWriter = eventWriter,
         AcceptanceVerifier = acceptanceVerifier ?? new GoalAcceptanceVerifier(

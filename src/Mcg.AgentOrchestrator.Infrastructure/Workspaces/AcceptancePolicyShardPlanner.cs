@@ -31,7 +31,7 @@ internal static partial class AcceptancePolicyShardPlanner
         [OperatorCommsProject] = new(BaseCacheEligibility.Always, [AppProject, InfrastructureTestsProject, TestSupportProject, ProviderEnvironmentTestsProject, CliTestsProject]),
         [ExecutionProject] = new(BaseCacheEligibility.Always, [InfrastructureProject, AppProject, InfrastructureTestsProject, AcceptanceTestsProject, TestSupportProject, ProviderEnvironmentTestsProject, CliTestsProject, ExecutionTestsProject]),
         [InfrastructureProject] = new(BaseCacheEligibility.Always, [AppProject, InfrastructureTestsProject, AcceptanceTestsProject, TestSupportProject, ProviderEnvironmentTestsProject, CliTestsProject]),
-        [AppProject] = new(BaseCacheEligibility.Always, [InfrastructureTestsProject, TestSupportProject, ProviderEnvironmentTestsProject, CliTestsProject]),
+        [AppProject] = new(BaseCacheEligibility.Always, [InfrastructureTestsProject, AcceptanceTestsProject, TestSupportProject, ProviderEnvironmentTestsProject, CliTestsProject]),
         [CoreTestsProject] = new(BaseCacheEligibility.Always, []),
         [InfrastructureTestsProject] = new(BaseCacheEligibility.Always, []),
         [AcceptanceTestsProject] = new(BaseCacheEligibility.WhenTargeted, []),

@@ -17,7 +17,7 @@ public sealed class GoalAcceptancePolicyRequiredChecksTests
             changedPaths, new(FullShards: false, ChangeScoped: true),
             new AbsentTree(absentProject), [absentProject]);
         var requiredCore = TestCheck("required core", AcceptancePolicyShardPlanner.CoreTestsProject);
-        var requiredAcceptance = TestCheck("required acceptance", AcceptancePolicyShardPlanner.AcceptanceTestsProject);
+        var requiredExecution = TestCheck("required execution", AcceptancePolicyShardPlanner.ExecutionTestsProject);
         var absentCheck = TestCheck("absent required tests", absentProject,
             focusedAbsentCheck ? ["--filter", "FullyQualifiedName~RemovedTests"] : []);
         var nonTestCheck = new AcceptanceManifestCheck
@@ -30,7 +30,8 @@ public sealed class GoalAcceptancePolicyRequiredChecksTests
         Assert.True(shardPlan.Applies);
         Assert.False(shardPlan.ForceFull);
         Assert.False(shardPlan.IncludesProject(requiredCore.Project));
-        Assert.False(shardPlan.IncludesProject(requiredAcceptance.Project));
+        Assert.False(shardPlan.IncludesProject(requiredExecution.Project));
+        Assert.True(shardPlan.IncludesProject(AcceptancePolicyShardPlanner.AcceptanceTestsProject));
         Assert.True(shardPlan.IncludesProject(manifestInfrastructure.Project));
         Assert.True(shardPlan.IsAbsentProject(absentProject));
         Assert.Contains(absentProject, shardPlan.Evidence);
@@ -45,14 +46,14 @@ public sealed class GoalAcceptancePolicyRequiredChecksTests
             string.Empty,
             new AcceptanceManifestCheck[] { manifestCore, manifestInfrastructure },
             changedPaths,
-            new AcceptanceManifestCheck[] { requiredCore, requiredAcceptance, absentCheck, nonTestCheck },
+            new AcceptanceManifestCheck[] { requiredCore, requiredExecution, absentCheck, nonTestCheck },
             shardPlan,
             null
         ]);
         var checks = Assert.IsAssignableFrom<IReadOnlyList<AcceptanceManifestCheck>>(result);
 
         Assert.Contains(requiredCore, checks);
-        Assert.Contains(requiredAcceptance, checks);
+        Assert.Contains(requiredExecution, checks);
         Assert.Contains(manifestInfrastructure, checks);
         Assert.Contains(nonTestCheck, checks);
         Assert.DoesNotContain(absentCheck, checks);
