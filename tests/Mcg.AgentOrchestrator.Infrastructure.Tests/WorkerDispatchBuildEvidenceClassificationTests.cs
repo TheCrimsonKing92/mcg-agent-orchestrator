@@ -241,7 +241,7 @@ public sealed class WorkerDispatchBuildEvidenceClassificationTests : WorkerDispa
         Xunit.Assert.True(runResult.Ran, runResult.Output);
         Xunit.Assert.NotNull(launched);
         Xunit.Assert.Equal(worktree, launched.WorkingDirectory);
-        Xunit.Assert.Equal(TimeSpan.FromMinutes(7), launched.Timeout);
+        Xunit.Assert.Equal(OrchestratorBuildEvidenceCheck.DefaultTimeout, launched.Timeout);
         Xunit.Assert.Equal(
             $"& '{scriptPath!.Replace("'", "''")}' 'src/Feature/Feature.csproj'", launched.Command);
         Xunit.Assert.False(resolution.MissingEvidence, resolution.Diagnostic);

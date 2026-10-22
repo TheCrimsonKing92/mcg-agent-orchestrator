@@ -82,7 +82,7 @@ public sealed class RemoteWorkerBuildCheckScenarioTests
             Operation = Host.Task.CompletionBuildEvidence! with
             {
                 ResultPath = Path.Combine(Host.Root, "placement.result.json"),
-                Deadline = Time.GetUtcNow() + TimeSpan.FromMinutes(12)
+                Deadline = Time.GetUtcNow() + OrchestratorBuildEvidenceCheck.DefaultTimeout + TimeSpan.FromMinutes(5)
             };
             Assert.Equal(CompletionBuildEvidencePhase.Pending, Operation.Phase);
             Assert.Equal(new[] { "src/Feature/Feature.csproj" }, Operation.Projects);

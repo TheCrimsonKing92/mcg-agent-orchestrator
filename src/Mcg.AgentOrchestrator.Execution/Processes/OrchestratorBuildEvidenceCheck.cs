@@ -54,7 +54,8 @@ public static class OrchestratorBuildEvidenceCheck
     internal const string ScriptRelativePath = "scripts/Invoke-WorkerBuildCheck.ps1";
     // Published by the App's OrchestratorHome accessor before command dispatch.
     internal const string HomeEnvironmentVariable = "MCG_ORCHESTRATOR_HOME";
-    internal static readonly TimeSpan DefaultTimeout = TimeSpan.FromMinutes(7);
+    // A full 10-project rebuild takes about 9 to 10 minutes under acceptance-gate load.
+    internal static readonly TimeSpan DefaultTimeout = TimeSpan.FromMinutes(12);
 
     internal static OrchestratorBuildEvidenceResolution Resolve(
         string worktreeRoot,
