@@ -29,7 +29,7 @@ internal enum SpawnRegistryLifecycle
     ConductorDetached
 }
 
-internal sealed record SpawnProcessIdentity(int ProcessId, DateTimeOffset StartedAt, string ImagePath);
+public sealed record SpawnProcessIdentity(int ProcessId, DateTimeOffset StartedAt, string ImagePath);
 
 internal sealed record SpawnProcessIdentityReadResult(
     SpawnProcessIdentity? Identity,
@@ -247,6 +247,29 @@ internal sealed class SpawnRegistry
             cmd.ExecuteScalar() as string,
             SpawnRegistryLifecycle.ConductorDetached.ToString(),
             StringComparison.Ordinal);
+    }
+
+    public SpawnProcessIdentity? TryReadOwnerProcessIdentity(string ownerId, int processId, DateTimeOffset processRecordedAt)
+    {
+        if (!File.Exists(_dbPath)) return null;
+        using var conn = OpenReadConnection();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            SELECT owner_process_id, owner_process_started_at, owner_process_image_path
+            FROM spawn_registry
+            WHERE owner_id = $owner_id
+              AND process_id = $process_id
+              AND registered_at <= $process_recorded_at
+            ORDER BY registered_at DESC, id DESC
+            LIMIT 1
+            """;
+        cmd.Parameters.AddWithValue("$owner_id", ownerId);
+        cmd.Parameters.AddWithValue("$process_id", processId);
+        cmd.Parameters.AddWithValue("$process_recorded_at", processRecordedAt.ToString("O", CultureInfo.InvariantCulture));
+        using var reader = cmd.ExecuteReader();
+        if (!reader.Read() || reader.IsDBNull(0) || reader.IsDBNull(1) || reader.IsDBNull(2)) return null;
+        return new SpawnProcessIdentity(reader.GetInt32(0),
+            DateTimeOffset.Parse(reader.GetString(1), CultureInfo.InvariantCulture), reader.GetString(2));
     }
 
     public bool TryMarkConductorDetached(SpawnRegistryEntry entry, string diagnostic)

@@ -124,6 +124,7 @@ public static class DispatchFailureDiagnosticMarker
     public const string WrapperProcessExitFailure = "wrapper-process-exit-failure";
     public const string RequiredFileChangeEvidenceMissing = "required-file-change-evidence-missing";
     public const string WorktreeInspectionFailed = "worktree-inspection-failed";
+    public const string ConductorGenerationInterrupted = "conductor-generation-interrupted";
 
     public static string Format(string code) => $"{Prefix} {code}";
 }
@@ -587,6 +588,10 @@ public static partial class DispatchFailureClassifier
         bool hasCommittedChanges,
         Func<TaskSpec, TaskVerificationRecord, VerificationTerminalContractAssessment> assessTerminalContract)
     {
+        if (ConductorGenerationInterruptionClassification.IsMarked(verification))
+            return BuildOutcome(TaskOutcomeRules.ConductorGenerationInterrupted, task, verification,
+                workerResultPresent, hasCommittedChanges, ConductorGenerationInterruptionClassification.Outcome(verification));
+
         if (IsProviderInterruptionFailure(verification))
         {
             return BuildOutcome(
@@ -2314,6 +2319,7 @@ public static partial class DispatchFailureClassifier
         for (var index = task.VerificationHistory.Count - 1; index >= 0; index--)
         {
             if (!IsProviderInterruptionFailure(task.VerificationHistory[index]) &&
+                !ConductorGenerationInterruptionClassification.IsMarked(task.VerificationHistory[index]) &&
                 task.VerificationHistory[index].CompletionVerdictRule != TaskOutcomeRules.VerificationTerminalContractIncomplete.Token)
             {
                 break;

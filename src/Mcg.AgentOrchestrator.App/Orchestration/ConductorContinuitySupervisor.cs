@@ -30,7 +30,9 @@ internal sealed record ConductorSupervisorProcessResult(
     int ProcessId,
     string StdoutPath = "",
     string StderrPath = "",
-    bool TerminationConfirmed = true);
+    bool TerminationConfirmed = true,
+    DateTimeOffset? ProcessStartedAt = null,
+    bool ForcedStop = false);
 
 internal sealed record ConductorContinuityExitArtifact(
     string StopReason,
@@ -498,6 +500,7 @@ internal sealed partial class ConductorContinuitySupervisor(
                             RecordActivation("reverted", attempt, candidateBuild, currentBuild,
                                 activation.Reason, activation.Detail);
                             TryDeleteArtifact(artifactPath);
+                            if (activation.ProcessResult is { } terminated) ConductorGenerationTerminationRecorder.Record(eventStore, _timeProvider, terminated, "activation-reverted", activation.Reason.ToString(), candidateBuild.CommitSha);
                             continue;
                         }
 
@@ -1012,6 +1015,9 @@ internal sealed class SystemConductorSupervisorProcessHost(
         {
             throw new InvalidOperationException("Failed to start the supervised conductor process.");
         }
+        DateTimeOffset? processStartedAt;
+        try { processStartedAt = process.StartTime.ToUniversalTime(); }
+        catch { processStartedAt = null; }
         try
         {
             request.OnProcessStarted?.Invoke(process.Id);
@@ -1030,12 +1036,14 @@ internal sealed class SystemConductorSupervisorProcessHost(
         }
         catch (OperationCanceledException)
         {
+            var forcedStop = false;
             var terminationConfirmed = process.HasExited;
             try
             {
                 if (!terminationConfirmed)
                 {
                     process.Kill(entireProcessTree: true);
+                    forcedStop = true;
                     terminationConfirmed = process.WaitForExit(5000);
                 }
             }
@@ -1049,14 +1057,17 @@ internal sealed class SystemConductorSupervisorProcessHost(
                 process.Id,
                 request.StdoutPath,
                 request.StderrPath,
-                terminationConfirmed);
+                terminationConfirmed,
+                processStartedAt,
+                forcedStop);
         }
         process.WaitForExit();
         return new ConductorSupervisorProcessResult(
             process.ExitCode,
             process.Id,
             request.StdoutPath,
-            request.StderrPath);
+            request.StderrPath,
+            ProcessStartedAt: processStartedAt);
     }
 
     private static ProcessStartInfo BuildDefaultStartInfo(ConductorSupervisorProcessRequest request)

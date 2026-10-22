@@ -191,7 +191,7 @@ internal static class SourceSizeRatchet
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs", 2692),
             // Goal 354522f1 tick persistence partial measured at 467 lines.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.TickPersistence.cs", 467),
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.DependencyReadmission.cs", 375),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.DependencyReadmission.cs", 370),
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.ParallelAcceptanceFairness.cs", 150),
             // Goal 33b9b7a6 extracts reconciled-pass application to PassedAcceptanceReceiptReplay.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.ParallelAcceptanceCompletion.cs", 462),
@@ -254,7 +254,7 @@ internal static class SourceSizeRatchet
             // Goal ffa0471e extracts historical/current completion-build policy to its owning collaborator.
             // Integrated build-scope extraction and task-intent admission: measured 2736, no headroom.
             // Goal e7c4bc06 adds Tester submission ingestion: measured 2743, no headroom.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Execution/Processes/BackgroundDispatchRunner.cs", 2727),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Execution/Processes/BackgroundDispatchRunner.cs", 2707),
             // Goal 5a75fed0 extracted typed projection parsing and literal restoration into
             // WorkerContextProjectionResidual, leaving the dispatcher to sequence package assembly.
             // Goal fd252fe4 adds retry fingerprints for the resolved provider, model, paid route, and
@@ -598,7 +598,7 @@ internal static class SourceSizeRatchet
             // Goal 4fce8cbe adds the scoped admission-health accumulator partial and shared census recording calls.
             // Goal 587ba8d2 adds one train-receipt-revalidate conduct event mapping line (measured 9320 at the merged head).
             // Goal aa4f5017 adds the passive activation-probe ledger; measured 9421 lines in 56 partials at the merged head, no headroom.
-            new SourceClassCeiling("ConductorBatchLoop", 9277, 56),
+            new SourceClassCeiling("ConductorBatchLoop", 9247, 56),
             // Goal ec8903af moved the goal-prefix parser to CliGoalPrefixArguments.
             // Goal cd1f6380 adds four lines at the owning transaction boundary, forwarding both
             // registrars and invoking actions after commit; list behavior lives in PostCommitActions.
