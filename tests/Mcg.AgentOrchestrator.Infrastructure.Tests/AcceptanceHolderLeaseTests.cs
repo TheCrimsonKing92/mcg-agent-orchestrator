@@ -635,6 +635,181 @@ public sealed class AcceptanceHolderLeaseTests
         Assert.Equal("Adopted", fixture.Lease().Read(fixture.Binding).Phase);
     }
 
+    [Fact]
+    public void SettledHolderWithoutResultRecordsFirstTransientDeath()
+    {
+        using var fixture = new Fixture();
+        var goal = new AgentOrchestratorKernel().CreateGoal("Settled holder retry");
+        var candidate = ConductorParallelAcceptanceCandidate.Create(goal, 0, [], "branch", "main");
+        var first = SettlementCoordinator(fixture, fixture.FirstGeneration);
+        var started = first.Evaluate(candidate, ConductorAutonomyPolicy.Permissive,
+            (_, _, _, _, _) => throw new InvalidOperationException("Unexpected verifier execution."));
+        Assert.Equal(ConductorParallelAcceptanceAttemptDecisionKind.Started, started.Kind);
+        Assert.Equal("Claimed", fixture.Lease().Read(fixture.Binding).Phase);
+        fixture.ActiveShards = 2;
+        first.PrepareHolderDetach();
+        Assert.Equal("Detached", fixture.Lease().Read(fixture.Binding).Phase);
+        fixture.FirstGenerationAlive = false;
+        var successor = SettlementCoordinator(fixture, fixture.SecondGeneration);
+        Assert.Single(successor.GetAllCapacityReservingAttempts());
+        Assert.Equal(fixture.SecondGeneration, fixture.Lease().Read(fixture.Binding).Generation);
+        fixture.HolderAlive = false;
+        Assert.Single(successor.GetAllCapacityReservingAttempts());
+        Assert.False(File.Exists(started.Attempt!.ResultPath));
+
+        fixture.ActiveShards = 0;
+        Assert.Empty(successor.GetAllCapacityReservingAttempts());
+        Assert.Equal("Released", fixture.Lease().Read(fixture.Binding).Phase);
+        var terminal = ReadSettlementAttempt(started.Attempt);
+        Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.ProcessDied, terminal.Outcome);
+        Assert.StartsWith("holder-tree-settled:", terminal.Detail);
+        Assert.Equal(1, terminal.TransientFailureCount);
+        Assert.True(ConductorParallelAcceptanceAttemptCoordinator.IsTransientTerminalFailure(terminal));
+    }
+
+    [Fact]
+    public void CancelledHolderWithoutResultRecordsTransientDeath()
+    {
+        using var fixture = new Fixture();
+        var goal = new AgentOrchestratorKernel().CreateGoal("Cancelled holder retry");
+        var candidate = ConductorParallelAcceptanceCandidate.Create(goal, 0, [], "branch", "main");
+        var coordinator = SettlementCoordinator(fixture, fixture.FirstGeneration);
+        var started = coordinator.Evaluate(candidate, ConductorAutonomyPolicy.Permissive,
+            (_, _, _, _, _) => throw new InvalidOperationException("Unexpected verifier execution."));
+        Assert.Equal(ConductorParallelAcceptanceAttemptDecisionKind.Started, started.Kind);
+        Assert.Equal("Claimed", fixture.Lease().Read(fixture.Binding).Phase);
+        Assert.True(fixture.Lease().Cancel(fixture.Binding, fixture.FirstGeneration, "test cancellation"));
+        Assert.Equal(1, fixture.CancelledJobs);
+        Assert.Equal("Cancelled", fixture.Lease().Read(fixture.Binding).Phase);
+        Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.Running, ReadSettlementAttempt(started.Attempt!).Outcome);
+        Assert.False(File.Exists(started.Attempt!.ResultPath));
+
+        Assert.Empty(coordinator.GetAllCapacityReservingAttempts());
+        var terminal = ReadSettlementAttempt(started.Attempt);
+        Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.ProcessDied, terminal.Outcome);
+        Assert.Equal("holder-tree-settled:Cancelled", terminal.Detail);
+        Assert.Equal(1, terminal.TransientFailureCount);
+    }
+
+    [Fact]
+    public void ConsecutiveSettledDeathsIncrementTheCandidateCount()
+    {
+        using var fixture = new Fixture();
+        var goal = new AgentOrchestratorKernel().CreateGoal("Consecutive holder deaths");
+        var candidate = ConductorParallelAcceptanceCandidate.Create(goal, 0, [], "branch", "main");
+        var coordinator = SettlementCoordinator(fixture, fixture.FirstGeneration);
+        var started = coordinator.Evaluate(candidate, ConductorAutonomyPolicy.Permissive,
+            (_, _, _, _, _) => throw new InvalidOperationException("Unexpected verifier execution."));
+        Assert.Equal(ConductorParallelAcceptanceAttemptDecisionKind.Started, started.Kind);
+        var current = started.Attempt!;
+        var earlier = current with
+        {
+            AttemptId = "earlier",
+            MetadataPath = Path.Combine(Path.GetDirectoryName(current.MetadataPath)!, "earlier.attempt.json"),
+            StartedAt = current.StartedAt.AddMinutes(-1),
+            CompletedAt = current.StartedAt.AddSeconds(-1),
+            ReconciledAt = current.StartedAt.AddSeconds(-1),
+            ExecutionProtocol = "in-process",
+            HolderContractVersion = 0,
+            HolderCandidateKey = null,
+            Outcome = ConductorParallelAcceptanceAttemptOutcome.ProcessDied,
+            Detail = "holder-tree-settled:Cancelled",
+            TransientFailureCount = 2
+        };
+        File.WriteAllText(earlier.MetadataPath,
+            JsonSerializer.Serialize(earlier, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+        Assert.Equal(current.CandidateKey, ReadSettlementAttempt(earlier).CandidateKey);
+        Assert.NotNull(ReadSettlementAttempt(earlier).ReconciledAt);
+        Assert.False(File.Exists(current.ResultPath));
+        fixture.HolderAlive = false;
+        fixture.ActiveShards = 0;
+
+        Assert.Empty(coordinator.GetAllCapacityReservingAttempts());
+        var terminal = ReadSettlementAttempt(current);
+        Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.ProcessDied, terminal.Outcome);
+        Assert.StartsWith("holder-tree-settled:", terminal.Detail);
+        Assert.Equal(3, terminal.TransientFailureCount);
+    }
+
+    [Fact]
+    public void SettledHolderWithResultFileKeepsOutcomeAndCount()
+    {
+        using var fixture = new Fixture();
+        var goal = new AgentOrchestratorKernel().CreateGoal("Published holder result");
+        var candidate = ConductorParallelAcceptanceCandidate.Create(goal, 0, [], "branch", "main");
+        var coordinator = SettlementCoordinator(fixture, fixture.FirstGeneration);
+        var started = coordinator.Evaluate(candidate, ConductorAutonomyPolicy.Permissive,
+            (_, _, _, _, _) => throw new InvalidOperationException("Unexpected verifier execution."));
+        Assert.Equal(ConductorParallelAcceptanceAttemptDecisionKind.Started, started.Kind);
+        var before = started.Attempt! with { TransientFailureCount = 2 };
+        File.WriteAllText(before.MetadataPath,
+            JsonSerializer.Serialize(before, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+        Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.Running, ReadSettlementAttempt(before).Outcome);
+        File.WriteAllText(before.ResultPath, "{}");
+        Assert.True(File.Exists(before.ResultPath));
+        fixture.HolderAlive = false;
+        fixture.ActiveShards = 0;
+
+        Assert.Empty(coordinator.GetAllCapacityReservingAttempts());
+        Assert.Equal("Released", fixture.Lease().Read(fixture.Binding).Phase);
+        var after = ReadSettlementAttempt(before);
+        Assert.Equal(before.Outcome, after.Outcome);
+        Assert.Equal(before.TransientFailureCount, after.TransientFailureCount);
+
+        // Removing the result proves the guarded writer is armed for this same settled holder.
+        File.Delete(before.ResultPath);
+        Assert.Empty(coordinator.GetAllCapacityReservingAttempts());
+        var withoutResult = ReadSettlementAttempt(before);
+        Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.ProcessDied, withoutResult.Outcome);
+        Assert.Equal(1, withoutResult.TransientFailureCount);
+    }
+
+    [Fact]
+    public void LegacySettledHolderWithoutResultRecordsTransientDeath()
+    {
+        using var fixture = new Fixture();
+        var directory = Path.Combine(fixture.Root, "goal");
+        Directory.CreateDirectory(directory);
+        var legacy = new ConductorParallelAcceptanceAttempt("legacy", "goal", "goal", 0,
+            "branch", "main", DateTimeOffset.UnixEpoch, DateTimeOffset.UnixEpoch, fixture.Holder.ProcessId,
+            ConductorParallelAcceptanceAttemptOutcome.Running,
+            Path.Combine(directory, "out"), Path.Combine(directory, "err"),
+            Path.Combine(directory, "exit"), Path.Combine(directory, "heartbeat"),
+            Path.Combine(directory, "result"), Path.Combine(directory, "legacy.attempt.json"))
+        { OwnerProcessStartedAt = fixture.Holder.StartedAt, OwnerExecutablePath = fixture.Holder.ImagePath };
+        File.WriteAllText(legacy.MetadataPath,
+            JsonSerializer.Serialize(legacy, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+        var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(fixture.Root, TrunkBranchName.Default,
+            utcNow: () => DateTimeOffset.UnixEpoch.AddDays(1),
+            classifyHolder: _ => SpawnTrackedProcessStatus.DeadOrRecycled,
+            holderLease: fixture.Lease(), generationIdentity: fixture.FirstGeneration);
+        Assert.False(File.Exists(legacy.ResultPath));
+
+        Assert.Empty(coordinator.GetAllCapacityReservingAttempts());
+        var terminal = ReadSettlementAttempt(legacy);
+        Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.ProcessDied, terminal.Outcome);
+        Assert.Equal("legacy-holder-settled", terminal.Detail);
+        Assert.Equal(1, terminal.TransientFailureCount);
+        Assert.True(ConductorParallelAcceptanceAttemptCoordinator.IsTransientTerminalFailure(terminal));
+    }
+
+    private static ConductorParallelAcceptanceAttempt ReadSettlementAttempt(ConductorParallelAcceptanceAttempt attempt) =>
+        JsonSerializer.Deserialize<ConductorParallelAcceptanceAttempt>(File.ReadAllText(attempt.MetadataPath),
+            new JsonSerializerOptions(JsonSerializerDefaults.Web))!;
+
+    private static ConductorParallelAcceptanceAttemptCoordinator SettlementCoordinator(
+        Fixture fixture, SpawnProcessIdentity generation) => new(
+        Path.Combine(fixture.Root, "attempts"), "integration",
+        isProcessAlive: pid => pid == fixture.Holder.ProcessId && fixture.HolderAlive,
+        utcNow: () => DateTimeOffset.UnixEpoch,
+        holderLease: fixture.Lease(), generationIdentity: generation,
+        launchOwnedProcess: launch =>
+        {
+            fixture.Binding = AcceptanceHolderBinding.For(launch.Attempt);
+            using var claim = fixture.Lease().Claim(fixture.Binding, fixture.Holder);
+            return new(fixture.Holder.ProcessId, fixture.Holder.StartedAt, fixture.Holder.ImagePath);
+        });
+
     private sealed class Fixture : IDisposable
     {
         internal string Root { get; } = Path.Combine(Path.GetTempPath(), $"holder-lease-{Guid.NewGuid():N}");
