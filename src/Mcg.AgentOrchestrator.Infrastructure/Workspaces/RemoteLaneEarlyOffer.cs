@@ -63,7 +63,7 @@ internal sealed class RemoteLaneEarlyOffer(RemoteLaneCoordinator coordinator) : 
         var reuseStarted = context.Time.GetTimestamp();
         if (context.Cache?.TryReuse(check) is { } reused)
         {
-            coordinator.Release(entry.Id);
+            coordinator.Release(entry.Id, check.Name);
             return new(null, reused, context.Time.GetElapsedTime(reuseStarted));
         }
         context.Started(check, entry);
