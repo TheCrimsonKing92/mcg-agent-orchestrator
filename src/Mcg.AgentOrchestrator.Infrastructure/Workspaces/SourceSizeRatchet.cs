@@ -188,7 +188,7 @@ internal static class SourceSizeRatchet
             // detach before loop exit at the existing dispatch boundary; holder transfer stays in its coordinator.
             // After integrating main b8da8f673, measured 2710 lines; no extra headroom.
             // Goal 4fce8cbe wires per-run admission telemetry into the existing tick completion and eligibility seams.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs", 2694),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs", 2692),
             // Goal 354522f1 tick persistence partial measured at 467 lines.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.TickPersistence.cs", 467),
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.DependencyReadmission.cs", 375),
@@ -254,7 +254,7 @@ internal static class SourceSizeRatchet
             // Goal ffa0471e extracts historical/current completion-build policy to its owning collaborator.
             // Integrated build-scope extraction and task-intent admission: measured 2736, no headroom.
             // Goal e7c4bc06 adds Tester submission ingestion: measured 2743, no headroom.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Execution/Processes/BackgroundDispatchRunner.cs", 2727),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Execution/Processes/BackgroundDispatchRunner.cs", 2707),
             // Goal 5a75fed0 extracted typed projection parsing and literal restoration into
             // WorkerContextProjectionResidual, leaving the dispatcher to sequence package assembly.
             // Goal fd252fe4 adds retry fingerprints for the resolved provider, model, paid route, and
@@ -336,7 +336,7 @@ internal static class SourceSizeRatchet
             // for outcome/compatibility mutations; parsing and application live in dedicated collaborators.
             // Goal 9d55c9bf adds four lines to classify dogfood-log list at the existing kernel-state route seam;
             // extracting this single switch case would split route ownership. No additional headroom.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Cli/CliPersistentStateRunner.cs", 4786),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Cli/CliPersistentStateRunner.cs", 4780),
             // Goal 03aaf13e adds the explicit-root isolation fact at the verifier's existing execution-
             // environment seam; the production verifier remains at its prior ceiling.
             // Goal 56ff780e keeps passed/failed/unknown shard-completion producer coverage in its owning
@@ -409,7 +409,7 @@ internal static class SourceSizeRatchet
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsFailedGoalRecoveryInterpreter.cs", 192),
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliCommandTestsPersistentRunnerCommands.cs", 1488),
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliCommandTestsPersistentRunnerCommandsAcceptance.cs", 695),
-            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliCommandTestsPersistentRunnerCommandsConductLoopHydration.cs", 801),
+            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliCommandTestsPersistentRunnerCommandsConductLoopHydration.cs", 784),
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliCommandTestsPersistentRunnerCommandsDispatchRecovery.cs", 417),
             // Raised for goal 8b6de491: the slice-batch preview test needs an available Developer agent in
             // its roster now that creating a batch requires one, and the roster is declared inline.
@@ -533,7 +533,7 @@ internal static class SourceSizeRatchet
             // ConductorProgramHealthMonitor. After integrating main b8da8f673, measured 12194 lines across
             // the same 30 partial files, with no extra headroom.
             // Goal 6cf5a8ce routes the backlog-premise-check/close verbs to their separately owned command type.
-            new SourceClassCeiling("CliCommandHandlers", 12032, 30),
+            new SourceClassCeiling("CliCommandHandlers", 12029, 30),
             // Goal ae77554f extracts bounded remote offer history parsing into RemoteLaneOfferHistoryReader.
             // Measured 9053 total lines across the existing 32 partial files; no extra headroom.
             // Goal 03580ad1 extracts source-mutation edits to AcceptanceSourceMutation; measured 8938 lines in 31 partials.
@@ -574,7 +574,7 @@ internal static class SourceSizeRatchet
             // finding deferral. After integrating main b8da8f673, measured 9309 lines in the same 28 partials; no headroom.
             // Goal 171a09ca records gate-owned Planner requests as typed obligations at the dispatch intake;
             // measured increase is exactly 10 lines (9319 total), with the same 28 partials and no headroom.
-            new SourceClassCeiling("AgentOrchestratorKernel", 9317, 28), // Persist bounded provider hold substitution with its routing event.
+            new SourceClassCeiling("AgentOrchestratorKernel", 9310, 28), // Persist bounded provider hold substitution with its routing event.
             // Goal d6033045 extracted the pre-admission receipt pass to PassedMergeTrainReceiptAdmission; goal 1d0f2317
             // adds one admission predicate to exclude stream-complete children before slot reservation. Measured 9255.
             // Goal 679eee57 added a one-line tick call to the separately owned ConductorExperimentWatch (+1); goal 80de5cb2 extracted
@@ -598,7 +598,7 @@ internal static class SourceSizeRatchet
             // Goal 4fce8cbe adds the scoped admission-health accumulator partial and shared census recording calls.
             // Goal 587ba8d2 adds one train-receipt-revalidate conduct event mapping line (measured 9320 at the merged head).
             // Goal aa4f5017 adds the passive activation-probe ledger; measured 9421 lines in 56 partials at the merged head, no headroom.
-            new SourceClassCeiling("ConductorBatchLoop", 9279, 56),
+            new SourceClassCeiling("ConductorBatchLoop", 9277, 56),
             // Goal ec8903af moved the goal-prefix parser to CliGoalPrefixArguments.
             // Goal cd1f6380 adds four lines at the owning transaction boundary, forwarding both
             // registrars and invoking actions after commit; list behavior lives in PostCommitActions.
@@ -611,7 +611,7 @@ internal static class SourceSizeRatchet
             // the command owns intent submission. After integrating main, measured 5972 lines in the same 18 partials; no headroom.
             // Goal 9d55c9bf adds the same four-line dogfood-log list case in the owning route classifier;
             // keep classification centralized across the same 18 partial files. No additional headroom.
-            new SourceClassCeiling("CliPersistentStateRunner", 5955, 18),
+            new SourceClassCeiling("CliPersistentStateRunner", 5949, 18),
             // Goal 5935c270 extracts subscription-plan output into SubscriptionPlanTextView
             // (2026-10-09 console architecture review, finding 4, taming slice 13).
             // Goal c0ff6203 extracts six small text views (taming slice 14).

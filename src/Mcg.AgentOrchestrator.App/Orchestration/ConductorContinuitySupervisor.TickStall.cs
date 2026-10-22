@@ -108,6 +108,7 @@ internal sealed partial class ConductorContinuitySupervisor
                     failure + " terminationConfirmed=false");
             }
 
+            ConductorGenerationTerminationRecorder.Record(eventStore, _timeProvider, stopped, "tick-stall", null, build.CommitSha);
             return new(stopped, true, true, failure);
         }
     }

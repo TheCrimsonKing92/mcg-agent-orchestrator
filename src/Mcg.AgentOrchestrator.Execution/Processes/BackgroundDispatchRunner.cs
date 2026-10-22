@@ -43,6 +43,7 @@ public sealed partial class BackgroundDispatchRunner
         string? DirtyStateHash);
 
     private readonly IClock _clock;
+    private readonly ConductorGenerationInterruptionEvidence _generationInterruption;
     private readonly TimeSpan _postOutputIdleTimeout;
     private readonly TimeSpan _progressStallTimeout;
     private readonly TimeSpan _startupHangTimeout;
@@ -85,9 +86,11 @@ public sealed partial class BackgroundDispatchRunner
         Func<int, (DateTimeOffset StartedAt, string ImagePath)?>? readProcessIdentity = null,
         Func<ProcessCommandLineSnapshot>? processCommandLineSnapshotFactory = null,
         Func<GoalId, string>? resolveWorkerBuildReceiptPath = null,
-        ICompletionBuildEvidenceOperation? completionBuildEvidence = null)
+        ICompletionBuildEvidenceOperation? completionBuildEvidence = null,
+        ConductorGenerationInterruptionEvidence? generationInterruption = null)
     {
         _clock = clock ?? new SystemClock();
+        _generationInterruption = generationInterruption ?? new ConductorGenerationInterruptionEvidence(_clock);
         _postOutputIdleTimeout = postOutputIdleTimeout ?? DefaultPostOutputIdleTimeout;
         _progressStallTimeout = progressStallTimeout ?? DefaultProgressStallTimeout;
         _startupHangTimeout = startupHangTimeout ?? DefaultStartupHangTimeout;
@@ -805,32 +808,9 @@ public sealed partial class BackgroundDispatchRunner
 
         if (verdict.WorktreeInspectionStatus.HasDirtyEvidence)
         {
-            var interruptedDecision = new DispatchRecoveryDecision(
-                DispatchRecoveryAction.PreserveInterruptedWork,
-                DispatchRecoveryPolicy.ToActionName(DispatchRecoveryAction.PreserveInterruptedWork),
-                processRecord.ExitCodePath,
-                "process disappeared with dirty worktree evidence",
-                "interrupted worker evidence requires operator verification");
-            const string interruptedReason = "process missing with dirty worktree evidence";
-            _recoveryService.TryWriteExitCode(processRecord.ExitCodePath, 1, interruptedReason);
-            var interruptedOutcome = BuildCompletedProcessOutcome(
-                kernel,
-                goalId,
-                taskId,
-                processRecord,
-                1,
-                DispatchProcessRecoveryService.BuildRecoveryDiagnostic(interruptedDecision),
-                interruptedDecision,
-                staleResourceAccounting);
-            return interruptedOutcome.AutoRequeueDisposition is not null
-                ? interruptedOutcome
-                : interruptedOutcome with
-                {
-                    AutoRequeueDisposition = new DispatchAutoRequeueDisposition(
-                    "InterruptedDispatchWorkPreserved",
-                    DispatchProcessRecoveryService.BuildRecoveryDiagnostic(interruptedDecision),
-                    ShouldRequeue: false)
-                };
+            return _generationInterruption.PreserveInterruptedWork(goalId, task, processRecord,
+                reason => _recoveryService.TryWriteExitCode(processRecord.ExitCodePath, 1, reason),
+                (decision, diagnostic) => BuildCompletedProcessOutcome(kernel, goalId, taskId, processRecord, 1, diagnostic, decision, staleResourceAccounting));
         }
 
         var staleDiagnostic = DispatchProcessRecoveryService.BuildRecoveryDiagnostic(recoveryDecision);
