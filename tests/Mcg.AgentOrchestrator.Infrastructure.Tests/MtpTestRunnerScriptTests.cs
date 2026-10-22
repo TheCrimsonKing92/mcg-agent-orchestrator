@@ -1763,51 +1763,61 @@ public sealed class MtpTestRunnerScriptTests
         params string[] filterArguments)
     {
         InvocationCounterScope.CountDiscovery();
-        var stdoutPipeName = $"mcg-managed-discovery-{Guid.NewGuid():N}-out";
-        var stderrPipeName = $"mcg-managed-discovery-{Guid.NewGuid():N}-err";
-        using var stdoutPipe = OperatingSystem.IsWindows()
-            ? GoalAcceptanceVerifierCaptureCustody.CreateCapturePipe(stdoutPipeName) : null;
-        using var stderrPipe = OperatingSystem.IsWindows()
-            ? GoalAcceptanceVerifierCaptureCustody.CreateCapturePipe(stderrPipeName) : null;
-        var startInfo = GoalAcceptanceVerifierCaptureCustody.BuildAcceptanceProcessStartInfo(
-            [ResolveDotnetHostPath(), typeof(MtpTestRunnerScriptTests).Assembly.Location, "--list-tests", "json", .. filterArguments],
-            RepositoryRoot(),
-            stdoutPipe is null ? null : $@"\\.\pipe\{stdoutPipeName}",
-            stderrPipe is null ? null : $@"\\.\pipe\{stderrPipeName}",
-            forceUtf8ConsoleOutput: true);
-
-        // Owned pipes keep cmd's UTF-8 preflight isolated from the parent's console and handles.
-        var result = Run(startInfo, TimeSpan.FromMinutes(2),
-            capturePipes: stdoutPipe is null ? null : (stdoutPipe, stderrPipe!));
-        Assert.True(
-            result.ExitCode == 0 || (allowEmpty && result.ExitCode is 1 or 8),
-            $"exit={result.ExitCode}{Environment.NewLine}{result.Stdout}{result.Stderr}");
-        using var document = JsonDocument.Parse(TestCoverageInvariantDiscoveryJson.EscapeRawControlCharacters(result.Stdout.Trim()));
-        var tests = document.RootElement.GetProperty("tests")
-            .EnumerateArray()
-            .Select(test =>
-            {
-                var type = test.GetProperty("type");
-                var traits = test.TryGetProperty("traits", out var traitElements)
-                    ? traitElements.EnumerateArray()
-                        .Select(trait => new KeyValuePair<string, string>(
-                            trait.GetProperty("key").GetString()!,
-                            trait.GetProperty("value").GetString()!))
-                        .ToArray()
-                    : [];
-                return new ManagedTestDescriptor(
-                    test.GetProperty("uid").GetString()!,
-                    test.GetProperty("displayName").GetString()!,
-                    type.GetProperty("typeName").GetString()!,
-                    type.GetProperty("methodName").GetString()!,
-                    traits);
-            })
-            .ToArray();
-        if (!allowEmpty)
+        var resultsDirectory = Path.GetFullPath(SharedTestSupport.CreateTempDirectory());
+        try
         {
-            Assert.NotEmpty(tests);
+            if (!filterArguments.Contains("--results-directory", StringComparer.Ordinal))
+                filterArguments = [.. filterArguments, "--results-directory", resultsDirectory];
+            var stdoutPipeName = $"mcg-managed-discovery-{Guid.NewGuid():N}-out";
+            var stderrPipeName = $"mcg-managed-discovery-{Guid.NewGuid():N}-err";
+            using var stdoutPipe = OperatingSystem.IsWindows()
+                ? GoalAcceptanceVerifierCaptureCustody.CreateCapturePipe(stdoutPipeName) : null;
+            using var stderrPipe = OperatingSystem.IsWindows()
+                ? GoalAcceptanceVerifierCaptureCustody.CreateCapturePipe(stderrPipeName) : null;
+            var startInfo = GoalAcceptanceVerifierCaptureCustody.BuildAcceptanceProcessStartInfo(
+                [ResolveDotnetHostPath(), typeof(MtpTestRunnerScriptTests).Assembly.Location, "--list-tests", "json", .. filterArguments],
+                RepositoryRoot(),
+                stdoutPipe is null ? null : $@"\\.\pipe\{stdoutPipeName}",
+                stderrPipe is null ? null : $@"\\.\pipe\{stderrPipeName}",
+                forceUtf8ConsoleOutput: true);
+
+            // Owned pipes keep cmd's UTF-8 preflight isolated from the parent's console and handles.
+            var result = Run(startInfo, TimeSpan.FromMinutes(2),
+                capturePipes: stdoutPipe is null ? null : (stdoutPipe, stderrPipe!));
+            Assert.True(
+                result.ExitCode == 0 || (allowEmpty && result.ExitCode is 1 or 8),
+                $"exit={result.ExitCode}{Environment.NewLine}{result.Stdout}{result.Stderr}");
+            using var document = JsonDocument.Parse(TestCoverageInvariantDiscoveryJson.EscapeRawControlCharacters(result.Stdout.Trim()));
+            var tests = document.RootElement.GetProperty("tests")
+                .EnumerateArray()
+                .Select(test =>
+                {
+                    var type = test.GetProperty("type");
+                    var traits = test.TryGetProperty("traits", out var traitElements)
+                        ? traitElements.EnumerateArray()
+                            .Select(trait => new KeyValuePair<string, string>(
+                                trait.GetProperty("key").GetString()!,
+                                trait.GetProperty("value").GetString()!))
+                            .ToArray()
+                        : [];
+                    return new ManagedTestDescriptor(
+                        test.GetProperty("uid").GetString()!,
+                        test.GetProperty("displayName").GetString()!,
+                        type.GetProperty("typeName").GetString()!,
+                        type.GetProperty("methodName").GetString()!,
+                        traits);
+                })
+                .ToArray();
+            if (!allowEmpty)
+            {
+                Assert.NotEmpty(tests);
+            }
+            return tests;
         }
-        return tests;
+        finally
+        {
+            SharedTestSupport.RemoveTempDirectory(resultsDirectory);
+        }
     }
 
     internal sealed record ManagedTestDescriptor(
