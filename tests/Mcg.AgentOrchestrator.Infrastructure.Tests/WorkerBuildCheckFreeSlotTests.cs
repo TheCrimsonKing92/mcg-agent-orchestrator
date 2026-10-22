@@ -65,9 +65,9 @@ public sealed class WorkerBuildCheckFreeSlotTests
         })
             startInfo.ArgumentList.Add(argument);
 
-        // Hang-only guard exceeds the fixture's per-child guard; no elapsed-time verdict.
+        // Hang-only launcher bound must exceed the fixture's 270 s child guard plus setup under gate load.
         var capture = await Task.Run(() => TestChildProcessCapture.Run(
-            startInfo, hangBound: TimeSpan.FromSeconds(300), start: info =>
+            startInfo, hangBound: TimeSpan.FromSeconds(600), start: info =>
             {
                 var process = Process.Start(info);
                 process?.StandardInput.Close();

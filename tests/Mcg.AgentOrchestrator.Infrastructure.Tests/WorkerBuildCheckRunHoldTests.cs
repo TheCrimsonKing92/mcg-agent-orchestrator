@@ -57,9 +57,9 @@ public sealed class WorkerBuildCheckRunHoldTests
         foreach (var argument in new[] { "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File",
             Path.Combine(root, "tests", "Mcg.AgentOrchestrator.Infrastructure.Tests", "Fixtures", "WorkerBuildCheckRunHold", "Invoke-Fixture.ps1") })
             startInfo.ArgumentList.Add(argument);
-        // Hang-only guard for the fixture exit event, matching the existing free-slot launcher.
+        // Hang-only launcher bound must exceed the fixture's 270 s child guard plus setup under gate load.
         var capture = await Task.Run(() => TestChildProcessCapture.Run(startInfo,
-            hangBound: TimeSpan.FromSeconds(300), start: info =>
+            hangBound: TimeSpan.FromSeconds(600), start: info =>
             {
                 var process = Process.Start(info);
                 process?.StandardInput.Close();
