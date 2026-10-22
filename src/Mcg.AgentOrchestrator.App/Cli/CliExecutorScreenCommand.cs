@@ -49,7 +49,9 @@ internal static class CliExecutorScreenCommand
         {
             var entry = ExecutorScreeningPlanner.PickIdleExecutor(configuration.Executors,
                 id => RemoteExecutorOccupancy.IsOccupied(occupancyRoot, id), executorId);
-            if (entry is null) return Idle("no-idle-executor");
+            if (entry is null) return Idle(configuration.Executors.Any(executor => executor.AdmissionEnabled &&
+                executor.Transport == "ssh" && (executorId is null || executor.Id == executorId))
+                ? "no-idle-executor" : "no-enabled-executor");
             var candidate = ExecutorScreeningPlanner.PickCandidate(candidateSource(), ExecutorScreeningReceiptLedger.ReadAll(receiptPath));
             if (candidate is null) return Idle("no-candidate");
             IReadOnlyList<AcceptanceTestLane> lanes = [];

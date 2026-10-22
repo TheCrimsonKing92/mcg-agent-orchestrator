@@ -67,6 +67,7 @@ internal static IReadOnlyList<string> RecognizedCommands { get; } =
     "remote-lane-selftest",
     "executor-screen",
     "executor-set-slots",
+    "executor-set-enabled",
     "focused-evidence-set",
     "round-value",
     "board-simulate",

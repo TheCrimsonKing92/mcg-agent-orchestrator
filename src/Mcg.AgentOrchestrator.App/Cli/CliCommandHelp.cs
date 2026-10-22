@@ -105,6 +105,7 @@ internal static class CliCommandHelp
     public const string RemoteLaneSelfTestUsage = "Usage: remote-lane-selftest --executor <id> [--timeout-minutes <n>]";
     public const string ExecutorScreenUsage = "Usage: executor-screen [--max-candidates <n>] [--executor <id>]";
     public const string ExecutorSetSlotsUsage = "Usage: executor-set-slots <executor-id> <slots> [--operator-actor <actor>] [--actor-kind <human|agent>] [--idempotency-key <key>] [--json]";
+    public const string ExecutorSetEnabledUsage = "Usage: executor-set-enabled <executor-id> <true|false> [--operator-actor <actor>] [--actor-kind <human|agent>] [--idempotency-key <key>] [--json]";
     public const string FocusedEvidenceSetUsage = "Usage: focused-evidence-set [--mode off|shadow|remote-first] [--sample-every <n>] [--operator-actor <actor>] [--actor-kind <human|agent>] [--idempotency-key <key>] [--json]";
     public const string RoundValueUsage = "Usage: round-value [--since <ISO-8601-with-offset>] [--until <ISO-8601-with-offset>] [--json] [--by-skill] [--by-check] [--baseline-since <ISO-8601-with-offset> --baseline-until <ISO-8601-with-offset>]";
     public const string LessonUsage = "Usage: lesson record --situation <text> --rule <text> --evidence <ref>... [--applies-to <tag>...] [--goal <goal-prefix>] [--until-goal <goal-prefix>] [--actor-kind human|agent] [--json] | lesson retire <lesson-id> --reason <text> [--evidence <ref>...] [--json]";
@@ -682,6 +683,9 @@ internal static class CliCommandHelp
     private static readonly CommandHelpEntry ExecutorSetSlots = new(
         ExecutorSetSlotsUsage, "Queue an audited host executor slot change for the next tick.",
         ["--operator-actor", "--actor-kind", "--idempotency-key", "--json", "--help", "-h"]);
+    private static readonly CommandHelpEntry ExecutorSetEnabled = new(
+        ExecutorSetEnabledUsage, "Queue an audited executor admission change for future configuration snapshots.",
+        ["--operator-actor", "--actor-kind", "--idempotency-key", "--json", "--help", "-h"]);
     private static readonly CommandHelpEntry FocusedEvidenceSet = new(
         FocusedEvidenceSetUsage, "Queue an audited focused-evidence setting change for the next tick.",
         ["--mode", "--sample-every", "--operator-actor", "--actor-kind", "--idempotency-key", "--json", "--help", "-h"]);
@@ -1257,6 +1261,11 @@ internal static class CliCommandHelp
         if (args[0].Equals("executor-set-slots", StringComparison.OrdinalIgnoreCase))
         {
             entry = ExecutorSetSlots;
+            return true;
+        }
+        if (args[0].Equals("executor-set-enabled", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = ExecutorSetEnabled;
             return true;
         }
         if (args[0].Equals("focused-evidence-set", StringComparison.OrdinalIgnoreCase))

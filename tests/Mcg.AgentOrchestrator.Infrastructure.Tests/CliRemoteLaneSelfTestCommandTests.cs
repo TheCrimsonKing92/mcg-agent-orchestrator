@@ -99,16 +99,75 @@ public sealed class CliRemoteLaneSelfTestCommandTests
         Assert.EndsWith("SELFTEST result=failed step=binding" + Environment.NewLine, output.ToString());
     }
 
-    private static Task<int> Run(FakeSshRemoteLaneTransport fake, TextWriter output, TextWriter error) =>
+    [Xunit.Fact]
+    public async Task Admission_DisableDuringPoll_CompletesOwnedAndReenableAdmitsFuture()
+    {
+        // Parallel-safe: the configuration, transport and poll events belong to this fake root.
+        await using var fake = new FakeSshRemoteLaneTransport();
+        Configure(fake.Root);
+        var path = RemoteLaneExecutorConfiguration.ResolveStorePath(fake.Root);
+        var polling = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+        var owned = Run(fake, output, error, transport: async (args, directory, bound, token) =>
+        {
+            if (args.Any(arg => arg.EndsWith("/status.json", StringComparison.Ordinal)))
+            {
+                polling.TrySetResult();
+                await release.Task.WaitAsync(token);
+            }
+            return await fake.Transport(args, directory, bound, token);
+        });
+        try
+        {
+            await Event(polling.Task, "self-test polling after admitted submission");
+            SetAdmission(false);
+            await fake.Polls.Writer.WriteAsync(new(Status()));
+            release.TrySetResult();
+            Assert.Equal(0, await RemoteExecutorAdmissionTests.Event(owned, "owned self-test completed after disable"));
+            Assert.Contains("binding=match", output.ToString());
+            Assert.Contains("SELFTEST result=passed", output.ToString());
+            var calls = fake.Calls.Count;
+            Assert.True(calls > 0);
+            Assert.Equal(2, await Run(fake, output, error, Attempt + "-disabled"));
+            Assert.Equal(calls, fake.Calls.Count);
+            Assert.Contains("SELFTEST refused reason=no-enabled-executor", output.ToString());
+            SetAdmission(true);
+            await fake.Polls.Writer.WriteAsync(new(Status(Attempt + "-future")));
+            Assert.Equal(0, await Run(fake, output, error, Attempt + "-future"));
+            Assert.Equal(calls * 2, fake.Calls.Count);
+            Assert.DoesNotContain(fake.Calls, call => call.Arguments.Any(arg => arg.EndsWith(".cancel", StringComparison.Ordinal)));
+        }
+        finally
+        {
+            release.TrySetResult();
+            fake.Polls.Writer.TryComplete();
+            await RemoteExecutorAdmissionTests.Event(owned, "owned self-test drained");
+        }
+
+        void SetAdmission(bool enabled) => File.WriteAllBytes(path,
+            RemoteLaneExecutorSettingRewrite.RewriteEnabled(File.ReadAllBytes(path), "one", enabled));
+    }
+
+    private static async Task Event(Task task, string name)
+    {
+        try { await task.WaitAsync(TimeSpan.FromSeconds(30)); }
+        catch (TimeoutException) { throw new TimeoutException("Missing event: " + name); }
+    }
+
+    private static Task<int> Run(FakeSshRemoteLaneTransport fake, TextWriter output, TextWriter error,
+        string attempt = Attempt,
+        Func<string[], string, TimeSpan, CancellationToken, Task<GoalAcceptanceVerifier.CommandResult>>? transport = null) =>
         CliRemoteLaneSelfTestCommand.RunAsync(["remote-lane-selftest", "--executor", "one"],
-            OrchestratorWorkspace.ForDirectory(fake.Root), fake.Transport,
+            OrchestratorWorkspace.ForDirectory(fake.Root), transport ?? fake.Transport,
             (directory, bound, args) => args[0] == "rev-parse"
                 ? new GitCli.GitResult(0, args[1] == "refs/heads/main" ? Sha : "tree", "")
                 : fake.Git(directory, bound, args),
-            fake.Clock, TimeSpan.Zero, Attempt, output, error);
-    private static Dictionary<string, object?> Status() => new()
+            fake.Clock, TimeSpan.Zero, attempt, output, error);
+    private static Dictionary<string, object?> Status(string attempt = Attempt) => new()
     {
-        ["state"] = "completed", ["attemptId"] = Attempt, ["executorId"] = "one", ["lane"] = Lane,
+        ["state"] = "completed", ["attemptId"] = attempt, ["executorId"] = "one", ["lane"] = Lane,
         ["filterHash"] = GoalAcceptanceVerifier.ShortHash(Filter), ["commitSha"] = Sha, ["treeSha"] = "tree",
         ["mainSha"] = Sha, ["manifestIdentity"] = "remote-lane-selftest", ["exitCode"] = 0,
         ["trx"] = new[] { "one.trx", "two.trx" }

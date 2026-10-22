@@ -41,8 +41,9 @@ internal static class RemoteWorkerBuildCheck
             var identity = new RemoteLaneCandidateIdentity("wbc-" + request.OperationId[..12], request.GoalId, commit, tree, "", "worker-build-check:v1");
             coordinator = new(context.Configuration, identity, request.WorktreeRoot, null, context.Executor, clock,
                 context.PollInterval, null, claimClass: RemoteExecutorClaimClass.FocusedEvidence);
-            var entry = context.Configuration.Enabled ? coordinator.TryClaimIdleExecutor() : null;
-            if (entry is null) return Fallback("no-idle-executor");
+            string? admissionReason = null;
+            var entry = context.Configuration.Enabled ? coordinator.TryClaimIdleExecutor(out admissionReason) : null;
+            if (entry is null) return Fallback(admissionReason ?? "no-idle-executor");
             executorId = entry.Id;
             var project = string.Join(";", request.Projects);
             var job = new RemoteLaneRequest(entry.Id, identity.AttemptId, request.GoalId, "worker-build-check", project,
