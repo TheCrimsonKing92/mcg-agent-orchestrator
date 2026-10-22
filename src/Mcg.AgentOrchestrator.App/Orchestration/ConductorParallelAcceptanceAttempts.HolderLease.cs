@@ -54,6 +54,7 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
                 WriteAttemptFile(current with
                 {
                     Outcome = ConductorParallelAcceptanceAttemptOutcome.ProcessDied,
+                    TransientFailureCount = CountConsecutiveTransientFailures(current) + 1,
                     CompletedAt = _utcNow(), Detail = $"holder-tree-settled:{observation.Reason}"
                 });
         }
@@ -101,6 +102,7 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
                 WriteAttemptFile(current with
                 {
                     Outcome = ConductorParallelAcceptanceAttemptOutcome.ProcessDied,
+                    TransientFailureCount = CountConsecutiveTransientFailures(current) + 1,
                     CompletedAt = _utcNow(), Detail = "legacy-holder-settled"
                 });
             }
