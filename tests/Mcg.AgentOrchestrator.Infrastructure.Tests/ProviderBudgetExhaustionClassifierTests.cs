@@ -5,6 +5,71 @@ using Mcg.AgentOrchestrator.App.SubscriptionPlanning;
 
 public sealed class ProviderBudgetExhaustionClassifierTests : WorkerDispatchTestSupport
 {
+    [Xunit.Theory]
+    [Xunit.InlineData("", "stdout", "Credit balance is too low")]
+    [Xunit.InlineData(
+        "API error (status 402 Payment Required): account usage balance exhausted",
+        "stderr", "API error (status 402 Payment Required): account usage balance exhausted")]
+    public void ReviewerCreditRefusal_RecordsBudgetRuleAndEvidenceSource(
+        string standardError,
+        string source,
+        string evidence)
+    {
+        var (_, task, verification) = RecordedReviewerCreditRefusal(standardError);
+
+        var outcome = DispatchFailureClassifier.Classify(task, verification);
+
+        Assert.Equal(AgentRole.Reviewer, task.RequiredRole);
+        Assert.Equal(DispatchOutcomeKind.ProviderBudgetExhausted, outcome.Kind);
+        Assert.Contains("rule=provider-budget-exhausted", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Assert.Contains($"source={source}", outcome.EvidenceSummary, StringComparison.Ordinal);
+        Assert.Contains("binding=anthropicapi::<provider-default>", outcome.EvidenceSummary, StringComparison.Ordinal);
+        Assert.Contains($"evidence={evidence}", outcome.EvidenceSummary, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void ReviewerCreditRefusal_HoldsOnlyApiBindingWithBackoff()
+    {
+        var (kernel, task, verification) = RecordedReviewerCreditRefusal(string.Empty);
+
+        var outcome = DispatchFailureClassifier.Classify(task, verification);
+        Assert.Contains("source=stdout", outcome.EvidenceSummary, StringComparison.Ordinal);
+        Assert.Contains("evidence=Credit balance is too low", outcome.EvidenceSummary, StringComparison.Ordinal);
+
+        Assert.True(DispatchFailureClassifier.TryGetProviderBudgetExhaustionHold(
+            kernel.Goals, "AnthropicApi", credentialBinding: null, out var hold));
+        Assert.Equal(task.Id, hold.SourceTaskId);
+        Assert.Equal("anthropicapi::<provider-default>", hold.BindingKey);
+        Assert.False(DispatchFailureClassifier.TryGetProviderBudgetExhaustionHold(
+            kernel.Goals, "Anthropic", credentialBinding: null, out _));
+
+        var schedule = ProviderBudgetHoldSchedules.Evaluate(kernel.Goals, hold, verification.CompletedAt);
+
+        Assert.Equal("backoff", schedule.ResetSource);
+        Assert.Null(schedule.ResetAt);
+    }
+
+    private static (AgentOrchestratorKernel Kernel, TaskSpec Task, TaskVerificationRecord Verification)
+        RecordedReviewerCreditRefusal(string standardError)
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal(
+            "Record API Reviewer credit refusal",
+            [new TaskSpec(TaskId.New(), "Review the candidate.", AgentRole.Reviewer)]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        var task = goal.Tasks.Single();
+        var dispatchedAt = DateTimeOffset.Parse("2026-10-22T03:06:00Z");
+        kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
+            "claude-api-reviewer", "claude-api-reviewer", "C:\\repo", dispatchedAt,
+            ProviderName: "AnthropicApi", WorkerProviderKind: ProviderKind.Unknown, GoalId: goal.Id));
+        var verification = new TaskVerificationRecord(
+            "claude-api-reviewer", "C:\\repo", 1, "Credit balance is too low", standardError,
+            dispatchedAt.AddMinutes(1), ProviderFailureKind: ProviderFailureKind.BudgetExhausted,
+            DispatchStartedAt: dispatchedAt);
+        kernel.RecordTaskVerification(goal.Id, task.Id, verification);
+        return (kernel, task, verification);
+    }
+
     private const string ObservedDiagnostic =
         "API error (status 402 Payment Required): Grok Build usage balance exhausted";
     private const string GenericBudgetDiagnostic =

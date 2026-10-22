@@ -3,6 +3,60 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed class WorkerDispatchCompletionClassifierTests
 {
+    [Xunit.Theory]
+    [Xunit.InlineData("Credit balance is too low", ProviderFailureKind.BudgetExhausted)]
+    [Xunit.InlineData("Some other failure", ProviderFailureKind.Unknown)]
+    [Xunit.InlineData("Credit balance is too low\nWorker prose", ProviderFailureKind.Unknown)]
+    public void CustomProvider_CreditOnlyFailure_UsesBudgetFallback(
+        string output,
+        ProviderFailureKind expected)
+    {
+        var catalog = WorkerProviderCatalog.Default();
+        var resolverCalls = 0;
+        var classifier = CreateClassifier(resolveWorkerProvider: dispatch =>
+        {
+            resolverCalls++;
+            var provider = dispatch.WorkerProviderKind != ProviderKind.Unknown
+                ? catalog.Resolve(dispatch.WorkerProviderKind)
+                : catalog.ResolveProfile(dispatch.WorkerName);
+            Xunit.Assert.Equal(ProviderKind.Unknown, provider.Identity.Kind);
+            return provider;
+        });
+        var dispatch = new TaskDispatchRecord(
+            "claude-api-reviewer", "claude-api-reviewer", "worktree",
+            DateTimeOffset.Parse("2026-10-22T03:06:00Z"),
+            ProviderName: "AnthropicApi", WorkerProviderKind: ProviderKind.Unknown);
+
+        var failure = classifier.ParseProviderFailureKind(dispatch, 1, output, string.Empty);
+
+        Xunit.Assert.Equal(1, resolverCalls);
+        Xunit.Assert.Equal(expected, failure);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(false, "", ProviderFailureKind.Unknown)]
+    [Xunit.InlineData(true, "connection refused", ProviderFailureKind.Connectivity)]
+    public void CreditFallback_PreservesProviderPolicyAndKnownFailures(
+        bool recognizeBudgetExhaustion,
+        string standardError,
+        ProviderFailureKind expected)
+    {
+        var provider = new StaticWorkerProvider(
+            new WorkerProviderIdentity(ProviderKind.Unknown, UsesCodexExitFileBehavior: false),
+            "claude-api-reviewer", "AnthropicApi", new WorkerCapabilities(true, true, true, true),
+            recognizeBudgetExhaustion: recognizeBudgetExhaustion);
+        var classifier = CreateClassifier(resolveWorkerProvider: _ => provider);
+        var dispatch = new TaskDispatchRecord(
+            "claude-api-reviewer", "claude-api-reviewer", "worktree",
+            DateTimeOffset.Parse("2026-10-22T03:06:00Z"),
+            ProviderName: "AnthropicApi", WorkerProviderKind: ProviderKind.Unknown);
+
+        var failure = classifier.ParseProviderFailureKind(
+            dispatch, 1, "Credit balance is too low", standardError);
+
+        Xunit.Assert.Equal(expected, failure);
+    }
+
     [Xunit.Fact]
     public void SuccessfulWorkerResultFromStdoutDoesNotReadArtifacts()
     {
