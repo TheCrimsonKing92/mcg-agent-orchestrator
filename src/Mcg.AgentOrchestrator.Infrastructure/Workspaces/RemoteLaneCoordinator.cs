@@ -75,7 +75,7 @@ internal sealed class RemoteLaneCoordinator : IDisposable
     {
         lock (_gate)
         {
-            yieldReason = null;
+            yieldReason = _configuration.Executors.Any(entry => entry.AdmissionEnabled) ? null : "no-enabled-executor";
             // OrderBy is stable: equally occupied executors retain configuration order.
             foreach (var entry in EligibleExecutors())
             {
@@ -88,13 +88,13 @@ internal sealed class RemoteLaneCoordinator : IDisposable
                 if (TryClaimOn(entry.Id) is { } claimed) { yieldReason = null; return claimed; }
             }
             if (_claimClass == RemoteExecutorClaimClass.FocusedEvidence)
-                _arbiter.WriteDemand(_configuration.Executors.Select(entry => entry.Id));
+                _arbiter.WriteDemand(_configuration.Executors.Where(entry => entry.AdmissionEnabled).Select(entry => entry.Id));
             return null;
         }
     }
 
     private IEnumerable<RemoteLaneExecutorEntry> EligibleExecutors() => _configuration.Executors
-        .Where(entry => !_retired.Contains(entry.Id) && HeldSlotCount(entry.Id) < entry.Slots &&
+        .Where(entry => entry.AdmissionEnabled && !_retired.Contains(entry.Id) && HeldSlotCount(entry.Id) < entry.Slots &&
             (!_busyUntil.TryGetValue(entry.Id, out var until) || until <= _clock.GetUtcNow()))
         .OrderBy(entry => HeldSlotCount(entry.Id));
 
@@ -134,7 +134,7 @@ internal sealed class RemoteLaneCoordinator : IDisposable
                 reason: $"shadow_attempt={target.ShadowAttempt} executor={target.Executor} released={released.ToString().ToLowerInvariant()} waited_ms={waited}"),
             cancellationToken).ConfigureAwait(false) is { } claimed) return claimed;
         RecordNoSlot(check);
-        _arbiter.WriteDemand(_configuration.Executors.Select(entry => entry.Id));
+        _arbiter.WriteDemand(_configuration.Executors.Where(entry => entry.AdmissionEnabled).Select(entry => entry.Id));
         return null;
     }
 
@@ -157,11 +157,12 @@ internal sealed class RemoteLaneCoordinator : IDisposable
             request = CreateRequest(check, "");
             if (!_noSlotLanes.Add(request.Lane)) return;
             occupancy = RemoteExecutorOccupancyCensus.Take(_occupancyRoot,
-                _configuration.Executors.Select(executor => (executor.Id, _retired.Contains(executor.Id) ? "retired" :
+                _configuration.Executors.Select(executor => (executor.Id, !executor.AdmissionEnabled ? "disabled" : _retired.Contains(executor.Id) ? "retired" :
                     _busyUntil.TryGetValue(executor.Id, out var until) && until > _clock.GetUtcNow() ? "backoff" : "full")));
         }
         Record(request, RemoteLaneOutcomeCode.OfferSkippedNoExecutor,
-            reason: RemoteExecutorOccupancyCensus.Reason(occupancy), occupancy: occupancy);
+            reason: _configuration.Executors.Any(entry => entry.AdmissionEnabled)
+                ? RemoteExecutorOccupancyCensus.Reason(occupancy) : "no-enabled-executor", occupancy: occupancy);
     }
 
     internal void Release(string executorId)

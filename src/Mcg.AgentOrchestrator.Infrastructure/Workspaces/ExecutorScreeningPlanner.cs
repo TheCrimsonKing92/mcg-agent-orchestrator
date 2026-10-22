@@ -49,7 +49,7 @@ internal static class ExecutorScreeningPlanner
 
     internal static RemoteLaneExecutorEntry? PickIdleExecutor(IReadOnlyList<RemoteLaneExecutorEntry> executors,
         Func<string, bool> isOccupied, string? onlyExecutorId = null) => executors.FirstOrDefault(entry =>
-            entry.Transport == "ssh" && (onlyExecutorId is null || entry.Id == onlyExecutorId) && !isOccupied(entry.Id));
+            entry.AdmissionEnabled && entry.Transport == "ssh" && (onlyExecutorId is null || entry.Id == onlyExecutorId) && !isOccupied(entry.Id));
 
     internal static string LaneName(string project, string filter) => "sc-" +
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(project + "\n" + filter)).AsSpan(0, 4)).ToLowerInvariant();

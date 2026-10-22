@@ -440,3 +440,8 @@ Enable the Discord pager by providing a forum channel ID and bot token; the loca
 ## Next Slices
 
 - Add a Windows UI or tray host once the headless behavior is stable.
+# Executor admission settings
+
+`executor-set-enabled <existing-executor-id> <true|false> [--operator-actor <actor>] [--actor-kind <human|agent>] [--idempotency-key <key>] [--json]` queues an authenticated workspace intent. The boolean accepts exactly `true` or `false`, case-insensitive. The response identifies the persisted intent and its current disposition; submission is not application. Poll `operator-intent-status <intent-id>` for `Applied` or `Rejected` after the conductor tick. Application requires Mutate authority, rejects steward assurance, rechecks that the executor exists, and uses the existing backed-up, audited atomic settings writer. Conflicting idempotency-key reuse rejects without mutation.
+
+The setting is the executor's JSON `enabled` member in the existing host `remote-lane-executors.json`; absent means enabled. Disabled executors remain configured, addressable by this command and `executor-set-slots`, and visible in `remote-executors` (JSON `admissionEnabled`, text `admission` row) and the Fleet view. Historical-only hosts have no configured admission value. No status query probes a disabled host. See [admission timing and runtime scope](operator-runbook.md#executor-admission).

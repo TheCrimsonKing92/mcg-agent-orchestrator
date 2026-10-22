@@ -34,6 +34,11 @@ internal static class CliRemoteLaneSelfTestCommand
         var entry = RemoteLaneExecutorConfiguration.LoadExecutors(
             RemoteLaneExecutorConfiguration.ResolveStorePath(workspace.ExecutionDirectory)).FirstOrDefault(entry => entry.Id == id);
         if (entry?.Transport != "ssh") return Usage();
+        if (!entry.AdmissionEnabled)
+        {
+            output.WriteLine("SELFTEST refused reason=no-enabled-executor");
+            return 2;
+        }
         IRemoteLaneHandle? handle = null;
         string? firstFailure = null;
         var lastStep = "submit";

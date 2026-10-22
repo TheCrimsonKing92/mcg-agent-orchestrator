@@ -23,6 +23,7 @@ internal sealed class ExecutorSettingIntentHandler(string executorsPath, string 
             throw new InvalidOperationException("steward-capability-boundary");
 
         ExecutorSetSlotsOperatorIntentPayload? slots = null;
+        ExecutorSetEnabledOperatorIntentPayload? enabled = null;
         FocusedEvidenceSetOperatorIntentPayload? focused = null;
         try
         {
@@ -30,6 +31,12 @@ internal sealed class ExecutorSettingIntentHandler(string executorsPath, string 
             {
                 slots = JsonSerializer.Deserialize<ExecutorSetSlotsOperatorIntentPayload>(intent.PayloadJson, OperatorIntentJson.Options);
                 if (slots is null || string.IsNullOrWhiteSpace(slots.ExecutorId)) throw Failure("invalid-payload");
+            }
+            else if (intent.Verb == OperatorIntentVerbs.ExecutorSetEnabled)
+            {
+                enabled = JsonSerializer.Deserialize<ExecutorSetEnabledOperatorIntentPayload>(intent.PayloadJson, OperatorIntentJson.Options);
+                if (enabled is null || string.IsNullOrWhiteSpace(enabled.ExecutorId) || enabled.Enabled is null)
+                    throw Failure("invalid-payload");
             }
             else if (intent.Verb == OperatorIntentVerbs.FocusedEvidenceSet)
                 focused = JsonSerializer.Deserialize<FocusedEvidenceSetOperatorIntentPayload>(intent.PayloadJson, OperatorIntentJson.Options)
@@ -53,6 +60,13 @@ internal sealed class ExecutorSettingIntentHandler(string executorsPath, string 
 
             var fields = new List<(string Field, string Old, string New)>();
             var candidate = original;
+            if (enabled is not null)
+            {
+                var admissionEntry = before.Executors.SingleOrDefault(e => e.Id == enabled.ExecutorId)
+                    ?? throw Failure("executor-not-found");
+                candidate = RemoteLaneExecutorSettingRewrite.RewriteEnabled(candidate, enabled.ExecutorId, enabled.Enabled!.Value);
+                fields.Add(($"executors[{enabled.ExecutorId}].enabled", Boolean(admissionEntry.AdmissionEnabled), Boolean(enabled.Enabled.Value)));
+            }
             if (slots is not null)
             {
                 candidate = RemoteLaneExecutorSettingRewrite.RewriteSlots(candidate, slots.ExecutorId, slots.Slots)
@@ -90,7 +104,7 @@ internal sealed class ExecutorSettingIntentHandler(string executorsPath, string 
             if (changed && !failedRaise)
             {
                 backup = plannedBackup;
-                WriteCandidate(original, candidate, backup, before, slots, focused);
+                WriteCandidate(original, candidate, backup, before, slots, focused, enabled);
             }
             if (!raise && remoteSync is not null && entry?.Transport == "ssh")
                 sync = Sync(entry, slots!.Slots, stamp, intent.Id, now);
@@ -133,7 +147,8 @@ internal sealed class ExecutorSettingIntentHandler(string executorsPath, string 
         new string(text.Take(64).Select(ch => char.IsWhiteSpace(ch) || char.IsControl(ch) ? '_' : ch).ToArray());
 
     private void WriteCandidate(byte[] original, byte[] candidate, string backup, RemoteLaneExecutorConfiguration before,
-        ExecutorSetSlotsOperatorIntentPayload? slots, FocusedEvidenceSetOperatorIntentPayload? focused)
+        ExecutorSetSlotsOperatorIntentPayload? slots, FocusedEvidenceSetOperatorIntentPayload? focused,
+        ExecutorSetEnabledOperatorIntentPayload? enabled)
     {
         var temporary = executorsPath + "." + Guid.NewGuid().ToString("n") + ".tmp";
         try
@@ -141,7 +156,8 @@ internal sealed class ExecutorSettingIntentHandler(string executorsPath, string 
             WriteNew(temporary, candidate);
             var after = RemoteLaneExecutorConfiguration.LoadForFocusedEvidence(temporary);
             RequireValid(after);
-            var expectedExecutors = before.Executors.Select(e => slots is not null && e.Id == slots.ExecutorId ? e with { Slots = slots.Slots } : e);
+            var expectedExecutors = before.Executors.Select(e => slots is not null && e.Id == slots.ExecutorId ? e with { Slots = slots.Slots } :
+                enabled is not null && e.Id == enabled.ExecutorId ? e with { AdmissionEnabled = enabled.Enabled!.Value } : e);
             var expectedFocused = before.FocusedEvidence with
             {
                 Mode = focused?.Mode ?? before.FocusedEvidence.Mode,
@@ -173,5 +189,6 @@ internal sealed class ExecutorSettingIntentHandler(string executorsPath, string 
     }
 
     private static string Number(int value) => value.ToString(CultureInfo.InvariantCulture);
+    private static string Boolean(bool value) => value ? "true" : "false";
     private static InvalidOperationException Failure(string reason) => new(reason);
 }

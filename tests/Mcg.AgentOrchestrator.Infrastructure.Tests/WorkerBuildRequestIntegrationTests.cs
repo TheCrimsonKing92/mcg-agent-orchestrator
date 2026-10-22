@@ -214,4 +214,53 @@ public sealed class WorkerBuildRequestIntegrationTests(ITestOutputHelper output)
         Assert.True(invocation.CustodyReleased);
         Assert.All(invocation.Children!, child => Assert.False(Mcg.AgentOrchestrator.App.Orchestration.WorkerBuildInvocationOperations.IsExactProcessAlive(child)));
     }
+
+    [Fact]
+    public async Task QueueWaitBeforeSlotDoesNotShortenCompileBudget()
+    {
+        using var fixture = new WorkerBuildRequestFixture();
+        var waited = false;
+        var started = false;
+        var invocation = await fixture.RunHelper(i =>
+        {
+            if (i.Phase == WorkerBuildPhase.WaitingForBuildSlot && !waited)
+            {
+                waited = true;
+                fixture.Time.Advance(TimeSpan.FromMinutes(4));
+            }
+            if (i.Phase == WorkerBuildPhase.CompilerStarted && !started)
+            {
+                started = true;
+                fixture.Time.Advance(TimeSpan.FromMinutes(2));
+            }
+        });
+        Assert.True(waited);
+        Assert.True(started);
+        Assert.Equal(WorkerBuildOutcome.Success, invocation.Outcome);
+        Assert.Equal(0, invocation.CompilerExitCode);
+        Assert.Equal(invocation.Observations.Single(o => o.Phase == WorkerBuildPhase.Requested).At + TimeSpan.FromMinutes(5),
+            invocation.Deadline);
+        Assert.False(fixture.Consume().MissingEvidence);
+    }
+
+    [Fact]
+    public async Task CompileOverrunAfterSlotFailsWithSpecificReason()
+    {
+        using var fixture = new WorkerBuildRequestFixture();
+        var started = false;
+        var invocation = await fixture.RunHelper(i =>
+        {
+            if (i.Phase != WorkerBuildPhase.CompilerStarted || started) return;
+            started = true;
+            fixture.Time.Advance(TimeSpan.FromMinutes(6));
+        });
+        Assert.True(started);
+        Assert.Equal(WorkerBuildOutcome.TimeoutAfterStart, invocation.Outcome);
+        Assert.Null(invocation.CompilerExitCode);
+        var child = Assert.Single(invocation.Children!);
+        Assert.False(Mcg.AgentOrchestrator.App.Orchestration.WorkerBuildInvocationOperations.IsExactProcessAlive(child));
+        Assert.True(invocation.CustodyReleased);
+        Assert.StartsWith("Compile deadline 5m00s passed 6m00s after build slot acquisition while project 1/1 src/Feature/Feature.csproj was building; 0 earlier projects exited 0; queue ",
+            invocation.Diagnostic);
+    }
 }

@@ -13,7 +13,7 @@ public sealed record RemoteExecutorReportRow(string ExecutorId, int Attempts,
     IReadOnlyDictionary<string, int> OutcomeCounts, double? AcceptedShare, DateTimeOffset? LastSuccessAt,
     IReadOnlyList<RemoteExecutorOutcomeRow> RecentAttempts, RemoteExecutorProbeRow? LastProbe,
     int? ConfiguredSlots, int PeakConcurrentAttempts, int ConcurrentAttempts,
-    IReadOnlyList<RemoteExecutorLaneSeconds> Lanes);
+    IReadOnlyList<RemoteExecutorLaneSeconds> Lanes, bool? AdmissionEnabled = null);
 public sealed record RemoteExecutorLaneSeconds(string Lane, int Samples, double MedianSeconds,
     double LastSeconds, double? SoloMedianSeconds, double? ConcurrentMedianSeconds);
 
@@ -25,7 +25,8 @@ public sealed record RemoteExecutorReport(IReadOnlyList<RemoteExecutorReportRow>
     public static RemoteExecutorReport Build(IEnumerable<string> configuredIds,
         IEnumerable<RemoteExecutorOutcomeRow> outcomes, IEnumerable<RemoteExecutorProbeRow> probes,
         DateTimeOffset? since = null, int last = 10, int unreadableOutcomeLines = 0, int unreadableProbeLines = 0,
-        IReadOnlyDictionary<string, int>? configuredSlots = null, DateTimeOffset? noExecutorSince = null)
+        IReadOnlyDictionary<string, int>? configuredSlots = null, DateTimeOffset? noExecutorSince = null,
+        IReadOnlyDictionary<string, bool>? configuredAdmission = null)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(last);
         var supplied = outcomes.ToArray();
@@ -72,7 +73,8 @@ public sealed record RemoteExecutorReport(IReadOnlyList<RemoteExecutorReportRow>
                     .Select(row => row with { Reason = row.Reason is { Length: > 160 } reason ? reason[..160] : row.Reason }).ToArray(),
                 allProbes.Where(row => row.ExecutorId == id).OrderByDescending(row => row.ObservedAt).FirstOrDefault(),
                 configuredSlots is not null && configuredSlots.TryGetValue(id, out var slots) ? slots : null,
-                peak, concurrent.Count(value => value), lanes);
+                peak, concurrent.Count(value => value), lanes,
+                configuredAdmission is not null && configuredAdmission.TryGetValue(id, out var enabled) ? enabled : null);
         }).ToArray();
         return new(rows, unreadableOutcomeLines, unreadableProbeLines, noExecutor.Length,
             noExecutor.Select(row => (DateTimeOffset?)row.ObservedAt).Max());

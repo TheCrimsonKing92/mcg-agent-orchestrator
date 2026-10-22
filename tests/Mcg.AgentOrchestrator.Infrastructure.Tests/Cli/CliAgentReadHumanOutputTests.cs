@@ -28,7 +28,8 @@ public sealed class CliAgentReadHumanOutputTests : CliTaskQueryTestSupport
                 "executor\tattempts\toutcomes\taccepted_share\tlast_success\tlast_probe",
                 "one\t1\t{\"accepted\":1}\t1\t2026-10-06T00:00:00.0000000+00:00\tnull",
                 "attempt\tone\t2026-10-06T00:00:00.0000000+00:00\ta\tlane\taccepted\t",
-                "slots\tone\t2\t0\t0"
+                "slots\tone\t2\t0\t0",
+                "admission\tone\tenabled"
             }) + Environment.NewLine, output);
         }
         finally { Directory.Delete(root, true); }
