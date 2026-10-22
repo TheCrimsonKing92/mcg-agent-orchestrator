@@ -1288,8 +1288,17 @@ public sealed partial class AgentOrchestratorKernel
         }
 
         var hadExplicitDisposition = goal.ExplicitDisposition is not null;
+        // An escalated acceptance episode needs ordinary readmission after unpark, not
+        // restoration of its stale gate-running state. Keep RED and terminal outcomes.
+        var resumeAcceptanceEscalation = goal.LifecycleStatus is GoalStatus.Verifying or GoalStatus.Verified &&
+            goal.Timeline.LastOrDefault(evt => evt.TickOutcome is not null)?.TickOutcome is
+            { OutcomeKind: "Escalated", LifecycleState: nameof(GoalLifecycleState.Verified),
+              EscalationKind: nameof(Conductor.ConductorEscalationKind.BackgroundAcceptanceFailed) or
+                  nameof(Conductor.ConductorEscalationKind.AcceptanceVerificationFailed) };
         goal.ApplyExplicitDisposition(GoalExplicitDispositionAction.Unpark);
-        if (hadExplicitDisposition && !IsTerminalGoalStatus(goal.Status) &&
+        if (resumeAcceptanceEscalation)
+            goal.SetStatus(GoalStatus.Active);
+        else if (hadExplicitDisposition && !IsTerminalGoalStatus(goal.Status) &&
             goal.Status is not (GoalStatus.Verifying or GoalStatus.AcceptanceFailed))
             RefreshGoalStatus(goal, allowParkedRefresh: true);
         Append(goal, null, ProgressKind.GoalPolicyDecision, $"Goal unparked: {unparkReason}");
