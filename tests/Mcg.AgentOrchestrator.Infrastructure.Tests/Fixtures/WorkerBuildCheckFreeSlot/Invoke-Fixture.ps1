@@ -12,8 +12,9 @@ function Invoke-CapturedProcess {
         [string[]]$ArgumentList,
         [string]$WorkingDirectory,
         [hashtable]$Environment = @{},
-        # Hang-only guard: the child must exit, never a performance assertion.
-        [int]$TimeoutSeconds = 120
+        # Hang-only guard: the helper cold-compiles WorkerBuildScopeTool and its project references on every call,
+        # measured at up to 119 s passing under a full gate.
+        [int]$TimeoutSeconds = 270
     )
 
     $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
