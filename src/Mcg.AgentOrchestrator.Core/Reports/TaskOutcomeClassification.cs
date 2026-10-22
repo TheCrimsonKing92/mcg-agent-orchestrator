@@ -35,6 +35,7 @@ internal static class TaskOutcomeRules
     public static readonly TaskOutcomeRule ProviderInterruption = new("provider-interruption", TaskOutcomeClass.Environmental);
     public static readonly TaskOutcomeRule VerificationTerminalContractIncomplete = new("verification-terminal-contract-incomplete", TaskOutcomeClass.UnknownEra);
     public static readonly TaskOutcomeRule DetachedWithoutWorkerResult = new("detached-without-worker-result", TaskOutcomeClass.Environmental);
+    public static readonly TaskOutcomeRule ConductorGenerationInterrupted = new("conductor-generation-interrupted", TaskOutcomeClass.Environmental);
     public static readonly TaskOutcomeRule ProviderNeutralProgressStall = new("provider-neutral-progress-stall", TaskOutcomeClass.Environmental);
     public static readonly TaskOutcomeRule ReapedMaxRuntime = new("reaped-max-runtime", TaskOutcomeClass.Environmental);
     public static readonly TaskOutcomeRule ProviderModelRejection = new("provider-model-rejection", TaskOutcomeClass.Environmental);
@@ -87,6 +88,7 @@ internal static class TaskOutcomeRules
         ProviderInterruption,
         VerificationTerminalContractIncomplete,
         DetachedWithoutWorkerResult,
+        ConductorGenerationInterrupted,
         ProviderNeutralProgressStall,
         ReapedMaxRuntime,
         ProviderModelRejection,

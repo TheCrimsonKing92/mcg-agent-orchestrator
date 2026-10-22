@@ -47,12 +47,16 @@ internal sealed partial class ConductorBatchLoop
         setAsideGoals[goal.Id.Value] = new BatchSetAsideEntry(
             goal.Id.Value,
             condition,
-            BuildEscalatedGoalStateFingerprint(goal),
+            SetAsideGoalReadmission.BuildEscalatedGoalStateFingerprint(goal),
             lastSelfClearEvidenceFingerprint,
             sweepBlocker?.Kind,
             sweepBlocker is null
                 ? null
-                : BuildSweepBlockerFingerprint(sweepBlocker));
+                : BuildSweepBlockerFingerprint(sweepBlocker),
+            AcceptanceEscalation: condition == BatchSetAsideCondition.LifecycleEscalation
+                ? VerifiedAcceptanceEscalationDecision.FindUnresolvedEscalation(goal)
+                : null,
+            LastAcceptanceAcknowledgement: selfClearedEntry?.LastAcceptanceAcknowledgement);
     }
 
     private static TerminalGoalSweepBlocker? SelectControllingSweepBlocker(
@@ -66,37 +70,6 @@ internal sealed partial class ConductorBatchLoop
 
     private static string BuildSweepBlockerFingerprint(TerminalGoalSweepBlocker blocker) =>
         $"{blocker.Kind}\n{blocker.Evidence}\n{blocker.Command}";
-
-    private static string BuildEscalatedGoalStateFingerprint(Goal goal)
-    {
-        var taskParts = goal.Tasks
-            .OrderBy(task => task.Id.Value, StringComparer.Ordinal)
-            .Select(task =>
-                string.Join(
-                    ":",
-                    new[]
-                    {
-                    task.Id.Value,
-                    $"candidate={task.LastDispatch?.ResultCommit?.Trim() ?? task.LastVerification?.ReviewedCommit?.Trim() ?? "none"}",
-                    task.Status.ToString(),
-                    task.LastDispatch is null ? "dispatch=none" : $"dispatch={task.LastDispatch.DispatchedAt.UtcTicks}:{task.LastDispatch.WorkerName}",
-                    task.LatestRetryAt is null ? "retry=none" : $"retry={task.LatestRetryAt.Value.UtcTicks}"
-                    }));
-
-        return string.Join("|", taskParts);
-    }
-
-    private static string TryResolveLifecycleState(ConductorDriver driver, Goal goal)
-    {
-        try
-        {
-            return GoalLifecycle.ResolveState(goal, driver.GetFacts(goal)).ToString();
-        }
-        catch
-        {
-            return "LifecycleState=unknown";
-        }
-    }
 
     private static string TryResolveLifecycleState(
         GoalProjectionCache goalProjectionCache,

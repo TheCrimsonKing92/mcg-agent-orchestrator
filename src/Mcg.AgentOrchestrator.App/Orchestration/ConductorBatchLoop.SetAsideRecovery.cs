@@ -115,4 +115,6 @@ internal sealed record BatchSetAsideEntry(
     string? SweepBlockerFingerprint = null,
     string? FaultFingerprint = null,
     int ReadmitPasses = 0,
-    string? EscalatedDependency = null);
+    string? EscalatedDependency = null,
+    VerifiedAcceptanceEscalationDecision.EventIdentity? AcceptanceEscalation = null,
+    VerifiedAcceptanceEscalationDecision.EventIdentity? LastAcceptanceAcknowledgement = null);

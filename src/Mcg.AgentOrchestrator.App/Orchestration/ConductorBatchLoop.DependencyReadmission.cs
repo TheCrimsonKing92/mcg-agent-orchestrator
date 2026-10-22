@@ -219,26 +219,21 @@ internal sealed partial class ConductorBatchLoop
                 // while still preserving the pre-existing state-change readmission path below.
             }
 
-            var currentFingerprint = entry.Condition == BatchSetAsideCondition.AwaitingClarification
-                ? TryResolveLifecycleState(driver, goal) switch
-                {
-                    "LifecycleState=unknown" => entry.StateFingerprint,
-                    nameof(GoalLifecycleState.AwaitingClarification) => BuildEscalatedGoalStateFingerprint(goal),
-                    var state => $"clarification={state}"
-                }
-                : BuildEscalatedGoalStateFingerprint(goal);
-            if (string.Equals(currentFingerprint, entry.StateFingerprint, StringComparison.Ordinal))
+            var readmission = SetAsideGoalReadmission.Evaluate(entry, goal, driver);
+            if (readmission is null)
             {
                 continue;
             }
 
             goalProjectionCache.Invalidate(goal.Id);
+            if (readmission.AcknowledgedEntry is { } acknowledgedEntry)
+            {
+                selfClearedSetAsideEntries[entry.GoalId] = acknowledgedEntry;
+            }
             setAsideGoals.Remove(entry.GoalId);
             escalatedGoals.Remove(entry.GoalId);
             reapedGoals.Remove(entry.GoalId);
-            kernel.RecordGoalPolicyDecision(
-                goal.Id,
-                $"Batch loop re-admitted escalated goal after state changed ({entry.Condition}).");
+            kernel.RecordGoalPolicyDecision(goal.Id, readmission.Message);
         }
     }
 

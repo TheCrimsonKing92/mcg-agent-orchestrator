@@ -1459,6 +1459,16 @@ public static partial class WorkerProcessJobs
         }
     }
 
+    internal static SpawnProcessIdentity? TryReadOwnerProcessIdentity(
+        string ownerId, int processId, DateTimeOffset processRecordedAt)
+    {
+        try { return Registry?.TryReadOwnerProcessIdentity(ownerId, processId, processRecordedAt); }
+        catch { return null; }
+    }
+
+    internal static IReadOnlyList<ConductorGenerationTermination> ReadConductorGenerationTerminations() =>
+        ConductorGenerationInterruptionEvidence.ReadTerminations(RegistryDbPath);
+
     internal static bool TryKillRecordedOwnedChildAndWait(int processId, TimeSpan timeout)
     {
         return TryKillOrFallbackAndWait(processId, timeout, allowProtectedDescendant: true);
