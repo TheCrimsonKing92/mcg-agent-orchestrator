@@ -20,6 +20,7 @@ internal sealed record RemoteLaneExecutorConfiguration(
     internal const int MaximumSlots = 16;
     internal const int MinimumSampleEvery = 1;
     internal IReadOnlyList<string> MachineLocalResourceKeys { get; init; } = [];
+    internal IReadOnlyList<string> ExecutorSerializedResourceKeys { get; init; } = [];
     internal RemoteFocusedEvidenceSettings FocusedEvidence { get; init; } = new();
     internal RemoteWorkerBuildCheckSettings WorkerBuildCheck { get; init; } = new();
     internal ExecutorScreeningSettings Screening { get; init; } = new();
@@ -143,9 +144,21 @@ internal sealed record RemoteLaneExecutorConfiguration(
                     keys.Add(key.GetString()!);
                 }
             }
+            var serializedKeys = new List<string>();
+            if (root.TryGetProperty("executorSerializedResourceKeys", out var serializedKeyArray))
+            {
+                if (serializedKeyArray.ValueKind != JsonValueKind.Array) return Disabled("invalid");
+                foreach (var key in serializedKeyArray.EnumerateArray())
+                {
+                    if (key.ValueKind != JsonValueKind.String || string.IsNullOrWhiteSpace(key.GetString()))
+                        return Disabled("invalid");
+                    serializedKeys.Add(key.GetString()!);
+                }
+            }
             return new(entries.ToArray(), names.ToArray(), null)
             {
                 MachineLocalResourceKeys = keys.ToArray(), AllInfrastructureLanes = allInfrastructureLanes,
+                ExecutorSerializedResourceKeys = serializedKeys.ToArray(),
                 FocusedEvidence = ParseFocusedEvidence(root), Screening = ExecutorScreeningSettings.Parse(root),
                 WorkerBuildCheck = ParseWorkerBuildCheck(root)
             };        }

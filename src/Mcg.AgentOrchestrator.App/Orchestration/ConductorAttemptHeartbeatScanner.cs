@@ -5,6 +5,9 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal static class ConductorAttemptHeartbeatScanner
 {
+    // ConductorParallelAcceptanceAttempts.CreateAttempt and GoalAcceptanceVerifier.ResolveGateHeartbeatPathCore write directly in goal folders.
+    internal const int MaxHeartbeatRecursionDepth = 1;
+
     internal static DateTimeOffset? LatestProgress(string root, DateTimeOffset now, TimeSpan window) =>
         ReadLive(root, now, window).Select(at => (DateTimeOffset?)at).Max();
 
@@ -19,7 +22,7 @@ internal static class ConductorAttemptHeartbeatScanner
         try
         {
             foreach (var file in new DirectoryInfo(root).EnumerateFiles("*.heartbeat.json",
-                new EnumerationOptions { RecurseSubdirectories = true, IgnoreInaccessible = true, AttributesToSkip = 0 }))
+                new EnumerationOptions { RecurseSubdirectories = true, MaxRecursionDepth = MaxHeartbeatRecursionDepth, IgnoreInaccessible = true, AttributesToSkip = 0 }))
             {
                 try
                 {

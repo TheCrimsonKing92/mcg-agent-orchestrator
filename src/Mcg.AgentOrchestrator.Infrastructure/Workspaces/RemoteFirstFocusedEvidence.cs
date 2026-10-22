@@ -45,7 +45,7 @@ internal static class RemoteFirstFocusedEvidence
             else
             {
                 var identity = new RemoteLaneCandidateIdentity(owner.RunId, goalId.Value, head, tree, main, "");
-                var prefix = Path.Combine(Path.GetDirectoryName(owner.ResultsPrefix)!, "remote-first", Path.GetFileName(owner.ResultsPrefix), "lane");
+                var prefix = Path.Combine(Path.GetDirectoryName(owner.ResultsPrefix)!, "remote-first", GoalAcceptanceVerifier.ShortHash(owner.RunId), "lane");
                 var executor = overrides.RemoteLaneExecutorForTests ??
                     (configuration.Executors.Any(entry => entry.Transport == "ssh")
                         ? new SshRemoteLaneExecutor(configuration, worktreePath, prefix, clock,
@@ -133,7 +133,7 @@ internal static class RemoteFirstFocusedEvidence
                         if (now - run.Started > owner.Settings.ResolveCheckTimeout(run.Check.TimeoutMinutes))
                         { Finish(run, RemoteLaneOutcomeCode.LaneTimeout, "lane-timeout"); return; }
                         if (now - heartbeat > TimeSpan.FromSeconds(entry.LeaseSeconds))
-                        { Finish(run, RemoteLaneOutcomeCode.LeaseExpired, "lease-expired"); return; }
+                        { Finish(run, RemoteLaneOutcomeCode.LeaseExpired, LeaseReason(handle)); return; }
                         if (handle.TryGetResult() is { } result)
                         {
                             Inspect(run, result, prefix);
@@ -258,6 +258,21 @@ internal static class RemoteFirstFocusedEvidence
         return new(check, new("", attempt, goal, RemoteFocusedEvidenceShadow.LaneName(check.Project, filter), check.Project,
             filter, GoalAcceptanceVerifier.ShortHash(filter), "", "", "",
             RemoteFocusedEvidenceShadow.ManifestIdentity(check.Project, filter, check.Runner ?? "")), clock.GetUtcNow());
+    }
+
+    private static string LeaseReason(IRemoteLaneHandle handle)
+    {
+        try
+        {
+            if ((handle as IRemoteLaneAttemptDiagnosticsSource)?.Snapshot().Poll is { FailedPollCount: > 0 } poll)
+            {
+                var text = (poll.LastFailedPoll?.StderrTail ?? "").Split(['\r', '\n'])[0].Trim();
+                if (text.Length > 200) text = text[..200];
+                return $"lease-expired failed-polls={poll.FailedPollCount}/{poll.PollCount} last-poll-error={text}";
+            }
+        }
+        catch (Exception) { }
+        return "lease-expired";
     }
 
     private static void Observe(Task task) => _ = task.ContinueWith(completed => { _ = completed.Exception; },

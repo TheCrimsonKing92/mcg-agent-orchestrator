@@ -37,7 +37,9 @@ public sealed record GoalSnapshot(
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     GoalPrioritySchedulingSnapshot? PriorityScheduling = null,
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
-    string? Isolation = null);
+    string? Isolation = null,
+    GoalExplicitDisposition? ExplicitDisposition = null,
+    GoalStatus? ParkedLifecycleStatus = null);
 
 public sealed record GoalHoldSnapshot(
     string Identity,

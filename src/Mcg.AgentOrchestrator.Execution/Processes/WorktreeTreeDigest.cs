@@ -98,11 +98,11 @@ internal static class WorktreeTreeDigest
         {
             if (!process.HasExited) process.Kill(entireProcessTree: true);
             return new(-1, string.Empty,
-                WorktreeTreeDigestFailure.FirstLine(error.IsCompletedSuccessfully ? error.Result : null), true);
+                WorktreeTreeDigestFailure.FirstLine(error.IsCompletedSuccessfully ? error.Result : null), true, TimeoutKind: "wait");
         }
         if (!Task.WaitAll([output, error], 5_000))
             return new(-1, string.Empty,
-                WorktreeTreeDigestFailure.FirstLine(error.IsCompletedSuccessfully ? error.Result : null), true);
+                WorktreeTreeDigestFailure.FirstLine(error.IsCompletedSuccessfully ? error.Result : null), true, TimeoutKind: "drain");
         return new(process.ExitCode, output.Result, WorktreeTreeDigestFailure.FirstLine(error.Result), false);
     }
 }

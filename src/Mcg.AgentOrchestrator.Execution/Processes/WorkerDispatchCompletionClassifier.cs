@@ -147,10 +147,22 @@ internal sealed class WorkerDispatchCompletionClassifier
             return ProviderFailureKind.Unknown;
         }
 
-        return _resolveWorkerProvider(dispatch).ParseOutcome(new WorkerProviderOutcome(
+        var provider = _resolveWorkerProvider(dispatch);
+        var failureKind = provider.ParseOutcome(new WorkerProviderOutcome(
             exitCode,
             standardOutput,
             standardError));
+        if (failureKind == ProviderFailureKind.Unknown &&
+            provider is not StaticWorkerProvider { RecognizeBudgetExhaustion: false } &&
+            ProviderLimitEvidenceParser.TryGetCliCreditExhaustionLine(
+                exitCode,
+                standardOutput.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries),
+                out _))
+        {
+            return ProviderFailureKind.BudgetExhausted;
+        }
+
+        return failureKind;
     }
 
     internal bool HasWorkerResultArtifact(string workingDirectory, string standardOutput)

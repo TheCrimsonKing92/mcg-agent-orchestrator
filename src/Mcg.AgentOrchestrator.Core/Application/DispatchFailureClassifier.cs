@@ -1790,10 +1790,10 @@ public static partial class DispatchFailureClassifier
         var dispatch = FindDispatchForVerification(task, verification) ?? task.LastDispatch;
         var providerName = dispatch?.ProviderName ?? dispatch?.WorkerName ?? "unknown";
         var binding = BuildProviderBindingKey(providerName, dispatch?.ClaudeCredentialSourceDirectory);
-        var evidence = TryGetProviderBudgetExhaustionLine(verification, out var line)
+        var evidence = TryGetProviderBudgetExhaustionLine(verification, out var line, out var source)
             ? TruncateEvidence(line)
             : "typed provider budget-exhaustion disposition";
-        return $"provider-budget-exhausted source=stderr provider={providerName} " +
+        return $"provider-budget-exhausted source={source} provider={providerName} " +
             $"binding={binding.Key} binding-scope={binding.Scope} receipt={verification.CompletedAt:O}; evidence={evidence}";
     }
 
@@ -2807,9 +2807,32 @@ public static partial class DispatchFailureClassifier
             out line) || TryGetCliRefusalLimitLine(verification, out line);
 
     internal static bool TryGetProviderBudgetExhaustionLine(TaskVerificationRecord verification, out string line) =>
-        ProviderLimitEvidenceParser.TryGetBudgetExhaustionEvidenceLine(
+        TryGetProviderBudgetExhaustionLine(verification, out line, out _);
+
+    private static bool TryGetProviderBudgetExhaustionLine(
+        TaskVerificationRecord verification,
+        out string line,
+        out string source)
+    {
+        source = "stderr";
+        if (ProviderLimitEvidenceParser.TryGetBudgetExhaustionEvidenceLine(
             EnumerateEvidenceLines(verification, includeStandardOutput: false, includeStandardError: true),
-            out line);
+            out line))
+        {
+            return true;
+        }
+
+        if (ProviderLimitEvidenceParser.TryGetCliCreditExhaustionLine(
+            verification.ExitCode,
+            EnumerateEvidenceLines(verification, includeStandardOutput: true, includeStandardError: false),
+            out line))
+        {
+            source = "stdout";
+            return true;
+        }
+
+        return false;
+    }
 
     internal static bool TryGetRelativeRetryAfter(string output, out TimeSpan retryAfter)
     {

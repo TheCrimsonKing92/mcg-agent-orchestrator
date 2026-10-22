@@ -97,8 +97,8 @@ internal sealed class WorkerBuildInvocationOperations(string statePath, string e
         WorkerBuildProjectScope.Result scope;
         try { scope = WorkerBuildProjectScope.ResolveForDispatch(dispatch.WorkingDirectory, required, goalId, taskId, dispatch); }
         catch (Exception ex) when (ex is not OutOfMemoryException) { return new(true, false, "worker_build_host=scope-invalid; " + ex.Message); }
-        if (!WorktreeTreeDigest.TryCompute(dispatch.WorkingDirectory, out var digest, out var reason))
-            return new(true, false, "worker_build_host=candidate-unavailable; " + reason);
+        if (!WorktreeTreeDigest.TryCompute(dispatch.WorkingDirectory, out var digest, out var reason, out var failure))
+            return new(true, false, "worker_build_host=candidate-unavailable; " + WorktreeTreeDigestFailure.WithDetail(reason, failure));
         var applicable = task.WorkerBuildInvocations.Where(i => i.DispatchId == reference.DispatchId &&
             i.TreeDigest == digest && i.Projects.Intersect(scope.Projects, StringComparer.OrdinalIgnoreCase).Count() == scope.Projects.Count)
             .OrderByDescending(i => i.Deadline).FirstOrDefault();

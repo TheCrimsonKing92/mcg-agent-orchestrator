@@ -90,7 +90,7 @@ internal sealed class WorkerBuildScopeDispatchFixture : WorkerDispatchTestSuppor
         var scope = Context(task).Resolve(Root, []);
         projects ??= scope.Projects;
         Assert.NotEmpty(scope.RequiredProjects);
-        Assert.True(WorktreeTreeDigest.TryCompute(Root, out var digest, out var failure), failure);
+        Assert.True(WorktreeTreeDigest.TryCompute(Root, out var digest, out var reason, out var failure), WorktreeTreeDigestFailure.WithDetail(reason, failure));
         var artifacts = Path.Combine(Root, ".orchestrator-context", "build-artifacts");
         Directory.CreateDirectory(artifacts);
         var results = projects.Select((project, index) =>

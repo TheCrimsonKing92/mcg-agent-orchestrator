@@ -205,7 +205,7 @@ public sealed class OrchestratorWorktreeGitExcludeTests
 
         public string Digest()
         {
-            Assert.True(WorktreeTreeDigest.TryCompute(Linked, out var digest, out var reason), reason);
+            Assert.True(WorktreeTreeDigest.TryCompute(Linked, out var digest, out var reason, out var failure), WorktreeTreeDigestFailure.WithDetail(reason, failure));
             return digest;
         }
 

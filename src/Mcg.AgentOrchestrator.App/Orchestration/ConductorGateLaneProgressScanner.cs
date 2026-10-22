@@ -14,7 +14,7 @@ internal static class ConductorGateLaneProgressScanner
         {
             // FileInfo write times come from enumeration; only recent files need their bodies opened.
             foreach (var file in new DirectoryInfo(root).EnumerateFiles("*.gate-heartbeat.json",
-                new EnumerationOptions { RecurseSubdirectories = true, IgnoreInaccessible = true, AttributesToSkip = 0 }))
+                new EnumerationOptions { RecurseSubdirectories = true, MaxRecursionDepth = ConductorAttemptHeartbeatScanner.MaxHeartbeatRecursionDepth, IgnoreInaccessible = true, AttributesToSkip = 0 }))
             {
                 try
                 {

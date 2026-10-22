@@ -7,9 +7,19 @@ internal sealed class ConductorStewardCaseG(
     Func<GoalId, bool>? hasLiveAcceptanceAttempt,
     Func<GoalId, bool>? inUnreconciledGroupedGate,
     Func<Goal, bool>? hasLandingEvidence,
-    Func<Goal, string?>? head)
+    Func<Goal, string?>? head,
+    Func<GoalId, bool>? queuedBehindOtherOccupants = null)
 {
     internal static readonly TimeSpan QuietThreshold = TimeSpan.FromMinutes(30);
+
+    internal static bool IsQueuedBehindOtherOccupants(GoalId goal,
+        IReadOnlyCollection<string> soloAttemptGoalIds,
+        IReadOnlyCollection<IReadOnlyCollection<string>> groupedGateMemberSets, int acceptanceWidth)
+    {
+        var occupants = soloAttemptGoalIds.Where(id => id != goal.Value).Distinct(StringComparer.Ordinal).Count() +
+            groupedGateMemberSets.Count(members => !members.Contains(goal.Value, StringComparer.Ordinal));
+        return occupants > 0 && occupants >= acceptanceWidth;
+    }
 
     internal static bool IsStranded(Goal goal, TaskSpec task, DateTimeOffset now) =>
         goal.Status == GoalStatus.Verifying &&
@@ -29,6 +39,7 @@ internal sealed class ConductorStewardCaseG(
         {
             if (hasLiveAcceptanceAttempt(goal.Id) || inUnreconciledGroupedGate(goal.Id) ||
                 hasLandingEvidence(goal)) return [];
+            if (queuedBehindOtherOccupants?.Invoke(goal.Id) == true) return [];
             sha = head(goal);
         }
         catch { return []; }

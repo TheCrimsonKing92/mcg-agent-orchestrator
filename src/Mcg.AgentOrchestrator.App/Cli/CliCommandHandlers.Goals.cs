@@ -1790,7 +1790,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                             adoptInheritedWorkers: WorkerAdoptionTransfer.CreateDefault(context.Workspace.SqliteStatePath,
                                 goalIds => context.ReloadKernel(goalIds))),
                         blockedRecheckHeartbeatInterval: reconcileSweepOptions.HeartbeatInterval, countLiveGroupedGates: () => loopDriver.CountLiveGroupedGateAttempts(relaunchBlockingOnly: true),
-                        workspace: context.Workspace).WithSteward(ConductorStewardHost.CreateDefault(context.Workspace))
+                        workspace: context.Workspace).WithSteward(ConductorStewardHost.CreateDefault(context.Workspace, () => ResolveConductorPolicy(loopPolicyName, context.Workspace.OrchestratorDirectory).Policy))
                         .WithUnintendedExitDiagnostics(conductorDiagnosticPath, conductorOutputLogPath)
                         .WithJudgePanel(ConductorJudgePanelHost.CreateDefault(context.Workspace))
                         .WithBoardFill(ConductorBoardFillHost.CreateDefault(context.Workspace,
@@ -1924,7 +1924,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                         readAdoptionCensus: WorkerAdoptionCensus.CreateDefault(context.Workspace.SqliteStatePath),
                         adoptInheritedWorkers: WorkerAdoptionTransfer.CreateDefault(context.Workspace.SqliteStatePath,
                             goalIds => context.ReloadKernel(goalIds))),
-                    workspace: context.Workspace).WithSteward(ConductorStewardHost.CreateDefault(context.Workspace))
+                    workspace: context.Workspace).WithSteward(ConductorStewardHost.CreateDefault(context.Workspace, () => ResolveConductorPolicy(conductPolicyName, context.Workspace.OrchestratorDirectory).Policy))
                     .WithJudgePanel(ConductorJudgePanelHost.CreateDefault(context.Workspace))
                     .WithBoardFill(ConductorBoardFillHost.CreateDefault(context.Workspace, () => ResolveConductorPolicy(conductPolicyName, context.Workspace.OrchestratorDirectory).Policy))
                     .WithAuthor(ConductorAuthorHost.CreateDefault(context.Workspace))

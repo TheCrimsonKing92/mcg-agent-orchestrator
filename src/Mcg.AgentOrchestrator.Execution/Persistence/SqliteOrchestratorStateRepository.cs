@@ -730,7 +730,23 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
                                 "goal row no longer exists")));
                     }
 
-                    if (SnapshotEquals(storedSnapshot, request.Baseline))
+                    // Refresh may carry committed authority newer than the checkpoint but older
+                    // than the stored row. Merge that progress using only the stored authority;
+                    // a tick cannot propose a newer revision or contradict the committed action.
+                    var tickDisposition = request.Current.ExplicitDisposition;
+                    var storedDisposition = storedSnapshot.ExplicitDisposition;
+                    if (tickDisposition is not null &&
+                        (storedDisposition is null || tickDisposition.Revision > storedDisposition.Revision ||
+                         (tickDisposition.Revision == storedDisposition.Revision &&
+                          tickDisposition.Action != storedDisposition.Action)))
+                    {
+                        return Task.FromResult<(bool ShouldSave, GoalStateSnapshot? NewState, GoalSnapshotSaveResult Result)>(
+                            (false, null, new GoalSnapshotSaveResult(request.Current.Id,
+                                GoalSnapshotSaveDisposition.Skipped, storedSnapshot,
+                                "tick cannot change explicit operator disposition", storedState!.HumanInputRequests)));
+                    }
+
+                    if (SnapshotEquals(storedSnapshot, request.Baseline) && tickDisposition == storedDisposition)
                     {
                         var state = ValidateConsistentGoalState(
                             request.Current,
@@ -2082,6 +2098,20 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
             return false;
         }
 
+        // Explicit commands are serialized by the goal-row CAS. Only the stored row may
+        // supply that authority; lifecycle progress is still tick-owned and merges separately.
+        // A committed explicit stop is terminal even if an older tick still reconciles
+        // progress under the preceding park. Keep that evidence without reviving the hold.
+        var stoppedAfterPark = stored.ExplicitDisposition?.Action == GoalExplicitDispositionAction.Park &&
+            stored.Status is GoalStatus.Cancelled or GoalStatus.Superseded;
+        var lifecycle = stoppedAfterPark ? stored.Status : PickTickOwned(
+            baseline.ParkedLifecycleStatus ?? baseline.Status,
+            stored.ParkedLifecycleStatus ?? stored.Status,
+            current.ParkedLifecycleStatus ?? current.Status);
+        var hasParkDisposition = stored.ExplicitDisposition?.Action == GoalExplicitDispositionAction.Park;
+        var explicitlyParked = hasParkDisposition &&
+            lifecycle is not (GoalStatus.Cancelled or GoalStatus.Superseded);
+
         var mergedSourceBacklogLink = PickStoreOwned(
             (baseline.SourceBacklogItemId, baseline.SourceBacklogCoverage),
             (stored.SourceBacklogItemId, stored.SourceBacklogCoverage),
@@ -2091,7 +2121,9 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
         {
             Objective = PickStoreOwned(baseline.Objective, stored.Objective, current.Objective),
             BriefVersions = PickStoreOwnedList(baseline.BriefVersions, stored.BriefVersions, current.BriefVersions),
-            Status = PickTickOwned(baseline.Status, stored.Status, current.Status),
+            Status = explicitlyParked ? GoalStatus.Parked : lifecycle,
+            ExplicitDisposition = stored.ExplicitDisposition,
+            ParkedLifecycleStatus = hasParkDisposition ? lifecycle : null,
             Tasks = mergedTasks,
             GateTestObligations = MergePlannerGateObligations(stored.GateTestObligations, current.GateTestObligations),
             Timeline = MergeTimeline(baseline.Timeline, stored.Timeline, current.Timeline),

@@ -6,6 +6,65 @@ using Mcg.AgentOrchestrator.Infrastructure;
 public sealed class ConductorStewardCaseGTriggerTests
 {
     [Xunit.Fact]
+    public async Task Queued_behind_other_live_occupants_at_width_emits_nothing()
+    {
+        using var h = new StewardCaseGHarness(queuedBehindOtherOccupants: _ => true);
+        Assert.True(ConductorStewardCaseG.IsStranded(h.Goal, h.Target, h.Clock.UtcNow));
+        Assert.Empty(h.CaseG.Detect(h.Goal, h.Clock.UtcNow));
+
+        h.Host.ServiceTick(h.Kernel);
+
+        Assert.Empty(await h.Intents.ListForGoalAsync(h.Goal.Id.Value));
+        Assert.Equal(0, h.Triggers.CountRemedies(ConductorStewardTriggerKind.VerifyingWithoutLiveGate));
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("one-solo", 1, true)]
+    [Xunit.InlineData("one-solo", 2, false)]
+    [Xunit.InlineData("two-solo", 2, true)]
+    [Xunit.InlineData("own-solo", 1, false)]
+    [Xunit.InlineData("other-group", 1, true)]
+    [Xunit.InlineData("own-group", 1, false)]
+    [Xunit.InlineData("duplicate-solo", 2, false)]
+    [Xunit.InlineData("empty", 1, false)]
+    public void Queued_behind_counts_only_other_goals_against_width(string scenario, int width, bool expected)
+    {
+        var goal = new GoalId("goal");
+        string[] solo = scenario switch
+        {
+            "one-solo" => ["other"],
+            "two-solo" => ["other", "another"],
+            "own-solo" => [goal.Value],
+            "duplicate-solo" => ["other", "other"],
+            _ => []
+        };
+        IReadOnlyCollection<string>[] grouped = scenario switch
+        {
+            "other-group" => [["other", "another"]],
+            "own-group" => [[goal.Value, "other"]],
+            _ => []
+        };
+
+        Assert.Equal(expected, ConductorStewardCaseG.IsQueuedBehindOtherOccupants(goal, solo, grouped, width));
+    }
+
+    [Xunit.Fact]
+    public void Fifth_source_false_null_or_throwing_keeps_today_behaviour()
+    {
+        Func<GoalId, bool>?[] availableSources = [_ => false, null];
+        foreach (var source in availableSources)
+        {
+            using var h = new StewardCaseGHarness(queuedBehindOtherOccupants: source);
+            var trigger = Assert.Single(h.CaseG.Detect(h.Goal, h.Clock.UtcNow));
+            Assert.Equal(ConductorStewardTriggerKind.VerifyingWithoutLiveGate, trigger.Kind);
+        }
+
+        using var unavailable = new StewardCaseGHarness(
+            queuedBehindOtherOccupants: _ => throw new IOException("unreadable acceptance occupants"));
+        Assert.Empty(unavailable.CaseG.Detect(unavailable.Goal, unavailable.Clock.UtcNow));
+    }
+
+    [Xunit.Fact]
     public void Quiet_verifying_goal_emits_G_for_last_completed_task()
     {
         using var h = new StewardCaseGHarness();
@@ -139,7 +198,7 @@ internal sealed class StewardCaseGHarness : IDisposable
     internal const string WorkerResult = "WORKER_RESULT:\nfiles: none\ntests: deferred - ExampleTests\ncommit: none\nblockers: none\nEND_WORKER_RESULT";
 
     internal StewardCaseGHarness(int quietMinutes = 31, Func<GoalId, long?>? version = null,
-        Action? beforeConductAppendCommit = null)
+        Action? beforeConductAppendCommit = null, Func<GoalId, bool>? queuedBehindOtherOccupants = null)
     {
         Directory.CreateDirectory(Root);
         Kernel = new AgentOrchestratorKernel(Clock);
@@ -157,7 +216,7 @@ internal sealed class StewardCaseGHarness : IDisposable
         Assert.True(Kernel.BeginGoalAcceptanceVerification(Goal.Id, "gate started"));
         QuietSince = Goal.Timeline.Max(item => item.OccurredAt);
         Clock.Advance(TimeSpan.FromMinutes(quietMinutes));
-        CaseG = new ConductorStewardCaseG(_ => false, _ => false, _ => false, _ => Sha);
+        CaseG = new ConductorStewardCaseG(_ => false, _ => false, _ => false, _ => Sha, queuedBehindOtherOccupants);
         Intents = new SqliteOperatorIntentStore(Path.Combine(Root, "intents.db"), Path.Combine(Root, "logs"));
         Triggers = new ConductorStewardTriggerStore(Path.Combine(Root, "triggers.db"));
         Host = new ConductorStewardHost(Triggers, new ConductorStewardTriggerDetector(), Model, Intents,

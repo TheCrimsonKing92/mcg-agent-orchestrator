@@ -44,8 +44,8 @@ internal sealed class WorkerBuildRequestHost : IWorkerBuildRequestService
         var root = Path.GetFullPath(task.LastDispatch!.WorkingDirectory);
         var scope = WorkerBuildProjectScope.Resolve(root, request.Projects,
             expectedMetadataDigest: task.LastDispatch.WorkerBuildScope!.MetadataDigest);
-        if (!WorktreeTreeDigest.TryCompute(root, out var digest, out var reason))
-            throw new InvalidOperationException("Worker build candidate unavailable: " + reason);
+        if (!WorktreeTreeDigest.TryCompute(root, out var digest, out var reason, out var failure))
+            throw new InvalidOperationException("Worker build candidate unavailable: " + WorktreeTreeDigestFailure.WithDetail(reason, failure));
         var previous = task.WorkerBuildInvocations.SingleOrDefault(i =>
             i.DispatchId == _reference.DispatchId && i.RequestKey == request.RequestKey);
         if (previous is not null)

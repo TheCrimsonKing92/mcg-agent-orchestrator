@@ -1,8 +1,146 @@
+using System.Collections.Concurrent;
+using System.Text.Json;
+using System.Xml.Linq;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 [Collection("IsolatedProcessSpawning")]
 public sealed class RemoteFirstFocusedEvidenceTests : RemoteFirstFocusedEvidenceFixture
 {
+    [Fact]
+    public async Task SshStagingStaysInsidePathBudgetForConductorShapedRunId()
+    {
+        await using var fake = new FakeSshRemoteLaneTransport();
+        using var scenario = CreateScenario();
+        ConfigureSsh(scenario, fake);
+        const string runId = "619be9fd-pre-review-20261022131924006-84312abfcad84b9bac9a397104fcf743";
+        var attemptFolder = Path.Combine(scenario.Root, ".orchestrator", "pre-review-evidence-attempts", scenario.Goal.Value);
+        var observedEntries = new ConcurrentQueue<string>();
+        var workingDirectories = new ConcurrentQueue<string>();
+        fake.FetchContents["remote.trx"] = RemoteTrx();
+        scenario.Overrides.RemoteLaneTransportRunnerForTests = Transport;
+
+        var pending = scenario.DirectAsync([FocusedCheck()], runId: runId,
+            resultsPrefix: Path.Combine(attemptFolder, runId + "-candidate"));
+        await Event(pending, "remote SSH verdict returned");
+        var result = Assert.Single((await pending).Results);
+        Assert.True(result.Passed);
+        Assert.Equal("remote-executor=fixture-executor", result.ResultSummary);
+        Assert.Equal(3, result.ExecutedTestCount);
+        Assert.Equal(0, scenario.LocalCalls);
+        Assert.NotEmpty(workingDirectories);
+        Assert.All(workingDirectories, directory => Assert.StartsWith(attemptFolder + Path.DirectorySeparatorChar, directory));
+        var entries = observedEntries.Distinct().ToArray();
+        Assert.Contains(entries, path => Path.GetFileName(path) == "status.json");
+        foreach (var path in entries.Except(result.TestResultPaths!))
+        {
+            var representativeLength = SshRemoteLaneExecutor.RepresentativeAttemptFolderLength + 1 +
+                Path.GetRelativePath(attemptFolder, path).Length + 4;
+            Assert.True(representativeLength < SshRemoteLaneExecutor.StagingPathBudget,
+                $"Staging entry exceeds path budget: {path} ({representativeLength})");
+        }
+
+        async Task<GoalAcceptanceVerifier.CommandResult> Transport(string[] args, string directory, TimeSpan bound, CancellationToken token)
+        {
+            workingDirectories.Enqueue(directory);
+            if (args[3] == "job.json")
+            {
+                using var job = JsonDocument.Parse(File.ReadAllText(Path.Combine(directory, "job.json")));
+                var fields = new[] { "attemptId", "executorId", "lane", "filterHash", "mainSha", "manifestIdentity" }
+                    .ToDictionary(name => name, name => (object?)job.RootElement.GetProperty(name).GetString());
+                fields["commitSha"] = job.RootElement.GetProperty("sha").GetString();
+                fields["treeSha"] = scenario.Tree;
+                fields["state"] = "completed";
+                fields["exitCode"] = 0;
+                fields["trx"] = new[] { "remote.trx" };
+                await fake.Polls.Writer.WriteAsync(new(fields), token);
+            }
+            var command = await fake.Transport(args, directory, bound, token);
+            // Observe temporary fetch writes before the handle moves or deletes them.
+            foreach (var path in Directory.EnumerateFileSystemEntries(directory, "*", SearchOption.AllDirectories))
+                observedEntries.Enqueue(path);
+            return command;
+        }
+    }
+
+    [Fact]
+    public async Task LeaseExpiryAfterFailedPollsNamesLastPollError()
+    {
+        await using var fake = new FakeSshRemoteLaneTransport();
+        using var scenario = CreateScenario();
+        ConfigureSsh(scenario, fake);
+        var secondPollEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var secondPollEnded = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var polls = 0;
+        await fake.Polls.Writer.WriteAsync(new(null, Exit: 1, Stderr: "poll-1-x: No such file or directory"));
+        scenario.Overrides.RemoteLaneTransportRunnerForTests = Transport;
+        var check = new GoalAcceptanceVerifier.AcceptanceManifestCheck
+        {
+            Name = "reviewer focused evidence: AlphaTests", Type = "dotnet-test", Project = Project,
+            Runner = "mtp", Arguments = ["--filter", "FullyQualifiedName~AlphaTests"], IsFocusedEvidenceSelection = true,
+            TimeoutMinutes = 2,
+            FocusedEvidenceSelections = [[new("AlphaTests", "AlphaTests", GoalAcceptanceVerifier.FocusedEvidenceTokenKind.Class,
+                "AlphaTests", "AlphaTests")]]
+        };
+        var pending = scenario.DirectAsync([check]);
+        try
+        {
+            // Poll 2 cannot enter until the handle has recorded poll 1's failure.
+            await Event(secondPollEntered.Task, "second SSH poll entered after first failed poll recorded");
+            scenario.Clock.Advance(TimeSpan.FromSeconds(61));
+            await Event(pending, "lease-expired local fallback returned");
+            var result = Assert.Single((await pending).Results);
+            Assert.Equal("local-passed", result.OutputTail);
+            Assert.Equal(1, scenario.LocalCalls);
+            var row = Assert.Single(scenario.Health());
+            Assert.Equal(RemoteLaneOutcomeCode.LeaseExpired, row.Outcome);
+            Assert.StartsWith("remote-first-fallback: lease-expired failed-polls=", row.Reason);
+            Assert.Contains("last-poll-error=poll-1-x: No such file or directory", row.Reason);
+        }
+        finally
+        {
+            await Event(secondPollEnded.Task, "blocked SSH poll cancelled before temporary root disposal");
+        }
+
+        async Task<GoalAcceptanceVerifier.CommandResult> Transport(string[] args, string directory, TimeSpan bound, CancellationToken token)
+        {
+            var second = args.Any(arg => arg.EndsWith("/status.json", StringComparison.Ordinal)) &&
+                Interlocked.Increment(ref polls) == 2;
+            if (second) secondPollEntered.TrySetResult();
+            try { return await fake.Transport(args, directory, bound, token); }
+            finally { if (second) secondPollEnded.TrySetResult(); }
+        }
+    }
+
+    private static void ConfigureSsh(Scenario scenario, FakeSshRemoteLaneTransport fake)
+    {
+        File.WriteAllText(scenario.ConfigurationPath, JsonSerializer.Serialize(new
+        {
+            executors = new[] { new { id = "fixture-executor", leaseSeconds = 60, slots = 1, transport = "ssh",
+                runnerAlias = "runner", adminAlias = "admin", remoteRepository = "C:/repo/bare.git", runRoot = "C:/mcg-executor",
+                pollSeconds = 1, occupancyProbe = false, toolsDigestCheck = false } },
+            lanes = Array.Empty<string>(), machineLocalResourceKeys = new[] { "machine-local" },
+            focusedEvidence = new { mode = "remote-first", sampleEvery = 9999, graceSeconds = 300 }
+        }));
+        scenario.Overrides.RemoteLaneExecutorForTests = null;
+        scenario.Overrides.RemoteLaneTransportRunnerForTests = fake.Transport;
+        scenario.Overrides.RemoteLaneGitRunnerForTests = fake.Git;
+    }
+
+    private static string RemoteTrx()
+    {
+        string[] identities = ["AlphaTests.Remote", "AlphaTests.Second", "AlphaTests.Third"];
+        var definitions = identities.Select((identity, index) => new XElement("UnitTest",
+            new XAttribute("id", "test-" + index), new XAttribute("name", identity),
+            new XElement("TestMethod", new XAttribute("className", "AlphaTests"),
+                new XAttribute("name", identity[(identity.LastIndexOf('.') + 1)..]))));
+        var results = identities.Select((identity, index) => new XElement("UnitTestResult",
+            new XAttribute("testId", "test-" + index), new XAttribute("testName", identity), new XAttribute("outcome", "Passed")));
+        return new XDocument(new XElement("TestRun", new XElement("TestDefinitions", definitions), new XElement("Results", results),
+            new XElement("ResultSummary", new XAttribute("outcome", "Completed"), new XElement("Counters",
+                new XAttribute("total", 3), new XAttribute("executed", 3), new XAttribute("passed", 3),
+                new XAttribute("failed", 0), new XAttribute("notExecuted", 0))))).ToString();
+    }
+
     [Fact]
     public async Task Accepted_BoundReceipt_ReturnsRemoteVerdictWithCustody()
     {
@@ -108,6 +246,7 @@ public sealed class RemoteFirstFocusedEvidenceTests : RemoteFirstFocusedEvidence
         var row = Assert.Single(scenario.Health());
         Assert.Equal(Enum.Parse<RemoteLaneOutcomeCode>(expected), row.Outcome);
         Assert.StartsWith("remote-first-fallback", row.Reason);
+        if (!fresh) Assert.Equal("remote-first-fallback: lease-expired", row.Reason);
         await Event(handle.Abandoned.Task, "timed out handle abandoned");
     }
 

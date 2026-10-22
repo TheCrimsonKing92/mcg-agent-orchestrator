@@ -10,6 +10,11 @@ public static class PreTesterEvidenceRefreshRule
 {
     private const string Prefix = "finding-evidence pre-tester-refresh ";
 
+    public static PreTesterEvidenceRefreshDecision DecideBuildPhaseRefresh(PreTesterEvidenceEntry? prior,
+        bool priorApparatusUnusable, bool priorBuildPhaseOnly, int refreshesForCandidate) =>
+        prior?.Outcome == "unusable" && priorApparatusUnusable && priorBuildPhaseOnly && refreshesForCandidate == 0
+            ? PreTesterEvidenceRefreshDecision.Refresh : PreTesterEvidenceRefreshDecision.Reuse;
+
     public static PreTesterEvidenceRefreshDecision Decide(PreTesterEvidenceEntry? prior,
         bool priorApparatusUnusable, RetryCause pendingTesterRetryCause, int refreshesForCandidate) =>
         prior?.Outcome == "unusable" && priorApparatusUnusable &&

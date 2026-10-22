@@ -99,7 +99,8 @@ internal sealed record AcceptancePartitionVerdictCacheOptions(
     Func<AcceptanceManifestCheck, string?>? ResolveClosureHash = null,
     Func<string, string, string, IReadOnlyList<string>>? ResolveChangedFiles = null,
     Func<string, string, string, IReadOnlyList<string>>? ResolveLaneCarryChangedFiles = null,
-    IReadOnlyList<AcceptanceManifestCheck>? IdenticalTreeChecks = null);
+    IReadOnlyList<AcceptanceManifestCheck>? IdenticalTreeChecks = null,
+    Func<DisjointLandingFactsRequest, DisjointLandingFacts?>? ResolveDisjointLandingFacts = null);
 
 internal sealed partial class AcceptancePartitionVerdictCache
 {
@@ -117,6 +118,7 @@ internal sealed partial class AcceptancePartitionVerdictCache
     private readonly bool _withinAttemptRerunEnabled;
     private readonly Func<bool> _enforceStructuralCoverage;
     private readonly List<PartitionVerdictReuseReceipt> _reused = [];
+    private readonly List<DisjointLandingDecision> _disjointLandingDecisions = [];
     private readonly List<PartitionVerdictExecutionReceipt> _executed = [];
     private readonly List<PartitionWithinAttemptRetryReceipt> _retries = [];
     private readonly List<PartitionVerdictRecord> _freshRecords = [];
@@ -130,6 +132,7 @@ internal sealed partial class AcceptancePartitionVerdictCache
     private AcceptanceSharedApparatusInvalidation? _sharedApparatusInvalidation;
     private AcceptanceTestReuseShadow? TestReuseShadow { get; init; }
     private AcceptanceLaneCarryShadow? LaneCarryShadow { get; init; }
+    private AcceptanceDisjointLandingLaneReuse.Session DisjointLandingReuse { get; init; } = null!;
     private bool _shadowsPending;
     internal bool HasPendingShadows => (TestReuseShadow is not null || LaneCarryShadow is not null) && _shadowsPending;
 
@@ -185,6 +188,10 @@ internal sealed partial class AcceptancePartitionVerdictCache
     internal int PartitionCount { get; }
     internal int PriorReuseAttemptCount { get; }
     internal bool ForceFullRerun { get; }
+    internal IReadOnlyList<DisjointLandingDecision> DisjointLandingDecisions
+    {
+        get { lock (_gate) return _disjointLandingDecisions.ToArray(); }
+    }
     internal AcceptanceSharedApparatusInvalidation? SharedApparatusInvalidation
     {
         get { lock (_gate) return _sharedApparatusInvalidation; }
@@ -275,6 +282,10 @@ internal sealed partial class AcceptancePartitionVerdictCache
             new AcceptanceClosureVerdictIndex(options.WorktreePath),
             identicalTreeIdentities)
         {
+            DisjointLandingReuse = new AcceptanceDisjointLandingLaneReuse.Session(
+                options.WorktreePath, options.GoalId.Value, attemptId,
+                GoalAcceptanceVerifier.NormalizeShaToken(candidateTreeSha),
+                GoalAcceptanceVerifier.NormalizeShaToken(mainSha), journal.Records, options.ResolveDisjointLandingFacts),
             LaneCarryShadow = partitionCount == 0 ? null : new AcceptanceLaneCarryShadow(options.WorktreePath, options.GoalId.Value, attemptId,
                 GoalAcceptanceVerifier.NormalizeShaToken(candidateTreeSha), options.ResolveLaneCarryChangedFiles),
             TestReuseShadow = partitionCount == 0 ? null : new AcceptanceTestReuseShadow(
@@ -310,11 +321,15 @@ internal sealed partial class AcceptancePartitionVerdictCache
             closureHash = ResolveClosureHash(check);
             if (string.IsNullOrWhiteSpace(closureHash))
             {
+                if (TryReuseDisjointLanding(check, partitionId, filterHash, cacheKey, closureHash) is { } reused)
+                    return reused;
                 RecordMiss(partitionId, PartitionVerdictMissReasons.ClosureHashUnavailable);
                 return null;
             }
             if (_closureIndex.FindLatest(ManifestIdentity, filterHash, closureHash) is not { } contentVerdict)
             {
+                if (TryReuseDisjointLanding(check, partitionId, filterHash, cacheKey, closureHash) is { } reused)
+                    return reused;
                 RecordMiss(partitionId, PartitionVerdictMissReasons.NoGreenVerdictForClosure, closureHash,
                     ClosureMissReasonCode(_closureIndex.FindLatestForFilter(filterHash), closureHash));
                 return null;
@@ -342,6 +357,27 @@ internal sealed partial class AcceptancePartitionVerdictCache
                 $"reuse_rule={reuseRule} closure_hash={closureHash ?? "not-applicable"}",
             TestResultPaths: cached.TestResultPaths,
             TestResultAttemptId: cached.AttemptId,
+            TestResultIsExplicitCrossAttemptReuse: true);
+    }
+
+    private AcceptanceCheckResult? TryReuseDisjointLanding(
+        AcceptanceManifestCheck check, string partitionId, string filterHash, string cacheKey, string? closureHash)
+    {
+        GoalAcceptanceVerifier.TryGetInfrastructurePartitionId(check, out _, out var filter);
+        var (decision, cached) = DisjointLandingReuse.Decide(partitionId, filterHash, filter,
+            record => TryBuildCacheKey(GoalId, record.CandidateTreeSha, record.MainSha, ManifestIdentity,
+                check, out _, out _, out var rebuilt) && string.Equals(rebuilt, record.CacheKey, StringComparison.Ordinal),
+            HasReusableStructuralCoverageEvidence);
+        lock (_gate) _disjointLandingDecisions.Add(decision);
+        Console.WriteLine($"DISJOINT_LANDING_REUSE lane={decision.LaneId} decision={decision.Decision} " +
+            $"reason={decision.ReasonCode} source_attempt_id={decision.SourceAttemptId}");
+        Console.Out.Flush();
+        if (cached is null) return null;
+        RecordReuse(new PartitionVerdictReuseReceipt(partitionId, cached.AttemptId, cacheKey, "disjoint-landing", closureHash));
+        return new AcceptanceCheckResult(check.Name, true, 0, null,
+            ResultSummary: $"partition-verdict-cache reused source_attempt_id={cached.AttemptId} cache_key={cacheKey} " +
+                $"reuse_rule=disjoint-landing closure_hash={closureHash ?? "not-applicable"}",
+            TestResultPaths: cached.TestResultPaths, TestResultAttemptId: cached.AttemptId,
             TestResultIsExplicitCrossAttemptReuse: true);
     }
 
