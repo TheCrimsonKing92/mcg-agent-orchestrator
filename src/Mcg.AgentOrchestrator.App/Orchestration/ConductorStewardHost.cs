@@ -91,10 +91,16 @@ internal sealed partial class ConductorStewardHost
             throw new InvalidOperationException("Steward model round did not drain after conductor shutdown cancellation.");
     }
 
-    internal static ConductorStewardHost CreateDefault(OrchestratorWorkspace workspace)
+    internal static ConductorStewardHost CreateDefault(OrchestratorWorkspace workspace,
+        Func<Mcg.AgentOrchestrator.Core.Conductor.ConductorAutonomyPolicy>? policy = null)
     {
         var enabledSetting = Environment.GetEnvironmentVariable(EnabledEnvironmentVariable);
         var caseDSources = ConductorStewardCaseDSources.CreateDefault(workspace);
+        var solo = new ConductorParallelAcceptanceAttemptCoordinator(
+            Path.Combine(workspace.OrchestratorDirectory, "acceptance-gate-attempts"),
+            workspace.IntegrationBranch, workspace.ExecutionDirectory);
+        var grouped = new ConductorGroupedGateAttemptCoordinator(
+            Path.Combine(workspace.OrchestratorDirectory, "grouped-gate-attempts"));
         ConductorStewardHost? host = null;
         host = new ConductorStewardHost(
             new ConductorStewardTriggerStore(Path.Combine(workspace.OrchestratorDirectory, "steward-triggers.db")),
@@ -123,16 +129,18 @@ internal sealed partial class ConductorStewardHost
                 new ManifestConductorStewardLaneSubstringResolver(workspace.ProjectHomeDirectoryOrNull)),
             caseDSources: caseDSources,
             caseG: new ConductorStewardCaseG(
-                OperatorIntentCoordinator.BuildLiveAcceptanceAttemptQuery(new ConductorParallelAcceptanceAttemptCoordinator(
-                    Path.Combine(workspace.OrchestratorDirectory, "acceptance-gate-attempts"),
-                    workspace.IntegrationBranch, workspace.ExecutionDirectory)),
-                goalId => new ConductorGroupedGateAttemptCoordinator(
-                        Path.Combine(workspace.OrchestratorDirectory, "grouped-gate-attempts"))
-                    .ReadAll().Any(attempt => attempt.ReconciledAt is null &&
-                        attempt.Members.Any(member => member.GoalId == goalId.Value)),
+                OperatorIntentCoordinator.BuildLiveAcceptanceAttemptQuery(solo),
+                goalId => grouped.ReadAll().Any(attempt => attempt.ReconciledAt is null &&
+                    attempt.Members.Any(member => member.GoalId == goalId.Value)),
                 goal => GoalOperationJournal.HasCompletedLandingEvidence(
                     GoalOperationJournal.Read(workspace.ExecutionDirectory, goal.Id)),
-                caseDSources.ResolveHead));
+                caseDSources.ResolveHead,
+                policy is null ? null : goalId => ConductorStewardCaseG.IsQueuedBehindOtherOccupants(goalId,
+                    solo.GetAllCapacityReservingAttempts().Select(attempt => attempt.GoalId).ToArray(),
+                    grouped.ReadAll().Where(attempt => attempt.ReconciledAt is null)
+                        .Select(attempt => (IReadOnlyCollection<string>)attempt.Members
+                            .Select(member => member.GoalId).ToArray()).ToArray(),
+                    policy().AcceptanceWidth)));
         return host;
     }
 
