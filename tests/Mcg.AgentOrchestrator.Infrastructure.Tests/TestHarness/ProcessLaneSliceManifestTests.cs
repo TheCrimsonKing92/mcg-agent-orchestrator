@@ -35,8 +35,8 @@ public sealed class ProcessLaneSliceManifestTests
         var violations = new List<string>();
         var engine = manifest["engine"]!.AsObject();
         var infrastructureLanes = engine["infrastructureTestLanes"]!.AsArray();
-        if (infrastructureLanes.Count != 27)
-            violations.Add($"Expected 27 infrastructure lanes, found {infrastructureLanes.Count}.");
+        if (infrastructureLanes.Count != 28)
+            violations.Add($"Expected 28 infrastructure lanes, found {infrastructureLanes.Count}.");
 
         foreach (var lane in infrastructureLanes)
         {
