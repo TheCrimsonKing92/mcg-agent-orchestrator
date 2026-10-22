@@ -133,7 +133,7 @@ public sealed class DispatchWorktreeCommitterTests
             if (arguments[0] == "add" && arguments[2] != "--")
             {
                 pathspecFile = arguments[2]["--pathspec-from-file=".Length..];
-                Xunit.Assert.Equal(Path.GetFullPath(Path.GetTempPath()).TrimEnd(Path.DirectorySeparatorChar),
+                Xunit.Assert.Equal(Path.GetFullPath(OrchestratorTempRoot.GetPurposeDirectory("commit-pathspecs")),
                     Path.GetDirectoryName(pathspecFile));
                 Xunit.Assert.Equal(
                     System.Text.Encoding.UTF8.GetBytes("src/Added.cs\0src/Edited.cs\0src/Widget.cs\0"),

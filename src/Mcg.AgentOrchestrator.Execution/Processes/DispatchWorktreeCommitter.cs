@@ -126,14 +126,15 @@ internal sealed class DispatchWorktreeCommitter
             return CommitWorktreeEditsResult.Success;
         }
 
-        var relativeTemp = Path.GetRelativePath(Path.GetFullPath(workingDirectory), Path.GetTempPath());
+        var tempDirectory = OrchestratorTempRoot.GetPurposeDirectory("commit-pathspecs");
+        var relativeTemp = Path.GetRelativePath(Path.GetFullPath(workingDirectory), tempDirectory);
         if (!Path.IsPathRooted(relativeTemp) && relativeTemp != ".." &&
             !relativeTemp.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal))
         {
             throw new InvalidOperationException("The system temp directory must be outside the worktree.");
         }
 
-        var pathspecFile = Path.GetTempFileName();
+        var pathspecFile = Path.Combine(tempDirectory, $"pathspec-{Guid.NewGuid():N}.nul");
         try
         {
             File.WriteAllText(pathspecFile, string.Join('\0', paths) + '\0', new UTF8Encoding(false));
