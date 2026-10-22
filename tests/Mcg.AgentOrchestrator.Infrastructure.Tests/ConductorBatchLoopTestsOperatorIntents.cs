@@ -286,8 +286,8 @@ public sealed class ConductorBatchLoopTestsOperatorIntents : ConductorBatchLoopT
         }
     }
 
-    [Xunit.Fact(DisplayName = "BatchLoop_rejects_operator_intent_outside_configured_goal_scope")]
-    public async Task BatchLoopRejectsOperatorIntentOutsideConfiguredGoalScope()
+    [Xunit.Fact]
+    public async Task BatchLoopLeavesForeignGoalIntentQueuedOutsideConfiguredScope()
     {
         var root = CreateTempDirectory("mcg-loop-operator-intent-scope");
         try
@@ -333,8 +333,9 @@ public sealed class ConductorBatchLoopTestsOperatorIntents : ConductorBatchLoopT
                 onlyGoalId: scopedGoal.Id.Value);
 
             var outcome = await store.GetAsync(intent.Id);
-            Assert.Equal(OperatorIntentStatus.Rejected, outcome!.Status);
-            Assert.Contains("outside conductor scope", outcome.Outcome, StringComparison.Ordinal);
+            Assert.Equal(OperatorIntentStatus.Pending, outcome!.Status);
+            Assert.Null(outcome.Outcome);
+            Assert.Null(outcome.ClaimOwner);
             Assert.Equal(WorkTaskStatus.Failed, outsideTask.Status);
         }
         finally

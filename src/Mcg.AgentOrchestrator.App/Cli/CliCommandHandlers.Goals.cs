@@ -47,14 +47,6 @@ private static readonly Regex OpeningBacklogObjectiveReferenceRegex = new(
 internal static ConductorPolicyResolution ResolveConductorPolicy(string? presetName, string orchestratorDirectory) =>
     CliConductLoopStartup.ResolveConductorPolicy(presetName, orchestratorDirectory);
 
-internal static void PrintConductorPolicyWarnings(ConductorPolicyResolution resolution)
-{
-    foreach (var warning in resolution.Warnings)
-    {
-        Console.WriteLine($"[conduct] WARNING: {warning}");
-    }
-}
-
 private sealed record SourceBacklogItemLink(
     BacklogItem Item,
     bool FromExplicitFlag,
@@ -1445,7 +1437,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 ConductorTargetGitExclude.Apply(context.Workspace, Console.WriteLine);
                 var supervisedChild = HasCliConfirmation(parts, ConductorContinuitySupervisor.ChildFlag);
                 var continuityExitArtifactPath = GetFlagValue(parts, ConductorContinuitySupervisor.ExitArtifactFlag);
-                PrintConductorPolicyWarnings(loopPolicyResolution);
+                CliConductLoopStartup.PrintConductorPolicyWarnings(loopPolicyResolution);
                 var loopPolicy = loopPolicyResolution.Policy;
                 int? loopMaxIter = null;
                 if (GetFlagValue(parts, "--max-iterations") is { } miStr)
@@ -1790,6 +1782,8 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                             Console.Error.WriteLine),
                         postLandingCanary: postLandingCanary,
                         goalReloadObservation: resolveGoalReloadObservation,
+                        prepareOperatorIntentTarget: (loopKernel, goalId) => OperatorIntentTargetPreparation.PrepareOperatorIntentTarget(
+                            context, loopKernel, goalId, loopReaper, intentGoalReloadObservations),
                         lifecycleRecorder: new ConductorLifecycleRecorder(
                             new SqliteRunEventStore(context.Workspace.RunEventStorePath),
                             readAdoptionCensus: WorkerAdoptionCensus.CreateDefault(context.Workspace.SqliteStatePath),
@@ -1845,7 +1839,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             var conductPolicyResolution = ResolveConductorPolicy(
                 conductPolicyName,
                 context.Workspace.OrchestratorDirectory);
-            PrintConductorPolicyWarnings(conductPolicyResolution);
+            CliConductLoopStartup.PrintConductorPolicyWarnings(conductPolicyResolution);
             var conductPolicy = conductPolicyResolution.Policy;
             Console.WriteLine(
                 $"[conduct] START goal={context.CurrentGoal.Id.Value[..8]} policy={conductPolicy.Name} " +
@@ -1919,6 +1913,9 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     (wk, goal) => new GoalDispatchOperations().RefreshDispatches(wk, goal, watchReaper),
                     conductEventLogWriter: new ConductEventLogWriter(context.Workspace.ConductEventsLogPath),
                     operatorIntents: OperatorIntentCoordinator.CreateDefault(context.Workspace),
+                    prepareOperatorIntentTarget: (wk, goalId) => OperatorIntentTargetPreparation.PrepareLoadedOperatorIntentTarget(
+                        context, wk, wk.GetGoal(goalId), watchReaper),
+                    goalReloadObservation: _ => new ConductorGoalReloadObservation.NotObserved(),
                     progressiveReviewGlances: ProgressiveReviewGlanceCoordinator.CreateDefault(context.Workspace, context.WorkerProfiles),
                     progressiveReviewSteering: ProgressiveReviewSteeringCoordinator.CreateDefault(context.Workspace, context.Agents, context.WorkerProfiles, context.Providers),
                     postLandingCanary: PostLandingCanaryFactory.CreateDefault(context.Workspace),
