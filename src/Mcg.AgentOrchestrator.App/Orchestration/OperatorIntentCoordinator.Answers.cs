@@ -181,10 +181,14 @@ internal sealed partial class OperatorIntentCoordinator
     }
 
     // A claimed retry can be waiting for this answer. Claim answers by verb so it cannot hide them.
-    private bool TryApplyQueuedAnswer(AgentOrchestratorKernel kernel, Goal goal, List<string> lines, out bool mutated)
+    private bool TryApplyQueuedAnswer(
+        AgentOrchestratorKernel kernel, Goal goal, List<string> lines, out bool mutated,
+        IReadOnlySet<string>? intentIds = null)
     {
         mutated = false;
-        var answer = _store.ClaimNextByVerbAsync(goal.Id.Value, OperatorIntentVerbs.Answer, ClaimOwner)
+        var answer = (intentIds is null
+            ? _store.ClaimNextByVerbAsync(goal.Id.Value, OperatorIntentVerbs.Answer, ClaimOwner)
+            : _store.ClaimNextInBatchAsync(goal.Id.Value, ClaimOwner, intentIds, verb: OperatorIntentVerbs.Answer))
             .GetAwaiter().GetResult();
         if (answer is null) return false;
         if (goal.Timeline.Any(item => item.OperatorIntentApplied?.IntentId == answer.Id))

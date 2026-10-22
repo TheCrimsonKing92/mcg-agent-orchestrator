@@ -514,13 +514,14 @@ public sealed class PassedMergeTrainReceiptHoldTests(ITestOutputHelper output) :
         // Seed the passed gate boundary; the readiness scenario needs the actual train tree
         // and effective plan so the existing receipt-only landing path can replay it.
         var main = selection.Members[0].MainRevision;
-        var members = selection.BindMembers().Select(member => member.WithRebasedHead(member.CandidateRevision)).ToArray();
+        var bound = selection.BindMembers(id => kernel.GetGoal(id).AuthoritativeBrief.Version);
+        var members = bound.Select(member => member.WithRebasedHead(member.CandidateRevision)).ToArray();
         var identity = MergeTrainIdentity.Create(members, main,
             RunGitOutput(repo, "rev-parse", "main^{tree}").Trim(), "held-train-fixture");
         if (materializeReceipt)
         {
             output.WriteLine("RECEIPT_HOLD_PHASE setup=materialization-start");
-            using var train = GoalWorktrees.CreateMergeTrainWorkspace(repo, main, selection.BindMembers(), Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, cleanup.Hooks);
+            using var train = GoalWorktrees.CreateMergeTrainWorkspace(repo, main, bound, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, cleanup.Hooks);
             Assert.Empty(train.Ejections);
             Assert.Equal(3, train.Members.Count);
             var changedFiles = train.Members.SelectMany(member => member.LandingPaths)
@@ -539,6 +540,11 @@ public sealed class PassedMergeTrainReceiptHoldTests(ITestOutputHelper output) :
         store.SaveGateReceipt(seeded);
         var receipt = Assert.Single(store.ReadPassedReceiptsForGoal(goals[0].Id));
         Assert.Equal(3, receipt.Identity.Members.Count);
+        Assert.All(receipt.Identity.Members, member =>
+        {
+            Assert.NotNull(member.BriefVersion);
+            Assert.Equal(kernel.GetGoal(member.GoalId).AuthoritativeBrief.Version, member.BriefVersion);
+        });
         Assert.Equal(MergeTrainGateOutcome.Passed, receipt.Outcome);
         Assert.True(receipt.HasAuthoritativeLandingEvidence);
         Assert.Equal(0, verifier.RunCount);

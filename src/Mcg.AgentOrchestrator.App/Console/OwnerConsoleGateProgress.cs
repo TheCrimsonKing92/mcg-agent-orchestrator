@@ -179,10 +179,19 @@ internal sealed record OwnerConsoleGateProgress(bool Live, string Kind,
             var unfinished = counted.Where(row => !IsDone(row)).ToArray();
             var concurrency = Math.Max(breakdownConcurrency, rows.Count(row => row.IsManifestLane && row.State == OwnerConsoleGateLaneState.Running));
             var remaining = OwnerConsoleGateRemainingEstimate.Makespan(unfinished, concurrency);
+            var gateElapsed = Nonnegative(now - gate.Start);
+            var denominator = gateElapsed.TotalSeconds + remaining;
+            // Display estimate only: gate wall time includes time before lanes start. Keep
+            // the model's fractional remaining time and never imply unfinished work is done.
+            var fraction = total > 0
+                ? denominator > 0 ? gateElapsed.TotalSeconds / denominator : unfinished.Length == 0 ? 1 : 0
+                : 0;
+            fraction = double.IsFinite(fraction) ? Math.Clamp(fraction, 0, 1) : 0;
+            if (unfinished.Length > 0) fraction = Math.Min(fraction, 0.99);
             var kind = gate.Events.Any(item => item.Get("train").Length > 0 || item.Get("scope") == "merge-train") ? "train" :
                 gate.Members.Length > 1 ? "cohort" : "solo";
             return new(true, kind, gate.Members.Select(id => new OwnerConsoleGateMember(id, title?.Invoke(id) ?? "")).ToArray(),
-                gate.Start, Nonnegative(now - gate.Start), rows, total > 0 ? done.Sum(row => row.MedianSeconds ?? 0) / total : 0,
+                gate.Start, gateElapsed, rows, fraction,
                 (int)remaining, done.Count(row => row.IsManifestLane), manifest.Count);
         }
     }

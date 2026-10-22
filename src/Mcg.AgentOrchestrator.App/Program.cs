@@ -102,7 +102,8 @@ var startupArgs = tenantSelection.CommandArgs.Count == 0
     : CliArgumentParser.NormalizeArgs(tenantSelection.CommandArgs.ToArray());
 try
 {
-    if (CliCommandHandlers.TryPrintStartupHelp(startupArgs))
+    if (!(startupArgs.Count > 0 && startupArgs[0] == AcceptanceJobCustodianHost.Subcommand) &&
+        CliCommandHandlers.TryPrintStartupHelp(startupArgs))
     {
         return 0;
     }
@@ -197,6 +198,15 @@ if (startupArgs.Count == 2 && startupArgs[0] == "__workspace-binding-check" && s
         stopFile = workspace.ConductorStopFilePath
     }));
     return 0;
+}
+if (startupArgs.Count > 0 && startupArgs[0] == AcceptanceJobCustodianHost.Subcommand)
+{
+    if (invocationBinding.RepositoryRoot is null || invocationBinding.ExpectedStateDirectory is null)
+    {
+        Console.Error.WriteLine("Acceptance custody requires explicit workspace binding.");
+        return 1;
+    }
+    return AcceptanceJobCustodianHost.Run(startupArgs);
 }
 OrchestratorHome.ExportForDescendants(OrchestratorHome.ResolveForLaunch(repoRoot));
 OrchestratorDataRoot.ExportForDescendants();

@@ -322,9 +322,13 @@ public sealed class Goal
 
     internal void RecordGateTestObligation(GateTestObligation obligation)
     {
-        var index = _gateTestObligations.FindIndex(existing =>
-            existing.Id == obligation.Id && existing.BriefVersion == obligation.BriefVersion);
+        var index = _gateTestObligations.FindIndex(existing => existing.HasSameIdentity(obligation));
         if (index < 0) _gateTestObligations.Add(obligation);
+        else if (obligation.PlannerIdentity is not null)
+        {
+            if (!obligation.PlannerEvidence!.SemanticallyEquals(_gateTestObligations[index].PlannerEvidence))
+                throw new InvalidOperationException("Conflicting stored Planner evidence payload.");
+        }
         else _gateTestObligations[index] = obligation;
     }
 
@@ -333,9 +337,11 @@ public sealed class Goal
         _gateTestObligations.Clear();
         foreach (var obligation in obligations ?? [])
         {
-            if (_gateTestObligations.Any(existing =>
-                existing.Id == obligation.Id && existing.BriefVersion == obligation.BriefVersion)) continue;
-            _gateTestObligations.Add(obligation with { Selectors = obligation.Selectors?.ToArray() ?? [] });
+            // Legacy restore kept the first matching fingerprint. Typed records additionally
+            // validate their immutable payload, without crossing the typed/untyped boundary.
+            if (obligation.PlannerIdentity is null && _gateTestObligations.Any(existing =>
+                    existing.PlannerIdentity is null && existing.HasSameIdentity(obligation))) continue;
+            RecordGateTestObligation(obligation with { Selectors = obligation.Selectors?.ToArray() ?? [] });
         }
     }
 

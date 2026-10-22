@@ -415,7 +415,7 @@ public sealed class ConductorBatchLoopTestsLoopSchedulingPolicy : ConductorBatch
             File.WriteAllText(policyPath, configured.ToJson());
 
             var resolution = CliCommandHandlers.ResolveConductorPolicy(null, orchestratorDirectory);
-            var output = CaptureConsole(() => CliCommandHandlers.PrintConductorPolicyWarnings(resolution));
+            var output = CaptureConsole(() => CliConductLoopStartup.PrintConductorPolicyWarnings(resolution));
 
             Assert.Contains(resolution.Warnings, warning =>
                 warning.Contains("above worker admission capacity 9", StringComparison.Ordinal) &&

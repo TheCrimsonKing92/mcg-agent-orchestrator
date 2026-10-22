@@ -6,7 +6,7 @@ internal static class GroupedAdmissionLandingHold
 {
     internal static bool IsGateSatisfiable(HumanInputRequest wait) =>
         wait.Kind == HumanWaitKind.ProspectiveAcceptanceEvidence &&
-        string.Equals(wait.EvidenceOwner, "acceptance-gate", StringComparison.OrdinalIgnoreCase) &&
+        GateTestObligation.IsAcceptanceGateOwner(wait.EvidenceOwner) &&
         wait.TestNames is { Count: > 0 };
 
     internal static HumanInputRequest? FindBlockingWait(IReadOnlyList<HumanInputRequest> pending) =>

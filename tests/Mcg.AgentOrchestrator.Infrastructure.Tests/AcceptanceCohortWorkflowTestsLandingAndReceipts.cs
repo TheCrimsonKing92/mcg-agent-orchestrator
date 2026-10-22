@@ -746,7 +746,7 @@ public sealed class AcceptanceCohortWorkflowTestsLandingAndReceipts : Acceptance
                 WorkerProfileCatalog.Default(),
                 cleanupHooks: CreateIsolatedCleanupContext(workspace.ExecutionDirectory).Hooks);
             var selection = ProjectSelection(driver, firstGoal, secondGoal);
-            var bindings = selection.BindMembers();
+            var bindings = selection.BindMembers(id => kernel.GetGoal(id).AuthoritativeBrief.Version);
             var store = new CohortAcceptanceStore(Path.Combine(workspace.OrchestratorDirectory, "cohort-acceptance.db"));
             AcceptanceCohortIdentity identity;
             using (var integration = GoalWorktrees.CreateAcceptanceCohortWorkspace(
@@ -891,7 +891,7 @@ public sealed class AcceptanceCohortWorkflowTestsLandingAndReceipts : Acceptance
                 kernel, workspace, verifier, AgentCatalog.Default().Agents, WorkerProfileCatalog.Default(),
                 cleanupHooks: CreateIsolatedCleanupContext(workspace.ExecutionDirectory).Hooks);
             var selection = ProjectSelection(driver, firstGoal, secondGoal);
-            var bindings = selection.BindMembers();
+            var bindings = selection.BindMembers(id => kernel.GetGoal(id).AuthoritativeBrief.Version);
             AcceptanceCohortIdentity identity;
             using (var integration = GoalWorktrees.CreateAcceptanceCohortWorkspace(
                        repo, selection.Members[0].MainRevision, bindings, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default))

@@ -31,7 +31,7 @@ internal sealed record ConductorAcceptanceCohortSelection(
     IReadOnlyList<GateReadyCandidateProjection> Members,
     IReadOnlyList<ConductorAcceptanceCohortPairExclusion> Exclusions)
 {
-    internal IReadOnlyList<AcceptanceCohortMemberBinding> BindMembers() =>
+    internal IReadOnlyList<AcceptanceCohortMemberBinding> BindMembers(Func<GoalId, int?>? briefVersion = null) =>
         Members.Select(member => new AcceptanceCohortMemberBinding(
             member.GoalId,
             member.BranchRevision,
@@ -41,7 +41,7 @@ internal sealed record ConductorAcceptanceCohortSelection(
             member.ChangeRiskTier,
             member.AutoPromotionDisposition,
             member.MergeEvidence.Status.ToString(),
-            member.MergeEvidence.Reason.ToString())).ToArray();
+            member.MergeEvidence.Reason.ToString(), briefVersion?.Invoke(member.GoalId))).ToArray();
 }
 
 internal enum ConductorAcceptanceHeldConflictKind
@@ -730,37 +730,9 @@ internal sealed partial class ConductorDriver
 
     private bool HasCurrentPassedCohortIdentity(
         ConductorAcceptanceCohortSelection selection,
-        AcceptanceCohortReceipt receipt)
-    {
-        if (_cohortWorkspace is null || _cohortAcceptanceVerifier is null)
-        {
-            return false;
-        }
-
-        var bindings = selection.BindMembers();
-        try
-        {
-            using var integration = GoalWorktrees.CreateAcceptanceCohortWorkspace(
-                _cohortWorkspace.ExecutionDirectory,
-                selection.Members[0].MainRevision,
-                bindings, _integrationBranch,
-                _cohortCleanupHooks);
-            var manifest = _cohortAcceptanceVerifier.ComputeEffectivePlanIdentity(
-                integration.Path,
-                bindings.SelectMany(member => member.LandingPaths)
-                    .Distinct(StringComparer.OrdinalIgnoreCase).ToArray());
-            return string.Equals(
-                AcceptanceCohortIdentity.Create(bindings, selection.Members[0].MainRevision,
-                    integration.TreeRevision, manifest).Value,
-                receipt.Identity.Value,
-                StringComparison.Ordinal);
-        }
-        catch (Exception ex) when (ex is AcceptanceCohortMaterializationException or
-            IOException or UnauthorizedAccessException or InvalidOperationException)
-        {
-            return false;
-        }
-    }
+        AcceptanceCohortReceipt receipt) =>
+        GroupedGateIdentityInspector.HasCurrentPassedCohortIdentity(selection, receipt,
+            _cohortKernel, _cohortWorkspace, _cohortAcceptanceVerifier, _integrationBranch, _cohortCleanupHooks);
 
     internal ConductorAcceptanceCohortFairnessPriority? SelectForcedCohortCandidate(
         IReadOnlyList<Goal> orderedGoals)

@@ -871,7 +871,11 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
         var merged = stored.ToDictionary(request => request.Id, StringComparer.Ordinal);
         foreach (var request in current ?? [])
         {
-            if (!merged.TryGetValue(request.Id, out var existing))
+            var typedExisting = request.PlannerIdentity is null ? null : merged.Values.FirstOrDefault(item => item.PlannerIdentity == request.PlannerIdentity);
+            if (typedExisting is not null && !request.PlannerEvidence!.SemanticallyEquals(typedExisting.PlannerEvidence))
+                throw new InvalidOperationException("Conflicting Planner evidence payload in snapshot merge.");
+            var mergeId = typedExisting?.Id ?? request.Id;
+            if (!merged.TryGetValue(mergeId, out var existing))
             {
                 merged[request.Id] = request;
                 continue;
@@ -888,8 +892,9 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
                 < 0 => existing,
                 _ => request.SuppressionCount > existing.SuppressionCount ? request : existing
             };
-            merged[request.Id] = winner with
+            merged[mergeId] = winner with
             {
+                Id = mergeId,
                 SuppressionCount = suppressionWinner.SuppressionCount,
                 SuppressionAnswerRevision = suppressionWinner.SuppressionAnswerRevision,
                 SuppressionRevision = suppressionWinner.SuppressionRevision
@@ -2059,6 +2064,19 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
     private static bool IsSnapshotDeserializeException(Exception exception) =>
         exception is JsonException or NotSupportedException or ArgumentException;
 
+    private static IReadOnlyList<GateTestObligation> MergePlannerGateObligations(
+        IReadOnlyList<GateTestObligation>? stored, IReadOnlyList<GateTestObligation>? current)
+    {
+        var merged = (stored ?? []).ToList();
+        foreach (var item in current ?? [])
+        {
+            var existing = merged.FirstOrDefault(candidate => candidate.HasSameIdentity(item));
+            if (existing is null) merged.Add(item);
+            else if (item.PlannerIdentity is not null && !item.PlannerEvidence!.SemanticallyEquals(existing.PlannerEvidence))
+                throw new InvalidOperationException("Conflicting Planner gate evidence payload in snapshot merge.");
+        }
+        return merged;
+    }
     private static bool TryMergeGoalSnapshots(
         GoalSnapshot baseline,
         GoalSnapshot stored,
@@ -2107,6 +2125,7 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
             ExplicitDisposition = stored.ExplicitDisposition,
             ParkedLifecycleStatus = hasParkDisposition ? lifecycle : null,
             Tasks = mergedTasks,
+            GateTestObligations = MergePlannerGateObligations(stored.GateTestObligations, current.GateTestObligations),
             Timeline = MergeTimeline(baseline.Timeline, stored.Timeline, current.Timeline),
             DependsOn = PickStoreOwnedList(baseline.DependsOn, stored.DependsOn, current.DependsOn),
             // Slice-batch ownership is immutable aggregate intake metadata. Operator/store changes win

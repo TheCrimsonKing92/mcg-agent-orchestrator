@@ -132,7 +132,8 @@ public sealed class InfrastructureProductionProjectGraphTests
                 Path.GetDirectoryName(projectPath)!, include)))))
             .Order(StringComparer.OrdinalIgnoreCase)
             .ToArray();
-        Assert.Equal([CoreProject, InfrastructureProject], references);
+        // Native custody controls launch the production App host; source ownership remains isolated below.
+        Assert.Equal([AppProject, CoreProject, InfrastructureProject], references);
 
         using var manifest = JsonDocument.Parse(File.ReadAllText(Path.Combine(root, "config", "acceptance-manifest.json")));
         var declaredChecks = manifest.RootElement.GetProperty("checks").EnumerateArray()

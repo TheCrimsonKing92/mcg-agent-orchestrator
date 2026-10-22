@@ -171,7 +171,7 @@ public sealed class ProspectiveEvidenceGateResolverGroupedReceiptTests
 
     internal static GroupedGateReceiptTrxEvidence.Receipt Save(ProspectiveEvidenceGateFixture fixture,
         IReadOnlyList<string> paths, bool cohort = false, bool passed = true, string? candidate = null,
-        char tree = '1', DateTimeOffset? completedAt = null)
+        char tree = '1', DateTimeOffset? completedAt = null, int? briefVersion = null)
     {
         var id = Guid.NewGuid().ToString("N");
         var completed = completedAt ?? DateTimeOffset.UnixEpoch;
@@ -181,7 +181,7 @@ public sealed class ProspectiveEvidenceGateResolverGroupedReceiptTests
         if (cohort)
         {
             var identity = AcceptanceCohortIdentity.Create(
-                [CohortMember(fixture.Goal.Id, revision), CohortMember(otherGoal, new string('c', 40))],
+                [CohortMember(fixture.Goal.Id, revision, briefVersion), CohortMember(otherGoal, new string('c', 40))],
                 new string('f', 40), new string(tree, 40), "manifest-v1");
             var store = new CohortAcceptanceStore(Path.Combine(fixture.OrchestratorDirectory, "cohort-acceptance.db"));
             var receipt = store.SaveGateReceipt(new AcceptanceCohortReceipt(id, identity,
@@ -193,7 +193,7 @@ public sealed class ProspectiveEvidenceGateResolverGroupedReceiptTests
         else
         {
             var identity = MergeTrainIdentity.Create(
-                [TrainMember(fixture.Goal.Id, revision), TrainMember(otherGoal, new string('c', 40))],
+                [TrainMember(fixture.Goal.Id, revision, briefVersion), TrainMember(otherGoal, new string('c', 40))],
                 new string('f', 40), new string(tree, 40), "manifest-v1");
             var store = new MergeTrainAcceptanceStore(Path.Combine(fixture.OrchestratorDirectory, "merge-train-acceptance.db"));
             var receipt = store.SaveGateReceipt(new MergeTrainReceipt(id, identity,
@@ -204,11 +204,11 @@ public sealed class ProspectiveEvidenceGateResolverGroupedReceiptTests
         }
     }
 
-    private static AcceptanceCohortMemberBinding CohortMember(GoalId goal, string candidate) =>
+    private static AcceptanceCohortMemberBinding CohortMember(GoalId goal, string candidate, int? briefVersion = null) =>
         new(goal, candidate, candidate, ["src/Example.cs"], ["resource:" + goal.Value],
-            ChangeRiskTier.Behavior, ConductorTransitionDecision.Auto, "Clean", "NoConflictsDetected");
+            ChangeRiskTier.Behavior, ConductorTransitionDecision.Auto, "Clean", "NoConflictsDetected", briefVersion);
 
-    private static MergeTrainMemberBinding TrainMember(GoalId goal, string candidate) =>
+    private static MergeTrainMemberBinding TrainMember(GoalId goal, string candidate, int? briefVersion = null) =>
         new(goal, candidate, candidate, ["src/Example.cs"], [], ChangeRiskTier.Behavior,
-            ConductorTransitionDecision.Auto, "Clean", "NoConflictsDetected", candidate);
+            ConductorTransitionDecision.Auto, "Clean", "NoConflictsDetected", candidate, briefVersion);
 }

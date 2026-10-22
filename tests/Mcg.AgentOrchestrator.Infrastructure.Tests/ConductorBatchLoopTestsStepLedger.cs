@@ -7,7 +7,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 [Xunit.Collection(TestCollections.DotnetBuildSlots)]
 public sealed class ConductorBatchLoopTestsStepLedger(ITestOutputHelper output) : ConductorBatchLoopTests(output)
 {
-    [Xunit.Fact(DisplayName = "Prewalk reports all nine steps in fixed order from injected CPU")]
+    [Xunit.Fact(DisplayName = "Early intent and prewalk steps stay within their injected CPU phases")]
     public void PrewalkReportsInjectedStepCpu()
     {
         var root = CreateTempDirectory("mcg-step-ledger");
@@ -29,10 +29,15 @@ public sealed class ConductorBatchLoopTestsStepLedger(ITestOutputHelper output) 
             var tick = OneTick(loop, kernel, MakeDriver());
 
             var line = Phase(tick, "prewalk");
-            Assert.Contains("prewalk_steps=retire-until-goal-lessons:11:1,workspace-intents:13:1,steward:17:1,author:19:1,store-evidence:23:1,judge-panel:29:1,board-fill:31:1,operator-intent-list:37:1,eligibility:41:1", line);
-            Assert.EndsWith(" cpu_ms=221", line);
+            Assert.Contains("prewalk_steps=retire-until-goal-lessons:11:1,workspace-intents:13:1,steward:17:1,author:19:1,store-evidence:23:1,judge-panel:29:1,board-fill:31:1,eligibility:41:1", line);
+            var intentLine = Phase(tick, "operator-intent");
+            Assert.Contains("operator_intent_steps=operator-intent-list:37:1", intentLine);
+            Assert.EndsWith(" cpu_ms=37", intentLine);
+            AssertBound(intentLine, "operator_intent_steps");
+            // The 37 ms capture belongs to the early phase: 221 - 37 = 184 ms.
+            Assert.EndsWith(" cpu_ms=184", line);
             // Emission order differs from call order; instrumentation cannot reorder calls.
-            Assert.Equal(new[] { "retire-until-goal-lessons", "steward", "author", "store-evidence", "judge-panel", "board-fill", "workspace-intents", "operator-intent-list", "eligibility" }, observed);
+            Assert.Equal(new[] { "operator-intent-list", "retire-until-goal-lessons", "steward", "author", "store-evidence", "judge-panel", "board-fill", "workspace-intents", "eligibility" }, observed);
             AssertBound(line, "prewalk_steps");
         }
         finally { TryDeleteDirectory(root); }
@@ -74,7 +79,8 @@ public sealed class ConductorBatchLoopTestsStepLedger(ITestOutputHelper output) 
         var loop = new ConductorBatchLoop(processCpuTime: () => TimeSpan.Zero).WithStepProbe(_ => probeCalls++);
         var tick = OneTick(loop, kernel, MakeDriver());
 
-        Assert.Contains("operator-intent-list:0:0", Phase(tick, "prewalk"));
+        Assert.DoesNotContain("operator-intent-list", Phase(tick, "prewalk"));
+        Assert.DoesNotContain(tick.ProgressLines!, line => line.Contains("phase=operator-intent ", StringComparison.Ordinal));
         Assert.Contains("sweep_steps=kernel-reload:0:0,refresh-dispatches:0:0,parked-reloads:0:0,terminal-sweep-run:0:0,owned-root-reap:0:0,reconcile-remediation:0:0,host-health:0:0,maintenance:0:0,state-log-check:0:0,failure-clusters:0:0,remote-git-mirror:0:0,goal-refinement:0:0", Phase(tick, "sweep"));
         Assert.Equal(8, probeCalls);
         var outsideCalls = 0;

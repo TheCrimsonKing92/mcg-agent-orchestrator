@@ -69,6 +69,7 @@ public sealed class CliCommandTestsConductLoopExternalTerminalEviction : CliComm
                 WorkerProfileCatalog.Default(),
                 currentGoal: null,
                 reloadKernel: () => CliPersistentStateRunner.LoadConductLoopKernel(repository),
+                loadOperatorIntentTargets: ids => repository.LoadGoalsAsync(ids).GetAwaiter().GetResult(),
                 persistKernel: _ => { },
                 persistGoalKernel: (_, _) => { },
                 reloadResolvedParkedHumanWaitKernel: () => new AgentOrchestratorKernel(),
@@ -99,7 +100,9 @@ public sealed class CliCommandTestsConductLoopExternalTerminalEviction : CliComm
                     document.RootElement.GetProperty("eventType").GetString() == "GoalEvictedFromConductor"));
                 Xunit.Assert.Equal(storedStatus.ToString(), eviction.RootElement.GetProperty("status").GetString());
                 Xunit.Assert.Equal(
-                    enqueueIntent ? "operator-intent-forced-reload" : "scheduled-reload",
+                    // Target preparation already hydrates the terminal snapshot before the
+                    // ordinary sweep. Eviction therefore uses the scheduled reload path.
+                    "scheduled-reload",
                     eviction.RootElement.GetProperty("trigger").GetString());
             }
             finally

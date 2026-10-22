@@ -132,9 +132,9 @@ public sealed partial class CohortAcceptanceStore
                 INSERT INTO cohort_members(
                     cohort_id, member_ordinal, goal_id, branch_revision, candidate_revision,
                     landing_paths_json, resource_keys_json, risk_tier, promotion_disposition,
-                    merge_status, merge_reason, landed)
+                    merge_status, merge_reason, brief_version, landed)
                 VALUES ($cohort, $ordinal, $goal, $branch, $candidate, $paths, $resources,
-                    $risk, $promotion, $mergeStatus, $mergeReason, 0);
+                    $risk, $promotion, $mergeStatus, $mergeReason, $briefVersion, 0);
                 """;
             command.Parameters.AddWithValue("$cohort", receipt.Identity.Value);
             command.Parameters.AddWithValue("$ordinal", index);
@@ -147,6 +147,7 @@ public sealed partial class CohortAcceptanceStore
             command.Parameters.AddWithValue("$promotion", member.AutoPromotionDisposition.ToString());
             command.Parameters.AddWithValue("$mergeStatus", member.MergeStatus);
             command.Parameters.AddWithValue("$mergeReason", member.MergeReason);
+            command.Parameters.AddWithValue("$briefVersion", (object?)member.BriefVersion ?? DBNull.Value);
             command.ExecuteNonQuery();
         }
 
@@ -1062,7 +1063,7 @@ public sealed partial class CohortAcceptanceStore
         membersCommand.Transaction = transaction;
         membersCommand.CommandText = """
             SELECT goal_id, branch_revision, candidate_revision, landing_paths_json, resource_keys_json,
-                   risk_tier, promotion_disposition, merge_status, merge_reason
+                   risk_tier, promotion_disposition, merge_status, merge_reason, brief_version
             FROM cohort_members WHERE cohort_id=$cohort ORDER BY member_ordinal;
             """;
         membersCommand.Parameters.AddWithValue("$cohort", cohortId);
@@ -1079,7 +1080,7 @@ public sealed partial class CohortAcceptanceStore
                 Enum.Parse<Mcg.AgentOrchestrator.Core.Conductor.ChangeRiskTier>(membersReader.GetString(5)),
                 Enum.Parse<Mcg.AgentOrchestrator.Core.Conductor.ConductorTransitionDecision>(membersReader.GetString(6)),
                 membersReader.GetString(7),
-                membersReader.GetString(8)));
+                membersReader.GetString(8), membersReader.IsDBNull(9) ? null : membersReader.GetInt32(9)));
         }
         membersReader.Close();
         if (members.Count != 2)

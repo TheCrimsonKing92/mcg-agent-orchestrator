@@ -319,7 +319,7 @@ public sealed class AcceptanceCohortWorkflowTestsGateOutcomes : AcceptanceCohort
                 kernel, workspace, verifier, AgentCatalog.Default().Agents, WorkerProfileCatalog.Default(),
                 cleanupHooks: CreateIsolatedCleanupContext(workspace.ExecutionDirectory).Hooks);
             var selection = ProjectSelection(driver, firstGoal, secondGoal);
-            var bindings = selection.BindMembers();
+            var bindings = selection.BindMembers(id => kernel.GetGoal(id).AuthoritativeBrief.Version);
             AcceptanceCohortIdentity identity;
             using (var integration = GoalWorktrees.CreateAcceptanceCohortWorkspace(
                        repo, selection.Members[0].MainRevision, bindings, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default))

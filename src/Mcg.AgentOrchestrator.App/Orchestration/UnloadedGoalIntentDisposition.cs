@@ -10,7 +10,7 @@ internal abstract record UnloadedGoalIntentDisposition
         string goalId, string? onlyGoalId, Func<string, ConductorGoalReloadObservation> observe)
     {
         if (onlyGoalId is not null && goalId != onlyGoalId)
-            return new Rejected($"goal is outside conductor scope {onlyGoalId[..Math.Min(8, onlyGoalId.Length)]}");
+            return new AwaitingReload();
         return observe(goalId) switch
         {
             ConductorGoalReloadObservation.NotObserved => new AwaitingReload(),

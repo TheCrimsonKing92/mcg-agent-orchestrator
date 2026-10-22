@@ -1,6 +1,4 @@
 using System.Diagnostics;
-using System.Security.Cryptography;
-using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Mcg.AgentOrchestrator.Core;
@@ -1271,7 +1269,7 @@ public sealed partial class BackgroundDispatchRunner
         var wrapperExitReconciled = false;
         var resourceAccounting = capturedResourceAccounting;
         var goal = kernel.GetGoal(goalId);
-        var humanInputDirective = AgentOutputDirectives.ParseHumanInputRequest(authoritativeStandardOutput, task.RequiredRole);
+        var humanInputDirective = PlannerOutputContract.ParseEvidenceRequests(authoritativeStandardOutput, task.RequiredRole, fullStandardOutput.Content is not null);
         var hasRoleCapability = DispatchRoleOutputCapabilities.TryGet(task.RequiredRole, out var dispatchRoleCapability);
         var requiresTerminalContract = task.RequiredRole is AgentRole.Reviewer or AgentRole.Tester &&
             DispatchFailureClassifier.IsSubscriptionProviderCliDispatch(task);
@@ -1344,7 +1342,7 @@ public sealed partial class BackgroundDispatchRunner
                 ? goal.RefinedSpec?.AcceptanceCriteria ?? []
                 : null;
             var capturedPlannerOutput = PlannerOutputContract.ReadCapturedOutputTail(processRecord.StandardOutputPath);
-            var evidenceRequest = AgentOutputDirectives.ParseHumanInputRequest(authoritativeStandardOutput, AgentRole.Planner);
+            var evidenceRequest = humanInputDirective;
             PlannerOutputContractResult plannerContract;
             if (evidenceRequest.IsMalformed)
             {
@@ -1490,7 +1488,7 @@ public sealed partial class BackgroundDispatchRunner
             hasRoleCapability,
             dispatchRoleCapability,
             relevantChangeEvidenceAvailable,
-            humanInputDirective.Directive is not null || humanInputDirective.IsMalformed,
+            humanInputDirective.Directives.Count > 0 || humanInputDirective.IsMalformed,
             !string.IsNullOrWhiteSpace(orchestratorFailureReason)));
         if (completedWorktreeInspection is { IsAvailable: true, Evidence: var worktreeEvidence })
         {
@@ -1534,7 +1532,7 @@ public sealed partial class BackgroundDispatchRunner
             }
 
             var buildEvidence = task.LastDispatch?.WorkerBuildProtocolVersion == 1
-                ? ResolveWorkerBuildInvocation(kernel, goalId, taskId, worktreeEvidence.ChangedPaths, worktreeEvidence.DirtyPaths)
+                ? ResolveWorkerBuildInvocation(kernel, goalId, taskId, worktreeEvidence.ChangedPaths, worktreeEvidence.DirtyPaths, ref orchestratorFailureReason)
                 : CompletionBuildDispatchReconciliationPolicy.Resolve(
                 task, processRecord.WorkingDirectory,
                 worktreeEvidence.ChangedPaths, worktreeEvidence.DirtyPaths, failedWorkerBuildCheck,
@@ -1876,7 +1874,7 @@ public sealed partial class BackgroundDispatchRunner
             HasCommittedChanges: hasCommittedChanges,
             HeartbeatStandardOutputBytes: heartbeatStdoutBytes,
             ProviderFailureKind: providerFailureKind,
-            HumanInputQuestion: humanInputQuestion,
+            HumanInputQuestion: humanInputQuestion, PlannerEvidenceBatch: humanInputDirective,
             DispatchStartedAt: processRecord.StartedAt,
             ChildProcessId: completed.ChildProcessId,
             ChildExitCode: completed.ChildExitCode,
@@ -1895,7 +1893,9 @@ public sealed partial class BackgroundDispatchRunner
             PlannerCandidateDivergence: plannerCandidateDivergence,
             AssignedScopeComplete: hasAssignedScopeComplete ? assignedScopeComplete : null,
             EvidenceSource: VerificationEvidenceSource.Dispatch,
-            DispatchAttemptAt: requiresTerminalContract ? dispatchAttempt?.DispatchedAt : null);
+            // Planner evidence binds its brief through host dispatch provenance as well.
+            DispatchAttemptAt: requiresTerminalContract || task.RequiredRole == AgentRole.Planner
+                ? dispatchAttempt?.DispatchedAt : null);
 
         var outcome = new DispatchRefreshOutcome(
             completed,
@@ -2580,17 +2580,7 @@ public sealed partial class BackgroundDispatchRunner
         GoalStatus.Completed;
 
     internal static string BuildDispatchId(GoalId goalId, TaskId taskId, TaskDispatchRecord dispatch)
-    {
-        var raw = string.Join('\u001f',
-            goalId.Value,
-            taskId.Value,
-            dispatch.DispatchedAt.ToUniversalTime().ToString("O"),
-            dispatch.WorkerName,
-            dispatch.WorkingDirectory,
-            dispatch.ProviderSessionId,
-            dispatch.Command);
-        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(raw)))[..16].ToLowerInvariant();
-    }
+        => DispatchIdentity.BuildId(goalId, taskId, dispatch);
 
     private sealed record AutoRequeueBlocker(
         string BlockingEntity,

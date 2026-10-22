@@ -5,6 +5,33 @@ using Mcg.AgentOrchestrator.Infrastructure;
 // Parallel-safe: each fixture owns its stores and TRX files.
 public sealed class GateTestObligationEvaluatorTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void TypedRequirement_GroupedReceiptMustCarryMatchingBriefAfterStoreReload(bool cohort)
+    {
+        using var fixture = new ProspectiveEvidenceGateFixture();
+        var payload = AgentOutputDirectives.ParseHumanInputRequest(
+            PlannerMultipleEvidenceRequestMergeTests.FirstRequest, AgentRole.Planner).Directive!.PlannerEvidence!;
+        var identity = new PlannerEvidenceIdentity(fixture.Goal.Id.Value, "planner", 1, 1, "gate-first");
+        var snapshot = fixture.Kernel.ExportSnapshot();
+        var kernel = AgentOrchestratorKernel.FromSnapshot(snapshot with { Goals = [snapshot.Goals.Single() with
+        {
+            GateTestObligations = [new(identity.StableId, 1, payload.Selectors!, "planner", "Candidate receipt", DateTimeOffset.UnixEpoch, identity, payload)]
+        }] });
+        var goal = kernel.GetGoal(fixture.Goal.Id);
+        // Use coherent grouped TRX without a solo attempt that could mask grouped resolution.
+        var path = GroupedGateTrxSamples.Write(fixture.Root, "typed-grouped.trx",
+            new("alpha", "AlphaTests", "Check", "AlphaTests.Check", "Passed"),
+            new("beta", "BetaTests", "Check", "BetaTests.Check", "Passed"));
+        ProspectiveEvidenceGateResolverGroupedReceiptTests.Save(fixture, [path], cohort, briefVersion: 2);
+        Assert.Equal(GateTestObligationEvaluator.Outcome.Pending,
+            Assert.Single(GateTestObligationEvaluator.Evaluate(goal, fixture.OrchestratorDirectory, fixture.CandidateSha)).Outcome);
+        ProspectiveEvidenceGateResolverGroupedReceiptTests.Save(fixture, [path], cohort, tree: '2', briefVersion: 1);
+        Assert.Equal(GateTestObligationEvaluator.Outcome.Satisfied,
+            Assert.Single(GateTestObligationEvaluator.Evaluate(goal, fixture.OrchestratorDirectory, fixture.CandidateSha)).Outcome);
+    }
+
     [Fact]
     public void SoloSource_SatisfiesNamespacedAndMethodOnlySelectors()
     {

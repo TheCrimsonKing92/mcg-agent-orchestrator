@@ -155,7 +155,8 @@ internal static class ProspectiveEvidenceGateResolver
                         // Never accept a partial set when any TRX in this attempt is unreadable.
                         results = [];
                     }
-                    attempts.Add(new(id, completedAt, paths, results));
+                    attempts.Add(new(id, completedAt, paths, results,
+                        root.TryGetProperty("briefVersion", out var brief) && brief.TryGetInt32(out var version) ? version : null));
                 }
                 catch (Exception)
                 {
@@ -177,7 +178,7 @@ internal static class ProspectiveEvidenceGateResolver
             ? value.GetString() : null;
 
     internal sealed record GateAttempt(
-        string Id, DateTimeOffset CompletedAt, IReadOnlyList<string> Paths, IReadOnlyList<TestResult> Results);
+        string Id, DateTimeOffset CompletedAt, IReadOnlyList<string> Paths, IReadOnlyList<TestResult> Results, int? BriefVersion = null);
 }
 
 internal sealed record ProspectiveEvidenceGateResolution(

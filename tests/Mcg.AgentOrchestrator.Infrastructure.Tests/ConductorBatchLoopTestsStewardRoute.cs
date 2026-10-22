@@ -38,6 +38,12 @@ public sealed class ConductorBatchLoopTestsStewardRoute : ConductorBatchLoopTest
             Xunit.Assert.NotNull(harness.Host.CurrentRound);
             harness.Model.Started.Task.GetAwaiter().GetResult();
             harness.Host.CurrentRound!.GetAwaiter().GetResult();
+            // Complete the producer between boundaries, after the tick's persistence. Harvest
+            // queues the route; only the next captured batch may apply it (same two-tick budget).
+            harness.Host.ServiceTick(harness.Kernel);
+            Xunit.Assert.Equal(OperatorIntentStatus.Pending,
+                Xunit.Assert.Single(harness.Intents.ListForGoalAsync(harness.Goal.Id.Value)
+                    .GetAwaiter().GetResult()).Status);
             roundCompleted = true;
         }
         var stopPath = Path.Combine(harness.Root, "stop.signal");

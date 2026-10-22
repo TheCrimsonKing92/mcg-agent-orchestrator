@@ -37,7 +37,7 @@ public sealed class OwnerConsoleGateCheckMedianTests
         Assert.True(row.IsEstimate);
         Assert.False(row.IsManifestLane);
         Assert.Contains("?", OwnerConsoleGateFormatter.LaneLine(row));
-        Assert.Equal(0, gate.Fraction);
+        Assert.Equal(0, gate.Fraction); // No gate wall time has elapsed; unknown checks add no model.
         Assert.Equal(300, gate.RemainingSeconds);
         Assert.Equal(0, gate.DoneCount);
         Assert.Equal(1, gate.TotalCount);
@@ -46,7 +46,7 @@ public sealed class OwnerConsoleGateCheckMedianTests
     [Theory]
     [InlineData(false, false, false, 0, 400, 0)]
     [InlineData(true, false, false, 0, 400, 0)]
-    [InlineData(true, true, false, 0.25, 300, 0)]
+    [InlineData(true, true, false, 0, 300, 0)]
     [InlineData(true, true, true, 1, 0, 1)]
     public void FractionAndRemainingCountHistoryButCountsStayManifestOnly(
         bool unknownCheck, bool coreDone, bool manifestDone, double fraction, int remaining, int doneCount)
@@ -62,6 +62,7 @@ public sealed class OwnerConsoleGateCheckMedianTests
 
         var gate = Build(events);
 
+        // Completion elapsed_ms does not advance the injected gate clock.
         Assert.Equal(fraction, gate.Fraction, precision: 6);
         Assert.Equal(remaining, gate.RemainingSeconds);
         Assert.Equal(doneCount, gate.DoneCount);
@@ -78,7 +79,7 @@ public sealed class OwnerConsoleGateCheckMedianTests
         Assert.Equal(OwnerConsoleGateLaneState.Queued, Assert.Single(gate.Lanes, row => row.Name == "A").State);
         Assert.Equal(OwnerConsoleGateLaneState.Running, Assert.Single(gate.Lanes, row => row.Name == "core tests").State);
         Assert.Equal(400, gate.RemainingSeconds);
-        Assert.Equal(0, gate.Fraction);
+        Assert.Equal(0, gate.Fraction); // Queued and running work at zero gate elapsed stays at zero.
         Assert.Equal(0, gate.DoneCount);
         Assert.Equal(1, gate.TotalCount);
     }

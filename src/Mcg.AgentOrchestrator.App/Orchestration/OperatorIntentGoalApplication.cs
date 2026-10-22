@@ -21,9 +21,10 @@ internal static class OperatorIntentGoalApplication
         AgentOrchestratorKernel kernel,
         Goal goal,
         OperatorIntentCoordinator intents,
-        ConductorParallelAcceptanceAttemptCoordinator attempts)
+        ConductorParallelAcceptanceAttemptCoordinator attempts,
+        IReadOnlySet<string>? intentIds = null)
     {
-        var result = intents.ExecutePending(kernel, goal);
+        var result = intents.ExecutePending(kernel, goal, intentIds);
         var lines = new List<string>();
         if (result.MutatedGoalState)
         {

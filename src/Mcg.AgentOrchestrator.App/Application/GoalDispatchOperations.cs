@@ -426,7 +426,7 @@ internal sealed partial class GoalDispatchOperations
         bool? cascadeTesterCheapFirst = null,
         string? cascadeCheapModelAlias = null, bool? cascadeMechanicalReworkCheap = null)
     {
-        ReconcileExitedAssignedProcessRecords(kernel, goal);
+        ReconcileExitedAssignedProcessRecords(kernel, workspace, goal);
         goal = kernel.GetGoal(goal.Id);
         var intentStore = SqliteOperatorIntentStore.ForDirectories(workspace.OrchestratorDirectory, workspace.LogDirectory);
         var intentAdmissions = goal.Tasks.ToDictionary(task => task.Id,
@@ -775,13 +775,19 @@ internal sealed partial class GoalDispatchOperations
         return true;
     }
 
-    private void ReconcileExitedAssignedProcessRecords(AgentOrchestratorKernel kernel, Goal goal)
+    private void ReconcileExitedAssignedProcessRecords(
+        AgentOrchestratorKernel kernel, OrchestratorWorkspace workspace, Goal goal)
     {
         var runner = new BackgroundDispatchRunner(
             isStillRunning: _isProcessRunning,
             readProcessIdentity: processId => _readProcessIdentity(processId) is { } identity
                 ? (identity.StartedAt, identity.ImagePath)
-                : null);
+                : null,
+            completionBuildEvidence: new CompletionBuildEvidenceCoordinator(workspace.SqliteStatePath, workspace.ExecutionDirectory))
+        {
+            WorkerBuildInvocations = new WorkerBuildInvocationOperations(workspace.SqliteStatePath, workspace.ExecutionDirectory),
+            OperatorIntents = SqliteOperatorIntentStore.ForDirectories(workspace.OrchestratorDirectory, workspace.LogDirectory)
+        };
         StaleDispatchProcessReconciler.Reconcile(
             kernel,
             runner,

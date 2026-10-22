@@ -158,6 +158,7 @@ internal sealed record ConductorParallelAcceptanceAttempt(
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     FindingEvidenceMutation? FocusedEvidenceMutation = null)
 {
+    public int? BriefVersion { get; init; }
     public string? IntegrationBranch { get; init; }
     public string? StateDirectory { get; init; }
     public string? ProjectName { get; init; }
@@ -1260,11 +1261,11 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
                 Path.GetDirectoryName(metadataPath) ?? throw new InvalidOperationException(
                     "acceptance attempt metadata path has no parent directory"),
                 attemptWriterLeaseTimeout);
+            var workspace = OwnedChildWorkspaceResolver.ForParallelAcceptanceAttempt(attempt);
             using var holderContainment = attempt.HolderContractVersion == 1
                 ? new AcceptanceHolderLease().Claim(AcceptanceHolderBinding.For(attempt),
-                    AcceptanceHolderLease.CurrentGeneration()) : null;
+                    AcceptanceHolderLease.CurrentGeneration(), workspace) : null;
             attemptLogWriters = RedirectConsole(attempt);
-            var workspace = OwnedChildWorkspaceResolver.ForParallelAcceptanceAttempt(attempt);
             var stateRepository = SqliteOrchestratorStateRepository.OpenReadOnly(workspace.SqliteStatePath);
             var kernel = stateRepository.LoadGoalsAsync([new GoalId(attempt.GoalId)]).GetAwaiter().GetResult();
             var goal = kernel.Goals.FirstOrDefault(g => g.Id.Value == attempt.GoalId)
@@ -2162,6 +2163,7 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
             ExecutionProtocol: _runInline ? "in-process" : "out-of-process",
             ConductorGenerationId: _conductorGenerationId)
         {
+            BriefVersion = candidate.Goal.AuthoritativeBrief.Version,
             IntegrationBranch = _integrationBranch,
             StateDirectory = _stateDirectory,
             ProjectName = _projectName,

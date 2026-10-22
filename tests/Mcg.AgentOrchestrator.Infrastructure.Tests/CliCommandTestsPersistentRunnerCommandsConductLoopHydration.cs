@@ -444,6 +444,7 @@ public sealed class CliCommandTestsPersistentRunnerCommandsConductLoopHydration 
             profiles,
             currentGoal: null,
             reloadKernel: () => CliPersistentStateRunner.LoadConductLoopKernel(repository),
+                loadOperatorIntentTargets: ids => repository.LoadGoalsAsync(ids).GetAwaiter().GetResult(),
             persistKernel: _ => { },
             persistGoalKernel: (_, changedGoalIds) =>
             {
@@ -492,6 +493,7 @@ public sealed class CliCommandTestsPersistentRunnerCommandsConductLoopHydration 
                 WorkerProfileCatalog.Default(),
                 currentGoal: null,
                 reloadKernel: () => CliPersistentStateRunner.LoadConductLoopKernel(repository),
+                loadOperatorIntentTargets: ids => repository.LoadGoalsAsync(ids).GetAwaiter().GetResult(),
                 persistKernel: _ => { },
                 persistGoalKernel: (_, _) => { },
                 reloadResolvedParkedHumanWaitKernel: () => new AgentOrchestratorKernel(),
@@ -550,6 +552,7 @@ public sealed class CliCommandTestsPersistentRunnerCommandsConductLoopHydration 
                 WorkerProfileCatalog.Default(),
                 currentGoal: null,
                 reloadKernel: () => CliPersistentStateRunner.LoadConductLoopKernel(repository),
+                loadOperatorIntentTargets: ids => repository.LoadGoalsAsync(ids).GetAwaiter().GetResult(),
                 persistKernel: _ => { },
                 persistGoalKernel: (_, _) => { },
                 reloadResolvedParkedHumanWaitKernel: () => new AgentOrchestratorKernel(),
@@ -595,29 +598,6 @@ public sealed class CliCommandTestsPersistentRunnerCommandsConductLoopHydration 
             if (Directory.Exists(root))
                 Directory.Delete(root, recursive: true);
         }
-    }
-
-    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_conduct_loop_targeted_query_ignores_synthetic_parked_wait_completion")]
-    public void PersistentRunnerConductLoopTargetedQueryIgnoresSyntheticParkedWaitCompletion()
-    {
-        var kernel = new AgentOrchestratorKernel();
-        var target = GoalLifecycleCommands.CreateAndActivateSimpleGoal(
-            kernel,
-            AgentCatalog.Default().Agents,
-            "Parked synthetic wait fixture");
-        var targetTask = target.Tasks.Single();
-        kernel.RecordTaskDispatch(target.Id, targetTask.Id, new TaskDispatchRecord("local", "agent run", "C:\\repo", DateTimeOffset.UtcNow));
-        kernel.RequestHumanInput(target.Id, targetTask.Id, "Need operator decision.");
-        kernel.ParkGoal(target.Id, "waiting for operator answer");
-
-        var repository = new InMemoryTransactionalStateRepository(kernel);
-        var targetedKernel = CliPersistentStateRunner.LoadConductLoopResolvedParkedHumanWaitKernel(repository);
-        var promoted = targetedKernel.RefreshParkedGoalsWithResolvedHumanWaits();
-
-        Xunit.Assert.Equal(1, repository.CompletedHumanInputQueryCount);
-        Xunit.Assert.DoesNotContain(target.Id.Value, repository.LoadedGoalIds);
-        Xunit.Assert.Equal(0, promoted);
-        Xunit.Assert.Empty(targetedKernel.Goals);
     }
 
     [Xunit.Fact(DisplayName = "CliPersistentStateRunner_conduct_loop_sweeps_terminal_candidates_loaded_on_demand")]

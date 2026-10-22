@@ -266,6 +266,10 @@ public sealed class PrerequisiteEvidenceBriefTests
         var clock = new FakeClock();
         var kernel = new AgentOrchestratorKernel(clock);
         var goal = kernel.CreateGoal("Classify planner evidence on the API runner path.");
+        kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
+            "Classify historical evidence for downstream workers.",
+            ["Answered historical evidence reaches downstream workers."],
+            VerificationClass.TestVerifiable, [], []));
         var agents = DefaultAgents();
         kernel.ActivateGoal(goal.Id, agents);
         var planner = goal.Tasks.First(task => task.RequiredRole == AgentRole.Planner);
@@ -283,6 +287,10 @@ public sealed class PrerequisiteEvidenceBriefTests
         Assert.Equal(
             HumanInputRequest.BuildPlannerEvidenceFingerprint(1, "historical-trx-receipts"),
             request.QuestionFingerprint);
+        Assert.Equal(new PlannerEvidenceIdentity(
+            goal.Id.Value, planner.Id.Value, goal.AuthoritativeBrief.Version,
+            1, "historical-trx-receipts"), request.PlannerIdentity);
+        Assert.Equal(WorkTaskStatus.WaitingForHuman, planner.Status);
     }
 
     private static int CountOccurrences(string content, string value)
