@@ -5,6 +5,23 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal static class PreTesterApparatusReceiptClassifier
 {
+    internal static bool IsBuildPhaseOnly(FocusedEvidenceRunResult? evidence)
+    {
+        if (evidence is null) return false;
+        var checks = TimedOutSelectionRerunMapping.AllRoundChecks(evidence);
+        return checks.Any(check => !check.Passed) && checks.All(check =>
+            (check.Passed || check.FailureClassification == AcceptanceFailureClassifications.BuildPhaseTimeout) &&
+            check.ExecutedTestCount is not > 0 && check.FailingTestIdentities is not { Count: > 0 });
+    }
+
+    internal static bool IsTransientAttemptOutcome(ConductorParallelAcceptanceAttemptOutcome? outcome) => outcome is
+        ConductorParallelAcceptanceAttemptOutcome.BlockedBuildSlot or
+        ConductorParallelAcceptanceAttemptOutcome.BlockedBuildLock or
+        ConductorParallelAcceptanceAttemptOutcome.Cancelled or
+        ConductorParallelAcceptanceAttemptOutcome.InfrastructureDeferred or
+        ConductorParallelAcceptanceAttemptOutcome.StructuralCoveragePermitUnavailable or
+        ConductorParallelAcceptanceAttemptOutcome.StaleCandidate;
+
     // Receipt validity and failure attribution determine whether a completed run is unusable.
     internal static (string Outcome, FindingEvidenceArmReceipt? Candidate, IReadOnlyList<string> FailingTests)
         ClassifyOutcome(FocusedEvidenceRunResult? evidence, bool completed,

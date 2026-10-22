@@ -7,7 +7,7 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 internal static class RemoteExecutorOccupancy
 {
     private sealed record Marker(int OwnerPid, DateTimeOffset OwnerStartUtc);
-    private static string Folder(string root, string executor) =>
+    internal static string Folder(string root, string executor) =>
         Path.Combine(root, ".orchestrator", "remote-executor-occupancy", executor);
     private static bool SafeName(string value) => !string.IsNullOrWhiteSpace(value) &&
         value is not ("." or "..") && value.IndexOfAny(Path.GetInvalidFileNameChars()) < 0;

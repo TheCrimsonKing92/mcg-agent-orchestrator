@@ -15,6 +15,7 @@ internal sealed class ConductorExperimentWatch
     private readonly OrchestratorWorkspace _workspace;
     private readonly ConductEventLogWriter? _writer;
     private readonly Func<ICollaborationItemStore> _collaborationStore;
+    private readonly ExperimentWatchInputCache _inputs = new();
     private readonly HashSet<(string Id, string Trigger)> _raised = [];
     private bool _rehydrated;
 
@@ -76,9 +77,9 @@ internal sealed class ConductorExperimentWatch
 
             if (open.Count == 0) return;
             // The production loop kernel excludes terminal goals; experiment readings need the
-            // same durable history as experiment-show, loaded afresh without a writer transaction.
-            var goals = ExperimentGoals.Read(_workspace.SqliteStatePath);
-            var landings = ExperimentLandingTimes.Read(_workspace.GoalLifecycleEventsDirectory);
+            // same durable history as experiment-show, refreshed without a writer transaction.
+            var goals = _inputs.ReadGoals(_workspace.SqliteStatePath, asOf);
+            var landings = _inputs.ReadLandings(_workspace.GoalLifecycleEventsDirectory);
             var hostLedgers = ExperimentHostLedgers.Read(_workspace.ExecutionDirectory);
             var gateAttempts = new Lazy<IReadOnlyCollection<DateTimeOffset>>(
                 () => ExperimentGateAttempts.Read(_workspace.ConductEventsLogPath));
