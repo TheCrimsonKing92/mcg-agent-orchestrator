@@ -25,6 +25,33 @@ public static partial class ProviderLimitEvidenceParser
     // The caller must first establish refusal-only stdout via GetCliRefusalLines.
     public static bool IsCliRefusalLimitLine(string line) => ContainsLimitText(line);
 
+    public static bool TryGetCliCreditExhaustionLine(
+        int exitCode,
+        IEnumerable<string> standardOutputLines,
+        out string line)
+    {
+        line = string.Empty;
+        if (exitCode == 0)
+        {
+            return false;
+        }
+
+        var lines = standardOutputLines.Where(value => !string.IsNullOrWhiteSpace(value)).ToArray();
+        if (lines.Length == 0 || !lines.All(value =>
+            !char.IsWhiteSpace(value[0]) &&
+            !LooksLikeSourceLocationEcho(value) &&
+            (value.StartsWith("Credit balance is too low", StringComparison.OrdinalIgnoreCase) ||
+             value.StartsWith("Your credit balance is too low", StringComparison.OrdinalIgnoreCase) ||
+             (value.StartsWith("API Error: 400", StringComparison.OrdinalIgnoreCase) &&
+              value.Contains("credit balance is too low", StringComparison.OrdinalIgnoreCase)))))
+        {
+            return false;
+        }
+
+        line = lines[0];
+        return true;
+    }
+
     [GeneratedRegex(@"^(?:You['\u2019]ve hit your (?:weekly|session|daily|usage) limit\b|Failed to authenticate\b|API Error:?\s*[1-5]\d{2}\b)", RegexOptions.CultureInvariant)]
     private static partial Regex CliRefusalShape();
 }
