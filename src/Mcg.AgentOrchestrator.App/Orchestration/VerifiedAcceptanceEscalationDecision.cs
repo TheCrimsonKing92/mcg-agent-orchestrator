@@ -36,6 +36,51 @@ internal static class VerifiedAcceptanceEscalationDecision
         return false;
     }
 
+    // The timeline has no event IDs. Bind to both the ordered occurrence and its durable
+    // contents so hydration works, equal timestamps are safe, and truncated history holds.
+    internal sealed record EventIdentity(int TimelineIndex, string ContentHash);
+
+    private static EventIdentity Identify(ProgressEvent evt, int index) => new(index,
+        Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+            System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(new
+            {
+                evt.GoalId, evt.TaskId, evt.Kind, evt.Message, evt.OccurredAt,
+                evt.TickOutcome?.OutcomeKind, evt.TickOutcome?.LifecycleState,
+                evt.TickOutcome?.EscalationKind
+            }))));
+
+    internal static EventIdentity? FindUnresolvedEscalation(Goal goal)
+    {
+        var events = goal.Timeline.ToArray();
+        for (var i = events.Length - 1; i >= 0; i--)
+        {
+            if (ClearsPersistedVerifiedAcceptanceEscalation(events[i])) return null;
+            if (events[i].Kind == ProgressKind.GoalPolicyDecision &&
+                IsPersistedVerifiedAcceptanceEscalation(events[i])) return Identify(events[i], i);
+        }
+        return null;
+    }
+
+    internal static EventIdentity? FindAcknowledgement(Goal goal, EventIdentity escalation)
+    {
+        var events = goal.Timeline.ToArray();
+        var index = escalation.TimelineIndex;
+        if (index < 0 || index >= events.Length || Identify(events[index], index) != escalation ||
+            events[index].Kind != ProgressKind.GoalPolicyDecision ||
+            !IsPersistedVerifiedAcceptanceEscalation(events[index])) return null;
+
+        EventIdentity? clearing = null;
+        for (var i = index + 1; i < events.Length; i++)
+        {
+            // A newer failure belongs to a different episode, even if it was also cleared.
+            if (events[i].Kind == ProgressKind.GoalPolicyDecision &&
+                IsPersistedVerifiedAcceptanceEscalation(events[i])) return null;
+            if (clearing is null && ClearsPersistedVerifiedAcceptanceEscalation(events[i]))
+                clearing = Identify(events[i], i);
+        }
+        return clearing;
+    }
+
     internal static bool IsPersistedVerifiedAcceptanceEscalation(ProgressEvent evt)
     {
         if (evt.TickOutcome is { } payload)

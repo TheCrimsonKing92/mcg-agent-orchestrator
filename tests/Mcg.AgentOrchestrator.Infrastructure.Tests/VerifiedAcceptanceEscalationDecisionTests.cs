@@ -100,4 +100,67 @@ public sealed class VerifiedAcceptanceEscalationDecisionTests
 
     private static ConductorAdvanceResult Result(ConductorAdvanceOutcome outcome) =>
         new("goal", "goal", "conservative", outcome);
+
+    [Xunit.Fact]
+    public void Acknowledgement_SameTimestampAndHydration_MatchesOrderedOccurrence()
+    {
+        var (kernel, goal) = CreateGoal();
+        Escalate(kernel, goal);
+        kernel.ParkGoal(goal.Id, "acknowledge interrupted acceptance");
+        kernel.UnparkGoal(goal.Id, "reconsider normally");
+        var snapshot = kernel.ExportSnapshot();
+        var sameTime = new DateTimeOffset(2026, 10, 19, 18, 0, 0, TimeSpan.Zero);
+        snapshot = snapshot with { Goals = snapshot.Goals.Select(g => g with
+        {
+            Timeline = g.Timeline.Select(e => e with { OccurredAt = sameTime }).ToArray()
+        }).ToArray() };
+        var reloaded = AgentOrchestratorKernel.FromSnapshot(snapshot).GetGoal(goal.Id);
+        // Capture before acknowledgement, then use a separately hydrated final history.
+        var before = snapshot with { Goals = snapshot.Goals.Select(g => g with
+        {
+            Timeline = g.Timeline.Take(g.Timeline.Count - 2).ToArray()
+        }).ToArray() };
+        var identity = Assert.IsType<VerifiedAcceptanceEscalationDecision.EventIdentity>(
+            VerifiedAcceptanceEscalationDecision.FindUnresolvedEscalation(
+                AgentOrchestratorKernel.FromSnapshot(before).GetGoal(goal.Id)));
+        var acknowledgement = Assert.IsType<VerifiedAcceptanceEscalationDecision.EventIdentity>(
+            VerifiedAcceptanceEscalationDecision.FindAcknowledgement(reloaded, identity));
+        Assert.Equal(identity.TimelineIndex + 1, acknowledgement.TimelineIndex);
+        Assert.False(VerifiedAcceptanceEscalationDecision.HasPersistedVerifiedAcceptanceEscalation(reloaded));
+        Assert.Equal(acknowledgement, VerifiedAcceptanceEscalationDecision.FindAcknowledgement(
+            AgentOrchestratorKernel.FromSnapshot(snapshot).GetGoal(goal.Id), identity));
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("unresolved")]
+    [Xunit.InlineData("unrelated")]
+    [Xunit.InlineData("older-ack")]
+    [Xunit.InlineData("newer-failure")]
+    [Xunit.InlineData("missing-history")]
+    [Xunit.InlineData("wrong-occurrence")]
+    public void Acknowledgement_WithoutMatchingClearedEpisode_Holds(string scenario)
+    {
+        var (kernel, goal) = CreateGoal();
+        if (scenario == "older-ack")
+        {
+            kernel.ParkGoal(goal.Id, "old acknowledgement");
+            kernel.UnparkGoal(goal.Id, "old resume");
+        }
+        Escalate(kernel, goal);
+        var identity = VerifiedAcceptanceEscalationDecision.FindUnresolvedEscalation(goal)!;
+        if (scenario == "unrelated") kernel.RecordGoalPolicyDecision(goal.Id, "ordinary note and tick");
+        if (scenario is "newer-failure" or "wrong-occurrence")
+        {
+            kernel.ParkGoal(goal.Id, "acknowledgement");
+            kernel.UnparkGoal(goal.Id, "resume");
+            Escalate(kernel, goal);
+        }
+        if (scenario == "missing-history") goal = CreateGoal().Goal;
+        if (scenario == "wrong-occurrence") identity = identity with { TimelineIndex = identity.TimelineIndex + 1 };
+        Assert.Null(VerifiedAcceptanceEscalationDecision.FindAcknowledgement(goal, identity));
+    }
+
+    private static void Escalate(AgentOrchestratorKernel kernel, Goal goal) =>
+        kernel.RecordGoalPolicyDecision(goal.Id, "interrupted acceptance",
+            new ConductorTickOutcomePayload("Escalated", "Verified", "BackgroundAcceptanceFailed"));
 }
