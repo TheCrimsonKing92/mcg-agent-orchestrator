@@ -66,6 +66,7 @@ internal sealed partial class ConductorBatchLoop
 
     private void ReconcileParallelAcceptanceAttempts(
         ParallelAcceptanceBatchState state,
+        IReadOnlyList<Goal> scopedGoals,
         AgentOrchestratorKernel kernel,
         ConductorDriver driver,
         ConductorAutonomyPolicy policy,
@@ -73,7 +74,12 @@ internal sealed partial class ConductorBatchLoop
         List<string> changedGoalLines,
         HashSet<GoalId> changedGoalIds)
     {
-        foreach (var goal in state.OrderedEligible)
+        // Admission candidates exclude parks; already-owned attempts still need their terminal
+        // evidence consumed. Do not put these goals into OrderedEligible or start new work.
+        foreach (var goal in state.OrderedEligible.Concat(scopedGoals.Where(goal =>
+                     goal.IsExplicitlyParked &&
+                     driver.ParallelAcceptanceAttemptCoordinator.GetUnreconciledAttempts([goal.Id.Value]).Count > 0))
+                     .DistinctBy(goal => goal.Id))
         {
             try
             {

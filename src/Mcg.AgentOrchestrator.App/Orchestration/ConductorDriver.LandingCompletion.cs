@@ -40,9 +40,16 @@ internal sealed partial class ConductorDriver
         ConductorAutonomyPolicy policy,
         AcceptanceVerificationSummary acceptance)
     {
-        // Census the failing tests at the handler's single entry so every gate completion is recorded,
-        // including the apparatus and unattributable early returns below. Lazy keeps the changed-path
-        // git call at exactly one per advance and off gate completions that never need it.
+        goal = GetCurrentGoal(goal);
+        var decision = LandingGoalStateGuardPolicy.Evaluate(new(null, goal.LifecycleStatus,
+            goal.AcceptanceFailureDeferredForRetry, acceptance.Passed));
+        if (decision.Action == LandingGoalStateGuardAction.Hold)
+            return MakeResult(goal.Id.Value, goalPrefix, policy,
+                new ConductorAdvanceOutcome.Held(GoalLifecycleState.WorkspaceReady, decision.Reason) { Decision = decision.ToRecord() });
+
+        // Terminal replay returns before census to avoid counting the same failed gate twice.
+        // Census every new gate completion, including apparatus and unattributable early returns.
+        // Lazy keeps the changed-path git call at one per advance and off paths that never need it.
         var landingFileScopes = new Lazy<IReadOnlyList<string>>(() => _getLandingFileScopes(goal));
         var apparatusRedReading = _apparatusRedGate?.RecordGateCompletion(goal, acceptance, landingFileScopes);
         if (TryDisposeWithinAttemptRerunApparatus(goal, goalPrefix, policy, acceptance) is { } rerunApparatus)

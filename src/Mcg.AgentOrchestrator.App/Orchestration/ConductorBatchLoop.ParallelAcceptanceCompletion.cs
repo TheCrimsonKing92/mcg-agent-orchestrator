@@ -17,7 +17,7 @@ internal sealed partial class ConductorBatchLoop
         {
             return;
         }
-        if (goal.Status != GoalStatus.Verifying)
+        if (goal.LifecycleStatus != GoalStatus.Verifying)
         {
             return;
         }
@@ -68,7 +68,7 @@ internal sealed partial class ConductorBatchLoop
     {
         EnsureParallelAcceptanceTerminalIsVerifying(kernel, goal, attempt);
         kernel.ResetAcceptanceIdentityStale(goal.Id);
-        if (goal.Status != GoalStatus.Verifying)
+        if (goal.LifecycleStatus != GoalStatus.Verifying)
         {
             return;
         }
@@ -144,7 +144,7 @@ internal sealed partial class ConductorBatchLoop
         Goal goal,
         ConductorParallelAcceptanceAttempt attempt)
     {
-        if (goal.Status == GoalStatus.Verified)
+        if (goal.LifecycleStatus == GoalStatus.Verified)
         {
             kernel.BeginGoalAcceptanceVerification(
                 goal.Id,

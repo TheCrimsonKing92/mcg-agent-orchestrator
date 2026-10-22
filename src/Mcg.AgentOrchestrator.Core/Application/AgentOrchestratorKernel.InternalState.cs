@@ -6,12 +6,12 @@ public sealed partial class AgentOrchestratorKernel
     {
         ReconcileAssignedPassingVerification(goal);
 
-        if (IsTerminalGoalStatus(goal.Status))
+        if (IsTerminalGoalStatus(goal.LifecycleStatus))
         {
             return;
         }
 
-        if (goal.Status == GoalStatus.Parked && !allowParkedRefresh)
+        if (goal.IsExplicitlyParked || goal.Status == GoalStatus.Parked && !allowParkedRefresh)
         {
             return;
         }
@@ -48,7 +48,7 @@ public sealed partial class AgentOrchestratorKernel
 
     private static void EnsureGoalCanResumeWork(Goal goal)
     {
-        if (IsReopenProtectedGoalStatus(goal.Status))
+        if (IsReopenProtectedGoalStatus(goal.LifecycleStatus))
             throw new InvalidOperationException($"Goal '{goal.Id.Value}' is {goal.Status} and cannot resume work.");
     }
 

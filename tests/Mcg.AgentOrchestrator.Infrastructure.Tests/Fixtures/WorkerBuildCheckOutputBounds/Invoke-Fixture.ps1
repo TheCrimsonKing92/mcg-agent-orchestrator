@@ -32,9 +32,10 @@ function Invoke-CapturedProcess {
         [string]$FileName,
         [string[]]$ArgumentList,
         [string]$WorkingDirectory,
-        # Hang guard per child; the outer fixture guard exceeds two of these for Warnings.
+        # Hang-only guard: the helper cold-compiles WorkerBuildScopeTool and its project references on every call,
+        # measured at up to 119 s passing under a full gate.
         [ValidateRange(1, 300)]
-        [int]$TimeoutSeconds = 120
+        [int]$TimeoutSeconds = 270
     )
 
     $startInfo = [System.Diagnostics.ProcessStartInfo]::new()

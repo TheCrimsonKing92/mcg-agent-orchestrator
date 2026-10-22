@@ -21,7 +21,8 @@ internal static class RemoteExecutorReportReader
         var slots = new Dictionary<string, int>(StringComparer.Ordinal);
         foreach (var executor in executors) slots.TryAdd(executor.Id, executor.Slots);
         return RemoteExecutorReport.Build(executors.Select(entry => entry.Id), outcomes, probes,
-            since, last, unreadable, unreadableProbes, slots, noExecutorSince);
+            since, last, unreadable, unreadableProbes, slots, noExecutorSince,
+            executors.ToDictionary(entry => entry.Id, entry => entry.AdmissionEnabled, StringComparer.Ordinal));
     }
 
     private static (double? Seconds, DateTimeOffset? StartedAt) ReadAttempt(JsonElement root)

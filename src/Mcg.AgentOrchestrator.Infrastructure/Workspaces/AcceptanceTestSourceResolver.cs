@@ -13,11 +13,6 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 /// </summary>
 internal static class AcceptanceTestSourceResolver
 {
-    internal static IReadOnlyList<string> ResolveSourcePaths(
-        string? rootPath,
-        string? testProjectPath,
-        string? testIdentity) => new Request(rootPath).ResolveSourcePaths(testProjectPath, testIdentity);
-
     /// <summary>
     /// The class portion of <c>Namespace.Class.Method</c>. Generic arity and xunit theory argument
     /// suffixes are stripped before splitting.
@@ -73,6 +68,8 @@ internal static class AcceptanceTestSourceResolver
 
         internal int EnumerationCount { get; private set; }
         internal int ReadCount { get; private set; }
+
+        internal IReadOnlyList<string> ResolveIdentity(string? testIdentity) => ResolveSourcePaths(null, testIdentity);
 
         internal IReadOnlyList<string> ResolveSourcePaths(string? testProjectPath, string? testIdentity)
         {
