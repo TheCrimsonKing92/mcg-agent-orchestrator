@@ -13,6 +13,12 @@ public sealed class DotnetProjectDiscoveryAdapter : IProjectDiscoveryAdapter
     private static readonly StringComparer PathComparer = OperatingSystem.IsWindows()
         ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
     private static readonly IReadOnlyList<string> RunnerProperties = DotnetTestMarkers.RunnerProperties;
+    private readonly IDirectoryTraversal traversal;
+
+    public DotnetProjectDiscoveryAdapter() : this(new DirectoryTraversal()) { }
+
+    internal DotnetProjectDiscoveryAdapter(IDirectoryTraversal traversal) =>
+        this.traversal = traversal ?? throw new ArgumentNullException(nameof(traversal));
 
     public ProjectModel Discover(string repositoryRoot, IReadOnlyCollection<string>? excludedDirectoryNames = null,
         IUnitCommandMeasurer? measurer = null, UnitCommandKinds measuredKinds = UnitCommandKinds.All)
@@ -24,7 +30,13 @@ public sealed class DotnetProjectDiscoveryAdapter : IProjectDiscoveryAdapter
         var questions = new List<ProjectOwnerQuestion>();
         var exclusions = new HashSet<string>(excludedDirectoryNames ?? [], StringComparer.OrdinalIgnoreCase);
         exclusions.UnionWith(["bin", "obj", ".git"]);
-        var files = EnumerateFiles(root, exclusions).Order(StringComparer.Ordinal).ToArray();
+        var discovery = EnumerateFiles(root, exclusions);
+        var files = discovery.Files.Order(StringComparer.Ordinal).ToArray();
+        foreach (var path in discovery.MissingDirectories.Select(path => Relative(root, path))
+                     .Order(StringComparer.Ordinal).Distinct(PathComparer))
+            Ask($"discovery/directories/{path}/membership",
+                $"Discovery could not inspect directory '{path}'; project membership may be incomplete.",
+                new FactSource(path, 1), questions);
         var solutions = files.Where(file => Path.GetDirectoryName(file) == root &&
             Path.GetExtension(file).ToLowerInvariant() is ".sln" or ".slnx").ToArray();
         var listed = new Dictionary<string, (string Name, FactSource Source)>(PathComparer);
@@ -299,21 +311,84 @@ public sealed class DotnetProjectDiscoveryAdapter : IProjectDiscoveryAdapter
         }
     }
 
-    private static IEnumerable<string> EnumerateFiles(string root, HashSet<string> exclusions)
+    private TraversalResult EnumerateFiles(string root, HashSet<string> exclusions)
     {
-        foreach (var file in Directory.EnumerateFiles(root))
-            if ((IsProjectFile(file) || Path.GetExtension(file).ToLowerInvariant() is ".sln" or ".slnx") &&
-                (File.GetAttributes(file) & FileAttributes.ReparsePoint) == 0)
-                yield return file;
-        foreach (var directory in Directory.EnumerateDirectories(root))
+        var files = new List<string>();
+        var missingDirectories = new List<string>();
+        // Root enumeration must never acquire the missing-descendant policy.
+        Visit(ReadEntries(root));
+        EnsureRootPresent();
+        return new TraversalResult(files, missingDirectories);
+
+        (string[] Files, string[] Directories) ReadEntries(string directory) =>
+            (traversal.EnumerateFiles(directory).ToArray(), traversal.EnumerateDirectories(directory).ToArray());
+
+        void EnsureRootPresent()
         {
-            if (exclusions.Contains(Path.GetFileName(directory)) ||
-                (File.GetAttributes(directory) & FileAttributes.ReparsePoint) != 0)
-                continue;
-            foreach (var file in EnumerateFiles(directory, exclusions))
-                yield return file;
+            // A throwing check preserves access/IO errors and detects root loss even after names were materialized.
+            if ((traversal.GetAttributes(root) & FileAttributes.Directory) == 0)
+                throw new DirectoryNotFoundException($"Repository root does not exist: {root}");
+        }
+
+        void Visit((string[] Files, string[] Directories) entries)
+        {
+            // File attributes and all project reads remain outside the directory handlers.
+            foreach (var file in entries.Files)
+                if ((IsProjectFile(file) || Path.GetExtension(file).ToLowerInvariant() is ".sln" or ".slnx") &&
+                    (traversal.GetAttributes(file) & FileAttributes.ReparsePoint) == 0)
+                    files.Add(file);
+
+            foreach (var directory in entries.Directories)
+            {
+                if (exclusions.Contains(Path.GetFileName(directory)))
+                    continue;
+                FileAttributes attributes;
+                try
+                {
+                    attributes = traversal.GetAttributes(directory);
+                }
+                catch (Exception exception) when (exception is FileNotFoundException or DirectoryNotFoundException)
+                {
+                    EnsureRootPresent();
+                    missingDirectories.Add(directory);
+                    continue;
+                }
+                if ((attributes & FileAttributes.ReparsePoint) != 0)
+                    continue;
+
+                (string[] Files, string[] Directories) children;
+                try
+                {
+                    children = ReadEntries(directory);
+                }
+                catch (Exception exception) when (exception is FileNotFoundException or DirectoryNotFoundException)
+                {
+                    EnsureRootPresent();
+                    missingDirectories.Add(directory);
+                    continue;
+                }
+                // Recursion is outside the catch: a deeper failure belongs to its own directory.
+                Visit(children);
+            }
         }
     }
+
+    // This instance-local seam owns only traversal operations, not general filesystem access.
+    internal interface IDirectoryTraversal
+    {
+        FileAttributes GetAttributes(string path);
+        IEnumerable<string> EnumerateFiles(string directory);
+        IEnumerable<string> EnumerateDirectories(string directory);
+    }
+
+    private sealed class DirectoryTraversal : IDirectoryTraversal
+    {
+        public FileAttributes GetAttributes(string path) => File.GetAttributes(path);
+        public IEnumerable<string> EnumerateFiles(string directory) => Directory.EnumerateFiles(directory);
+        public IEnumerable<string> EnumerateDirectories(string directory) => Directory.EnumerateDirectories(directory);
+    }
+
+    private sealed record TraversalResult(List<string> Files, List<string> MissingDirectories);
 
     private static string? ResolveProjectPath(string root, string directory, string include)
     {

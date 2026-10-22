@@ -4,6 +4,31 @@ using Mcg.AgentOrchestrator.Infrastructure;
 public sealed class AcceptanceTestSourceResolverTests
 {
     [Fact]
+    public void BoundResolveIdentityEnumeratesOncePerRootAcrossIdentities()
+    {
+        var files = new SourceFiles();
+        files.Add("tests/A/First.cs", "class FirstTests {}");
+        files.Add("tests/B/Another.cs", "class AnotherTests {}");
+        files.Add("src/Third.cs", "class ThirdTests {}");
+        string[] identities = ["Ns.FirstTests.One", "Ns.AnotherTests.One", "Ns.ThirdTests.One",
+            "Ns.FirstTests.Two", "Ns.AnotherTests.Two"];
+        var expected = identities.Select(identity => files.Request().ResolveSourcePaths(null, identity)).ToArray();
+        Assert.Equal(new[] { "tests/A/First.cs", "tests/B/Another.cs", "src/Third.cs",
+            "tests/A/First.cs", "tests/B/Another.cs" }, expected.Select(paths => Assert.Single(paths)));
+        files.Reads.Clear();
+
+        var request = files.Request();
+        Func<string, IReadOnlyList<string>> resolve = request.ResolveIdentity;
+        for (var index = 0; index < identities.Length; index++)
+            Assert.Equal(expected[index], resolve(identities[index]));
+
+        Assert.Equal(2, request.EnumerationCount);
+        Assert.Equal(3, request.ReadCount);
+        Assert.Equal(3, files.Reads.Count);
+        Assert.All(files.Reads.Values, count => Assert.Equal(1, count));
+    }
+
+    [Fact]
     public void ThousandsOfDistinctAndRepeatedIdentitiesReadEachSourceOnce()
     {
         var files = new SourceFiles();

@@ -14,7 +14,8 @@ internal sealed record OwnerFleetHostNode(bool ConductorRunning, int ExecutorCou
 internal sealed record OwnerFleetExecutorNode(string Id, OwnerFleetReachability Reachability,
     IReadOnlyList<string> ProbeReasons, DateTimeOffset? ProbeAt, int? ConfiguredSlots,
     int PeakConcurrentAttempts, string? LastOutcome, DateTimeOffset? LastOutcomeAt,
-    double? AcceptedShare, IReadOnlyList<RemoteExecutorLaneSeconds> Lanes, RemoteExecutorSlotsSyncRow? SlotsFile = null);
+    double? AcceptedShare, IReadOnlyList<RemoteExecutorLaneSeconds> Lanes, RemoteExecutorSlotsSyncRow? SlotsFile = null,
+    bool? AdmissionEnabled = null);
 
 internal sealed record OwnerFleetViewModel(OwnerFleetHostNode Host,
     IReadOnlyList<OwnerFleetExecutorNode> Executors, IReadOnlyList<OwnerFleetProviderHoldNode>? ProviderHolds = null);
@@ -39,7 +40,7 @@ internal static class OwnerFleetViewModelBuilder
                     row.ConfiguredSlots, row.PeakConcurrentAttempts, last?.Outcome,
                     last is null ? null : TimeZoneInfo.ConvertTime(last.ObservedAt, zone), row.AcceptedShare, row.Lanes.ToArray(),
                     slotsSync?.GetValueOrDefault(row.ExecutorId) is { } sync ?
-                        sync with { ObservedAt = TimeZoneInfo.ConvertTime(sync.ObservedAt, zone) } : null);
+                        sync with { ObservedAt = TimeZoneInfo.ConvertTime(sync.ObservedAt, zone) } : null, row.AdmissionEnabled);
             }).ToArray(), (providerHolds ?? []).Select(row => new OwnerFleetProviderHoldNode(
                 row.Hold.BindingKey, OwnerProviderHoldNarration.DisplayName(row.Hold.BindingKey),
                 $"{row.Hold.SourceGoalId.Value[..8]}/{row.Hold.SourceTaskId.Value[..8]}",

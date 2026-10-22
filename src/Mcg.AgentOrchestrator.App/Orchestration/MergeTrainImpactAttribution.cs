@@ -41,9 +41,10 @@ internal static class MergeTrainImpactAttribution
             }
 
             MergeTrainMemberBinding? attributed = null;
+            var sourceRequest = new AcceptanceTestSourceResolver.Request(workspacePath);
             foreach (var className in classes)
             {
-                var sources = AcceptanceTestSourceResolver.ResolveSourcePaths(workspacePath, null, className + ".Subject");
+                var sources = sourceRequest.ResolveIdentity(className + ".Subject");
                 var impacted = plans.Select((plan, index) => (plan, index)).Where(item => item.plan.Checks.Any(check =>
                     check.TestClassSelections is { } selections
                         ? selections.Any(selection => AcceptanceTestSourceResolver.ExtractClassName(selection + ".Subject") == className)

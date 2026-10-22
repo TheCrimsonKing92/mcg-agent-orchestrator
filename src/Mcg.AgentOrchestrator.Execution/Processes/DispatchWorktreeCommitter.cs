@@ -59,9 +59,13 @@ internal sealed class DispatchWorktreeCommitter
             var addArgs = new List<string>(dirtyPaths.Count + 3) { "add", "-A", "--" };
             addArgs.AddRange(dirtyPaths);
             var add = _runGit(workingDirectory, addArgs.ToArray());
-            if (!add.Succeeded)
+            if (!add.Succeeded || !add.ProcessStarted)
             {
-                return CommitWorktreeEditsResult.FromGitFailure("add", addArgs, add);
+                var fallback = TryStageUnstagedDirtyPaths(workingDirectory, dirtyPaths);
+                if (!fallback.Succeeded)
+                {
+                    return fallback;
+                }
             }
 
             var staged = _runGit(workingDirectory, ["diff", "--cached", "--name-only"]);
@@ -103,6 +107,87 @@ internal sealed class DispatchWorktreeCommitter
             return CommitWorktreeEditsResult.Failed(
                 $"Orchestrator commit-on-behalf failed with {ex.GetType().Name}: {NormalizeDiagnosticText(ex.Message)}");
         }
+    }
+
+    private CommitWorktreeEditsResult TryStageUnstagedDirtyPaths(
+        string workingDirectory,
+        IReadOnlyList<string> dirtyPaths)
+    {
+        string[] statusArgs = ["status", "--porcelain=v1", "-z", "--untracked-files=all"];
+        var status = _runGit(workingDirectory, statusArgs);
+        if (!status.Succeeded || !status.ProcessStarted || status.DrainTimedOut)
+        {
+            return CommitWorktreeEditsResult.FromGitFailure("status", statusArgs, status);
+        }
+
+        var paths = ParseUnstagedDirtyPaths(status.Output, dirtyPaths);
+        if (paths.Count == 0)
+        {
+            return CommitWorktreeEditsResult.Success;
+        }
+
+        var tempDirectory = OrchestratorTempRoot.GetPurposeDirectory("commit-pathspecs");
+        var relativeTemp = Path.GetRelativePath(Path.GetFullPath(workingDirectory), tempDirectory);
+        if (!Path.IsPathRooted(relativeTemp) && relativeTemp != ".." &&
+            !relativeTemp.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("The system temp directory must be outside the worktree.");
+        }
+
+        var pathspecFile = Path.Combine(tempDirectory, $"pathspec-{Guid.NewGuid():N}.nul");
+        try
+        {
+            File.WriteAllText(pathspecFile, string.Join('\0', paths) + '\0', new UTF8Encoding(false));
+            string[] addArgs = ["add", "-A", $"--pathspec-from-file={pathspecFile}", "--pathspec-file-nul"];
+            var add = _runGit(workingDirectory, addArgs);
+            return add.Succeeded && add.ProcessStarted && !add.DrainTimedOut
+                ? CommitWorktreeEditsResult.Success
+                : CommitWorktreeEditsResult.FromGitFailure("add", addArgs, add);
+        }
+        finally
+        {
+            File.Delete(pathspecFile);
+        }
+    }
+
+    private static IReadOnlyList<string> ParseUnstagedDirtyPaths(
+        string status,
+        IReadOnlyList<string> dirtyPaths)
+    {
+        var dirty = dirtyPaths.ToHashSet(StringComparer.Ordinal);
+        var paths = new SortedSet<string>(StringComparer.Ordinal);
+        var offset = 0;
+        while (offset < status.Length)
+        {
+            var end = status.IndexOf('\0', offset);
+            if (end < offset + 4 || status[offset + 2] != ' ')
+            {
+                throw new InvalidOperationException("Incomplete or malformed NUL-delimited git status entry.");
+            }
+
+            var indexCode = status[offset];
+            var worktreeCode = status[offset + 1];
+            var path = status[(offset + 3)..end];
+            offset = end + 1;
+            // Porcelain v1 -z emits the destination first, then a separate source field.
+            if (indexCode is 'R' or 'C' || worktreeCode is 'R' or 'C')
+            {
+                end = status.IndexOf('\0', offset);
+                if (end <= offset)
+                {
+                    throw new InvalidOperationException("Incomplete git status rename or copy source.");
+                }
+
+                offset = end + 1;
+            }
+
+            if (worktreeCode != ' ' && dirty.Contains(path))
+            {
+                paths.Add(path);
+            }
+        }
+
+        return paths.ToArray();
     }
 
     internal CommitWorktreeEditsResult TryCommitCheckpoint(

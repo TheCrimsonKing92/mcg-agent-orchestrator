@@ -7,6 +7,14 @@ using Mcg.AgentOrchestrator.Infrastructure;
 public sealed class CliExecutorSettingCommandsTests
 {
     [Theory]
+    [InlineData("executor-set-enabled", "mcg-exec-1", "1")]
+    [InlineData("executor-set-enabled", "mcg-exec-1", "yes")]
+    [InlineData("executor-set-enabled", "mcg-exec-1", " true")]
+    [InlineData("executor-set-enabled", "mcg-exec-1", "false ")]
+    [InlineData("executor-set-enabled", "mcg-exec-1", "")]
+    [InlineData("executor-set-enabled", "mcg-exec-1")]
+    [InlineData("executor-set-enabled", "mcg-exec-1", "false", "extra")]
+    [InlineData("executor-set-enabled", "no-such", "false")]
     [InlineData("executor-set-slots", "mcg-exec-1", "0")]
     [InlineData("executor-set-slots", "mcg-exec-1", "17")]
     [InlineData("executor-set-slots", "mcg-exec-1", "2.5")]
@@ -58,6 +66,7 @@ public sealed class CliExecutorSettingCommandsTests
 
     [Theory]
     [InlineData("executor-set-slots")]
+    [InlineData("executor-set-enabled")]
     [InlineData("focused-evidence-set")]
     public void Registration_DocumentedFlags_AreAcceptedAndUnknownFlagsShowUsage(string verb)
     {
@@ -86,6 +95,8 @@ public sealed class CliExecutorSettingCommandsTests
 
     [Theory]
     [InlineData("executor-set-slots", "mcg-exec-1", "1")]
+    [InlineData("executor-set-enabled", "mcg-exec-1", "true")]
+    [InlineData("executor-set-enabled", "mcg-exec-1", "FALSE")]
     [InlineData("executor-set-slots", "mcg-exec-1", "16")]
     [InlineData("focused-evidence-set", "--mode", "remote-first")]
     [InlineData("focused-evidence-set", "--sample-every", "1")]

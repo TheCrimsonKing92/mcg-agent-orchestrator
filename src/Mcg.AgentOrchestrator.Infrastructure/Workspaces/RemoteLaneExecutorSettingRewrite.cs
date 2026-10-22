@@ -4,7 +4,7 @@ using System.Text.Json;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
-// Replaces one existing integer token; all surrounding bytes belong to the operator.
+// Replaces one setting token; all surrounding bytes belong to the operator.
 internal static class RemoteLaneExecutorSettingRewrite
 {
     internal static byte[]? RewriteSlots(byte[] original, string executorId, int slots) =>
@@ -13,7 +13,10 @@ internal static class RemoteLaneExecutorSettingRewrite
     internal static byte[]? RewriteSampleEvery(byte[] original, int sampleEvery) =>
         Rewrite(original, null, sampleEvery);
 
-    private static byte[]? Rewrite(byte[] original, string? executorId, int value)
+    internal static byte[] RewriteEnabled(byte[] original, string executorId, bool enabled) =>
+        Rewrite(original, executorId, 0, enabled) ?? original;
+
+    private static byte[]? Rewrite(byte[] original, string? executorId, int value, bool? enabled = null)
     {
         try
         {
@@ -31,14 +34,24 @@ internal static class RemoteLaneExecutorSettingRewrite
                 {
                     if (seen) throw Invalid();
                     seen = true;
-                    span = executorId is null ? ReadSample(ref reader) : ReadExecutors(ref reader, executorId);
+                    span = executorId is null ? ReadSample(ref reader) : ReadExecutors(ref reader, executorId, enabled);
                 }
                 else reader.Skip();
             }
             if (reader.TokenType != JsonTokenType.EndObject || reader.Read()) throw Invalid();
             if (!seen && executorId is not null) throw Invalid();
             if (span is null) return null;
-            var replacement = Encoding.UTF8.GetBytes(value.ToString(CultureInfo.InvariantCulture));
+            var replacement = Encoding.UTF8.GetBytes(enabled is { } admission ? admission ? "true" : "false"
+                : value.ToString(CultureInfo.InvariantCulture));
+            if (span.Value.Start == span.Value.End)
+            {
+                // Insert a legacy property before the first property, using its existing indentation.
+                var first = preamble + span.Value.Start;
+                var open = first - 1;
+                while (open >= preamble && original[open] is (byte)' ' or (byte)'\t' or (byte)'\r' or (byte)'\n') open--;
+                var gap = Encoding.UTF8.GetString(original, open + 1, first - open - 1);
+                replacement = Encoding.UTF8.GetBytes("\"enabled\": false," + gap);
+            }
             using var output = new MemoryStream();
             output.Write(original.AsSpan(0, preamble + span.Value.Start));
             output.Write(replacement);
@@ -48,7 +61,7 @@ internal static class RemoteLaneExecutorSettingRewrite
         catch (JsonException error) { throw new InvalidOperationException("executors-file-invalid", error); }
     }
 
-    private static (int, int)? ReadExecutors(ref Utf8JsonReader reader, string executorId)
+    private static (int, int)? ReadExecutors(ref Utf8JsonReader reader, string executorId, bool? enabled)
     {
         if (reader.TokenType != JsonTokenType.StartArray) throw Invalid();
         var ids = new HashSet<string>(StringComparer.Ordinal);
@@ -59,11 +72,13 @@ internal static class RemoteLaneExecutorSettingRewrite
             if (reader.TokenType != JsonTokenType.StartObject) throw Invalid();
             string? id = null;
             (int, int)? slots = null;
+            int? firstProperty = null;
             while (reader.Read() && reader.TokenType != JsonTokenType.EndObject)
             {
                 if (reader.TokenType != JsonTokenType.PropertyName) throw Invalid();
+                firstProperty ??= checked((int)reader.TokenStartIndex);
                 var isId = reader.ValueTextEquals("id");
-                var isSlots = reader.ValueTextEquals("slots");
+                var isSlots = reader.ValueTextEquals(enabled is null ? "slots" : "enabled");
                 if (!reader.Read()) throw Invalid();
                 if (isId)
                 {
@@ -73,12 +88,21 @@ internal static class RemoteLaneExecutorSettingRewrite
                 else if (isSlots)
                 {
                     if (slots is not null) throw Invalid();
-                    slots = IntegerSpan(ref reader);
+                    if (enabled is null) slots = IntegerSpan(ref reader);
+                    else
+                    {
+                        if (reader.TokenType is not (JsonTokenType.True or JsonTokenType.False)) throw Invalid();
+                        slots = (checked((int)reader.TokenStartIndex), checked((int)reader.BytesConsumed));
+                    }
                 }
                 else reader.Skip();
             }
             if (string.IsNullOrWhiteSpace(id) || !ids.Add(id)) throw Invalid();
-            if (id == executorId) { found = true; result = slots; }
+            if (id == executorId)
+            {
+                found = true;
+                result = slots ?? (enabled == false ? (firstProperty!.Value, firstProperty.Value) : null);
+            }
         }
         if (!found) throw new InvalidOperationException("executor-not-found");
         return result;
