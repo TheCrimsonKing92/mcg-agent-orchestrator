@@ -1429,7 +1429,10 @@ public sealed class WorkerContextPackageTests(Xunit.ITestOutputHelper output)
                 reviewerScopeTotalChangedFileCount: reviewerPaths.Length,
                 reviewerMergeTreeClean: false,
                 reviewerMergeTreeConflictPaths: reviewerConflictPaths,
-                reviewerMergeTreeTotalConflictPathCount: reviewerConflictPaths.Length);
+                reviewerMergeTreeTotalConflictPathCount: reviewerConflictPaths.Length,
+                deferredEvidence: new DeferredNoChangeEvidenceContext(reviewerGoal.Id.Value, null,
+                    [new("source-developer", new string('b', 40), null, null, null, false,
+                        DeferredNoChangeEvidenceAvailability.Unavailable, [], [], [], null, null, "inventory-unavailable")]));
 
             var scenarios = new[]
             {

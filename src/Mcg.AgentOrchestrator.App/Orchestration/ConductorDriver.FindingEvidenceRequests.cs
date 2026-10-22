@@ -698,7 +698,7 @@ internal sealed partial class ConductorDriver
         return false;
     }
 
-    private static string CreateFindingEvidenceReceiptId(
+    internal static string CreateFindingEvidenceReceiptId(
         string candidateSha,
         string findingRoundFingerprint,
         string identity) =>

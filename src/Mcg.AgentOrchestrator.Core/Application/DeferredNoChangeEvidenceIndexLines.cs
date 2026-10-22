@@ -36,33 +36,48 @@ public static class DeferredNoChangeEvidenceIndexLines
         foreach (var evt in goal.Timeline.Reverse())
         {
             if (evt.Kind is not (ProgressKind.FindingEvidenceRequestRecorded or ProgressKind.FindingEvidenceRunRecorded) ||
-                !evt.Message.StartsWith(Prefix, StringComparison.Ordinal)) continue;
-            var fields = evt.Message[Prefix.Length..].Split(';', StringSplitOptions.TrimEntries)
-                .Select(part => part.Split('=', 2))
-                .Where(parts => parts.Length == 2)
-                .ToDictionary(parts => parts[0], parts => parts[1], StringComparer.Ordinal);
-            if (!fields.TryGetValue("task_id", out var taskId) ||
-                !string.Equals(taskId, developerTaskId.Value, StringComparison.Ordinal) ||
-                !fields.TryGetValue("candidate_sha", out var sha) ||
-                !string.Equals(sha, candidateSha, StringComparison.OrdinalIgnoreCase) ||
-                !fields.TryGetValue("outcome", out var outcome)) continue;
-            static string[] Values(IReadOnlyDictionary<string, string> values, string key) =>
-                values.TryGetValue(key, out var value) && value.Length > 0
-                    ? value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                        .Select(Uri.UnescapeDataString).ToArray()
-                    : [];
-            fields.TryGetValue("receipt_id", out var receipt);
-            fields.TryGetValue("result_path", out var path);
-            var entry = new DeferredNoChangeEvidenceEntry(
-                outcome, developerTaskId, sha, receipt ?? "none", Values(fields, "selections"),
-                Values(fields, "not_run"), path == "none" ? null : Uri.UnescapeDataString(path ?? string.Empty),
-                Values(fields, "failing_tests"), fields.ContainsKey("declared") ? Values(fields, "declared") : null);
+                !TryParse(evt.Message, out var entry) || entry.DeveloperTaskId != developerTaskId ||
+                !string.Equals(entry.CandidateSha, candidateSha, StringComparison.OrdinalIgnoreCase)) continue;
             if (declaredClasses is null || MatchesDeclaration(entry, declaredClasses)) return entry;
         }
         return null;
     }
 
-    private static bool MatchesDeclaration(DeferredNoChangeEvidenceEntry entry, IReadOnlyList<string> declaredClasses)
+    // Decoding supplies a locator only. Store custody, canonical identity and evidence validity
+    // must be established by the host reader before any result can be used as proof.
+    public static bool TryParse(string message, out DeferredNoChangeEvidenceEntry entry)
+    {
+        entry = default!;
+        if (!message.StartsWith(Prefix, StringComparison.Ordinal)) return false;
+        try
+        {
+            var fields = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (var part in message[Prefix.Length..].Split(';', StringSplitOptions.TrimEntries))
+            {
+                var pair = part.Split('=', 2);
+                if (pair.Length != 2 || !fields.TryAdd(pair[0], pair[1])) return false;
+            }
+            if (!fields.TryGetValue("task_id", out var task) || string.IsNullOrWhiteSpace(task) ||
+                !fields.TryGetValue("candidate_sha", out var sha) || string.IsNullOrWhiteSpace(sha) ||
+                !fields.TryGetValue("outcome", out var outcome) ||
+                outcome is not ("started" or "green" or "red" or "unusable") ||
+                !fields.TryGetValue("receipt_id", out var receipt) ||
+                !fields.TryGetValue("result_path", out var path)) return false;
+            string[] Values(string key) => fields.TryGetValue(key, out var value) && value.Length > 0
+                ? value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                    .Select(Uri.UnescapeDataString).ToArray() : [];
+            entry = new(outcome, new TaskId(task), sha, receipt, Values("selections"),
+                Values("not_run"), path == "none" ? null : Uri.UnescapeDataString(path),
+                Values("failing_tests"), fields.ContainsKey("declared") ? Values("declared") : null);
+            return true;
+        }
+        catch (Exception ex) when (ex is ArgumentException or UriFormatException)
+        {
+            return false;
+        }
+    }
+
+    public static bool MatchesDeclaration(DeferredNoChangeEvidenceEntry entry, IReadOnlyList<string> declaredClasses)
     {
         static HashSet<string> ClassSet(IEnumerable<string> names) => names.Select(name => name.Trim())
             .Where(name => name.Length > 0).ToHashSet(StringComparer.Ordinal);
