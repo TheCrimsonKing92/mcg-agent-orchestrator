@@ -76,13 +76,11 @@ public sealed partial class GoalAcceptanceVerifier
                 return ClassifyCandidateRerunCheck(item.Identity, arm, check, receipt);
             }, StringComparer.Ordinal);
         });
+        var sources = new AcceptanceTestSourceResolver.Request(worktreePath);
         var rerunAttributions = await AcceptanceFailureAttributionPlanner.ApplyCandidateRerunAsync(
             allAttributions,
             baselineSha,
-            identity => AcceptanceTestSourceResolver.ResolveSourcePaths(
-                worktreePath,
-                projectByIdentity.GetValueOrDefault(identity),
-                identity),
+            identity => sources.ResolveSourcePaths(projectByIdentity.GetValueOrDefault(identity), identity),
             changedFiles,
             invocationBudget,
             rerunner,
