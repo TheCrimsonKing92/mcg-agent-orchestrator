@@ -32,8 +32,9 @@ public sealed class ProviderBudgetExhaustionClassifierTests : WorkerDispatchTest
     {
         var (kernel, task, verification) = RecordedReviewerCreditRefusal(string.Empty);
 
-        Assert.True(DispatchFailureClassifier.TryGetProviderBudgetExhaustionLine(verification, out var line));
-        Assert.Equal("Credit balance is too low", line);
+        var outcome = DispatchFailureClassifier.Classify(task, verification);
+        Assert.Contains("source=stdout", outcome.EvidenceSummary, StringComparison.Ordinal);
+        Assert.Contains("evidence=Credit balance is too low", outcome.EvidenceSummary, StringComparison.Ordinal);
 
         Assert.True(DispatchFailureClassifier.TryGetProviderBudgetExhaustionHold(
             kernel.Goals, "AnthropicApi", credentialBinding: null, out var hold));
