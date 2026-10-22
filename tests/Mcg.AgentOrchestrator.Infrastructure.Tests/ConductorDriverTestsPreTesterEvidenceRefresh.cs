@@ -11,7 +11,7 @@ public sealed class ConductorDriverTestsPreTesterEvidenceRefresh
     private const string ChangedPath = "tests/Mcg.AgentOrchestrator.Core.Tests/DeclaredCoreTests.cs";
 
     // The bound detects a hang; assertions measure cross-tick evidence and dispatch state.
-    [Fact(Timeout = 30_000)]
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Trait("Category", "CrossTick")]
     public void BuildOnlyUnusableRefreshesBeforeAnyTesterDispatch()
     {
@@ -46,7 +46,7 @@ public sealed class ConductorDriverTestsPreTesterEvidenceRefresh
     }
 
     // The bound detects a hang; assertions measure the persisted refresh budget and terminal outcome.
-    [Fact(Timeout = 30_000)]
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Trait("Category", "CrossTick")]
     public void BuildOnlyFreshUnusableEscalatesWithoutTesterDispatch()
     {
