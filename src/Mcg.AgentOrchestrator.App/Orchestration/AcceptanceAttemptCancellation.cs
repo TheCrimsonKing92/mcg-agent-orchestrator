@@ -44,12 +44,9 @@ internal static class AcceptanceAttemptCancellation
                 AcceptanceAttemptCancellationCause.GoalRecordMissing);
         }
 
-        // A gate cannot be admitted from these dispositions: Parked is excluded before the batch walk,
-        // and Failed/Cancelled/Superseded are excluded by GoalStatusSemantics. Seeing one after a gate
-        // started therefore records a real stop, while Active and AcceptanceFailed may merely be lagging
-        // pre-gate rows and are not stop signals on their own.
-        if (observedStatus.Value is GoalStatus.Parked or
-            GoalStatus.Cancelled or
+        // Active and AcceptanceFailed can be lagging pre-gate rows. Parked retains the
+        // existing gate-cancellation contract regardless of explicit-disposition metadata.
+        if (observedStatus.Value is GoalStatus.Parked or GoalStatus.Cancelled or
             GoalStatus.Superseded or
             GoalStatus.Failed)
         {

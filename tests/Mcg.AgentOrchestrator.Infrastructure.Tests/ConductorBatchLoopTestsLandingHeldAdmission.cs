@@ -44,11 +44,14 @@ public sealed class ConductorBatchLoopTestsLandingHeldAdmission : ConductorBatch
         var seeded = new List<(bool ShutdownLatched, bool ParentCached, int Admitted, int ObservedPaths)>();
         var snapshots = new List<(bool ShutdownLatched, bool ParentCached, int Admitted, int ObservedPaths)>();
         var sameGuards = false;
+        var admissionHasTickContext = false;
         SliceBatchParentExecutionGuard? parentGuard = null;
         SliceBatchAdmissionEvaluator? admissionGuard = null;
 
         TickReceipt("operator", duringAdmission: driver =>
         {
+            admissionHasTickContext = PrivateField(driver, "_conductorTickKernel").GetValue(driver) is not null &&
+                (int)PrivateField(driver, "_conductorTick").GetValue(driver)! == 1;
             seedCount++;
             PrivateField(driver, "_buildServerShutdownRanThisTick").SetValue(driver, true);
             var parentPresent = true;
@@ -70,6 +73,7 @@ public sealed class ConductorBatchLoopTestsLandingHeldAdmission : ConductorBatch
         });
 
         Assert.Equal(1, seedCount);
+        Assert.True(admissionHasTickContext);
         Assert.Equal((true, true, 1, 1), Assert.Single(seeded));
         Assert.True(sameGuards);
         Assert.Equal((false, false, 0, 0), Assert.Single(snapshots));
@@ -100,8 +104,9 @@ public sealed class ConductorBatchLoopTestsLandingHeldAdmission : ConductorBatch
         var goals = Enumerable.Range(0, 4).Select(index =>
             CreateVerifiedSimpleGoal(kernel, $"Landing hold admission {index}")).ToArray();
         // Ensure a real AdvanceOnce/GetFacts call in the walk even when all Verified goals queue.
+        GoalId? walkProbeId = null;
         if (duringGoalWalk is not null)
-            GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, AgentCatalog.Default().Agents, "Per-tick reset walk probe");
+            walkProbeId = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, AgentCatalog.Default().Agents, "Per-tick reset walk probe").Id;
         var wait = kernel.RequestHumanInputDeduplicated(goals[0].Id, null, "Supply prospective evidence",
             kind: HumanWaitKind.ProspectiveAcceptanceEvidence, evidenceOwner: owner,
             testNames: ["GateTests"]).Request;
@@ -124,9 +129,9 @@ public sealed class ConductorBatchLoopTestsLandingHeldAdmission : ConductorBatch
             id => new GateReadyLandingScopeObservation(true, paths[id]),
             (_, _, _) => new GateReadyMergeTreeObservation(true));
         driver = MakeDriver(
-            getFacts: _ =>
+            getFacts: goal =>
             {
-                if (admissionObserved && !walkObserved && driver is not null &&
+                if (goal.Id == walkProbeId && admissionObserved && !walkObserved && driver is not null &&
                     PrivateField(driver, "_conductorTickKernel").GetValue(driver) is not null)
                 {
                     walkObserved = true;

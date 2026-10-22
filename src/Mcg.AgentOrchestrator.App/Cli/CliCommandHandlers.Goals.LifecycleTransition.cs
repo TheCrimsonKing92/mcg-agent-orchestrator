@@ -84,7 +84,7 @@ internal static partial class CliCommandHandlers
         return new GoalLifecycleTransitionOutcome(
             GoalLifecycleTransitionDisposition.Applied,
             goal.Id,
-            GoalStatus.Active,
+            goal.Status,
             goal,
             goal.Timeline[^1]);
     }
@@ -104,9 +104,12 @@ internal static partial class CliCommandHandlers
                 }
 
                 Console.WriteLine($"Goal unparked {outcome.GoalId.Value[..8]}.");
-                Console.WriteLine("Status change: Parked -> Active");
+                if (outcome.ObservedStatus == GoalStatus.Active)
+                    Console.WriteLine("Status change: Parked -> Active");
+                else
+                    Console.WriteLine($"Status after unpark: {outcome.ObservedStatus}");
                 if (deliverCommittedLifecycleEvent is null)
-                    AppendCommittedLifecycleEvent(outcome, workspace, GoalStatus.Active);
+                    AppendCommittedLifecycleEvent(outcome, workspace, outcome.Goal!.Status);
                 else
                     deliverCommittedLifecycleEvent();
 

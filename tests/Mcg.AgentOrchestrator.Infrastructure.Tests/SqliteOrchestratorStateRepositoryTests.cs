@@ -1982,10 +1982,16 @@ public sealed class SqliteOrchestratorStateRepositoryTests
             "Persist a parked operator wait",
             [new TaskSpec(TaskId.New(), "Await an operator decision", AgentRole.Developer)]);
         kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        var request = kernel.RequestHumanInput(goal.Id, goal.Tasks.Single().Id, "Proceed?");
         await repo.SaveAsync(kernel);
+        // Explicit authority is committed by the supported command, never minted by a tick.
+        var parked = CliPersistentStateRunner.ExecuteGoalParkApplication(
+            new(goal.Id.Value, "deferred by operator", true), goal.Id, repo);
+        Assert.True(parked.ShouldSave);
+        kernel = await repo.LoadAsync();
         var baseline = kernel.ExportSnapshot().Goals.Single();
-        kernel.RequestHumanInput(goal.Id, goal.Tasks.Single().Id, "Proceed?");
-        kernel.ParkGoal(goal.Id, "deferred by operator");
+        Assert.Equal(new GoalExplicitDisposition(1, GoalExplicitDispositionAction.Park), baseline.ExplicitDisposition);
+        kernel.RecordTaskNote(goal.Id, goal.Tasks.Single().Id, "Progress retained while parked");
         var parkedState = kernel.ExportSnapshot();
 
         var results = await repo.SaveGoalSnapshotsWithMergeAsync(
@@ -1994,8 +2000,13 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         Assert.Equal(GoalSnapshotSaveDisposition.Saved, Assert.Single(results).Disposition);
         var restored = await repo.LoadAsync();
         Assert.Equal(GoalStatus.Parked, restored.GetGoal(goal.Id).Status);
+        Assert.Equal(baseline.ExplicitDisposition, restored.GetGoal(goal.Id).ExplicitDisposition);
         Assert.Equal(WorkTaskStatus.Assigned, restored.GetTask(goal.Id, goal.Tasks.Single().Id).Status);
         Assert.Empty(restored.GetPendingHumanInput(goal.Id));
+        Assert.True(Assert.Single(restored.ExportSnapshot().HumanInputRequests,
+            item => item.Id == request.Id.Value).IsCompleted);
+        Assert.Contains(restored.GetGoal(goal.Id).Timeline,
+            item => item.Message == "Progress retained while parked");
     }
 
     [Xunit.Fact]
