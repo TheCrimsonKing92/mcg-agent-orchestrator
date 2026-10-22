@@ -62,7 +62,40 @@ public sealed class WorktreeTreeDigestFailureTests
         Assert.Equal("IOException", failure.ExceptionType);
         Assert.Equal(-1, failure.ExitCode);
         Assert.False(failure.TimedOut);
-        Assert.Equal("step=exception exit=-1 exception=IOException", failure.Describe());
+        Assert.Equal("step=exception exit=-1 exception=IOException message=fake git start failure", failure.Describe());
+    }
+
+    [Theory]
+    [InlineData("wait")]
+    [InlineData("drain")]
+    public void TimeoutKindIsDescribedAfterTimedOutFlag(string kind)
+    {
+        Assert.False(WorktreeTreeDigest.TryCompute("fake-worktree", out _, out var reason, out var failure,
+            (_, _, args) => args[0] == "add" ? new(-1, "", null, true, kind) : Succeeded(args)));
+
+        Assert.Equal("digest-unavailable", reason);
+        Assert.NotNull(failure);
+        Assert.Equal($"step=add exit=-1 timed-out=true timeout={kind}", failure.Describe());
+    }
+
+    [Fact]
+    public void RunnerExceptionDescribesFirstMessageLine()
+    {
+        Assert.False(WorktreeTreeDigest.TryCompute("fake-worktree", out _, out var reason, out var failure,
+            (_, _, _) => throw new IOException("first line\r\nsecond line")));
+
+        Assert.Equal("digest-unavailable", reason);
+        Assert.NotNull(failure);
+        Assert.Equal("step=exception exit=-1 exception=IOException message=first line", failure.Describe());
+    }
+
+    [Fact]
+    public void WithDetailAppendsDescriptionOnlyWhenFailureExists()
+    {
+        Assert.Equal("digest-unavailable", WorktreeTreeDigestFailure.WithDetail("digest-unavailable", null));
+        Assert.Equal("digest-unavailable; digest_detail=step=add exit=128 stderr=fatal: x",
+            WorktreeTreeDigestFailure.WithDetail("digest-unavailable",
+                new WorktreeTreeDigestFailure("add", 128, false, null, "fatal: x")));
     }
 
     [Theory]

@@ -83,8 +83,8 @@ internal sealed class CompletionBuildEvidenceCoordinator : ICompletionBuildEvide
         }
         if (operation is null)
         {
-            if (!WorktreeTreeDigest.TryCompute(request.WorktreeRoot, out var digest, out var reason))
-                throw new InvalidOperationException($"Completion build candidate identity unavailable: {reason}");
+            if (!WorktreeTreeDigest.TryCompute(request.WorktreeRoot, out var digest, out var reason, out var failure))
+                throw new InvalidOperationException($"Completion build candidate identity unavailable: {WorktreeTreeDigestFailure.WithDetail(reason, failure)}");
             using var owner = Process.GetCurrentProcess();
             var id = Guid.NewGuid().ToString("N");
             operation = new CompletionBuildEvidenceOperation(id, goalId.Value, taskId.Value,

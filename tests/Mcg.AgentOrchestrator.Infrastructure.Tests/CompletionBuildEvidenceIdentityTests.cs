@@ -5,6 +5,31 @@ using Mcg.AgentOrchestrator.Core;
 public sealed class CompletionBuildEvidenceIdentityTests
 {
     [Fact]
+    public void UndigestibleCandidateThrowsWithFailedGitStep()
+    {
+        var fixture = new CompletionBuildEvidenceFixture();
+        var root = Path.Combine(Path.GetTempPath(), $"digest-non-repository-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            Assert.False(Directory.Exists(Path.Combine(root, ".git")));
+            Assert.Null(fixture.Task.CompletionBuildEvidence);
+            var exception = Assert.Throws<InvalidOperationException>(() => fixture.Coordinator().Reconcile(
+                fixture.Kernel, fixture.GoalId, fixture.TaskId,
+                new(root, ["src/Feature/Feature.csproj"], TimeSpan.FromMinutes(1)), fixture.Task.LastProcess!));
+
+            Assert.StartsWith("Completion build candidate identity unavailable: digest-unavailable; digest_detail=step=rev-parse exit=",
+                exception.Message);
+            Assert.Null(fixture.Task.CompletionBuildEvidence);
+            Assert.Equal(0, fixture.Launches);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public void MatchingCompletedBuildObservedAfterDeadlineStillCompletesCurrentDispatch()
     {
         var fixture = new CompletionBuildEvidenceFixture();
