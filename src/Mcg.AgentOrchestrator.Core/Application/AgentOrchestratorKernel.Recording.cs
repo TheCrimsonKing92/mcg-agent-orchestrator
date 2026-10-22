@@ -584,9 +584,9 @@ public sealed partial class AgentOrchestratorKernel
                 DeveloperCriteriaSelfCheck.ParseWorkerOutput(verification.AuthoritativeStandardOutput ?? verification.StandardOutput).ToTaskNote(taskId));
         }
 
-        ReportWorkerTaskProgress(
-            goalId,
-            taskId,
+        if (task.RequiredRole == AgentRole.Reviewer && outcome.Kind == DispatchOutcomeKind.VerifiedSuccess)
+            new ReviewerVerdictEvidenceClosure(_humanInputRequestLock, _clock, (g, t, k, m) => Append(g, t, k, m)).Close(goal, task, verification, HumanInputRequests);
+        ReportWorkerTaskProgress(goalId, taskId,
             outcome.Kind == DispatchOutcomeKind.VerifiedSuccess ? WorkTaskStatus.Completed : WorkTaskStatus.Failed,
             outcome.Kind == DispatchOutcomeKind.VerifiedSuccess
                  ? BuildCompletionMessageWithAdvisoryBlocker(
