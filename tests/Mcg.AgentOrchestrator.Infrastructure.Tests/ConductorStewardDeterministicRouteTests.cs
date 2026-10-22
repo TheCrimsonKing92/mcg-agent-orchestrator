@@ -13,20 +13,23 @@ public sealed class ConductorStewardDeterministicRouteTests
         Xunit.Assert.NotNull(output);
         var route = ConductorStewardAdjudicationParser.Parse(output);
         Xunit.Assert.Equal("ContractClarification", route.Cause);
-        Xunit.Assert.Contains(MultipleRequests, route.Text);
-        Xunit.Assert.Contains("Format-only", route.Text);
+        Xunit.Assert.Contains("Historical Planner contract recovery", route.Text);
+        Xunit.Assert.DoesNotContain(MultipleRequests, route.Text);
         Xunit.Assert.Contains("task/rejected-planner/stdout", route.Text);
         Xunit.Assert.Contains("every criterion mapping", route.Text);
         Xunit.Assert.Contains("research sections, source findings", route.Text);
-        Xunit.Assert.Contains("exact deduplicated union", route.Text);
-        Xunit.Assert.Contains("owner=acceptance-gate", route.Text);
-        Xunit.Assert.Contains("no store", route.Text);
+        Xunit.Assert.Contains("separate PLANNER_EVIDENCE_REQUEST JSON-object line for each distinct criterion_index/evidence_key", route.Text);
+        Xunit.Assert.Contains("owner, availability, needed, reason, store/store_ref and exact ordered test selections", route.Text);
+        Xunit.Assert.Contains("Do not combine distinct Acceptance identities", route.Text);
         Xunit.Assert.Contains("Operator obligations", route.Text);
+        Xunit.Assert.Contains("tracked as separate evidence directives", route.Text);
         Xunit.Assert.Contains("required proof and pending status", route.Text);
-        Xunit.Assert.Contains("never guess a merge or invent evidence", route.Text);
+        Xunit.Assert.Contains("never drop a requirement, guess a merge or invent evidence", route.Text);
         Xunit.Assert.Contains("Self-check", route.Text);
-        Xunit.Assert.Contains("count exactly one directive line", route.Text);
-        Xunit.Assert.Contains("every original Acceptance selection", route.Text);
+        Xunit.Assert.Contains("at most 16 evidence lines and 64 KiB combined UTF-8 payload", route.Text);
+        Xunit.Assert.Contains("Compare every original identity, owner and payload", route.Text);
+        Xunit.Assert.Contains("exact Acceptance selection union", route.Text);
+        Xunit.Assert.Contains("no pending test, review or Operator check is described as executed", route.Text);
     }
 
     [Xunit.Theory]

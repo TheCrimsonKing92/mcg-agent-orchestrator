@@ -90,7 +90,8 @@ public static class DispatchProcessHost
         // dispatch that arrives without it fails before launch rather than re-deriving a source.
         ClaudeCredentialSourceSelection? ClaudeCredentialSelection = null,
         TaskIntentAdmissionReference? TaskIntentAdmission = null,
-        string? StartGatePath = null);
+        string? StartGatePath = null,
+        WorkerBuildHostReference? WorkerBuildHost = null);
 
     public sealed record DispatchChildExitRecord(
         int ProcessId,
@@ -1363,7 +1364,8 @@ public static void DropToLow() {
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".grok");
 
     /// <summary>Entry point for the detached <c>__dispatch-run &lt;paramsPath&gt;</c> subcommand.</summary>
-    public static int Run(string parametersPath)
+    public static int Run(string parametersPath,
+        Func<WorkerBuildHostReference, IWorkerBuildRequestService>? buildService = null)
     {
         DispatchRunParameters parameters;
         try
@@ -1375,7 +1377,7 @@ public static void DropToLow() {
             return 1;
         }
 
-        return RunCore(parameters, null);
+        return RunCore(parameters, null, buildService);
     }
 
     internal sealed class HeartbeatTestHooks
@@ -1393,7 +1395,8 @@ public static void DropToLow() {
     internal static int RunWithHeartbeatHooksForTests(DispatchRunParameters parameters, HeartbeatTestHooks hooks) =>
         RunCore(parameters, hooks);
 
-    private static int RunCore(DispatchRunParameters parameters, HeartbeatTestHooks? heartbeatHooks)
+    private static int RunCore(DispatchRunParameters parameters, HeartbeatTestHooks? heartbeatHooks,
+        Func<WorkerBuildHostReference, IWorkerBuildRequestService>? buildService = null)
     {
         var startedAt = DateTimeOffset.UtcNow;
         var lastProgressAt = startedAt;
@@ -1408,6 +1411,7 @@ public static void DropToLow() {
         var prepExitWritten = false;
         Process? worker = null;
         OwnedProcessGroup? workerGroup = null;
+        WorkerBuildRequestChannel? buildChannel = null;
         Process? selectedChild = null;
         var selectedChildLock = new object();
         var diagnosticLock = new object();
@@ -1852,6 +1856,9 @@ public static void DropToLow() {
             WriteHeartbeat("starting");
             using var mandatoryContextLeases = AcquireMandatoryContextFileLeases(parameters);
             RequireStartGate(parameters.StartGatePath);
+            if (parameters.WorkerBuildHost is { } buildReference)
+                buildChannel = new WorkerBuildRequestChannel(parameters.WorkingDirectory,
+                    (buildService ?? throw new InvalidOperationException("Enrolled dispatch has no worker build service."))(buildReference));
             heartbeatHooks?.BeforeTaskIntentAdmission?.Invoke(startInfo);
             startInfo.Environment[WorkerSandboxOptions.DispatchWorkerVariable] = "1";
             worker = parameters.TaskIntentAdmission is { } intentAdmission
@@ -1868,6 +1875,7 @@ public static void DropToLow() {
                 }, heartbeatHooks?.ReadTaskIntentLaunchIdentity)
                 : ProcessTreeGuiSuppression.Start(startInfo);
             workerGroup ??= OwnedProcessGroup.Attach(worker);
+            buildChannel?.Register(worker, workerGroup);
             heartbeatHooks?.AfterTaskIntentAdmission?.Invoke(worker);
 
             try { WriteHeartbeat("launched"); }
@@ -1911,6 +1919,10 @@ public static void DropToLow() {
                 break;
             }
 
+            var completedBuildChannel = buildChannel;
+            buildChannel = null;
+            completedBuildChannel?.Dispose();
+
             // Drain with a bounded timeout. A grandchild that inherits the pipe handle
             // (e.g. claude-cli's node child) keeps CopyToAsync alive indefinitely after
             // the worker exits. Cap the wait and cancel so the finally block always
@@ -1952,6 +1964,12 @@ public static void DropToLow() {
             // Freeze that selection into the child record before publishing the completion signal.
             WriteHeartbeat("exited", terminal: true);
             WriteSelectedChildExitRecord();
+            try { buildChannel?.Dispose(); }
+            catch (Exception failure)
+            {
+                exitCode = 1;
+                RecordFallbackDiagnostic($"[dispatch-host] worker build reconciliation failed: {failure.GetType().Name}: {failure.Message}");
+            }
             WorkerProcessJobs.ReadAccountingAndDispose(workerGroup, kill: false, captureAccounting: false, out _);
             // The exit file is the completion signal consumed by BackgroundDispatchRunner. Publish it
             // only after every child/diagnostic artifact the completion path reads is durable.

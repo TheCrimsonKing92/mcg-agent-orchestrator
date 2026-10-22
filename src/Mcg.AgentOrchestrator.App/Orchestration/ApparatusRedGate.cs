@@ -273,6 +273,10 @@ internal sealed class ApparatusRedGate
             }
 
             var trxFailures = ReadTrxFailures(check);
+            var confirmedLaneFailures = uniqueChecks.ContainsKey(check.Name)
+                ? AcceptanceLaneRerunAttributionReader.ReadConfirmedFailures(
+                    check, goal.Id.Value, acceptance.BranchHeadSha, acceptance.MainHeadSha, acceptance.AttemptId)
+                : [];
             foreach (var identity in identities)
             {
                 var failure = trxFailures.FirstOrDefault(candidate => IdentityMatches(candidate.TestName, identity));
@@ -291,6 +295,9 @@ internal sealed class ApparatusRedGate
                     attribution.TestIdentity.Equals(identity, StringComparison.Ordinal) &&
                     attribution.Origin == AcceptanceTestFailureOrigin.Introduced &&
                     attribution.CandidateRerun?.Outcome == "Failed") == true;
+                var confirmedLaneFailure = confirmedLaneFailures.SingleOrDefault(failure => failure.TestIdentity == identity);
+                var baselineAttributions = check.FailingTestAttributions?.Where(attribution =>
+                    attribution.TestIdentity == identity).ToArray() ?? [];
                 var notExecutedReruns = check.FailingTestAttributions?
                     .Where(attribution =>
                         attribution.TestIdentity.Equals(identity, StringComparison.Ordinal) &&
@@ -311,13 +318,15 @@ internal sealed class ApparatusRedGate
                         StringComparer.OrdinalIgnoreCase)),
                     HasCrossGoalOccurrence: false,
                     CandidateRerunPassed: rerunPassed,
-                    CandidateRerunFailed: rerunFailed,
+                    CandidateRerunFailed: rerunFailed || confirmedLaneFailure is not null,
                     FailureMessage: message,
                     MessageFingerprint: messageFingerprint,
                     ReferencedChangedTypes: CandidateChangedTypeReferenceReader.MatchReferencedTypes(
                         sourceRoot, sourcePaths, declaredChangedTypes.Value, sourceRequest),
                     CandidateRerunNotExecuted: notExecutedReruns.Length > 0,
-                    CandidateRerunInfrastructureSignature: rerunInfrastructureSignature));
+                    CandidateRerunInfrastructureSignature: rerunInfrastructureSignature,
+                    ConfirmedLaneFailure: confirmedLaneFailure,
+                    BaselineAttribution: baselineAttributions.Length == 1 ? baselineAttributions[0] : null));
             }
         }
 

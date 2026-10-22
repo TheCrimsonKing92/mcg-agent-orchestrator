@@ -186,6 +186,7 @@ public sealed partial class AgentOrchestratorKernel
             .Where(request =>
                 request.GoalId == goalId &&
                 (request.TaskId == taskId || request.TaskId is null) &&
+                (request.PlannerIdentity is null || request.PlannerIdentity.BriefVersion == goal.AuthoritativeBrief.Version) &&
                 request.IsCompleted &&
                 !request.WasDismissed &&
                 !request.IsSyntheticParkedHumanWaitCompletion &&
@@ -217,7 +218,7 @@ public sealed partial class AgentOrchestratorKernel
                 request.Id.Value,
                 request.Question,
                 request.AuthoritativeAnswer!.Text,
-                request.AuthoritativeAnswer.BriefVersion))
+                request.PlannerIdentity?.BriefVersion ?? request.AuthoritativeAnswer.BriefVersion))
             .ToList();
         var prerequisiteEvidenceSection = PrerequisiteEvidenceDigest.RenderSection(
             prerequisiteEvidence,
@@ -315,6 +316,10 @@ public sealed partial class AgentOrchestratorKernel
 
         instructionLines.Add(string.Empty);
         segments.Add(TaskBriefSegment.Fixed(instructionLines));
+
+        var plannerEvidenceLines = PlannerEvidenceBriefSection.Build(goal, HumanInputRequests);
+        if (plannerEvidenceLines.Count > 0)
+            segments.Add(TaskBriefSegment.Fixed(plannerEvidenceLines));
 
         if (goal.RefinedSpec is { } refinedSpec)
         {

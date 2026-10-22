@@ -33,6 +33,15 @@ internal static partial class PlannerOutputContract
         ("risks and stop conditions", RisksHeading())
     ];
 
+    internal static HumanInputDirectiveParseResult ParseEvidenceRequests(
+        string standardOutput, AgentRole role, bool completeOutputAvailable)
+    {
+        var batch = AgentOutputDirectives.ParseHumanInputRequest(standardOutput, role);
+        return batch.Directives.Any(item => item.PlannerEvidence is not null) && !completeOutputAvailable
+            ? new(null, "Cannot validate Planner evidence without the complete authoritative worker decision stream; replan.")
+            : batch;
+    }
+
     internal static PlannerOutputContractResult Resolve(
         string standardOutput,
         string standardError,

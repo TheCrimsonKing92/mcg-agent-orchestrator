@@ -10,7 +10,7 @@ public sealed class GroupedAdmissionLandingHoldTests
     [InlineData("operator", true)]
     [InlineData("owner", true)]
     [InlineData(null, true)]
-    [InlineData("Acceptance", true)]
+    [InlineData("Acceptance", false)]
     [InlineData("other", true)]
     [InlineData("acceptance-gate", false)]
     public void Apply_UnsatisfiableWait_ExcludesWithRequestId(string? owner, bool namesTests)
@@ -52,6 +52,7 @@ public sealed class GroupedAdmissionLandingHoldTests
     [Theory]
     [InlineData("acceptance-gate")]
     [InlineData("ACCEPTANCE-GATE")]
+    [InlineData("Acceptance")]
     public void Apply_GateSatisfiableWait_ReturnsSameReadyProjection(string owner)
     {
         var (kernel, goal) = Setup();

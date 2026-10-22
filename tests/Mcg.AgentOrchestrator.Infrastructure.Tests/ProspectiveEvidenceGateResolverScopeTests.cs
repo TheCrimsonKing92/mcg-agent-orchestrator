@@ -5,7 +5,6 @@ public sealed class ProspectiveEvidenceGateResolverScopeTests
 {
     [Theory]
     [InlineData("operator", "names", HumanWaitKind.ProspectiveAcceptanceEvidence)]
-    [InlineData("Acceptance", "names", HumanWaitKind.ProspectiveAcceptanceEvidence)]
     [InlineData("Acceptance", "null", HumanWaitKind.ProspectiveAcceptanceEvidence)]
     [InlineData(null, "names", HumanWaitKind.ProspectiveAcceptanceEvidence)]
     [InlineData("acceptance-gate", "empty", HumanWaitKind.ProspectiveAcceptanceEvidence)]
@@ -28,6 +27,34 @@ public sealed class ProspectiveEvidenceGateResolverScopeTests
         Assert.Empty(wait.AnswerHistory);
         Assert.Empty(result.ResolvedRequestIds);
         Assert.Empty(result.UnresolvedWaits);
+    }
+
+    [Theory]
+    [InlineData("Acceptance")]
+    [InlineData("acceptance")]
+    [InlineData("ACCEPTANCE-GATE")]
+    public void AcceptanceAlias_ResolvesSelectorsAndPreservesExcludedSiblings(string owner)
+    {
+        using var fixture = new ProspectiveEvidenceGateFixture();
+        var eligible = fixture.CreateWait([ProspectiveEvidenceGateFixture.IncidentClass], owner);
+        var selectorless = fixture.CreateWait(null, owner);
+        var operatorWait = fixture.CreateWait([ProspectiveEvidenceGateFixture.IncidentClass], "operator");
+        fixture.WriteAttempt(ProspectiveEvidenceGateFixture.PassingRows);
+
+        var result = fixture.Resolve();
+
+        Assert.Equal([eligible.Id], result.ResolvedRequestIds);
+        Assert.True(eligible.IsCompleted);
+        Assert.Equal(HumanInputAnswerOrigin.Worker, eligible.AuthoritativeAnswer!.Origin);
+        Assert.Empty(result.UnresolvedWaits);
+        Assert.Equal(new[] { selectorless.Id, operatorWait.Id }.OrderBy(id => id.Value),
+            fixture.Kernel.GetPendingHumanInput(fixture.Goal.Id).Select(wait => wait.Id).OrderBy(id => id.Value));
+        Assert.All(new[] { selectorless, operatorWait }, wait =>
+        {
+            Assert.False(wait.IsCompleted);
+            Assert.Null(wait.Answer);
+            Assert.Empty(wait.AnswerHistory);
+        });
     }
 
     [Fact]

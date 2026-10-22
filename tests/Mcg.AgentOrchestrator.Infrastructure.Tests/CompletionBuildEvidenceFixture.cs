@@ -10,6 +10,7 @@ internal sealed class CompletionBuildEvidenceFixture : WorkerDispatchTestSupport
     internal readonly string Root;
     internal readonly string StatePath;
     internal readonly string ReceiptPath;
+    internal readonly DotnetBuildStorageRoot Storage;
     internal AgentOrchestratorKernel Kernel;
     internal readonly GoalId GoalId;
     internal readonly TaskId TaskId;
@@ -32,6 +33,7 @@ internal sealed class CompletionBuildEvidenceFixture : WorkerDispatchTestSupport
     internal CompletionBuildEvidenceFixture()
     {
         Root = CreateSeededDispatchRepository();
+        Storage = new DotnetBuildStorageRoot(Path.Combine(Root, "build-storage"));
         StatePath = Path.Combine(Root, "state.db");
         ReceiptPath = Path.Combine(Root, "build-receipt.json");
         var fixture = CreateCompletedGoalWorktreeDispatch(Root, AgentRole.Developer,
@@ -96,7 +98,7 @@ internal sealed class CompletionBuildEvidenceFixture : WorkerDispatchTestSupport
             new GoalEvidenceOperationCoordinator(new ReconcileSweepRemediationStore(StatePath), Root,
                 TimeSpan.FromMinutes(10), () => Clock.UtcNow, () => child.Pid, () => id, () => child.StartedAt,
                 new FakePidProbe()).TryBegin(goal, CompletionBuildEvidenceCoordinator.OperationName),
-        startProcess: startProcess, readIdentity: readIdentity, hostReaders: hostReaders);
+        startProcess: startProcess, readIdentity: readIdentity, hostReaders: hostReaders, storageRoot: Storage);
 
     private CompletionBuildEvidenceOperation Persist(CompletionBuildEvidenceOperation operation)
     {

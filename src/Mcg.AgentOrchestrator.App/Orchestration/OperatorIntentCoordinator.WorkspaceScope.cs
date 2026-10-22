@@ -41,7 +41,7 @@ internal sealed partial class OperatorIntentCoordinator
                     throw new InvalidOperationException("Workspace intent services are unavailable.");
                 replayed = intent.Verb switch
                 {
-                    OperatorIntentVerbs.ExecutorSetSlots or OperatorIntentVerbs.FocusedEvidenceSet =>
+                    OperatorIntentVerbs.ExecutorSetSlots or OperatorIntentVerbs.ExecutorSetEnabled or OperatorIntentVerbs.FocusedEvidenceSet =>
                         ApplyExecutorSetting(intent, out executorSettingSummary),
                     OperatorIntentVerbs.LessonRecord => ApplyLessonRecord(kernel, intent, Lessons!),
                     OperatorIntentVerbs.LessonRetire => ApplyLessonRetire(intent, Lessons!),

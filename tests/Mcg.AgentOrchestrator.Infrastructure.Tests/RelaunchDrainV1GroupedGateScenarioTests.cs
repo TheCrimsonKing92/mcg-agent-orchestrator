@@ -261,7 +261,8 @@ public sealed class RelaunchDrainV1GroupedGateScenarioTests : AcceptanceCohortWo
         internal void PublishPassingReceipt(ConductorGroupedGateAttempt attempt)
         {
             var identity = AcceptanceCohortIdentity.Create(new ConductorAcceptanceCohortSelection(
-                attempt.Members.Select(member => member.ToProjection(attempt.MainRevision)).ToArray(), []).BindMembers(),
+                attempt.Members.Select(member => member.ToProjection(attempt.MainRevision)).ToArray(), [])
+                    .BindMembers(id => _kernel.GetGoal(id).AuthoritativeBrief.Version),
                 attempt.MainRevision, attempt.CombinedTreeRevision, attempt.ManifestIdentity);
             Assert.Equal(attempt.IdentityValue, identity.Value);
             new CohortAcceptanceStore(Path.Combine(Workspace.OrchestratorDirectory, "cohort-acceptance.db"))

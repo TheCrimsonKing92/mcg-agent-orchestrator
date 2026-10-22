@@ -8,6 +8,14 @@ namespace Mcg.AgentOrchestrator.App.Cli;
 
 internal static class CliConductLoopStartup
 {
+    internal static void PrintConductorPolicyWarnings(ConductorPolicyResolution resolution)
+    {
+        foreach (var warning in resolution.Warnings)
+        {
+            Console.WriteLine($"[conduct] WARNING: {warning}");
+        }
+    }
+
     internal static ConductorPolicyResolution? PrepareConductLoopPolicy(
         string orchestratorDirectory,
         string? policyName,

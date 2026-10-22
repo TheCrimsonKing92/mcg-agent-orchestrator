@@ -956,7 +956,8 @@ function Set-MtpHermeticEnvironment {
         if (-not $allowedNames.Contains($item.Name) -and
             -not $item.Name.StartsWith('DOTNET_', [System.StringComparison]::OrdinalIgnoreCase) -and
             -not $item.Name.StartsWith('NUGET_', [System.StringComparison]::OrdinalIgnoreCase)) {
-            [System.Environment]::SetEnvironmentVariable($item.Name, $null, [System.EnvironmentVariableTarget]::Process)
+            # PowerShell $null binds to an empty string; typed null removes the key on modern .NET.
+            [System.Environment]::SetEnvironmentVariable($item.Name, [System.Management.Automation.Language.NullString]::Value, [System.EnvironmentVariableTarget]::Process)
         }
     }
 
@@ -1005,7 +1006,7 @@ function Restore-MtpEnvironment {
 
     foreach ($item in @(Get-ChildItem Env:)) {
         if (-not $Snapshot.ContainsKey($item.Name)) {
-            [System.Environment]::SetEnvironmentVariable($item.Name, $null, [System.EnvironmentVariableTarget]::Process)
+            [System.Environment]::SetEnvironmentVariable($item.Name, [System.Management.Automation.Language.NullString]::Value, [System.EnvironmentVariableTarget]::Process)
         }
     }
     foreach ($entry in $Snapshot.GetEnumerator()) {

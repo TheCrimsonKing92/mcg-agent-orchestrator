@@ -51,6 +51,18 @@ public static class TaskIntentAdmission
     public static Process Launch(TaskIntentAdmissionReference reference, string decisionKey, Func<Process> start)
         => Launch(reference, decisionKey, start, readIdentity: null);
 
+    // A dispatch-scoped action is not another worker launch. The same task mutex linearizes it
+    // against intent intake, and the canonical prepared revision must still authorize the action.
+    internal static void ExecuteAuthorized(TaskIntentAdmissionReference reference, string decisionKey, Action action)
+        => Serialize(reference.StorePath, reference.GoalId, reference.TaskId, () =>
+        {
+            var store = SqliteOperatorIntentStore.OpenAdmissionAuthority(reference.StorePath);
+            var denial = store.RecordSuppression(reference, decisionKey);
+            if (denial is not null) throw new TaskIntentDispatchSuppressedException(denial);
+            action();
+            return true;
+        });
+
     internal static Process Launch(TaskIntentAdmissionReference reference, string decisionKey, Func<Process> start,
         Func<Process, SpawnProcessIdentityReadResult>? readIdentity)
         => Serialize(reference.StorePath, reference.GoalId, reference.TaskId, () =>

@@ -129,6 +129,31 @@ internal sealed class CancelDispatchIntentTestStore : IOperatorIntentStore
 
     public void Add(OperatorIntentRecord intent) => _items.Add(intent);
 
+    public Task<IReadOnlyList<OperatorIntentRecord>> CaptureGoalBatchAsync(string claimOwner,
+        CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyList<OperatorIntentRecord>>(_items
+            .Where(item => item.GoalId != OperatorIntentScopes.Workspace &&
+                (item.Status == OperatorIntentStatus.Pending ||
+                 item.Status == OperatorIntentStatus.Claimed && item.ClaimOwner == claimOwner))
+            .OrderBy(item => item.CreatedAt).ThenBy(item => item.Id, StringComparer.Ordinal).ToArray());
+
+    public Task<OperatorIntentRecord?> ClaimNextInBatchAsync(string goalId, string claimOwner,
+        IReadOnlySet<string> intentIds, bool pendingOnly = false, string? verb = null,
+        CancellationToken cancellationToken = default)
+    {
+        var intent = _items.Where(item => item.GoalId == goalId && intentIds.Contains(item.Id) &&
+                (verb is null || item.Verb == verb) &&
+                (item.Status == OperatorIntentStatus.Pending ||
+                 !pendingOnly && item.Status == OperatorIntentStatus.Claimed && item.ClaimOwner == claimOwner))
+            .OrderBy(item => item.Status == OperatorIntentStatus.Claimed ? 0 : 1)
+            .ThenBy(item => item.CreatedAt).ThenBy(item => item.Id, StringComparer.Ordinal).FirstOrDefault();
+        if (intent is null) return Task.FromResult<OperatorIntentRecord?>(null);
+        var index = _items.FindIndex(item => item.Id == intent.Id);
+        _items[index] = intent with { Status = OperatorIntentStatus.Claimed, ClaimOwner = claimOwner,
+            ClaimedAt = intent.ClaimedAt ?? DateTimeOffset.UtcNow };
+        return Task.FromResult<OperatorIntentRecord?>(_items[index]);
+    }
+
     public Task<OperatorIntentRecord> EnqueueAsync(OperatorIntentRecord intent, CancellationToken cancellationToken = default)
     {
         BeforeEnqueue?.Invoke();

@@ -1,5 +1,41 @@
 # Operator Runbook
 
+## Host-owned worker build requests
+
+New Developer/Tester dispatches enroll in worker-build protocol 1 before their start gate opens. The sanctioned `Invoke-WorkerBuildCheck.ps1` adapter submits project/configuration selections to that dispatch host's local named pipe. `.orchestrator-context/worker-build-channel.json` is a locator, never authorization or evidence. The host checks the connected OS peer against its owned worker job and derives goal/task/dispatch authority from canonical state. Requests cannot name an executable, store, process to stop, or lease owner.
+
+The pipe grants its limited client rights to the host token's logon SID, read through native `GetTokenInformation(TokenLogonSid)`. `WindowsIdentity.Groups` filters logon SIDs and cannot supply that identity. Missing or unreadable token identity fails channel creation; do not substitute a user-wide ACE. LowIL access, exclusion of pipe-instance creation rights and owned-job peer admission remain required. See the [.NET group filtering implementation](https://github.com/dotnet/runtime/blob/main/src/libraries/System.Security.Principal.Windows/src/System/Security/Principal/WindowsIdentity.cs) and [Windows token information contract](https://learn.microsoft.com/en-us/windows/win32/api/winnt/ne-winnt-token_information_class).
+
+Completion-only coordinators pin one build storage root at construction and use it for result creation, origin validation and their child process environment. Recovery must supply the same configured root; a result path in another root fails origin validation. Never derive the owning root from a worker-supplied result path or accept multiple roots to bypass that check.
+
+`status --agent` exposes optional `workerBuildInvocations` metadata only for tasks with invocation records, as the last task-row field. Tasks without records retain the ordered `number`, `status`, `role`, `description`, `agent` fields, including a null `agent` when unassigned. Populated metadata retains invocation, dispatch, candidate, phase, outcome, consumed and custody-release fields; pending records include `outcome: null`. The envelope remains `mcg.status` version 1, and a missing goal label remains null. Human output is unchanged. Durable history lives in task snapshots in the existing state database. Worker output and worker-editable receipts do not certify protocol-1 builds. Pre-protocol dispatches retain their existing legacy receipt limits; completion-only operations retain `WorkerNotRunning` and their separate identity.
+
+The phases are Requested, Authorized, WaitingForCustody, CustodyAcquired, WaitingForBuildSlot, BuildSlotAcquired, PreparingLaunch, ChildRegistered, CompilerStarted and Completed. Custody is the existing goal-evidence lease; build capacity is the ordinary first-free byte-range slot lock. They are separate observations. The canonical dispatch process record pins the host PID, start time and image path; authorization and consumption reject a missing or mismatched identity component. The host registers suspended child PID/start/image before resume, verifies current dispatch admission and candidate/scope again at resume and completion, and records terminal state before acknowledging the adapter. LowIL compiler token integrity and the process object's Low mandatory label with NoWriteUp/NoReadUp (NWNR) policy are set and independently read back through the original owned suspended-process handle before any candidate code runs; compiler environment selection omits provider credentials.
+
+Integrity preparation changes only the owned compiler token and process mandatory label. A label API failure or inconsistent readback prevents resume and follows the existing owned-job termination and host terminal-outcome path. A Low token paired with a Medium/NWNR process object denies ordinary self-process queries; lowering the token alone is insufficient. The Medium host, parent process, repository and trusted receipt protections retain their existing policy. Same-user Low peers can obtain handles to the Low process object subject to its existing DACL; NWNR is not isolation between peers at the same integrity level. Acceptance must verify the native Medium-host path, successful Low compilation, both label readbacks, existing write-up and Medium-parent protections, failure cleanup and managed host-death recovery on the changed candidate. The toy diagnostic probe does not satisfy these obligations. See the Windows [mandatory-label policy](https://learn.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-system_mandatory_label_ace) and [handle-based label update contract](https://learn.microsoft.com/en-us/windows/win32/api/aclapi/nf-aclapi-setsecurityinfo).
+
+Compiler `TEMP`/`TMP` stays invocation-specific under the owning goal's artifacts directory (`tmp/<invocation>`), alongside the logs rather than beneath them. MSBuild adds a user directory and generated batch filename for `Exec`; a batch path beyond the limit accepted by `cmd.exe` can fail before its command starts. Integration fixture diagnostics retain the first error/exception from a bounded prefix scan as well as the output tail. These diagnostics explain failures and never authorize or classify a build. See the [retry investigation](diagnosis/35bcb7de-worker-build-retry.md) for the path control and remaining LowIL evidence gap.
+
+| Outcome | Host observation |
+| --- | --- |
+| Success | Every scoped build process exited zero; candidate/scope still match |
+| CompilerFailure | An owned, resumed build process exited nonzero |
+| CapacityBeforeStart | Build-slot acquisition ended without acquiring a slot or launching a compiler |
+| TimeoutAfterStart | Host deadline fired after an observed owned compiler start |
+| Cancelled | Worker lifetime or operator authorization ended; owned termination confirmed |
+| StaleCandidate | Candidate content or scope no longer matches the invocation |
+| Interrupted / ApparatusFailure | Launch, supervision or reconciliation could not establish a build verdict |
+
+An adapter disconnect is transport loss: the host retains supervision through its deadline or worker exit. Reusing an idempotency key with the same immutable payload returns the existing invocation; changing that payload rejects it. Terminal invocations never relaunch. Consumption checks the current canonical dispatch, candidate and project coverage and records application once. A stale snapshot cannot erase a host observation or clear consumption.
+
+The host records `BuildSlotAcquired` immediately after acquiring ordinary build capacity, before filesystem/LowIL preparation or launch. A deadline in that preparation window is `Interrupted`, never `CapacityBeforeStart`; the latter rejects any recorded slot acquisition. Worker-build dispatch identity excludes provider session metadata learned or updated by heartbeat, while retaining goal, task, dispatch time, worker, directory and command binding at enrollment, launch and consumption. The shared dispatch identity used by other paths is unchanged.
+
+After dispatch-host death, normal exited-dispatch reconciliation checks the recorded process identities, confirms children are terminal, records Interrupted (or attributable operator cancellation), and releases only the matching custody owner. Unknown liveness retains the obligation and custody; investigate the exact recorded identities using `repo-process-info` before recovery. Do not force-unlock, rewrite receipts, or repeat a worker build to hide an unresolved invocation. Recovery-count and checkpoint limits are unchanged.
+
+Source trace: `GoalDispatchOperationsStart` → `BackgroundDispatchRunner.TryStartLatestDispatch` enrolls and transports `WorkerBuildHostReference`; `Program` → `DispatchProcessHost.Run` installs `WorkerBuildRequestHost`; `WorkerBuildRequestChannel.ServeAsync` admits OS peers; `WorkerBuildRequestHost.Execute` owns custody, ordinary slots, suspended child registration/resume and terminal persistence; `WorkerBuildInvocationOperations.Store` uses expected-version canonical transactions; `Consume` validates applicability and applies once. Worker exit closes the channel; `CancelLatestProcess` and `ExitedDispatchReconciliationExecutor` reconcile host-death obligations. `TaskSpec` and snapshot merging preserve monotonic invocation history independently of worker-attempt progress.
+
+Acceptance must execute `WorkerBuildRequestIntegrationTests`, `WorkerBuildRequestAuthorityTests`, `WorkerBuildRequestRecoveryTests`, the existing completion/legacy/slot compatibility selections, the [authority negative control](negative-controls/35bcb7de-worker-build-authority.md), and normal full acceptance. Independent cross-family implementation review remains required. Post-activation organic observation remains pending in backlog `ebd739048ebd470ba03e71893df1d5b3`; fixture evidence cannot close it. The historical `ce387eac` timeout cause remains undetermined.
+
 On a new Windows host, run `.\mcg-orchestrator.cmd host-exclusions --apply` once from an elevated PowerShell as the same user account that runs the orchestrator. Run `host-exclusions` without a switch to inspect the required roots first; it changes nothing. New orchestrator roots must be created through `OrchestratorTempRoot`, `DotnetBuildEnvironmentManager` root resolution, `TempRootJanitor` low-integrity root resolution, or the `GoalAcceptanceVerifier` root-name members and included by `HostScanExclusionRoots`, so this verb lists the roots that the creating code owns.
 
 Repository scripts, diagnostic probes, and evidence utilities use PowerShell and .NET. Do not use Python for this work or introduce a Python installation requirement for repository users.
@@ -424,6 +460,7 @@ Known direct-command limitation: [acceptance](cli-reference.md#acceptance-and-ga
 | `recover <goal> <note>` | A task or lifecycle record is stuck, orphaned, or out of sync. | Repairs task/lifecycle state and may make tasks dispatchable again. |
 | `gate-cancel <goal-prefix> --text-file <path> [--attempt <attempt-id>]` | A solo, cohort or merge-train gate is running a stale or unwanted candidate and holds the acceptance slot. | The tick stops the attempt's process tree through its holder job, appends `GATE_CANCELLED` to the conduct event stream and frees the slot. No member gets `AcceptanceFailed`, a retry-budget change or a failure receipt. A solo goal returns to `Verified`; a goal whose task was reopened stays as it is. Poll `operator-intent-status <intent-id>`. Rejection codes: `invalid-payload`, `no-live-gate-attempt`, `attempt-not-live`, `holder-not-cancellable`, `holder-stop-unproven`, `gate-cancel-unavailable`. |
 | `acceptance-retry <goal> <reason> --confirm-acceptance-retry` | The goal is `AcceptanceFailed`, every task is already `Completed` or deliberately `Cancelled`, and the gate failed for an environmental reason. | Returns the goal to `Verified` for the next conductor tick, preserves task and dispatch evidence, resets the automatic acceptance retry budget, and records the operator re-gate. It does not reopen a task or emit `WorkerDispatch`, and is capped at three calls per goal. |
+| `acceptance-attribution-pending` attention | The bound candidate failed again in an executed lane rerun, baseline attribution is unavailable, and cross-goal history is the only proposed apparatus basis. | Retains `AcceptanceFailed` and the original first/rerun receipts. No automatic gate, Developer reopen or retry-budget increment occurs. The existing landing attention names the candidate, main, attempt, failing identities, receipt digests and missing baseline evidence. After supplying attributable baseline evidence or a relevant verified repair, run `acceptance-retry <goal> "<reason>" --confirm-acceptance-retry`. It requires the unresolved escalation for that failure occurrence and keeps the normal operator cap and task-verification preconditions. The next normal gate reevaluates attribution; no baseline-only executor is implied. |
 | `retry <goal> <task-number> <reason>` | The implementation or verification evidence is wrong and a worker must revise it. | Reopens that task, clears its latest gate evidence, and allows another worker round; downstream tasks may also be invalidated. |
 | `revise <goal> --brief-file <path> [--reason-file <path>]` | The goal premise or brief is stale, but the goal should continue with corrected authority. | Creates a new authoritative brief version and reports the not-yet-started, in-flight, and completed task sets. In-flight dispatches continue from their prior snapshot and completed tasks stay unchanged. Use `revise <goal> --history` to audit versions. |
 | `goal-amend <goal> --waive <criterion-number|exact-text> --reason-file <path> [--actor <name>]` | An in-flight goal has an infeasible or mis-specified acceptance criterion. | Records an auditable waiver and re-renders the criterion as explicitly waived in future worker briefs. This whole-kernel verb currently requires a quiet window. |
@@ -900,12 +937,43 @@ it is separate from physical build permits and goal leases. Conductor stop check
 durable holder detach (or exact cancellation and terminal publication). A successor reconciles
 these records every admission tick, including holders of terminal or out-of-scope goals.
 Result publication, heartbeat age, lease expiry and root exit do not release an occupied job.
-An independent Windows PowerShell custodian acquires the named job handle before holder
+An independent compiled managed custodian (`dotnet App.dll __acceptance-custodian`) acquires the named job handle before holder
 assignment, outside that job. It survives conductor and holder exit, waits for job completion
 notifications, and publishes `<metadata>.holder-settled.json` only after accounting proves zero
 active processes. The receipt binds the job name and full holder identity. A missing job name
 without this receipt remains a hold. Kill-on-close remains enabled so loss of the final custody
-handle cancels the bound tree. The `claim` lease receipt measures custody startup latency.
+handle cancels the bound tree. App supplies the absolute muxer from its loaded shared runtime and
+the current App assembly closure with explicit repository/state/project/tenant selectors. The
+internal command verifies workspace binding before custody and opens no state database or conductor
+lock. Readiness and attachment messages bind the exact job, holder and custodian identities; only
+validated native assignment permits transfer of the holder's transient job handle. Startup failure
+retains up to 8192 diagnostic characters while draining stderr concurrently. Readiness retains its
+30-second production bound and diagnostic draining its five-second bound.
+The `claim` lease receipt measures custody startup latency.
+
+Custody performance evidence is Operator-owned and stays pending until the immutable final candidate
+exists. In an idle window, use isolated old/new workspaces (never roll back the live runtime), the same
+absolute dotnet host, Windows host, configuration and bounded holder fixture. On each revision collect
+at least five fresh successful production `AcceptanceHolderLease.Claim` admissions; record immutable
+revision, application/host paths, configuration and every `claim` receipt's `DurationMilliseconds`.
+Use the same count per revision and record raw values, median, minimum and maximum; keep unsuccessful
+attempts separate. Run the holder fixture through natural exit and bound native settlement for every
+sample. Do not measure during live acceptance. An unchanged or slower result is valid; removal of the
+second runtime/compiler path is the architectural delivery, and no speed-up is presumed. After landing,
+record activated native custody on that runtime: exact host/App identity, job name, holder and custodian
+PID/start/image, membership excluding the custodian, and successful bound durable settlement. Pre-landing
+test receipts do not satisfy this activation observation.
+
+The bounded fixture entrypoint is the test-only `Mcg.AgentOrchestrator.SupervisorLaunchProbe.dll
+acceptance-claim <absolute-fixture-root> <fresh-token>`. Launch it with the selected absolute dotnet
+host and redirected stdin/stdout/stderr. Read its JSON admission receipt, retain the exact reported
+custodian process handle, send `exit` on stdin, and require both processes to exit zero and the
+reported settlement file to match the job/holder identity. Bound readiness and exit waits at 60 seconds
+as hang detectors. The receipt includes raw `AdmissionMilliseconds`, host/App paths, custodian identity,
+and the production lease's `claim` timing. Repeat with a fresh root/token per sample. The fixture adapts
+the old/new `Claim` signatures only in test code; use the same fixture source/hash on both isolated
+application revisions. `AcceptanceJobCustodianLaunchTests.ProductionClaimLaunchesCompiledCustodyAndSettles`
+exercises this entrypoint and verifies that custody startup creates no state directory.
 Retention also preserves unsettled holder artifacts, including evidence whose goal owner is absent.
 Unreadable claims and legacy attempts with live or uninspectable identities remain capacity holds;
 do not clear them by changing lease age or lowering gate width. For a complete recorded PID/start/image
@@ -1026,3 +1094,12 @@ Historical examples moved from worker guidance are retained here under their sou
 - `AGENTS.md` — output/diagnosis/spec discipline and architecture invariants (read after this).
 - `.agents/skills/orchestrator-worker-verification/SKILL.md` — how to verify a worker result before trusting it.
 - `next <goal> --full` — authoritative live goal inspection; `readiness [goal]` reads terminal-goal diagnosis and start blockers through the read-only route, without outbox draining. Bare `readiness` keeps the session current goal when its id is present in goal metadata; otherwise it selects the newest-created goal (including terminal goals), with metadata enumeration order breaking creation-time ties. It loads only the selected goal for the report. `readiness-repair <goal>` is the only readiness form that repairs; it and `goal-recovery <goal>` run repairing terminal-goal sweeps and can change state.
+## Executor admission
+
+Pause new work with `executor-set-enabled <existing-id> false`; resume with `executor-set-enabled <existing-id> true`. These queue native workspace intents through the same attribution, Mutate authorization, audit and idempotency path as `executor-set-slots`. Inspect the returned intent identity, then poll `operator-intent-status <intent-id>` until `Applied` or `Rejected`. Enqueue success alone does not change admission. The sole configuration owner updates the existing host `.orchestrator/remote-lane-executors.json` atomically, retaining unrelated bytes and a backup. Missing `enabled` defaults to true; present values must be JSON booleans. This command changes admission only.
+
+Configuration capture is the linearization boundary. Atomic application affects subsequent captures, including a later tick (workspace intents are serviced before the goal walk). Existing attempts keep their immutable captured settings, including pending offers; already owned jobs continue polling, collecting, validating, settling and cleaning up exactly as before. Disabling does not cancel work, change an earlier verdict or mark a host unhealthy. Reenable permits future captures; it does not revise an earlier fallback.
+
+Capture points: gate lanes load in `GoalAcceptanceVerifier.LoadRemoteLanes`; focused remote-first loads at `RemoteFirstFocusedEvidence.RunAsync`; shadow at `RemoteFocusedEvidenceShadow.Start`; worker-build captures placement configuration in `CompletionBuildEvidenceCoordinator` before `RemoteWorkerBuildCheck.RunAsync`; screening loads once per `executor-screen` invocation (including its candidate loop); self-test captures its selected entry at command start. Background health probes capture when selected by `ConductorRemoteExecutorProbe.Evaluate`; tools reconciliation captures at `ConductorExecutorToolsDeploy.Run`. Newly selected work skips disabled hosts before occupancy, tools-digest or screening probes. Existing handle receipt/settlement paths retain their bindings. When all applicable entries are disabled, new admission records `no-enabled-executor` and follows the existing local fallback or screening idle policy.
+
+The effect is limited to the activated updated runtime and its updated consumers. Older binaries ignore `enabled`; activate the updated runtime using the existing restart/publish handoff procedure before relying on the setting. This is not fleet-wide immediate revocation. `remote-executors` and Fleet show disabled configured hosts separately from historical health, without scheduling a probe. No live fleet change or deployment is part of verifying this command.

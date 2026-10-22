@@ -74,7 +74,7 @@ internal sealed partial class ConductorDriver
             goalsById.TryGetValue(member.GoalId, out var goal)
                 ? goal
                 : throw new InvalidOperationException($"Selected cohort goal {member.GoalId.Value} is not in the current Ready batch.")).ToArray();
-        var bindings = selection.BindMembers();
+        var bindings = selection.BindMembers(id => goalsById[id].AuthoritativeBrief.Version);
         AcceptanceCohortWorkspace integration;
         try
         {

@@ -30,10 +30,10 @@ public sealed class AgentOutputDirectivesPlannerLineRulesTests
     }
 
     [Xunit.Fact]
-    public void PlannerDirectiveRetainsEveryOriginalFragment()
+    public void PlannerDirectiveRetainsRequiredPlanAndEvidenceRules()
     {
         var directive = PlannerDirective();
-        string[] originalFragments =
+        string[] requiredFragments =
         [
             "Planner: print the complete decision-changing plan in stdout before WORKER_RESULT; stdout is authoritative, and a summary or private model-home file path alone is invalid. ",
             "A referenced plan artifact is only a fallback when stdout parsing fails; writing a separate artifact is not required. ",
@@ -42,10 +42,13 @@ public sealed class AgentOutputDirectivesPlannerLineRulesTests
             "Map every numbered acceptance criterion, and state valid/invalid premise evidence, backticked file/symbol citations, the owner/lifecycle decision, external and unhappy-path contracts, integration sequence, ",
             "For every criterion mapping use `disposition=planned; plan=<mapping>` or `disposition=undecidable; would-settle=<evidence>; required-source=<producer/store>; unavailable-because=<reason>`. ",
             "An undecidable criterion does not block other criteria and requires `blockers: none` when no operator action is needed. ",
-            "For evidence that exists only in an unreadable store, emit exactly one `PLANNER_EVIDENCE_REQUEST:` JSON directive with criterion_index, evidence_key, availability=retrievable, store, needed, and reason. ",
-            "For evidence that was never recorded, prefer an undecidable mapping; if operator action is still required, use availability=never-recorded and omit store. ",
-            "Evidence needed to decide or plan now is a blocking prerequisite; evidence that can only be produced after the candidate exists is prospective acceptance evidence. ",
-            "For the latter, use availability=post-implementation with owner and omit store; retain the exact criterion obligation without claiming the check was executed. ",
+            "Repeat `PLANNER_EVIDENCE_REQUEST:` JSON-object lines per criterion_index/evidence_key (max 16 lines/65536 UTF-8 payload bytes total). ",
+            "Mix historical/future Acceptance/Operator items; none only alone; no substantive HUMAN_INPUT. ",
+            "Each object requires criterion_index, evidence_key, availability, needed, and reason. ",
+            "Unreadable store: availability=retrievable plus store. Never-recorded: prefer undecidable; operator action requires availability=never-recorded, no store. ",
+            "Prerequisites block now; future obligations: availability=post-implementation plus owner, no store, never claim execution. ",
+            "Gate tests: owner=acceptance-gate; non-empty tests array of class, Class.Method or exact theory rows. Selectorless acceptance: authorized explicit answer; Operator checks stay independent. ",
+            "Host alone binds goal/task/dispatch brief version. Invalid batch/identity conflicts or out-of-range criteria reject all; fix diagnostics and replan. ",
             "backticked verification commands with TEST-VERIFIABLE or REAL-WORLD-DEPENDENT, and explicit stop conditions. ",
             "Cited repository paths must exist unless explicitly marked as a new file to create. ",
             "Mark a new file with the exact token `(new file)` or `— new file` immediately after its backticked path, ",
@@ -56,10 +59,11 @@ public sealed class AgentOutputDirectivesPlannerLineRulesTests
             "a single colon before a symbol name is not recognised and the whole string is then treated as a file path that does not exist.",
         ];
 
-        foreach (var fragment in originalFragments)
+        foreach (var fragment in requiredFragments)
         {
             Xunit.Assert.Contains(fragment, directive, StringComparison.Ordinal);
         }
+        Xunit.Assert.DoesNotContain("emit exactly one", directive, StringComparison.Ordinal);
     }
 
     [Xunit.Fact]

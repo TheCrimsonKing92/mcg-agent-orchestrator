@@ -192,16 +192,6 @@ public sealed class AcceptanceInfrastructureDeferredException : Exception
     }
 }
 
-public sealed record AcceptanceVerificationResult(
-    bool Passed,
-    bool Skipped,
-    int? ExitCode,
-    string? OutputTail,
-    bool Retried = false,
-    string? ArtifactsPath = null,
-    IReadOnlyList<AcceptanceCheckResult>? Checks = null,
-    IReadOnlyList<string>? TestResultPaths = null);
-
 public enum DotnetShardDisposition
 {
     RunDotnetShards,
@@ -1596,6 +1586,9 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             fresh = (finalResult, fresh.Retried || finalResult.LaneRerun is not null);
         }
         var attemptIdentity = (_executionContext as AcceptanceAttemptExecutionOwner)?.Identity;
+        fresh = (AcceptanceLaneRerunAttributionReader.Attach(fresh.Result, goalId?.Value,
+            cacheContext?.VerifyingCommitSha ?? attemptIdentity?.VerifyingCommitSha,
+            cacheContext?.MainSha ?? attemptIdentity?.MainSha), fresh.Retried);
         fresh = (AcceptanceAssemblyCleanupAttributionReader.Attach(fresh.Result, goalId?.Value,
             cacheContext?.VerifyingCommitSha ?? attemptIdentity?.VerifyingCommitSha,
             cacheContext?.MainSha ?? attemptIdentity?.MainSha), fresh.Retried);

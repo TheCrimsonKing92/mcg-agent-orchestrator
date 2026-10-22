@@ -40,6 +40,6 @@ internal static class CliAttentionShowJsonQueryCommand
         items = CliCommandHandlers.CollaborationItemsForAttention(items, kernel, goal?.Id, includeHistory: false);
         Console.WriteLine(AttentionShowAgentReadView.Render(goal?.Id.Value, waits, items,
             item => CliCommandHandlers.IsSpecClarification(item)
-                ? CliCommandHandlers.ClarificationId(item, identityUniverse) : null, time));
+                ? CliCommandHandlers.ClarificationId(item, identityUniverse) : null, time, kernel.Goals));
     }
 }

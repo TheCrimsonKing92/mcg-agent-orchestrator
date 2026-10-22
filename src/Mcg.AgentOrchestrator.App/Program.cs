@@ -13,7 +13,7 @@ if (args.Length >= 1 && args[0] == CompletionBuildEvidenceCoordinator.Subcommand
 // workspace, or state setup so the detached worker process stays minimal and self-contained.
 if (args.Length >= 2 && args[0] == DispatchProcessHost.SubcommandName)
 {
-    return DispatchProcessHost.Run(args[1]);
+    return DispatchProcessHost.Run(args[1], reference => new WorkerBuildRequestHost(reference));
 }
 
 if (args.Length >= 2 && args[0] == ConductorParallelAcceptanceAttemptCoordinator.OwnedProcessSubcommandName)
@@ -102,7 +102,8 @@ var startupArgs = tenantSelection.CommandArgs.Count == 0
     : CliArgumentParser.NormalizeArgs(tenantSelection.CommandArgs.ToArray());
 try
 {
-    if (CliCommandHandlers.TryPrintStartupHelp(startupArgs))
+    if (!(startupArgs.Count > 0 && startupArgs[0] == AcceptanceJobCustodianHost.Subcommand) &&
+        CliCommandHandlers.TryPrintStartupHelp(startupArgs))
     {
         return 0;
     }
@@ -197,6 +198,15 @@ if (startupArgs.Count == 2 && startupArgs[0] == "__workspace-binding-check" && s
         stopFile = workspace.ConductorStopFilePath
     }));
     return 0;
+}
+if (startupArgs.Count > 0 && startupArgs[0] == AcceptanceJobCustodianHost.Subcommand)
+{
+    if (invocationBinding.RepositoryRoot is null || invocationBinding.ExpectedStateDirectory is null)
+    {
+        Console.Error.WriteLine("Acceptance custody requires explicit workspace binding.");
+        return 1;
+    }
+    return AcceptanceJobCustodianHost.Run(startupArgs);
 }
 OrchestratorHome.ExportForDescendants(OrchestratorHome.ResolveForLaunch(repoRoot));
 OrchestratorDataRoot.ExportForDescendants();

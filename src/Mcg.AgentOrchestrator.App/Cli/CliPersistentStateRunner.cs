@@ -951,6 +951,9 @@ internal static partial class CliPersistentStateRunner
         var tickBaselines = new Dictionary<string, GoalSnapshot>(StringComparer.Ordinal);
         AgentOrchestratorKernel LoadLoopKernel() => LoadLoopKernelForGoals([]);
 
+        AgentOrchestratorKernel LoadOperatorIntentTargets(IReadOnlyCollection<GoalId> goalIds)
+            => ConductLoopTargetLoader.LoadOperatorIntentTargets(stateRepository, goalIds, tickBaselines);
+
         AgentOrchestratorKernel LoadLoopKernelForGoals(IReadOnlyCollection<string> trackedGoalIds)
         {
             var loaded = LoadConductLoopKernel(
@@ -960,7 +963,7 @@ internal static partial class CliPersistentStateRunner
                     .Distinct(StringComparer.Ordinal)
                     .ToArray(),
                 workspace.ExecutionDirectory);
-            CaptureMissingConductLoopTickBaselines(tickBaselines, loaded);
+            ConductLoopTargetLoader.CaptureMissingTickBaselines(tickBaselines, loaded);
             return loaded;
         }
         var startupStopPath = workspace.ConductorStopFilePath;
@@ -1152,6 +1155,7 @@ internal static partial class CliPersistentStateRunner
             reloadResolvedParkedHumanWaitKernel: () => LoadConductLoopResolvedParkedHumanWaitKernel(stateRepository),
             reloadParkedGoalSafetyNetKernel: () => LoadConductLoopParkedGoalSafetyNetKernel(stateRepository),
             reloadKernelForGoals: LoadLoopKernelForGoals,
+            loadOperatorIntentTargets: LoadOperatorIntentTargets,
             checkpointGoalKernel: CheckpointGoals,
             initialConductLoopLoadHold: initialConductLoopLoadHold,
             persistCriticalGoalKernel: PersistCriticalGoals,
@@ -1210,16 +1214,6 @@ internal static partial class CliPersistentStateRunner
                 result.PersistedHumanInputRequests);
         }
         return true;
-    }
-
-    internal static void CaptureMissingConductLoopTickBaselines(
-        IDictionary<string, GoalSnapshot> tickBaselines,
-        AgentOrchestratorKernel loadedKernel)
-    {
-        ArgumentNullException.ThrowIfNull(tickBaselines);
-        ArgumentNullException.ThrowIfNull(loadedKernel);
-        foreach (var goal in loadedKernel.ExportSnapshot().Goals)
-            tickBaselines.TryAdd(goal.Id, goal);
     }
 
     internal static void PersistCriticalGoalSnapshotsOrThrow(

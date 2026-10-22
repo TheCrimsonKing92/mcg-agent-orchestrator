@@ -3,7 +3,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 public sealed class AcceptancePolicyShardPlannerTests
 {
     private const string AppEvidence =
-        "changed projects: App; dependency closure: App, Infrastructure.Cli.Tests, " +
+        "changed projects: App; dependency closure: App, Infrastructure.Acceptance.Tests, Infrastructure.Cli.Tests, " +
         "Infrastructure.ProviderEnvironment.Tests, Infrastructure.Tests, TestSupport";
 
     [Fact]
@@ -89,7 +89,7 @@ public sealed class AcceptancePolicyShardPlannerTests
 
         Assert.Equal(
             "changed projects: Infrastructure.OperatorComms; dependency closure: App, " +
-            "Infrastructure.Cli.Tests, Infrastructure.OperatorComms, Infrastructure.ProviderEnvironment.Tests, " +
+            "Infrastructure.Acceptance.Tests, Infrastructure.Cli.Tests, Infrastructure.OperatorComms, Infrastructure.ProviderEnvironment.Tests, " +
             "Infrastructure.Tests, TestSupport",
             plan.Evidence);
         Assert.DoesNotContain(

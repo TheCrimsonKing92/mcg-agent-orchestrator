@@ -36,7 +36,7 @@ internal sealed partial class GoalDispatchOperations
         Func<DateTimeOffset>? utcNow = null)
     {
         utcNow ??= () => DateTimeOffset.UtcNow;
-        ReconcileExitedAssignedProcessRecords(kernel, goal);
+        ReconcileExitedAssignedProcessRecords(kernel, workspace, goal);
         goal = kernel.GetGoal(goal.Id);
         var intentStore = SqliteOperatorIntentStore.ForDirectories(workspace.OrchestratorDirectory, workspace.LogDirectory);
         var intentAdmissions = goal.Tasks.ToDictionary(task => task.Id,
@@ -252,7 +252,7 @@ internal sealed partial class GoalDispatchOperations
         bool? cascadeTesterCheapFirst = null,
         string? cascadeCheapModelAlias = null, bool? cascadeMechanicalReworkCheap = null)
     {
-        runner ??= new BackgroundDispatchRunner();
+        runner ??= OperatorCancelAwareDispatchRunner.ForWorkspace(workspace);
         var logRoot = workspace.LogDirectory;
         var intentStore = SqliteOperatorIntentStore.ForDirectories(workspace.OrchestratorDirectory, logRoot);
         var plan = kernel.BuildProcessBatchPlan(goal.Id, ProcessBatchActionKind.StartDispatches);

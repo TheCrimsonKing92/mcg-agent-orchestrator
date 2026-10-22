@@ -6,7 +6,7 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 internal sealed record RemoteLaneExecutorEntry(string Id, int LeaseSeconds,
     string? Transport = null, string? RunnerAlias = null, string? AdminAlias = null,
     string? RemoteRepository = null, string? RunRoot = null, int PollSeconds = 10, int Slots = 1,
-    bool OccupancyProbe = false, bool ToolsDigestCheck = false);
+    bool OccupancyProbe = false, bool ToolsDigestCheck = false, bool AdmissionEnabled = true);
 
 internal sealed record RemoteFocusedEvidenceSettings(
     string Mode = "off", int SampleEvery = 4, int GraceSeconds = 300, string? FaultReason = null,
@@ -68,6 +68,15 @@ internal sealed record RemoteLaneExecutorConfiguration(
                     if (value > 0) seconds = value;
                 }
                 var slots = 1;
+                var admissionEnabled = true;
+                var enabledProperties = executor.EnumerateObject().Where(property => property.NameEquals("enabled")).ToArray();
+                if (enabledProperties.Length > 1) return Disabled("invalid");
+                if (enabledProperties.Length == 1)
+                {
+                    if (enabledProperties[0].Value.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+                        return Disabled("invalid");
+                    admissionEnabled = enabledProperties[0].Value.GetBoolean();
+                }
                 if (executor.TryGetProperty("slots", out var slotCount))
                 {
                     if (slotCount.ValueKind != JsonValueKind.Number || !slotCount.TryGetInt32(out slots) ||
@@ -76,7 +85,7 @@ internal sealed record RemoteLaneExecutorConfiguration(
                 }
                 if (!executor.TryGetProperty("transport", out var transport))
                 {
-                    entries.Add(new(id.GetString()!, seconds, Slots: slots));
+                    entries.Add(new(id.GetString()!, seconds, Slots: slots, AdmissionEnabled: admissionEnabled));
                     continue;
                 }
                 if (transport.ValueKind != JsonValueKind.String || transport.GetString() != "ssh")
@@ -112,7 +121,7 @@ internal sealed record RemoteLaneExecutorConfiguration(
                     toolsDigestCheck = digestCheck.GetBoolean();
                 }
                 entries.Add(new(id.GetString()!, seconds, "ssh", runner, admin, repository, runRoot,
-                    pollSeconds, slots, occupancyProbe, toolsDigestCheck));
+                    pollSeconds, slots, occupancyProbe, toolsDigestCheck, admissionEnabled));
             }
             var names = new List<string>();
             foreach (var lane in lanes.EnumerateArray())

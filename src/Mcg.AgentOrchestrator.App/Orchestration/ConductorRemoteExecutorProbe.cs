@@ -36,7 +36,7 @@ internal sealed class ConductorRemoteExecutorProbe(
             }
             var now = clock.GetUtcNow();
             var entry = RemoteLaneExecutorConfiguration.LoadExecutors(configurationPath).FirstOrDefault(entry =>
-                entry.Transport == "ssh" && entry.AdminAlias is not null &&
+                entry.AdmissionEnabled && entry.Transport == "ssh" && entry.AdminAlias is not null &&
                 (!_starts.TryGetValue(entry.Id, out var last) || now - last >= TimeSpan.FromMinutes(10)) &&
                 !RemoteExecutorOccupancy.IsOccupied(hostStateRoot, entry.Id, startTimeOf));
             if (entry is null) return;

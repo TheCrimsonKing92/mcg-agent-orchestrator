@@ -3,6 +3,20 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed class RepoProcessCliCommandTests
 {
+    [Xunit.Theory]
+    [Xunit.InlineData("dotnet App.dll __acceptance-custodian", "dotnet", "acceptance-custodian")]
+    [Xunit.InlineData("dotnet App.dll \"__acceptance-custodian\"", "dotnet", "acceptance-custodian")]
+    [Xunit.InlineData("dotnet App.dll __acceptance-custodian-extra", "dotnet", "app-host")]
+    [Xunit.InlineData("dotnet App.dll --note=__acceptance-custodian", "dotnet", "app-host")]
+    [Xunit.InlineData("tool __acceptance-custodian", "tool", "app-host")]
+    [Xunit.InlineData("dotnet Other.dll __acceptance-custodian", "dotnet", "app-host")]
+    [Xunit.InlineData("dotnet App.dll repo-process-info --command-contains __acceptance-custodian", "dotnet", "app-host")]
+    public void CustodianClassificationRequiresExactCommandToken(string command, string name, string expected)
+    {
+        var snapshot = Snapshot(DateTimeOffset.Parse("2026-08-26T12:00:00Z")) with
+            { CommandLine = command, Name = name };
+        Assert.Equal(expected, RepoProcessCliCommand.ClassifyKind(snapshot));
+    }
     [Xunit.Fact]
     public void StopRevalidation_RecycledPid_RefusesAction()
     {

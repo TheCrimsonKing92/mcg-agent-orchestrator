@@ -73,7 +73,8 @@ public sealed record AcceptanceFailureSnapshot(
     string? BranchHeadSha = null,
     string? MainHeadSha = null,
     IReadOnlyList<AcceptanceCheckAttribution>? CheckAttributions = null,
-    string? BaselineAttestation = null);
+    string? BaselineAttestation = null,
+    AcceptanceAttributionPending? AttributionPending = null);
 
 public sealed record RefinedSpecSnapshot(
     string BehavioralContract,
@@ -146,7 +147,8 @@ public sealed record TaskSnapshot(
     DateTimeOffset? CriterionRetryFeedbackRoundAt = null,
     bool LatestRetryInherited = false,
     DateTimeOffset? SubscriptionDeferralReleasedAt = null,
-    CompletionBuildEvidenceOperation? CompletionBuildEvidence = null);
+    CompletionBuildEvidenceOperation? CompletionBuildEvidence = null,
+    IReadOnlyList<WorkerBuildInvocation>? WorkerBuildInvocations = null);
 
 public sealed record TaskExecutionSnapshot(
     string AgentId,
@@ -202,7 +204,8 @@ public sealed record TaskVerificationSnapshot(
     PlannerEvidenceStoreReference? HumanInputStoreReference = null,
     VerificationEvidenceSource EvidenceSource = VerificationEvidenceSource.Unspecified,
     DateTimeOffset? DispatchAttemptAt = null,
-    IReadOnlyList<FindingEvidenceRequestDisposition>? FindingEvidenceRequestDispositions = null)
+    IReadOnlyList<FindingEvidenceRequestDisposition>? FindingEvidenceRequestDispositions = null, HumanInputDirectiveParseResult? PlannerEvidenceBatch = null,
+    string? OrchestratorFailureReason = null)
 {
     public string StandardOutput { get; init; } = VerificationTextBounds.BoundText(StandardOutput, StandardOutputPath);
 
@@ -264,7 +267,8 @@ public sealed record TaskDispatchSnapshot(
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     IReadOnlyList<string>? SelectedSkills = null,
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
-    WorkerBuildScopeIdentity? WorkerBuildScope = null);
+    WorkerBuildScopeIdentity? WorkerBuildScope = null,
+    int WorkerBuildProtocolVersion = 0);
 
 public sealed record TaskProcessSnapshot(
     int ProcessId,
@@ -287,7 +291,8 @@ public sealed record TaskProcessSnapshot(
     string? ExitArtifactReason = null,
     bool WasGracefullyDetachedByConductor = false,
     IReadOnlyList<int>? NonBlockingProcessIds = null,
-    DateTimeOffset? ProcessIdentityStartedAt = null);
+    DateTimeOffset? ProcessIdentityStartedAt = null,
+    string? ProcessIdentityImagePath = null);
 
 public sealed record TaskProcessResourceAccountingSnapshot(
     long CpuMilliseconds,
@@ -335,7 +340,9 @@ public sealed record HumanInputRequestSnapshot(
     long SuppressionRevision = 0,
     string? EvidenceOwner = null,
     PlannerEvidenceStoreReference? StoreReference = null,
-    IReadOnlyList<string>? TestNames = null);
+    IReadOnlyList<string>? TestNames = null,
+    PlannerEvidenceIdentity? PlannerIdentity = null,
+    PlannerEvidencePayload? PlannerEvidence = null);
 
 public static class VerificationTextBounds
 {

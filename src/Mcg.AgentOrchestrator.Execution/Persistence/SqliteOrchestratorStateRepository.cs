@@ -855,7 +855,11 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
         var merged = stored.ToDictionary(request => request.Id, StringComparer.Ordinal);
         foreach (var request in current ?? [])
         {
-            if (!merged.TryGetValue(request.Id, out var existing))
+            var typedExisting = request.PlannerIdentity is null ? null : merged.Values.FirstOrDefault(item => item.PlannerIdentity == request.PlannerIdentity);
+            if (typedExisting is not null && !request.PlannerEvidence!.SemanticallyEquals(typedExisting.PlannerEvidence))
+                throw new InvalidOperationException("Conflicting Planner evidence payload in snapshot merge.");
+            var mergeId = typedExisting?.Id ?? request.Id;
+            if (!merged.TryGetValue(mergeId, out var existing))
             {
                 merged[request.Id] = request;
                 continue;
@@ -872,8 +876,9 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
                 < 0 => existing,
                 _ => request.SuppressionCount > existing.SuppressionCount ? request : existing
             };
-            merged[request.Id] = winner with
+            merged[mergeId] = winner with
             {
+                Id = mergeId,
                 SuppressionCount = suppressionWinner.SuppressionCount,
                 SuppressionAnswerRevision = suppressionWinner.SuppressionAnswerRevision,
                 SuppressionRevision = suppressionWinner.SuppressionRevision
@@ -1676,6 +1681,10 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
               AND EXISTS (
                   SELECT 1 FROM json_each(goals.snapshot_json, '$.Tasks') AS task
                   WHERE json_extract(task.value, '$.Status') NOT IN ('{WorkTaskStatus.Completed}', '{WorkTaskStatus.Cancelled}')
+                    OR EXISTS (
+                        SELECT 1 FROM json_each(task.value, '$.WorkerBuildInvocations') AS invocation
+                        WHERE json_extract(invocation.value, '$.Outcome') IS NULL
+                           OR COALESCE(json_extract(invocation.value, '$.CustodyReleased'), 0) = 0)
               )
             """;
         var ids = new List<GoalId>();
@@ -2039,6 +2048,19 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
     private static bool IsSnapshotDeserializeException(Exception exception) =>
         exception is JsonException or NotSupportedException or ArgumentException;
 
+    private static IReadOnlyList<GateTestObligation> MergePlannerGateObligations(
+        IReadOnlyList<GateTestObligation>? stored, IReadOnlyList<GateTestObligation>? current)
+    {
+        var merged = (stored ?? []).ToList();
+        foreach (var item in current ?? [])
+        {
+            var existing = merged.FirstOrDefault(candidate => candidate.HasSameIdentity(item));
+            if (existing is null) merged.Add(item);
+            else if (item.PlannerIdentity is not null && !item.PlannerEvidence!.SemanticallyEquals(existing.PlannerEvidence))
+                throw new InvalidOperationException("Conflicting Planner gate evidence payload in snapshot merge.");
+        }
+        return merged;
+    }
     private static bool TryMergeGoalSnapshots(
         GoalSnapshot baseline,
         GoalSnapshot stored,
@@ -2071,6 +2093,7 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
             BriefVersions = PickStoreOwnedList(baseline.BriefVersions, stored.BriefVersions, current.BriefVersions),
             Status = PickTickOwned(baseline.Status, stored.Status, current.Status),
             Tasks = mergedTasks,
+            GateTestObligations = MergePlannerGateObligations(stored.GateTestObligations, current.GateTestObligations),
             Timeline = MergeTimeline(baseline.Timeline, stored.Timeline, current.Timeline),
             DependsOn = PickStoreOwnedList(baseline.DependsOn, stored.DependsOn, current.DependsOn),
             // Slice-batch ownership is immutable aggregate intake metadata. Operator/store changes win
@@ -2224,12 +2247,15 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
             LastExecution = attemptAuthority is null ? PickTickOwned(baseline.LastExecution, stored.LastExecution, current.LastExecution) : attemptAuthority.LastExecution,
             LastVerification = attemptAuthority is null ? PickStoreOwned(baseline.LastVerification, stored.LastVerification, current.LastVerification) : attemptAuthority.LastVerification,
             VerificationHistory = PickStoreOwnedList(baseline.VerificationHistory, stored.VerificationHistory, current.VerificationHistory),
-            LastDispatch = attemptAuthority is null ? PickTickOwned(baseline.LastDispatch, stored.LastDispatch, current.LastDispatch) : attemptAuthority.LastDispatch,
+            LastDispatch = PreserveWorkerBuildEnrollment(
+                attemptAuthority is null ? PickTickOwned(baseline.LastDispatch, stored.LastDispatch, current.LastDispatch) : attemptAuthority.LastDispatch,
+                stored.LastDispatch, current.LastDispatch),
             LastProcess = attemptAuthority is null ? PickSameAttemptProcess(baseline.LastProcess, stored.LastProcess, current.LastProcess) : attemptAuthority.LastProcess,
             // Operation ownership is independent of the worker-attempt snapshot. A stale tick may
             // advance other attempt fields while the persisted owner has already launched its child.
             CompletionBuildEvidence = MergeCompletionBuildEvidence(
                 baseline.CompletionBuildEvidence, stored.CompletionBuildEvidence, current.CompletionBuildEvidence),
+            WorkerBuildInvocations = MergeWorkerBuildInvocations(stored.WorkerBuildInvocations, current.WorkerBuildInvocations),
             VerificationPlan = PickStoreOwned(baseline.VerificationPlan, stored.VerificationPlan, current.VerificationPlan),
             SubscriptionRetryAfter = PickStoreOwned(baseline.SubscriptionRetryAfter, stored.SubscriptionRetryAfter, current.SubscriptionRetryAfter),
             SubscriptionDeferralReleasedAt = PickStoreOwned(baseline.SubscriptionDeferralReleasedAt, stored.SubscriptionDeferralReleasedAt, current.SubscriptionDeferralReleasedAt),
@@ -2263,6 +2289,46 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
             // current-HEAD evidence when an unrelated store mutation advances concurrently.
             PreReviewEvidenceReceipt = PickTickOwned(baseline.PreReviewEvidenceReceipt, stored.PreReviewEvidenceReceipt, current.PreReviewEvidenceReceipt)
         };
+    }
+
+    private static IReadOnlyList<WorkerBuildInvocation> MergeWorkerBuildInvocations(
+        IReadOnlyList<WorkerBuildInvocation>? stored, IReadOnlyList<WorkerBuildInvocation>? current)
+    {
+        var result = (stored ?? []).ToDictionary(i => i.Id);
+        foreach (var incoming in current ?? [])
+        {
+            if (!result.TryGetValue(incoming.Id, out var previous)) { result.Add(incoming.Id, incoming); continue; }
+            if (!previous.SameOrigin(incoming)) throw new InvalidOperationException("Conflicting worker build origin.");
+            var older = previous.Version <= incoming.Version ? previous : incoming;
+            var newer = previous.Version <= incoming.Version ? incoming : previous;
+            if (older.Version == newer.Version)
+            {
+                if (System.Text.Json.JsonSerializer.Serialize(older) != System.Text.Json.JsonSerializer.Serialize(newer))
+                    throw new InvalidOperationException("Conflicting worker build transition.");
+            }
+            else
+            {
+                // A stale snapshot may skip multiple host transitions, but cannot rewrite their prefix.
+                older.RequireSuccessor(newer with { Version = older.Version + 1 });
+            }
+            result[incoming.Id] = newer;
+        }
+        return result.Values.OrderBy(i => i.DispatchAt).ThenBy(i => i.Id, StringComparer.Ordinal).ToArray();
+    }
+
+    private static TaskDispatchSnapshot? PreserveWorkerBuildEnrollment(TaskDispatchSnapshot? selected,
+        TaskDispatchSnapshot? stored, TaskDispatchSnapshot? current)
+    {
+        if (selected is null) return null;
+        foreach (var candidate in new[] { stored, current })
+        {
+            if (candidate is null || candidate.DispatchedAt != selected.DispatchedAt || candidate.WorkerBuildProtocolVersion == 0) continue;
+            if (candidate.Command != selected.Command || candidate.WorkingDirectory != selected.WorkingDirectory ||
+                candidate.WorkerBuildProtocolVersion != 1)
+                throw new InvalidOperationException("Worker build enrollment cannot be transferred to a different dispatch origin.");
+            selected = selected with { WorkerBuildProtocolVersion = 1 };
+        }
+        return selected;
     }
 
     private static CompletionBuildEvidenceOperation? MergeCompletionBuildEvidence(
