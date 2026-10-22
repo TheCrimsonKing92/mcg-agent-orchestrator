@@ -63,7 +63,8 @@ internal static class MergeTrainRedAttribution
         IReadOnlyList<string> resultPaths,
         string workspacePath,
         IReadOnlyList<MergeTrainMemberBinding> members,
-        out IReadOnlyList<string> failingSubjects)
+        out IReadOnlyList<string> failingSubjects,
+        AcceptanceTestSourceResolver.Request? sources = null)
     {
         failingSubjects = [];
         var results = resultPaths.Select(AcceptanceTrxFailureReader.Read).ToArray();
@@ -75,6 +76,7 @@ internal static class MergeTrainRedAttribution
         MergeTrainMemberBinding? attributed = null;
         var sourcesByClass = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
         var subjects = new HashSet<string>(StringComparer.Ordinal);
+        sources ??= new AcceptanceTestSourceResolver.Request(workspacePath);
         foreach (var failure in failures)
         {
             // These guards report another artifact's defect. Their own source is not the
@@ -92,7 +94,7 @@ internal static class MergeTrainRedAttribution
                                 ? path.Equals(subject, StringComparison.OrdinalIgnoreCase)
                                 : Path.GetFileName(path).Equals(subject, StringComparison.OrdinalIgnoreCase))
                             .ToHashSet(StringComparer.OrdinalIgnoreCase)
-                        : AcceptanceTestSourceResolver.ResolveSourcePaths(workspacePath, null, subject + ".Subject")
+                        : sources.ResolveIdentity(subject + ".Subject")
                             .Select(path => NormalizePath(workspacePath, path))
                             .ToHashSet(StringComparer.OrdinalIgnoreCase);
                     if (!TryOwn(subjectSources)) return null;
@@ -102,14 +104,14 @@ internal static class MergeTrainRedAttribution
             }
             var className = AcceptanceTestSourceResolver.ExtractClassName(failure.TestName ?? string.Empty);
             if (string.IsNullOrWhiteSpace(className)) return null;
-            if (!sourcesByClass.TryGetValue(className, out var sources))
+            if (!sourcesByClass.TryGetValue(className, out var classSources))
             {
-                sources = AcceptanceTestSourceResolver.ResolveSourcePaths(workspacePath, null, failure.TestName)
+                classSources = sources.ResolveIdentity(failure.TestName)
                     .Select(path => NormalizePath(workspacePath, path))
                     .ToHashSet(StringComparer.OrdinalIgnoreCase);
-                sourcesByClass.Add(className, sources);
+                sourcesByClass.Add(className, classSources);
             }
-            if (!TryOwn(sources)) return null;
+            if (!TryOwn(classSources)) return null;
             subjects.Add(className);
         }
         failingSubjects = subjects.Order(StringComparer.Ordinal).ToArray();

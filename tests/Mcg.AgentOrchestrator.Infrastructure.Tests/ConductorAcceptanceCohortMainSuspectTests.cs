@@ -44,7 +44,7 @@ public sealed class ConductorAcceptanceCohortMainSuspectTests
             var shared = ConductorAcceptanceCohortMainSuspect.TryDecide(classified, Bindings(), root, test =>
             {
                 resolutions++;
-                return AcceptanceTestSourceResolver.ResolveSourcePaths(root, null, test);
+                return new AcceptanceTestSourceResolver.Request(root).ResolveSourcePaths(null, test);
             });
             Assert.Equal(first, shared);
             Assert.Equal(1, resolutions);

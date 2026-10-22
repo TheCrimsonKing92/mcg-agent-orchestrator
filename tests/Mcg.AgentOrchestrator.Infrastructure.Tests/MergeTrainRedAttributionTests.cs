@@ -161,6 +161,28 @@ public sealed class MergeTrainRedAttributionTests
         Assert.Same(members[0], MergeTrainRedAttribution.TryAttribute(receipt, fixture.Root, members));
     }
 
+    [Fact]
+    public void DistinctFailingClassesShareOneSourceRequest()
+    {
+        using var fixture = new Fixture();
+        fixture.Source("tests/First.cs", "FirstTests", "AnotherTests", "ThirdTests");
+        fixture.Source("src/Unchanged.cs", "Unchanged");
+        var receipt = fixture.Receipt("Ns.FirstTests.Fails", "Ns.AnotherTests.Fails", "Ns.ThirdTests.Fails");
+        var sources = new AcceptanceTestSourceResolver.Request(fixture.Root);
+
+        var attributed = MergeTrainRedAttribution.TryAttribute(
+            receipt.GateTestResultPaths, fixture.Root, fixture.Members, out var subjects, sources);
+        var defaultAttributed = MergeTrainRedAttribution.TryAttribute(
+            receipt.GateTestResultPaths, fixture.Root, fixture.Members, out var defaultSubjects);
+
+        Assert.Same(fixture.Members[0], attributed);
+        Assert.Same(fixture.Members[0], defaultAttributed);
+        Assert.Equal(new[] { "AnotherTests", "FirstTests", "ThirdTests" }, subjects);
+        Assert.Equal(defaultSubjects, subjects);
+        Assert.InRange(sources.EnumerationCount, 1, 2);
+        Assert.Equal(Directory.EnumerateFiles(fixture.Root, "*.cs", SearchOption.AllDirectories).Count(), sources.ReadCount);
+    }
+
     [Theory]
     [InlineData("Failed")]
     [InlineData("Error")]
