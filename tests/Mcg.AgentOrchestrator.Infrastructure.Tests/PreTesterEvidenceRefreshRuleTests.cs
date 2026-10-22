@@ -5,6 +5,25 @@ using static ConductorDriverTests;
 public sealed class PreTesterEvidenceRefreshRuleTests
 {
     [Theory]
+    [InlineData("unusable", true, true, 0, true)]
+    [InlineData("green", true, true, 0, false)]
+    [InlineData("red", true, true, 0, false)]
+    [InlineData("actionable-red", true, true, 0, false)]
+    [InlineData("started", true, true, 0, false)]
+    [InlineData(null, true, true, 0, false)]
+    [InlineData("unusable", false, true, 0, false)]
+    [InlineData("unusable", true, false, 0, false)]
+    [InlineData("unusable", true, true, 1, false)]
+    [InlineData("unusable", true, true, -1, false)]
+    public void BuildPhaseRefreshOnlyForTheFirstBuildOnlyUnusableReceipt(string? outcome, bool apparatus,
+        bool buildOnly, int count, bool refresh)
+    {
+        var prior = outcome is null ? null : new PreTesterEvidenceEntry(outcome, "abc1234", "old", [], [], null, []);
+        Assert.Equal(refresh ? PreTesterEvidenceRefreshDecision.Refresh : PreTesterEvidenceRefreshDecision.Reuse,
+            PreTesterEvidenceRefreshRule.DecideBuildPhaseRefresh(prior, apparatus, buildOnly, count));
+    }
+
+    [Theory]
     [InlineData("unusable", true, RetryCause.EnvironmentApparatusFailure, 0, true)]
     [InlineData("green", true, RetryCause.EnvironmentApparatusFailure, 0, false)]
     [InlineData("red", true, RetryCause.EnvironmentApparatusFailure, 0, false)]

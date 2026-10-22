@@ -10,6 +10,75 @@ public sealed class ConductorDriverTestsPreTesterEvidenceRefresh
     private const string CandidateSha = "bbb2222";
     private const string ChangedPath = "tests/Mcg.AgentOrchestrator.Core.Tests/DeclaredCoreTests.cs";
 
+    // The bound detects a hang; assertions measure cross-tick evidence and dispatch state.
+    [Fact(Timeout = 30_000)]
+    [Trait("Category", "CrossTick")]
+    public void BuildOnlyUnusableRefreshesBeforeAnyTesterDispatch()
+    {
+        using var scenario = new Scenario(buildPhaseOnly: true);
+        var first = Assert.IsType<ConductorAdvanceOutcome.Held>(scenario.Advance().Outcome);
+        var old = scenario.Latest();
+        Assert.StartsWith("PRE_TESTER_BUILD_PHASE_REFRESH", first.Reason, StringComparison.Ordinal);
+        Assert.Contains(CandidateSha, first.Reason, StringComparison.Ordinal);
+        Assert.Contains(old.ReceiptId, first.Reason, StringComparison.Ordinal);
+        Assert.Equal("unusable", old.Outcome);
+        Assert.Equal(1, scenario.Runs);
+        Assert.Equal(0, scenario.Dispatches);
+        Assert.Empty(scenario.DeliveredIndex);
+        Assert.Empty(scenario.RefreshMarkers());
+
+        Assert.IsType<ConductorAdvanceOutcome.Executed>(scenario.Advance().Outcome);
+
+        var fresh = scenario.Latest();
+        Assert.Equal("green", fresh.Outcome);
+        Assert.NotEqual(old.ReceiptId, fresh.ReceiptId);
+        var marker = Assert.Single(scenario.RefreshMarkers());
+        Assert.Equal(CandidateSha, marker.CandidateSha);
+        Assert.Equal(old.ReceiptId, marker.SupersededReceiptId);
+        Assert.Equal(fresh.ReceiptId, marker.FreshReceiptId);
+        Assert.Equal(1, PreTesterEvidenceRefreshRule.CountForCandidate(scenario.Goal, scenario.Tester.Id, CandidateSha));
+        Assert.Equal(2, scenario.Runs);
+        Assert.Equal(1, scenario.Dispatches);
+        Assert.Contains(Assert.Single(scenario.DeliveredIndex), line => line.Contains("verdict=green", StringComparison.Ordinal) &&
+            line.Contains("receipt=" + fresh.ReceiptId, StringComparison.Ordinal));
+        Assert.Empty(scenario.Escalations);
+        Assert.Empty(scenario.Recoveries);
+    }
+
+    // The bound detects a hang; assertions measure the persisted refresh budget and terminal outcome.
+    [Fact(Timeout = 30_000)]
+    [Trait("Category", "CrossTick")]
+    public void BuildOnlyFreshUnusableEscalatesWithoutTesterDispatch()
+    {
+        using var scenario = new Scenario(secondUnusable: true, buildPhaseOnly: true);
+        Assert.IsType<ConductorAdvanceOutcome.Held>(scenario.Advance().Outcome);
+        var old = scenario.Latest();
+        Assert.Equal(1, scenario.Runs);
+        Assert.Equal(0, scenario.Dispatches);
+
+        var escalated = Assert.IsType<ConductorAdvanceOutcome.Escalated>(scenario.Advance().Outcome);
+
+        var fresh = scenario.Latest();
+        Assert.Equal("unusable", fresh.Outcome);
+        Assert.NotEqual(old.ReceiptId, fresh.ReceiptId);
+        Assert.Equal(escalated.Reason, Assert.Single(scenario.Escalations));
+        Assert.Contains("PRE_TESTER_APPARATUS_REFRESH_UNUSABLE", escalated.Reason, StringComparison.Ordinal);
+        Assert.Contains(CandidateSha, escalated.Reason, StringComparison.Ordinal);
+        Assert.Contains(old.ReceiptId, escalated.Reason, StringComparison.Ordinal);
+        Assert.Contains(fresh.ReceiptId, escalated.Reason, StringComparison.Ordinal);
+        var marker = Assert.Single(scenario.RefreshMarkers());
+        Assert.Equal(old.ReceiptId, marker.SupersededReceiptId);
+        Assert.Equal(fresh.ReceiptId, marker.FreshReceiptId);
+        Assert.Equal(0, scenario.Dispatches);
+        Assert.Empty(scenario.DeliveredIndex);
+        Assert.Equal(2, scenario.Runs);
+        Assert.Equal(1, PreTesterEvidenceRefreshRule.CountForCandidate(scenario.Goal, scenario.Tester.Id, CandidateSha));
+
+        scenario.Advance();
+        Assert.Equal(2, scenario.Runs);
+        Assert.Single(scenario.RefreshMarkers());
+    }
+
     [Fact]
     public void AutoRetryRefreshesUnusableReceiptAndDispatchesFreshGreen()
     {
@@ -186,6 +255,7 @@ public sealed class ConductorDriverTestsPreTesterEvidenceRefresh
         private readonly string _root = ConductorDriverTests.CreateTempDirectory();
         private readonly FixtureClock _clock = new();
         private readonly bool _secondUnusable;
+        private readonly bool _buildPhaseOnly;
         public AgentOrchestratorKernel Kernel { get; }
         public Goal Goal { get; }
         public TaskSpec Tester { get; }
@@ -195,9 +265,10 @@ public sealed class ConductorDriverTestsPreTesterEvidenceRefresh
         public List<string> Escalations { get; } = [];
         public List<FailedGoalRecoveryDecision> Recoveries { get; } = [];
 
-        public Scenario(bool secondUnusable = false)
+        public Scenario(bool secondUnusable = false, bool buildPhaseOnly = false)
         {
             _secondUnusable = secondUnusable;
+            _buildPhaseOnly = buildPhaseOnly;
             Kernel = new(_clock);
             Kernel.ConfigureCandidateIdentityResolver(_ => new CandidateIdentity("patch", "base", "manifest"));
             var developer = new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer);
@@ -294,8 +365,17 @@ public sealed class ConductorDriverTestsPreTesterEvidenceRefresh
         private static FocusedEvidenceRunResult Unusable(string request)
         {
             var check = new AcceptanceCheckResult("build", false, -1, "no tests executed",
-                FailureClassification: AcceptanceFailureClassifications.BuildPhaseTimeout, ExecutedTestCount: 0);
+                FailureClassification: AcceptanceFailureClassifications.FocusedSelectionApparatusFailure, ExecutedTestCount: 0);
             return new(request, true, false, "apparatus timeout", [check],
+                Arms: [new(FindingEvidenceArm.Candidate, CandidateSha, FindingEvidenceArmDisposition.Inconclusive,
+                    true, false, "build timed out", [check])]);
+        }
+
+        private static FocusedEvidenceRunResult BuildOnlyUnusable(string request)
+        {
+            var check = new AcceptanceCheckResult("build", false, -1, "no tests executed",
+                FailureClassification: AcceptanceFailureClassifications.BuildPhaseTimeout, ExecutedTestCount: 0);
+            return new(request, true, false, "build timed out", [],
                 Arms: [new(FindingEvidenceArm.Candidate, CandidateSha, FindingEvidenceArmDisposition.Inconclusive,
                     true, false, "build timed out", [check])]);
         }
@@ -306,7 +386,8 @@ public sealed class ConductorDriverTestsPreTesterEvidenceRefresh
                 getPreReviewEvidenceContext: _ => NoPreReviewContext(CandidateSha),
                 getLandingFileScopes: _ => [ChangedPath], executionDirectory: _root,
                 focusedEvidenceAttemptCoordinator: coordinator ?? Coordinator(),
-                runFocusedEvidence: (_, request) => ++Runs == 1 || _secondUnusable ? Unusable(request) : Green(request),
+                runFocusedEvidence: (_, request) => ++Runs == 1 || _secondUnusable
+                    ? _buildPhaseOnly ? BuildOnlyUnusable(request) : Unusable(request) : Green(request),
                 dispatchAndStart: _ =>
                 {
                     Assert.Equal(WorkTaskStatus.Assigned, Tester.Status);

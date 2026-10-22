@@ -90,10 +90,11 @@ internal sealed partial class ConductorDriver
                 throw new InvalidDataException("Started pre-Tester evidence lost its Developer declaration or candidate binding.");
             return false;
         }
-
-        var superseded = prior is { Outcome: "unusable" } && PreTesterEvidenceRefreshRule.Decide(prior,
-            PreTesterApparatusReceiptClassifier.IsApparatusUnusable(_focusedEvidenceAttemptCoordinator.ReadFocusedReceiptEvidence(goal.Id, prior.ReceiptId, candidateSha!)),
-            tester.PendingRetryCause, PreTesterEvidenceRefreshRule.CountForCandidate(goal, tester.Id, candidateSha!)) == PreTesterEvidenceRefreshDecision.Refresh ? prior.ReceiptId : null;
+        var priorEvidence = prior is { Outcome: "unusable" } ? _focusedEvidenceAttemptCoordinator.ReadFocusedReceiptEvidence(goal.Id, prior.ReceiptId, candidateSha!) : null;
+        var apparatusUnusable = PreTesterApparatusReceiptClassifier.IsApparatusUnusable(priorEvidence);
+        var refreshCount = PreTesterEvidenceRefreshRule.CountForCandidate(goal, tester.Id, candidateSha!);
+        var superseded = PreTesterEvidenceRefreshRule.Decide(prior, apparatusUnusable, tester.PendingRetryCause, refreshCount) == PreTesterEvidenceRefreshDecision.Refresh ||
+            PreTesterEvidenceRefreshRule.DecideBuildPhaseRefresh(prior, apparatusUnusable, PreTesterApparatusReceiptClassifier.IsBuildPhaseOnly(priorEvidence), refreshCount) == PreTesterEvidenceRefreshDecision.Refresh ? prior!.ReceiptId : null;
         if (superseded is not null) prior = null;
         if (prior is not null && prior.Outcome != "started")
         {
@@ -202,13 +203,7 @@ internal sealed partial class ConductorDriver
         var completed = TryReconcileFocusedEvidenceAttempt(
             goal, policy, request, candidateSha, "pre-tester-deferred", requestContext,
             out var evidence, out var attempt, out var decision, out var kind);
-        var transientFailure = attempt?.Outcome is
-            ConductorParallelAcceptanceAttemptOutcome.BlockedBuildSlot or
-            ConductorParallelAcceptanceAttemptOutcome.BlockedBuildLock or
-            ConductorParallelAcceptanceAttemptOutcome.Cancelled or
-            ConductorParallelAcceptanceAttemptOutcome.InfrastructureDeferred or
-            ConductorParallelAcceptanceAttemptOutcome.StructuralCoveragePermitUnavailable or
-            ConductorParallelAcceptanceAttemptOutcome.StaleCandidate;
+        var transientFailure = PreTesterApparatusReceiptClassifier.IsTransientAttemptOutcome(attempt?.Outcome);
         if (!completed &&
             (kind is not (ConductorParallelAcceptanceAttemptDecisionKind.Completed or
                           ConductorParallelAcceptanceAttemptDecisionKind.TerminalWithoutRun) ||
@@ -224,7 +219,6 @@ internal sealed partial class ConductorDriver
                 FocusedEvidencePendingHeld(fromState, decision, kind));
             return true;
         }
-
         var liveHead = _getPreReviewEvidenceContext(goal).CandidateSha?.Trim();
         if (IsSupersededPreTesterCandidate(worktreePath, candidateSha, liveHead))
         {
@@ -252,7 +246,13 @@ internal sealed partial class ConductorDriver
             result = Escalate(goal, goalPrefix, policy, fromState, PreTesterEvidenceRefreshRule.DescribeRepeat(candidateSha!, refresh!.SupersededReceiptId, receiptId));
             return true;
         }
-
+        if (outcome == "unusable" && PreTesterApparatusReceiptClassifier.IsBuildPhaseOnly(evidence) &&
+            PreTesterEvidenceRefreshRule.CountForCandidate(goal, tester.Id, candidateSha!) == 0)
+        {
+            result = MakeResult(goal.Id.Value, goalPrefix, policy, new ConductorAdvanceOutcome.Held(fromState,
+                $"PRE_TESTER_BUILD_PHASE_REFRESH: candidate_sha={candidateSha}; receipt_id={receiptId}"));
+            return true;
+        }
         if (outcome != "actionable-red") return false;
         if (TryEscalatePreTesterRedLoop(GetCurrentGoal(goal), goalPrefix, policy, fromState, out result))
             return true;

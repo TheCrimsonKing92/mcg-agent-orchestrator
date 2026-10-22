@@ -244,7 +244,7 @@ public sealed class TesterRedLabelledInconclusiveScenarioTests
         private static FocusedEvidenceRunResult Unusable(string request)
         {
             var check = new AcceptanceCheckResult("build", false, -1, "no tests executed",
-                FailureClassification: AcceptanceFailureClassifications.BuildPhaseTimeout, ExecutedTestCount: 0);
+                FailureClassification: AcceptanceFailureClassifications.FocusedSelectionApparatusFailure, ExecutedTestCount: 0);
             return new(request, true, false, "apparatus timeout", [check],
                 Arms: [new(FindingEvidenceArm.Candidate, Candidate, FindingEvidenceArmDisposition.Inconclusive,
                     true, false, "build timed out", [check])]);
