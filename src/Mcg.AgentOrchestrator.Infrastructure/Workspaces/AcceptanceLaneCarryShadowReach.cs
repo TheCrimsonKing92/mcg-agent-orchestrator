@@ -4,7 +4,7 @@ using Microsoft.CodeAnalysis.CSharp.Syntax;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
-// Pure text reach estimates. These results never authorize verdict reuse.
+// Pure text reach estimates. The conservative tier decides disjoint-landing reuse; other tiers remain measurement-only.
 internal static class AcceptanceLaneCarryShadowReach
 {
     private static readonly Regex Identifiers = new("[A-Za-z0-9_]+", RegexOptions.Compiled);

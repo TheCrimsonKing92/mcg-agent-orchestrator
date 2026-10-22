@@ -91,6 +91,50 @@ public sealed class AcceptancePartitionVerdictCacheContentReuseTests : GoalAccep
         Assert.Null(second.TryReuse(_lane));
     }
 
+    [Fact]
+    public void DisjointLandingFactsFromRealRepository()
+    {
+        Directory.CreateDirectory(_root);
+        CreateRepository();
+        string Revision(string expression)
+        {
+            var result = InfrastructureTestSupport.RunGitProbe(_root, ["rev-parse", expression]);
+            Assert.True(result.Succeeded, result.StandardError);
+            return result.StandardOutput.Trim();
+        }
+        const string landed = "src/TestLibrary/LandedWidget.cs";
+        const string goal = "src/TestLibrary/GoalOwned.cs";
+        var main1 = Revision("HEAD");
+        RunGit("checkout", "-b", "landing-main");
+        File.WriteAllText(Path.Combine(_root, landed), "internal class LandedWidget { }");
+        RunGit("add", landed);
+        RunGit("commit", "-m", "land independent file");
+        var main2 = Revision("HEAD");
+        RunGit("checkout", "-b", "goal-branch", main1);
+        File.WriteAllText(Path.Combine(_root, goal), "internal class GoalOwned { }");
+        RunGit("add", goal);
+        RunGit("commit", "-m", "goal delta");
+        var tree1 = Revision("HEAD^{tree}");
+        RunGit("merge", "--no-ff", "--no-edit", "landing-main");
+        var tree2 = Revision("HEAD^{tree}");
+
+        var facts = Assert.IsType<DisjointLandingFacts>(AcceptanceDisjointLandingLaneReuse.ResolveFactsFromGit(
+            new(_root, tree1, main1, tree2, main2)));
+
+        Assert.True(facts.RecordMainIsAncestor);
+        Assert.Equal(new[] { landed }, facts.LandedPaths);
+        Assert.Equal(new[] { goal }, facts.RecordGoalDelta);
+        Assert.Equal(new[] { goal }, facts.CurrentGoalDelta);
+        Assert.Equal(new[] { landed }, facts.TreeDiff);
+
+        File.AppendAllText(Path.Combine(_root, goal), " // goal changed again");
+        RunGit("add", goal);
+        RunGit("commit", "-m", "change goal after merge");
+        var changed = Assert.IsType<DisjointLandingFacts>(AcceptanceDisjointLandingLaneReuse.ResolveFactsFromGit(
+            new(_root, tree1, main1, Revision("HEAD^{tree}"), main2)));
+        Assert.Equal(new[] { goal, landed }, changed.TreeDiff.Order(StringComparer.Ordinal));
+    }
+
     public void Dispose()
     {
         DeleteDirectoryWithRetry(_root);
