@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
+using static Mcg.AgentOrchestrator.App.Orchestration.WorkerBuildTerminalDecision;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
@@ -64,8 +65,13 @@ internal sealed class WorkerBuildRequestHost : IWorkerBuildRequestService
         GoalEvidenceOperationScope? custody = null;
         DotnetBuildEnvironmentLease? slot = null;
         OwnedProcessGroup.SuspendedProcessStart? child = null;
-        using var deadline = new CancellationTokenSource(_budget, _time);
-        using var stop = CancellationTokenSource.CreateLinkedTokenSource(lifetime, deadline.Token);
+        using var queueDeadline = new CancellationTokenSource(_budget, _time);
+        using var compileDeadline = new CancellationTokenSource(Timeout.InfiniteTimeSpan, _time);
+        using var queueStop = CancellationTokenSource.CreateLinkedTokenSource(lifetime, queueDeadline.Token);
+        using var compileStop = CancellationTokenSource.CreateLinkedTokenSource(lifetime, compileDeadline.Token);
+        var stop = queueStop;
+        var stopCause = StopCause.LifetimeEnded;
+        var exits = new List<int?>();
         var terminalSafe = true;
         try
         {
@@ -91,6 +97,7 @@ internal sealed class WorkerBuildRequestHost : IWorkerBuildRequestService
             var acquisition = DotnetBuildEnvironmentManager.TryAcquireFirstAvailableBuildPermit(environment,
                 invocation.Deadline - _time.GetUtcNow(), stop.Token,
                 onWait: () => Advance(WorkerBuildPhase.WaitingForBuildSlot), timeProvider: _time);
+            if (acquisition is not DotnetBuildLeaseAcquisition.Acquired) CheckCurrent();
             if (acquisition is DotnetBuildLeaseAcquisition.SlotsBusy)
             {
                 Complete(WorkerBuildOutcome.CapacityBeforeStart, null, "Host build-slot acquisition ended before process launch.");
@@ -103,6 +110,12 @@ internal sealed class WorkerBuildRequestHost : IWorkerBuildRequestService
             {
                 slot = acquired.Lease;
                 Advance(WorkerBuildPhase.BuildSlotAcquired);
+                stop = compileStop;
+                queueDeadline.CancelAfter(Timeout.InfiniteTimeSpan);
+                var remaining = invocation.Observations.Last(o => o.Phase == WorkerBuildPhase.BuildSlotAcquired).At + _budget - _time.GetUtcNow();
+                if (remaining <= TimeSpan.Zero) compileDeadline.Cancel();
+                else compileDeadline.CancelAfter(remaining);
+                CheckCurrent();
                 var logRoot = Path.Combine(slot.Environment.ArtifactsPath, "worker-host-builds", invocation.Id);
                 Directory.CreateDirectory(logRoot);
                 // Exec adds MSBuildTemp<user>/tmp<guid>.exec.cmd beneath TEMP. cmd.exe
@@ -131,6 +144,7 @@ internal sealed class WorkerBuildRequestHost : IWorkerBuildRequestService
                         string.IsNullOrWhiteSpace(read.ExecutablePath))
                         throw new UnauthorizedAccessException("Owned compiler process identity unavailable.");
                     var identity = new WorkerBuildProcess(child.Process.Id, at, read.ExecutablePath);
+                    exits.Add(null);
                     Save(invocation with { Children = (invocation.Children ?? []).Append(identity).ToArray() });
                     Advance(WorkerBuildPhase.ChildRegistered);
                     if (task.LastDispatch.SandboxLowIntegrity) child.LowerIntegrityBeforeResume();
@@ -143,33 +157,31 @@ internal sealed class WorkerBuildRequestHost : IWorkerBuildRequestService
                     });
                     while (!child.WaitForOwnedExit(TimeSpan.FromMilliseconds(100))) CheckCurrent(validateCandidate: false);
                     var exit = child.TryReadOwnedExitCode() ?? throw new InvalidOperationException("Owned compiler exit was not observed.");
+                    exits[^1] = exit;
                     if (!child.Group.TerminateAndConfirmEmpty(TimeSpan.FromSeconds(10)))
                         throw new InvalidOperationException("Owned compiler descendants did not become terminal.");
                     terminalSafe = true;
                     child.Dispose();
                     child = null;
                     CheckCurrent();
-                    if (exit != 0) { Complete(WorkerBuildOutcome.CompilerFailure, exit, "Host observed compiler/build exit failure."); break; }
+                    if (exit != 0) { CompleteDecision(StopCause.None); break; }
                 }
-                if (!invocation.IsTerminal) Complete(WorkerBuildOutcome.Success, 0, "Host observed all scoped compiler/build exits successfully.");
+                if (!invocation.IsTerminal) CompleteDecision(StopCause.None);
             }
         }
         catch (OperationCanceledException)
         {
             StopChild();
-            var started = invocation.Observations.Any(o => o.Phase == WorkerBuildPhase.CompilerStarted);
-            var outcome = lifetime.IsCancellationRequested || !deadline.IsCancellationRequested || !WorkerBuildInvocationOperations.IsExactProcessAlive(worker)
-                ? WorkerBuildOutcome.Cancelled
-                : started ? WorkerBuildOutcome.TimeoutAfterStart
-                : slot is not null || invocation.Observations.Any(o => o.Phase == WorkerBuildPhase.PreparingLaunch)
-                    ? WorkerBuildOutcome.Interrupted : invocation.Phase == WorkerBuildPhase.WaitingForBuildSlot
-                        ? WorkerBuildOutcome.CapacityBeforeStart : WorkerBuildOutcome.ApparatusFailure;
-            Complete(outcome, null, "Host observed lifetime cancellation or deadline.");
+            CompleteDecision(lifetime.IsCancellationRequested ? StopCause.LifetimeEnded
+                : !WorkerBuildInvocationOperations.IsExactProcessAlive(worker) ? StopCause.WorkerExited
+                : stopCause == StopCause.DispatchCancelled ? stopCause
+                : stop == compileStop && compileDeadline.IsCancellationRequested ? StopCause.CompileDeadline
+                : stop == queueStop && queueDeadline.IsCancellationRequested ? StopCause.QueueDeadline : stopCause);
         }
         catch (TaskIntentDispatchSuppressedException)
         {
             StopChild();
-            Complete(WorkerBuildOutcome.Cancelled, null, "Operator intent revoked dispatch action authority.");
+            CompleteDecision(StopCause.DispatchCancelled);
         }
         catch (WorkerBuildCandidateChangedException)
         {
@@ -212,6 +224,11 @@ internal sealed class WorkerBuildRequestHost : IWorkerBuildRequestService
         }
         void Advance(WorkerBuildPhase phase) => Save(invocation with
         { Observations = invocation.Observations.Append(new(phase, _time.GetUtcNow())).ToArray() });
+        void CompleteDecision(StopCause cause)
+        {
+            var result = Decide(invocation.Observations, scope.Projects, exits, cause, _budget, _time.GetUtcNow(), worker.Pid);
+            Complete(result.Outcome, result.CompilerExitCode, result.Diagnostic);
+        }
         void Complete(WorkerBuildOutcome outcome, int? exit, string diagnostic)
         {
             if (!terminalSafe) throw new InvalidOperationException("Compiler termination is unconfirmed; terminal obligation retained.");
@@ -226,7 +243,7 @@ internal sealed class WorkerBuildRequestHost : IWorkerBuildRequestService
             TaskIntentAdmission.ExecuteAuthorized(_reference.Admission!, "worker-build-lifetime:" + invocation.Id, () => { });
             var latestKernel = _operations.Load(_reference.GoalId);
             if (latestKernel.GetTask(new GoalId(_reference.GoalId), new TaskId(_reference.TaskId)).Status == WorkTaskStatus.Cancelled)
-                throw new OperationCanceledException("Dispatch cancelled.");
+            { stopCause = StopCause.DispatchCancelled; throw new OperationCanceledException("Dispatch cancelled."); }
             var latest = WorkerBuildInvocationOperations.RequireOrigin(latestKernel, _reference, _host, true);
             if (validateCandidate && (!WorktreeTreeDigest.TryCompute(root, out var currentDigest, out _) || currentDigest != invocation.TreeDigest ||
                 WorkerBuildProjectScope.Resolve(root, request.Projects,

@@ -29,6 +29,7 @@ public static class OperatorIntentVerbs
     public const string EpicOutcomeDefine = "epic-outcome-define";
     public const string EpicOutcomeRecord = "epic-outcome-record";
     public const string ExecutorSetSlots = "executor-set-slots";
+    public const string ExecutorSetEnabled = "executor-set-enabled";
     public const string FocusedEvidenceSet = "focused-evidence-set";
 }
 
@@ -40,6 +41,7 @@ public static class OperatorIntentScopes
 public sealed record EpicOutcomeDefineOperatorIntentPayload(string EpicId, EpicOutcomeDefinition Definition);
 public sealed record EpicOutcomeRecordOperatorIntentPayload(string EpicId, EpicOutcomeEvidence Evidence);
 public sealed record ExecutorSetSlotsOperatorIntentPayload(string ExecutorId, int Slots);
+public sealed record ExecutorSetEnabledOperatorIntentPayload(string ExecutorId, bool? Enabled);
 public sealed record FocusedEvidenceSetOperatorIntentPayload(string? Mode, int? SampleEvery);
 public sealed record ProviderResetOperatorIntentPayload(string BindingKey, DateTimeOffset ResetAt, string Rationale);
 public sealed record GateCancelOperatorIntentPayload(string Reason, string? AttemptId);

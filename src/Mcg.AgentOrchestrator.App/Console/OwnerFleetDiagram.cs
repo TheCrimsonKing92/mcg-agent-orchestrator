@@ -48,6 +48,8 @@ internal static class OwnerFleetDiagram
         {
             lines.Add("│" + new string(' ', width - 1));
             content = [$"Executor {executor.Id}"];
+            content.Add(executor.AdmissionEnabled is { } enabled
+                ? enabled ? "admission: enabled" : "admission: disabled" : "admission: not configured");
             content.Add(executor.Reachability switch
             {
                 OwnerFleetReachability.Reachable => "reachability: reachable",

@@ -35,7 +35,7 @@ public sealed class WorkerStoreReferenceDispatchPlumbingTests
     }
 
     [Fact]
-    public void PrepareTaskIgnoresAnswersFromOtherGoalsAndOtherRequestKinds()
+    public void PrepareTaskIgnoresAnswersFromOtherGoalsAndUnselectedRequestKinds()
     {
         using var fixture = new WorkerStoreReferenceFixture();
         fixture.WriteSource("operator-evidence/answer.md", "unselected");
@@ -46,7 +46,7 @@ public sealed class WorkerStoreReferenceDispatchPlumbingTests
         kernel.ActivateGoal(otherGoal.Id, AgentCatalog.Default().Agents);
         var otherGoalRequest = kernel.RequestHumanInput(otherGoal.Id, otherTask.Id, "Other prerequisite?", HumanWaitKind.PlannerPrerequisiteEvidence);
         kernel.SubmitHumanInput(otherGoalRequest.Id, "store-ref: other = operator-evidence:operator-evidence/answer.md");
-        var clarification = kernel.RequestHumanInput(goal.Id, task.Id, "Clarification?", HumanWaitKind.SpecClarification);
+        var clarification = kernel.RequestHumanInput(goal.Id, task.Id, "Risk review?", HumanWaitKind.RiskReview);
         kernel.SubmitHumanInput(clarification.Id, "store-ref: clarification = operator-evidence:operator-evidence/answer.md");
 
         WorkerProfileDispatcher.PrepareTask(kernel, goal, task,

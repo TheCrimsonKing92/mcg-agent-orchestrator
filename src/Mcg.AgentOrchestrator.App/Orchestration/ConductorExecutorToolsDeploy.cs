@@ -38,7 +38,7 @@ internal sealed class ConductorExecutorToolsDeploy(
         try
         {
             var entries = RemoteLaneExecutorConfiguration.LoadExecutors(configurationPath).Where(entry =>
-                entry.Transport == "ssh" && entry.AdminAlias is not null && entry.RunRoot is not null && entry.ToolsDigestCheck).ToArray();
+                entry.AdmissionEnabled && entry.Transport == "ssh" && entry.AdminAlias is not null && entry.RunRoot is not null && entry.ToolsDigestCheck).ToArray();
             if (entries.Length == 0) return;
             var source = readMainTools();
             if (source is null)

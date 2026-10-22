@@ -11,6 +11,7 @@ internal static class ExecutorScreeningRunner
         string occupancyRoot, string receiptPath, string receiptId, TimeSpan laneTimeout,
         TimeProvider clock, TimeSpan pollInterval, CancellationToken token = default)
     {
+        if (!entry.AdmissionEnabled) return null;
         var attempt = "screening-" + receiptId;
         var claims = new List<IDisposable>();
         var started = clock.GetUtcNow();

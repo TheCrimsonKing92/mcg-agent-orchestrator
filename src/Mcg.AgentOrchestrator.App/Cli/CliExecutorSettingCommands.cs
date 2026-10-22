@@ -10,6 +10,7 @@ internal static class CliExecutorSettingCommands
 {
     internal static bool IsCommand(IReadOnlyList<string> args) => args.Count > 0 &&
         (args[0].Equals(OperatorIntentVerbs.ExecutorSetSlots, StringComparison.OrdinalIgnoreCase) ||
+         args[0].Equals(OperatorIntentVerbs.ExecutorSetEnabled, StringComparison.OrdinalIgnoreCase) ||
          args[0].Equals(OperatorIntentVerbs.FocusedEvidenceSet, StringComparison.OrdinalIgnoreCase));
 
     internal static int Run(IReadOnlyList<string> args, OrchestratorWorkspace workspace,
@@ -24,12 +25,24 @@ internal static class CliExecutorSettingCommands
             if (!IsCommand(args)) throw new ArgumentException("Unknown executor setting command.");
             var verb = args[0].ToLowerInvariant();
             var isSlots = verb == OperatorIntentVerbs.ExecutorSetSlots;
-            var usage = isSlots ? CliCommandHelp.ExecutorSetSlotsUsage : CliCommandHelp.FocusedEvidenceSetUsage;
-            var start = isSlots ? 3 : 1;
+            var isEnabled = verb == OperatorIntentVerbs.ExecutorSetEnabled;
+            var usage = isSlots ? CliCommandHelp.ExecutorSetSlotsUsage : isEnabled
+                ? CliCommandHelp.ExecutorSetEnabledUsage : CliCommandHelp.FocusedEvidenceSetUsage;
+            var start = isSlots || isEnabled ? 3 : 1;
             if (args.Count < start) throw new ArgumentException(usage);
-            var parsed = Parse(args, start, isSlots, usage);
+            var parsed = Parse(args, start, isSlots || isEnabled, usage);
             object payload;
-            if (isSlots)
+            if (isEnabled)
+            {
+                if (!args[2].Equals("true", StringComparison.OrdinalIgnoreCase) &&
+                    !args[2].Equals("false", StringComparison.OrdinalIgnoreCase))
+                    throw new ArgumentException("enabled-invalid");
+                var path = RemoteLaneExecutorConfiguration.ResolveStorePath(workspace.ExecutionDirectory);
+                if (!RemoteLaneExecutorConfiguration.LoadExecutors(path).Any(e => e.Id == args[1]))
+                    throw new ArgumentException("executor-not-found");
+                payload = new ExecutorSetEnabledOperatorIntentPayload(args[1], args[2].Equals("true", StringComparison.OrdinalIgnoreCase));
+            }
+            else if (isSlots)
             {
                 if (!int.TryParse(args[2], NumberStyles.Integer, CultureInfo.InvariantCulture, out var slots) ||
                     slots is < RemoteLaneExecutorConfiguration.MinimumSlots or > RemoteLaneExecutorConfiguration.MaximumSlots)
