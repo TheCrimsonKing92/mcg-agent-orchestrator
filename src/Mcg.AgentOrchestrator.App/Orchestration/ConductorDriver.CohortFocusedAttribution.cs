@@ -64,7 +64,7 @@ internal sealed partial class ConductorDriver
             store.ReadFailedCohortEvidence(identity.ObservedMainRevision, identity.Value));
         var sharedTests = ConductorAcceptanceCohortMainSuspect.TryDecide(classified, bindings,
             workspace.ExecutionDirectory,
-            test => AcceptanceTestSourceResolver.ResolveSourcePaths(workspace.ExecutionDirectory, null, test));
+            new AcceptanceTestSourceResolver.Request(workspace.ExecutionDirectory).ResolveIdentity);
         sharedTests = identicalFailure?.Tests ?? sharedTests;
         if (sharedTests is not null)
         {

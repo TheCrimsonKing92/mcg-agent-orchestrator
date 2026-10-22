@@ -27,10 +27,11 @@ internal static class MergeTrainRatchetAttribution
         }
         if (parsed.Count == 0) return null;
         MergeTrainMemberBinding? attributed = null;
+        var sourceRequest = new AcceptanceTestSourceResolver.Request(workspacePath);
         foreach (var subject in parsed)
         {
             var sources = (subject.StartsWith("class:", StringComparison.Ordinal)
-                    ? AcceptanceTestSourceResolver.ResolveSourcePaths(workspacePath, null, subject[6..] + ".Subject")
+                    ? sourceRequest.ResolveIdentity(subject[6..] + ".Subject")
                     : new[] { subject })
                 .Select(path => NormalizePath(workspacePath, path)).ToHashSet(StringComparer.OrdinalIgnoreCase);
             var owners = members.Where(member => member.LandingPaths
