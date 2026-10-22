@@ -161,14 +161,16 @@ public abstract class RemoteFirstFocusedEvidenceFixture : GoalAcceptanceVerifier
         }
 
         internal Task<RemoteFirstFocusedEvidence.Outcome> DirectAsync(IReadOnlyList<Check> checks, bool keepGoing = false,
-            Func<IReadOnlyList<Check>, Task<IReadOnlyList<AcceptanceCheckResult>>>? local = null, CancellationToken token = default) =>
-            DirectOwnedAsync(checks, keepGoing, local, token);
+            Func<IReadOnlyList<Check>, Task<IReadOnlyList<AcceptanceCheckResult>>>? local = null, CancellationToken token = default,
+            string runId = "direct-attempt", string? resultsPrefix = null) =>
+            DirectOwnedAsync(checks, keepGoing, local, token, runId, resultsPrefix);
 
         private async Task<RemoteFirstFocusedEvidence.Outcome> DirectOwnedAsync(IReadOnlyList<Check> checks, bool keepGoing,
-            Func<IReadOnlyList<Check>, Task<IReadOnlyList<AcceptanceCheckResult>>>? local, CancellationToken token)
+            Func<IReadOnlyList<Check>, Task<IReadOnlyList<AcceptanceCheckResult>>>? local, CancellationToken token,
+            string runId = "direct-attempt", string? resultsPrefix = null)
         {
             await using var owner = AcceptanceExecutionOwners.CreateFocusedVerification(Root, Goal, null,
-                options: new(RunId: "direct-attempt", ResultsPrefix: Prefix));
+                options: new(RunId: runId, ResultsPrefix: resultsPrefix ?? Prefix));
             return await RemoteFirstFocusedEvidence.RunAsync(Overrides, Clock, Root, checks, Goal,
                 (IAcceptanceRunExecutionContext)owner, keepGoing, local ?? Local, token);
         }
