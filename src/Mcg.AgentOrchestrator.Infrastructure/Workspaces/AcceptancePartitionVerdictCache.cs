@@ -133,6 +133,7 @@ internal sealed partial class AcceptancePartitionVerdictCache
     private AcceptanceTestReuseShadow? TestReuseShadow { get; init; }
     private AcceptanceLaneCarryShadow? LaneCarryShadow { get; init; }
     private AcceptanceDisjointLandingLaneReuse.Session DisjointLandingReuse { get; init; } = null!;
+    private AcceptanceLaneFlakeLedger LaneFlakeLedger { get; init; } = null!;
     private bool _shadowsPending;
     internal bool HasPendingShadows => (TestReuseShadow is not null || LaneCarryShadow is not null) && _shadowsPending;
 
@@ -282,6 +283,7 @@ internal sealed partial class AcceptancePartitionVerdictCache
             new AcceptanceClosureVerdictIndex(options.WorktreePath),
             identicalTreeIdentities)
         {
+            LaneFlakeLedger = new AcceptanceLaneFlakeLedger(options.WorktreePath),
             DisjointLandingReuse = new AcceptanceDisjointLandingLaneReuse.Session(
                 options.WorktreePath, options.GoalId.Value, attemptId,
                 GoalAcceptanceVerifier.NormalizeShaToken(candidateTreeSha),
@@ -612,6 +614,9 @@ internal sealed partial class AcceptancePartitionVerdictCache
                 $"Within-attempt probe for '{check.Name}' lacks a typed failed first-run decision.");
         }
 
+        var progress = decision.FailedPredicate == AcceptanceShardCompletionPredicates.TimedOut
+            ? AcceptanceTimedOutProbeEvidence.ClassifyFirstRunProgress(firstRun.GateHeartbeatPath)
+            : null;
         PartitionWithinAttemptRetryReceipt completedReceipt;
         AcceptanceCheckResult verdict;
         bool rerunPass;
@@ -668,13 +673,17 @@ internal sealed partial class AcceptancePartitionVerdictCache
             }
         }
 
+        var rerunVerdict = progress is null ? null : AcceptanceTimedOutProbeEvidence.TryComposeRerunPass(
+            firstRun, probe, completedReceipt.OriginalInvocationId, completedReceipt.RetryInvocationId, progress);
         var detail =
-            $"partition_id={partitionId} predicate={decision.FailedPredicate} verdict_source=first_run " +
+            $"partition_id={partitionId} predicate={decision.FailedPredicate} verdict_source={(rerunVerdict is null ? "first_run" : "rerun")} " +
             $"probe_ran=true flake_confirmed={probe.Passed.ToString().ToLowerInvariant()}" +
             (rerunPass ? $" apparatus_reason={AcceptanceWithinAttemptRerunEvidence.Reason}" : string.Empty) +
             (verdict.WithinAttemptRerun is { FailedPredicate: AcceptanceShardCompletionPredicates.TimedOut } evidence
                 ? $" first_trx=none rerun_trx_recorded=true rerun_passed={evidence.RerunPassed.ToString().ToLowerInvariant()}"
-                : string.Empty);
+                : string.Empty) +
+            (progress is null ? string.Empty :
+                $" first_run_progress={progress.State} first_run_silence_seconds={progress.SilenceSeconds?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown"}");
         AppendPartitionVerdictJournalEntries(
             JournalPath,
             [new PartitionVerdictJournalEntry(
@@ -690,10 +699,24 @@ internal sealed partial class AcceptancePartitionVerdictCache
                 PartitionPairKey: PairKey,
                 PartitionId: partitionId,
                 PartitionFilterHash: filterHash,
-                PartitionVerdict: firstRun.Passed ? "GREEN" : "RED",
+                PartitionVerdict: rerunVerdict is not null || firstRun.Passed ? "GREEN" : "RED",
                 PartitionAttemptId: AttemptId,
                 PartitionRetryReceipt: completedReceipt)]);
-        return verdict;
+        if (rerunVerdict?.LaneRerun is { } laneRerun)
+        {
+            try
+            {
+                LaneFlakeLedger.Append(AcceptanceLaneFlakeRow.FromEvidence(
+                    GoalId, AttemptId, check.Name, CandidateTreeSha, laneRerun, DateTimeOffset.UtcNow));
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"LANE_FLAKE_LEDGER_WRITE_FAILED lane=\"{check.Name}\" error={ex.Message.ReplaceLineEndings(" ")}");
+            }
+            Console.WriteLine($"LANE_RERUN lane=\"{check.Name}\" outcome=flake first_predicate=timed-out first_trx=none first_run_progress=growing first_invocation={laneRerun.FirstInvocationId} rerun_invocation={laneRerun.RerunInvocationId}");
+            Console.Out.Flush();
+        }
+        return rerunVerdict ?? verdict;
     }
 
     private static bool IsWithinAttemptRerunPass(
