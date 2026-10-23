@@ -2117,6 +2117,8 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
             (stored.SourceBacklogItemId, stored.SourceBacklogCoverage),
             (current.SourceBacklogItemId, current.SourceBacklogCoverage));
 
+        var obligationMerge = GoalSnapshotObligationMerge.Merge(
+            baseline.CriterionEvidenceObligations, stored.CriterionEvidenceObligations, current.CriterionEvidenceObligations);
         merged = stored with
         {
             Objective = PickStoreOwned(baseline.Objective, stored.Objective, current.Objective),
@@ -2126,6 +2128,7 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
             ParkedLifecycleStatus = hasParkDisposition ? lifecycle : null,
             Tasks = mergedTasks,
             GateTestObligations = MergePlannerGateObligations(stored.GateTestObligations, current.GateTestObligations),
+            CriterionEvidenceObligations = obligationMerge.Obligations,
             Timeline = MergeTimeline(baseline.Timeline, stored.Timeline, current.Timeline),
             DependsOn = PickStoreOwnedList(baseline.DependsOn, stored.DependsOn, current.DependsOn),
             // Slice-batch ownership is immutable aggregate intake metadata. Operator/store changes win
@@ -2179,6 +2182,8 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
                 current.EffectiveAcceptanceCriteriaCorrections)
         };
         reason = "stored version advanced during tick; reapplied tick snapshot delta onto fresh goal row";
+        if (obligationMerge.ConflictIds.Count > 0)
+            reason += "; criterion evidence obligation conflict kept stored: " + string.Join(",", obligationMerge.ConflictIds);
         return true;
     }
 
