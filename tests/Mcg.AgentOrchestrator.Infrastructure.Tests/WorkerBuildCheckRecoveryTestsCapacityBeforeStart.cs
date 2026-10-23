@@ -112,6 +112,105 @@ public sealed class WorkerBuildCheckRecoveryTestsCapacityBeforeStart
         Assert.Equal(0, task.WorkerBuildCheckRecoveryCount);
     }
 
+    [Xunit.Theory]
+    [Xunit.InlineData(true)]
+    [Xunit.InlineData(false)]
+    public void CompilerFailureWithEarlierCapacityEchoPreservesBuildFailure(bool hasBuildLog)
+    {
+        using var repository = CreateSeededGitRepository();
+        var (kernel, goal) = SimpleGoal();
+        var task = goal.Tasks.Single();
+        var worktree = GoalWorktrees.Ensure(repository.WorkingDirectory, goal.Id);
+        var originalHead = ReadGit(worktree, "rev-parse", "HEAD");
+        var artifacts = Path.Combine(repository.WorkingDirectory, "build-artifacts");
+        const string compilerError = "src/Feature.cs(12,4): error CS0103: missing [App.csproj]";
+        if (hasBuildLog) WriteLog(artifacts, "20261023T050000000Z", compilerError);
+        else Assert.False(Directory.Exists(artifacts));
+        File.WriteAllText(Path.Combine(worktree, "seed.txt"), "uncommitted");
+        DispatchTask(kernel, goal, task, workingDirectory: worktree);
+        kernel.RecordDispatchExecutionResult(goal.Id, task.Id,
+            new TaskVerificationRecord("test.exe", worktree, 1,
+                "worker_build_invocation=abcdef0123456789abcdef0123456789; outcome=CapacityBeforeStart",
+                "worker_build_invocation=0123456789abcdef0123456789abcdef; phase=Completed; outcome=CompilerFailure; consumed=True" +
+                Environment.NewLine + "Host observed compiler/build exit failure." + Environment.NewLine +
+                DispatchFailureDiagnosticMarker.Format(DispatchFailureDiagnosticMarker.WorkerBuildCheckFailed),
+                DateTimeOffset.UtcNow));
+        Assert.Equal(DispatchFailureDiagnosticMarker.WorkerBuildCheckFailed,
+            TaskOutcomeClassifier.TryExtractRule(DispatchFailureClassifier.Classify(task, task.LastVerification!).ClassifierReceipt));
+        var retries = new List<string>();
+        var otherRetries = new List<string>();
+        var driver = RecoveryDriver(kernel, repository.WorkingDirectory, artifacts, retries, otherRetries);
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        if (hasBuildLog)
+        {
+            Assert.IsNotType<ConductorAdvanceOutcome.Escalated>(result.Outcome);
+            var feedback = Assert.Single(retries);
+            Assert.Contains(compilerError, feedback, StringComparison.Ordinal);
+            Assert.DoesNotContain(WorkerBuildCheckRecoveryText.SlotCapacityBlock, feedback, StringComparison.Ordinal);
+            Assert.Equal(1, task.WorkerBuildCheckRecoveryCount);
+            Assert.NotEqual(originalHead, ReadGit(worktree, "rev-parse", "HEAD"));
+            Assert.Equal(string.Empty, ReadGit(worktree, "status", "--porcelain"));
+        }
+        else
+        {
+            var escalated = Assert.IsType<ConductorAdvanceOutcome.Escalated>(result.Outcome);
+            Assert.Equal("build-log-unavailable", escalated.Decision!.DiscriminatingEvidence);
+            Assert.DoesNotContain(WorkerBuildCheckRecoveryText.SlotCapacityBlock, escalated.Reason, StringComparison.Ordinal);
+            Assert.Empty(retries);
+            Assert.Equal(0, task.WorkerBuildCheckRecoveryCount);
+            Assert.Equal(originalHead, ReadGit(worktree, "rev-parse", "HEAD"));
+        }
+        Assert.Empty(otherRetries);
+    }
+
+    [Xunit.Fact]
+    public void CapacityRecoveryExhaustionCheckpointsAndEscalatesWithCapacityFeedback()
+    {
+        using var repository = CreateSeededGitRepository();
+        var (kernel, goal) = SimpleGoal();
+        var task = goal.Tasks.Single();
+        var worktree = GoalWorktrees.Ensure(repository.WorkingDirectory, goal.Id);
+        var artifacts = Path.Combine(repository.WorkingDirectory, "build-artifacts");
+        Assert.False(Directory.Exists(artifacts));
+        var retries = new List<string>();
+        var otherRetries = new List<string>();
+        var driver = RecoveryDriver(kernel, repository.WorkingDirectory, artifacts, retries, otherRetries);
+
+        for (var attempt = 1; attempt <= 3; attempt++)
+        {
+            var previousHead = ReadGit(worktree, "rev-parse", "HEAD");
+            File.WriteAllText(Path.Combine(worktree, "seed.txt"), $"change {attempt}");
+            FailBuildEvidence(kernel, goal, task, worktree, CapacityLine);
+
+            var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+            Assert.NotEqual(previousHead, ReadGit(worktree, "rev-parse", "HEAD"));
+            Assert.Equal(string.Empty, ReadGit(worktree, "status", "--porcelain"));
+            if (attempt < 3)
+            {
+                Assert.IsNotType<ConductorAdvanceOutcome.Escalated>(result.Outcome);
+                Assert.Equal(attempt, retries.Count);
+                Assert.Equal(attempt, task.WorkerBuildCheckRecoveryCount);
+                Assert.Contains(WorkerBuildCheckRecoveryText.SlotCapacityBlock, retries[^1], StringComparison.Ordinal);
+            }
+            else
+            {
+                var escalated = Assert.IsType<ConductorAdvanceOutcome.Escalated>(result.Outcome);
+                Assert.Equal("build-check-recovery-exhausted", escalated.Decision!.DiscriminatingEvidence);
+                Assert.Contains(WorkerBuildCheckRecoveryText.SlotCapacityBlock, escalated.Reason, StringComparison.Ordinal);
+                Assert.DoesNotContain(WorkerBuildCheckRecoveryText.BuildSlotLockTimeoutBlock, escalated.Reason, StringComparison.Ordinal);
+                Assert.Contains($"checkpoint commit: {ReadGit(worktree, "rev-parse", "HEAD")}", escalated.Reason, StringComparison.Ordinal);
+                Assert.Equal($"checkpoint: worker-build-check-failed exhausted 2/2 for task {task.Id.Value}",
+                    ReadGit(worktree, "log", "-1", "--format=%s"));
+            }
+        }
+        Assert.Equal(2, retries.Count);
+        Assert.Equal(2, task.WorkerBuildCheckRecoveryCount);
+        Assert.Empty(otherRetries);
+    }
+
     private static void FailBuildEvidence(
         AgentOrchestratorKernel kernel, Goal goal, TaskSpec task, string worktree, string output)
     {

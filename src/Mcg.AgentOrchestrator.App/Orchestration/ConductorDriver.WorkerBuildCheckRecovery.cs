@@ -31,6 +31,10 @@ internal sealed partial class ConductorDriver
         if (task is null) return null;
         var cause = WorkerBuildCheckRecoveryText.NoBuildCause(
             task.LastVerification!.StandardError + Environment.NewLine + task.LastVerification.StandardOutput);
+        if (cause == WorkerBuildNoBuildCause.SlotCapacity &&
+            TaskOutcomeClassifier.TryExtractRule(DispatchFailureClassifier.Classify(task, task.LastVerification!).ClassifierReceipt) !=
+                DispatchFailureDiagnosticMarker.WorkerBuildEvidenceMissing)
+            cause = WorkerBuildNoBuildCause.None;
         var errors = cause == WorkerBuildNoBuildCause.SlotCapacity ? null : WorkerBuildLogErrorReader.ReadNewest(_workerBuildArtifactsPath(goal.Id));
         var noBuild = errors is null && cause != WorkerBuildNoBuildCause.None;
         if (errors is null && !noBuild)
