@@ -9,6 +9,7 @@ internal sealed class OwnerConsoleNotificationDetector(OwnerConsoleNotificationS
     private DateTimeOffset? _tickReference;
     private bool _tickConsumed;
     private bool _initialized;
+    private bool _stopSuppressed;
 
     internal IReadOnlyList<OwnerConsoleNotificationTier> Detect(OwnerConsoleViewModel? previous,
         OwnerConsoleViewModel current, DateTimeOffset now, OwnerConsoleBellTiers enabled)
@@ -24,7 +25,7 @@ internal sealed class OwnerConsoleNotificationDetector(OwnerConsoleNotificationS
         if (started) _restartAt = now;
         var calm = current.Status.LandedToday > previous.Status.LandedToday || started;
         var attention = ObserveDecisions(current, now, baseline: false);
-        var alarm = previous.Status.ConductorRunning && !current.Status.ConductorRunning;
+        var alarm = ObserveStop(previous.Status, current.Status, now);
         alarm |= ObserveTick(current, now, baseline: false);
 
         var result = new List<OwnerConsoleNotificationTier>(3);
@@ -36,6 +37,30 @@ internal sealed class OwnerConsoleNotificationDetector(OwnerConsoleNotificationS
         if (attention && enabled.Attention) result.Add(OwnerConsoleNotificationTier.Attention);
         if (alarm && enabled.Alarm) result.Add(OwnerConsoleNotificationTier.Alarm);
         return result;
+    }
+
+    private bool ObserveStop(OwnerConsoleStatus previous, OwnerConsoleStatus current, DateTimeOffset now)
+    {
+        if (current.ConductorRunning)
+        {
+            _stopSuppressed = false;
+            return false;
+        }
+        if (previous.ConductorRunning)
+        {
+            _stopSuppressed = current.PlannedStopReason is not null;
+            return !_stopSuppressed;
+        }
+        if (!_stopSuppressed) return false;
+        if (current.PlannedStopReason is null ||
+            current.PlannedStopReason == "self-relaunch-handoff" && current.PlannedStopAt is { } at &&
+            now - at > settings.StaleTickThreshold)
+        {
+            // Consume the deferred stop even when the Alarm tier is muted.
+            _stopSuppressed = false;
+            return true;
+        }
+        return false;
     }
 
     private void Baseline(OwnerConsoleViewModel model, DateTimeOffset now)

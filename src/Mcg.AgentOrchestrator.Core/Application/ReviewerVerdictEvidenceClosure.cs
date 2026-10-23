@@ -1,6 +1,6 @@
 namespace Mcg.AgentOrchestrator.Core;
 
-// Owns closure of Reviewer-owned Planner waits from current-candidate Reviewer verdicts.
+// Owns closure of worker-owned Planner waits from current-candidate Reviewer verdicts.
 internal sealed class ReviewerVerdictEvidenceClosure(
     object requestLock,
     IClock clock,
@@ -11,12 +11,22 @@ internal sealed class ReviewerVerdictEvidenceClosure(
     {
         lock (requestLock)
         {
-            var pending = requests.Where(request => request.GoalId == goal.Id && !request.IsCompleted &&
-                request.Kind == HumanWaitKind.ProspectiveAcceptanceEvidence &&
-                string.Equals(request.EvidenceOwner?.Trim(), "reviewer", StringComparison.OrdinalIgnoreCase)).ToArray();
+            var pending = requests.Where(request =>
+            {
+                var owner = request.EvidenceOwner?.Trim();
+                return request.GoalId == goal.Id && !request.IsCompleted &&
+                    request.Kind == HumanWaitKind.ProspectiveAcceptanceEvidence &&
+                    (string.Equals(owner, "reviewer", StringComparison.OrdinalIgnoreCase) ||
+                     string.Equals(owner, "developer", StringComparison.OrdinalIgnoreCase) ||
+                     string.Equals(owner, "tester", StringComparison.OrdinalIgnoreCase));
+            }).ToArray();
             foreach (var request in pending)
             {
-                var reason = GetSkipReason(goal, reviewer, verification, request, out var verdict);
+                var owner = request.EvidenceOwner!.Trim().ToLowerInvariant();
+                var reason = GetSkipReason(goal, reviewer, verification, request, out var verdict, out var developer);
+                var ownerTask = developer;
+                if (reason is null && owner == "tester")
+                    reason = GetTesterSkipReason(goal, developer!.LastDispatch!.ResultCommit!, out ownerTask);
                 if (reason is not null)
                 {
                     var prefix = request.Id.Value[..Math.Min(8, request.Id.Value.Length)];
@@ -28,8 +38,9 @@ internal sealed class ReviewerVerdictEvidenceClosure(
                 var evidence = verdict!.Evidence[..Math.Min(400, verdict.Evidence.Length)];
                 var log = string.IsNullOrWhiteSpace(verification.StandardOutputPath)
                     ? "unavailable" : verification.StandardOutputPath;
+                var ownerFields = owner == "reviewer" ? string.Empty : $" owner={owner} owner_task={ownerTask!.Id.Value}";
                 var answer = ($"REVIEWER_VERDICT_EVIDENCE task={reviewer.Id.Value} " +
-                    $"criterion_index={verdict.CriterionIndex} candidate={verification.ReviewedCommit} " +
+                    $"criterion_index={verdict.CriterionIndex}{ownerFields} candidate={verification.ReviewedCommit} " +
                     $"worker_result_log={log} evidence={evidence}").Trim();
                 request.Complete(answer, clock.UtcNow, origin: HumanInputAnswerOrigin.Worker,
                     briefVersion: goal.AuthoritativeBrief.Version);
@@ -39,9 +50,10 @@ internal sealed class ReviewerVerdictEvidenceClosure(
     }
 
     private static string? GetSkipReason(Goal goal, TaskSpec reviewer, TaskVerificationRecord verification,
-        HumanInputRequest request, out CriterionVerdict? verdict)
+        HumanInputRequest request, out CriterionVerdict? verdict, out TaskSpec? developer)
     {
         verdict = null;
+        developer = null;
         if (request.PlannerIdentity is not { } identity)
             return "untyped";
         if (identity.BriefVersion != goal.AuthoritativeBrief.Version ||
@@ -52,7 +64,7 @@ internal sealed class ReviewerVerdictEvidenceClosure(
             blockers != WorkerResultBlockers.BlockersStatus.None)
             return "review-not-pass";
 
-        var developer = goal.Tasks.Where(task => task.RequiredRole == AgentRole.Developer && task.LastDispatch is not null)
+        developer = goal.Tasks.Where(task => task.RequiredRole == AgentRole.Developer && task.LastDispatch is not null)
             .MaxBy(task => task.LastDispatch!.DispatchedAt);
         var candidate = developer?.LastDispatch?.ResultCommit;
         if (developer is null || developer.Status != WorkTaskStatus.Completed || string.IsNullOrWhiteSpace(candidate))
@@ -63,5 +75,17 @@ internal sealed class ReviewerVerdictEvidenceClosure(
             return "verdict-not-met";
         verdict = verdicts.FirstOrDefault(item => item.CriterionIndex == identity.CriterionIndex - 1 && item.Verdict == "met");
         return verdict is null ? "verdict-not-met" : null;
+    }
+
+    private static string? GetTesterSkipReason(Goal goal, string candidate, out TaskSpec? tester)
+    {
+        tester = goal.Tasks.Where(task => task.RequiredRole == AgentRole.Tester && task.LastDispatch is not null)
+            .MaxBy(task => task.LastDispatch!.DispatchedAt);
+        if (tester is null)
+            return "owner-round-missing";
+        if (tester.Status != WorkTaskStatus.Completed)
+            return "owner-round-incomplete";
+        return string.Equals(tester.LastVerification?.ReviewedCommit?.Trim(), candidate, StringComparison.OrdinalIgnoreCase)
+            ? null : "owner-candidate-differs";
     }
 }
