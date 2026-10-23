@@ -22,6 +22,8 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
 
     // Evidence satisfaction is deliberately absent: answering an operator wait must not
     // invalidate the gate that created it. Changes to the obligations themselves do.
+    // Provenance and finding id are audit fields rewritten by every rebind; candidate
+    // binding is checked independently by the exact-pair checks.
     internal static string? BuildReplayContextFingerprint(Goal goal)
     {
         if (goal.AuthoritativeRefinedSpecVersion is not { } version)
@@ -48,8 +50,8 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
             }),
             Obligations = goal.CriterionEvidenceObligations.OrderBy(item => item.Id, StringComparer.Ordinal)
                 .Select(item => new { item.Id, item.CriterionVersion, item.CriterionIndex,
-                    item.Criterion, item.Owner, item.RequiredScope, item.Provenance,
-                    item.FindingStableId, item.ReplacementObligationId, item.ReplacementOwner })
+                    item.Criterion, item.Owner, item.RequiredScope,
+                    item.ReplacementObligationId, item.ReplacementOwner })
         };
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(
             JsonSerializer.Serialize(context)))).ToLowerInvariant();
