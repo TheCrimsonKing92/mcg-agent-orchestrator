@@ -47,7 +47,7 @@ public sealed partial class GoalAcceptanceVerifier
                 () => executionOwner.Identity.AttemptId,
                 resolveManifestIdentity,
                 () => EngineSettings.EnforceStructuralCoverage,
-                () => TempRootApparatusLossReceiptStore.Read(executionOwner.ApparatusReceiptPath), ResolveClosureHash: _testOverrides.ResolvePartitionVerdictClosureHashForTests, ResolveChangedFiles: _testOverrides.ResolvePartitionVerdictChangedFilesForTests, IdenticalTreeChecks: [.. effectiveChecks.Where(check => AcceptanceIdenticalTreeReuseRule.TryGetCheckIdentity(check, out _))]),
+                () => TempRootApparatusLossReceiptStore.Read(executionOwner.ApparatusReceiptPath), ResolveClosureHash: _testOverrides.ResolvePartitionVerdictClosureHashForTests, ResolveChangedFiles: _testOverrides.ResolvePartitionVerdictChangedFilesForTests, IdenticalTreeChecks: [.. effectiveChecks.Where(check => AcceptanceIdenticalTreeReuseRule.TryGetCheckIdentity(check, out _))], MemberGoalIds: executionOwner.AttemptMemberGoalIds?.Select(id => id.Value).ToArray()),
             out var unavailableReason);
         if (partitionVerdictCache is null)
         {
