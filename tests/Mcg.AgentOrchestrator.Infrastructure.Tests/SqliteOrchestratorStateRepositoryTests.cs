@@ -2033,7 +2033,8 @@ public sealed class SqliteOrchestratorStateRepositoryTests
     [Xunit.Fact]
     public async Task SweepCheckpoint_IgnoresOtherGoalRequests()
     {
-        var repo = new SqliteOrchestratorStateRepository(TempDb());
+        var databasePath = TempDb();
+        var repo = new SqliteOrchestratorStateRepository(databasePath);
         var kernel = new AgentOrchestratorKernel();
         var target = kernel.CreateGoal("Persist one swept goal");
         var other = kernel.CreateGoal(
@@ -2043,10 +2044,13 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         kernel.ActivateGoal(other.Id, AgentCatalog.Default().Agents);
         var otherRequest = kernel.RequestHumanInput(other.Id, other.Tasks.Single().Id, "Other answer?");
         await repo.SaveAsync(kernel);
+        var checkpoint = new CliOwnedGoalCheckpoint(repo, kernel);
+        kernel.RecordTaskNote(target.Id, target.Tasks[0].Id, "sweep-progress");
 
-        CliPersistentStateRunner.PersistSweepChanges(kernel, repo, [target.Id]);
+        CliPersistentStateRunner.PersistSweepChanges(kernel, checkpoint, Path.GetDirectoryName(databasePath)!);
 
         var restored = await repo.LoadAsync();
+        Assert.Contains(restored.GetGoal(target.Id).Timeline, item => item.Message == "sweep-progress");
         Assert.Equal(otherRequest.Id, Assert.Single(restored.GetPendingHumanInput(other.Id)).Id);
     }
 

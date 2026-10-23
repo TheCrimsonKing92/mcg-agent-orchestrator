@@ -194,27 +194,10 @@ public static class DispatchReadinessRules
     }
 
     private static bool IsEarlierSdlcStage(AgentRole candidate, AgentRole current)
-    {
-        return SdlcStageOrder(candidate) is { } candidateOrder &&
-            SdlcStageOrder(current) is { } currentOrder &&
-            candidateOrder < currentOrder;
-    }
+        => SdlcTaskDependencies.IsEarlierStage(candidate, current);
 
     internal static bool IsEarlierSdlcStageOf(AgentRole candidate, AgentRole current) =>
         IsEarlierSdlcStage(candidate, current);
-
-    private static int? SdlcStageOrder(AgentRole role)
-    {
-        return role switch
-        {
-            AgentRole.Researcher => 0,
-            AgentRole.Planner => 1,
-            AgentRole.Developer => 2,
-            AgentRole.Tester => 3,
-            AgentRole.Reviewer => 4,
-            _ => null
-        };
-    }
 
     private static string? ResolveParallelProviderKey(TaskSpec task, IReadOnlyList<AgentDefinition>? agents)
     {

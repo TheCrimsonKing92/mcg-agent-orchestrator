@@ -340,34 +340,11 @@ private static bool? TryExecuteTaskCommand(string command, IReadOnlyList<string>
             return false;
 
         case "add-task":
-            var addTaskUsage = "add-task [--goal <goal-prefix>] <role> <description> [--before-role <role>] | add-task [--goal <goal-prefix>] <role> --text-file <path> [--before-role <role>]";
-            CliArgumentParser.RequirePartCount(parts, 3, addTaskUsage);
-            var hasGoalTarget = parts[1].Equals("--goal", StringComparison.OrdinalIgnoreCase);
-            if (hasGoalTarget && parts.Count < 5)
-            {
-                throw new ArgumentException($"Usage: {addTaskUsage}");
-            }
-
-            context.CurrentGoal = hasGoalTarget
-                ? OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, parts[2])
-                : OrchestratorEntityResolver.RequireGoal(context.CurrentGoal);
-            var roleIndex = hasGoalTarget ? 3 : 1;
-            var taskDescription = ResolveTextArgument(
-                parts,
-                inlineIndex: roleIndex + 1,
-                addTaskUsage,
-                "--text-file");
-            var beforeRoleValue = GetFlagValue(parts, "--before-role");
-            var addedTask = context.Kernel.AddTask(
-                context.CurrentGoal.Id,
-                CliArgumentParser.ParseAgentRole(parts[roleIndex]),
-                taskDescription,
-                context.Agents,
-                beforeRole: beforeRoleValue is null
-                    ? null
-                    : CliArgumentParser.ParseAgentRole(beforeRoleValue));
-            TaskTextView.PrintTask(context.CurrentGoal, addedTask);
-            return true;
+        case "repair-task-graph":
+            var repairSelector = GetFlagValue(parts, "--goal");
+            context.CurrentGoal = repairSelector is null ? OrchestratorEntityResolver.RequireGoal(context.CurrentGoal)
+                : OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, repairSelector);
+            return CliTaskGraphRepairCommand.Submit(parts, context.Workspace, context.CurrentGoal);
 
         case "verification-plan":
             var planTarget = ResolveCommandTaskTarget(parts, context, "verification-plan <task-number>|<goal-prefix> <task-number>|--goal <goal-prefix> <task-number> [plan]");
