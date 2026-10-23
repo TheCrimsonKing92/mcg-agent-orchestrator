@@ -104,30 +104,5 @@ public sealed partial class GoalAcceptanceVerifier
         string identity,
         FocusedEvidenceArmRunResult arm,
         AcceptanceCheckResult check,
-        string? receipt)
-    {
-        if (!arm.Accepted ||
-            arm.Disposition is FindingEvidenceArmDisposition.ApparatusFailure or
-                FindingEvidenceArmDisposition.Inconclusive ||
-            !string.IsNullOrWhiteSpace(check.FailureClassification))
-        {
-            return new CandidateFailureRerunResult(null, receipt,
-                check.FailureClassification ?? $"candidate rerun arm was not usable: {arm.Disposition}");
-        }
-
-        if (string.IsNullOrWhiteSpace(receipt))
-        {
-            return new CandidateFailureRerunResult(null, null, "candidate rerun receipt was missing");
-        }
-
-        if (check.Passed)
-        {
-            return new CandidateFailureRerunResult(true, receipt);
-        }
-
-        return check.FailingTestIdentities?.Contains(identity, StringComparer.Ordinal) == true
-            ? new CandidateFailureRerunResult(false, receipt)
-            : new CandidateFailureRerunResult(null, receipt,
-                "candidate rerun did not report this identity as failing");
-    }
+        string? receipt) => CandidateRerunCheckClassifier.Classify(identity, arm, check, receipt);
 }
