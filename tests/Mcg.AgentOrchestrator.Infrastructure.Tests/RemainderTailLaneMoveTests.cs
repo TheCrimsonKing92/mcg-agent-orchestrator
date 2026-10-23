@@ -17,7 +17,7 @@ public sealed class RemainderTailLaneMoveTests
         var lanes = LoadLanes();
         if (resolveCollections) lanes = Resolve(lanes, RunnableTypes());
 
-        Assert.Equal(27, lanes.Count);
+        Assert.Equal(28, lanes.Count);
         Assert.Equal(BalanceB, Assert.Single(AcceptanceLaneMembership.LanesIncluding(
             lanes, typeof(AcceptanceExecutionCacheIsolatedBuildTests).FullName!)).Name);
     }
@@ -38,8 +38,8 @@ public sealed class RemainderTailLaneMoveTests
             beforeMove = Resolve(beforeMove, types);
         }
 
-        Assert.Equal(27, loaded.Count);
-        Assert.Equal(27, beforeMove.Count);
+        Assert.Equal(28, loaded.Count);
+        Assert.Equal(28, beforeMove.Count);
         Assert.Equal(new[] { Remainder }, LaneNames(beforeMove, moved));
         Assert.Equal(new[] { BalanceB }, LaneNames(loaded, moved));
         foreach (var type in types.Where(type => type != moved))
