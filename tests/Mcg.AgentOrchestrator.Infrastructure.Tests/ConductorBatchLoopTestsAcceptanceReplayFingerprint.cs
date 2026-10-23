@@ -7,6 +7,47 @@ public sealed class ConductorBatchLoopTestsAcceptanceReplayFingerprint : Conduct
 {
     public ConductorBatchLoopTestsAcceptanceReplayFingerprint(ITestOutputHelper output) : base(output) { }
 
+    [Xunit.Fact]
+    public void FingerprintIgnoresRebindAuditFieldsButNotObligationContract()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = CreateVerifiedSimpleGoal(kernel, "Keep replay identity across candidate-only rebinds");
+        var version = kernel.RecordGoalRefinement(goal.Id, new RefinedSpec(goal.Objective,
+            ["Replay the same candidate"], VerificationClass.TestVerifiable, [], [])).Version;
+        var prior = new string('a', 40);
+        var candidate = new string('b', 40);
+        var original = kernel.MapCriterionEvidenceOwner(goal.Id, 0, version, CriterionEvidenceOwner.Acceptance,
+            "operator binding", expectedCandidateSha: prior);
+        var fingerprint = ConductorParallelAcceptanceAttemptCoordinator.BuildReplayContextFingerprint(goal);
+        Assert.NotNull(fingerprint);
+        Assert.Null(original.FindingStableId);
+
+        var rebound = kernel.MapCriterionEvidenceOwner(goal.Id, 0, version, CriterionEvidenceOwner.Acceptance,
+            "conductor ratchet conflict resolution", findingStableId: "finding-rebind-control", expectedCandidateSha: candidate);
+
+        Assert.Equal(original.Id, rebound.Id);
+        Assert.Equal(prior, original.ExpectedCandidateSha);
+        Assert.Equal(candidate, rebound.ExpectedCandidateSha);
+        Assert.NotEqual(original.Provenance, rebound.Provenance);
+        Assert.Equal("finding-rebind-control", rebound.FindingStableId);
+        Assert.Equal(fingerprint, ConductorParallelAcceptanceAttemptCoordinator.BuildReplayContextFingerprint(goal));
+
+        kernel.MapCriterionEvidenceOwner(goal.Id, 0, version, CriterionEvidenceOwner.Operator,
+            "conductor ratchet conflict resolution", requiredScope: rebound.RequiredScope,
+            findingStableId: "finding-rebind-control", expectedCandidateSha: candidate);
+        var operatorFingerprint = ConductorParallelAcceptanceAttemptCoordinator.BuildReplayContextFingerprint(goal);
+        Assert.NotEqual(fingerprint, operatorFingerprint);
+
+        kernel.MapCriterionEvidenceOwner(goal.Id, 0, version, CriterionEvidenceOwner.Operator,
+            "conductor ratchet conflict resolution", requiredScope: "operator observation",
+            findingStableId: "finding-rebind-control", expectedCandidateSha: candidate);
+        var scopeFingerprint = ConductorParallelAcceptanceAttemptCoordinator.BuildReplayContextFingerprint(goal);
+        Assert.NotEqual(operatorFingerprint, scopeFingerprint);
+
+        kernel.RecordGoalRefinement(goal.Id, goal.RefinedSpec! with { AcceptanceCriteria = ["Changed criterion text"] });
+        Assert.NotEqual(scopeFingerprint, ConductorParallelAcceptanceAttemptCoordinator.BuildReplayContextFingerprint(goal));
+    }
+
     [Xunit.Theory]
     [Xunit.InlineData(false)]
     [Xunit.InlineData(true)]
