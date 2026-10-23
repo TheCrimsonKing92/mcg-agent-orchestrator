@@ -13,12 +13,12 @@ public sealed class DispatchProcessHostTestsConductorSupervisorWindowsLaunchAuth
     public static bool IsWindows => OperatingSystem.IsWindows();
 
     [Xunit.Theory(Skip = "Requires Windows process/job semantics.", SkipUnless = nameof(IsWindows))]
-    [Xunit.InlineData(true, false, 0, true)]
-    [Xunit.InlineData(false, false, 5, false)]
-    [Xunit.InlineData(true, true, 0, true)]
-    [Xunit.InlineData(false, true, 0, false)]
+    [Xunit.InlineData(true, false, 0, true, false)]
+    [Xunit.InlineData(false, false, 0, false, true)]
+    [Xunit.InlineData(true, true, 0, true, false)]
+    [Xunit.InlineData(false, true, 0, false, false)]
     public void NativeLaunch_JobPolicyComparison_RecordsAuthorityAndLifetime(
-        bool allowBreakaway, bool nested, int expectedError, bool escapesBoundary)
+        bool allowBreakaway, bool nested, int expectedError, bool escapesBoundary, bool expectsFallback)
     {
         var root = Path.Combine(Path.GetTempPath(), "mcg-supervisor-authority-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
@@ -74,10 +74,11 @@ public sealed class DispatchProcessHostTestsConductorSupervisorWindowsLaunchAuth
             var events = File.ReadAllText(Path.Combine(root, "conduct-events.log"));
             output.WriteLine(events);
             var authorityLines = File.ReadAllLines(Path.Combine(root, "conduct-events.log"))
-                .Where(line => line.Contains("\"eventKind\":\"loop-handoff-launch-authority\"", StringComparison.Ordinal));
-            using var authorityEvent = JsonDocument.Parse(Assert.Single(authorityLines));
+                .Where(line => line.Contains("\"eventKind\":\"loop-handoff-launch-authority\"", StringComparison.Ordinal)).ToArray();
+            if (expectsFallback) Assert.Equal(2, authorityLines.Length);
+            using var authorityEvent = JsonDocument.Parse(expectsFallback ? authorityLines[0] : Assert.Single(authorityLines));
             using var launch = JsonDocument.Parse(authorityEvent.RootElement.GetProperty("detail").GetString()!);
-            Assert.Equal(expectedError, launch.RootElement.GetProperty("nativeError").GetInt32());
+            Assert.Equal(expectsFallback ? 5 : expectedError, launch.RootElement.GetProperty("nativeError").GetInt32());
             Assert.Equal("CreateProcessW", launch.RootElement.GetProperty("api").GetString());
             var authority = launch.RootElement.GetProperty("authority");
             Assert.Equal(parent.Process.Id, authority.GetProperty("incumbentPid").GetInt32());
@@ -87,6 +88,18 @@ public sealed class DispatchProcessHostTestsConductorSupervisorWindowsLaunchAuth
             Assert.Equal(inner?.Limits ?? outer.Limits, authority.GetProperty("innermostJobLimitFlags").GetUInt32());
             var flags = Convert.ToUInt32(authority.GetProperty("creationFlags").GetString()![2..], 16);
             Assert.Equal(0x01080600u, flags & 0x01080600u);
+            if (expectsFallback)
+            {
+                using var fallbackEvent = JsonDocument.Parse(authorityLines[1]);
+                using var fallbackLaunch = JsonDocument.Parse(fallbackEvent.RootElement.GetProperty("detail").GetString()!);
+                Assert.Equal(0, fallbackLaunch.RootElement.GetProperty("nativeError").GetInt32());
+                Assert.Equal("inherit-job", fallbackLaunch.RootElement.GetProperty("fallback").GetString());
+                var fallbackFlags = Convert.ToUInt32(fallbackLaunch.RootElement.GetProperty("authority")
+                    .GetProperty("creationFlags").GetString()![2..], 16);
+                Assert.Equal(flags & ~0x01000000u, fallbackFlags);
+                Assert.NotNull(successor);
+                Assert.False(successor.HasExited);
+            }
             if (expectedError == 0)
             {
                 Assert.NotNull(successor);
