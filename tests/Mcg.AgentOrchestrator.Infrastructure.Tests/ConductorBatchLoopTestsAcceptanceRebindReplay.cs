@@ -57,6 +57,36 @@ public sealed class ConductorBatchLoopTestsAcceptanceRebindReplay : ConductorBat
 
     [Xunit.Theory(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Xunit.Trait("Category", "CrossTick")]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public void RebindByDifferentActorAndFindingReplaysWithoutGate(bool fallback)
+    {
+        using var scene = new Scene(rebindActor: "conductor patch-equivalent landing carry",
+            rebindFindingId: "finding-rebind-control");
+        using var census = GateLoadContextProbe.PushLiveGateOccupantProbe(() => []);
+        var receipt = scene.Receipt;
+        scene.AssertPending();
+        Assert.All(scene.Goal.CriterionEvidenceObligations.Where(item => item.Owner == CriterionEvidenceOwner.Acceptance), item =>
+        {
+            Assert.Equal("operator mapping by conductor patch-equivalent landing carry", item.Provenance);
+            Assert.Equal("finding-rebind-control", item.FindingStableId);
+        });
+        Assert.Equal(receipt.ReplayContextFingerprint,
+            ConductorParallelAcceptanceAttemptCoordinator.BuildReplayContextFingerprint(scene.Goal));
+
+        scene.Advance(fallback);
+
+        scene.AssertSatisfied();
+        Assert.Equal(1, scene.Landings);
+        Assert.Equal(0, scene.GateLaunches);
+        Assert.Equal(0, scene.WorkerLaunches);
+        Assert.Equal(1, scene.AttemptCount);
+        Assert.Equal(receipt.AttemptId, scene.Receipt.AttemptId);
+        Assert.NotNull(scene.Receipt.ReplayLandedAt);
+    }
+
+    [Xunit.Theory(Timeout = TestHangGuard.WholeTestMilliseconds)]
+    [Xunit.Trait("Category", "CrossTick")]
     [Xunit.InlineData("missing-proof")]
     [Xunit.InlineData("corrupt-result")]
     [Xunit.InlineData("task")]
@@ -195,7 +225,6 @@ public sealed class ConductorBatchLoopTestsAcceptanceRebindReplay : ConductorBat
     [Xunit.InlineData("criterion-text")]
     [Xunit.InlineData("owner")]
     [Xunit.InlineData("scope")]
-    [Xunit.InlineData("provenance")]
     [Xunit.InlineData("spec")]
     [Xunit.InlineData("task")]
     [Xunit.InlineData("candidate")]
@@ -238,9 +267,8 @@ public sealed class ConductorBatchLoopTestsAcceptanceRebindReplay : ConductorBat
                 break;
             case "owner": scene.Map(1, CriterionEvidenceOwner.Operator); break;
             // These are persisted-contract controls. The supported mapping API
-            // rejects invalid scopes/bindings and ignores an actor-only remap.
+            // rejects invalid scopes/bindings.
             case "scope": scene.ReplaceObligation(1, item => item with { RequiredScope = "different scope" }); break;
-            case "provenance": scene.ReplaceObligation(1, item => item with { Provenance = "changed provenance" }); break;
             case "wrong-binding": scene.Map(1, candidate: Prior); break;
             case "unbound": scene.ReplaceObligation(1, item => item with { ExpectedCandidateSha = null }); break;
             case "candidate": scene.CurrentCandidate = Prior; break;
@@ -452,7 +480,8 @@ public sealed class ConductorBatchLoopTestsAcceptanceRebindReplay : ConductorBat
             File.ReadAllText(_receiptPath),
             new JsonSerializerOptions { PropertyNameCaseInsensitive = true })!;
 
-        public Scene(bool native = false, string? skippedOutcome = null, bool advisoryFailure = false)
+        public Scene(bool native = false, string? skippedOutcome = null, bool advisoryFailure = false,
+            string rebindActor = Provenance, string? rebindFindingId = null)
         {
             _native = native;
             Root = native ? LandingExecutorTests.CreateGitRepository() : CreateTempDirectory("mcg-rebound-replay");
@@ -510,12 +539,14 @@ public sealed class ConductorBatchLoopTestsAcceptanceRebindReplay : ConductorBat
             Assert.Equal(ConductorParallelAcceptanceAttemptDecisionKind.Completed, seed.Kind);
             _receiptPath = seed.Attempt.MetadataPath;
             Coordinator.MarkReconciled(seed.Attempt);
-            for (var index = 0; index < 2; index++) Map(index);
+            for (var index = 0; index < 2; index++)
+                Map(index, provenance: rebindActor, findingStableId: rebindFindingId);
         }
 
         public CriterionEvidenceObligation Map(int index, CriterionEvidenceOwner owner = CriterionEvidenceOwner.Acceptance,
-            string scope = CriterionEvidenceScopes.FullAcceptanceGate, string? candidate = "current", string provenance = Provenance) =>
-            Kernel.MapCriterionEvidenceOwner(Goal.Id, index, 1, owner, provenance, scope,
+            string scope = CriterionEvidenceScopes.FullAcceptanceGate, string? candidate = "current", string provenance = Provenance,
+            string? findingStableId = null) =>
+            Kernel.MapCriterionEvidenceOwner(Goal.Id, index, 1, owner, provenance, scope, findingStableId,
                 expectedCandidateSha: candidate == "current" ? Candidate : candidate);
 
         private void Configure()
