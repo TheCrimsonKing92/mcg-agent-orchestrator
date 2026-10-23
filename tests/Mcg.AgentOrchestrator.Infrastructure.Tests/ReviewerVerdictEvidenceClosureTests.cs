@@ -75,8 +75,8 @@ public sealed class ReviewerVerdictEvidenceClosureTests
     [InlineData("operator")]
     [InlineData("acceptance-gate")]
     [InlineData("acceptance")]
-    [InlineData("Tester")]
-    [InlineData("Developer")]
+    [InlineData("developer requests; conductor executes")]
+    [InlineData("acceptance gate")]
     [InlineData("")]
     public void NonReviewerOwnedWaitIsNeverEvaluated(string owner)
     {
@@ -105,6 +105,70 @@ public sealed class ReviewerVerdictEvidenceClosureTests
         AssertPassingReviewClosesControlWait();
     }
 
+    [Theory]
+    [InlineData("Developer")]
+    [InlineData("developer")]
+    [InlineData("Tester")]
+    [InlineData(" TESTER ")]
+    public void MetVerdictOnCurrentCandidateClosesWorkerOwnedWait(string owner)
+    {
+        var scenario = CreateScenario(testerBase: "B");
+        var request = CreateWait(scenario, owner);
+        var normalizedOwner = owner.Trim().ToLowerInvariant();
+        var ownerTask = normalizedOwner == "developer" ? scenario.Developer : scenario.Tester!;
+
+        RecordReviewer(scenario);
+
+        Assert.Equal(WorkTaskStatus.Completed, scenario.Reviewer.Status);
+        Assert.True(request.IsCompleted);
+        Assert.Equal(HumanInputAnswerOrigin.Worker, request.AuthoritativeAnswer!.Origin);
+        Assert.StartsWith($"{ClosurePrefix}{scenario.Reviewer.Id.Value}", request.Answer);
+        Assert.Contains($"criterion_index=2 owner={normalizedOwner} owner_task={ownerTask.Id.Value}", request.Answer);
+        Assert.Contains("candidate=B", request.Answer);
+    }
+
+    [Theory]
+    [InlineData(null, WorkTaskStatus.Completed, "owner-round-missing")]
+    [InlineData("B", WorkTaskStatus.Failed, "owner-round-incomplete")]
+    [InlineData("A", WorkTaskStatus.Completed, "owner-candidate-differs")]
+    public void TesterOwnedWaitStaysOpenWhenTheTesterRoundDoesNotMatch(
+        string? testerBase, WorkTaskStatus testerStatus, string reason)
+    {
+        var scenario = CreateScenario(testerBase: testerBase, testerStatus: testerStatus);
+        var request = CreateWait(scenario, "Tester");
+
+        RecordReviewer(scenario);
+
+        AssertSkippedWait(scenario, request, reason);
+    }
+
+    [Fact]
+    public void DeveloperOwnedWaitUsesTheSliceOneConditions()
+    {
+        var running = CreateScenario(secondDeveloper: true);
+        var runningRequest = CreateWait(running, "Developer");
+        RecordReviewer(running);
+        AssertSkippedWait(running, runningRequest, "candidate-unknown");
+
+        var notMet = CreateScenario();
+        var notMetRequest = CreateWait(notMet, "Developer", criterionIndex: 2);
+        RecordReviewer(notMet);
+        AssertSkippedWait(notMet, notMetRequest, "verdict-not-met");
+    }
+
+    private static void AssertSkippedWait(Scenario scenario, HumanInputRequest request, string reason)
+    {
+        Assert.Equal(WorkTaskStatus.Completed, scenario.Reviewer.Status);
+        Assert.False(request.IsCompleted);
+        Assert.Null(request.Answer);
+        Assert.Null(request.AuthoritativeAnswer);
+        Assert.DoesNotContain(scenario.Goal.Timeline, item => item.Message.Contains(ClosurePrefix, StringComparison.Ordinal));
+        var skipped = Assert.Single(scenario.Goal.Timeline.Where(item => item.Message.StartsWith(SkippedPrefix, StringComparison.Ordinal)));
+        Assert.Equal(ProgressKind.TaskNote, skipped.Kind);
+        Assert.Equal(scenario.Reviewer.Id, skipped.TaskId);
+        Assert.Equal($"{SkippedPrefix} request={request.Id.Value[..8]} reason={reason}", skipped.Message);
+    }
+
     // Pair no-op scenarios with a positive control so they also fail when the closure is absent.
     private static void AssertPassingReviewClosesControlWait()
     {
@@ -115,13 +179,17 @@ public sealed class ReviewerVerdictEvidenceClosureTests
         Assert.True(request.IsCompleted);
     }
 
-    private static Scenario CreateScenario(bool secondDeveloper = false)
+    private static Scenario CreateScenario(bool secondDeveloper = false, string? testerBase = null,
+        WorkTaskStatus testerStatus = WorkTaskStatus.Completed)
     {
         var kernel = new AgentOrchestratorKernel();
         var planner = new TaskSpec(TaskId.New(), "Plan evidence", AgentRole.Planner);
         var developer = new TaskSpec(TaskId.New(), "Implement candidate", AgentRole.Developer);
         var reviewer = new TaskSpec(TaskId.New(), "Inspect diff", AgentRole.Reviewer);
         var tasks = new List<TaskSpec> { planner, developer, reviewer };
+        var tester = testerBase is null ? null : new TaskSpec(TaskId.New(), "Verify candidate", AgentRole.Tester);
+        if (tester is not null)
+            tasks.Add(tester);
         var laterDeveloper = new TaskSpec(TaskId.New(), "Revise candidate", AgentRole.Developer);
         if (secondDeveloper)
             tasks.Add(laterDeveloper);
@@ -143,7 +211,19 @@ public sealed class ReviewerVerdictEvidenceClosureTests
                 "codex-cli", "revise", "C:\\fixture", DispatchTime.AddSeconds(1), BaseCommit: "B"));
             Assert.Equal(WorkTaskStatus.Running, laterDeveloper.Status);
         }
-        return new Scenario(kernel, goal, planner, developer, reviewer);
+        if (tester is not null)
+        {
+            var startedAt = DispatchTime.AddSeconds(1);
+            kernel.RecordTaskDispatch(goal.Id, tester.Id, new TaskDispatchRecord(
+                "codex-cli", "verify", "C:\\fixture", startedAt, BaseCommit: testerBase));
+            kernel.RecordTaskVerification(goal.Id, tester.Id, new TaskVerificationRecord(
+                "verify", "C:\\fixture", 0, string.Empty, string.Empty, startedAt.AddMilliseconds(1),
+                WorkerResultPresent: true, ReviewedCommit: "worker-supplied-candidate"));
+            kernel.ReportWorkerTaskProgress(goal.Id, tester.Id, testerStatus, "Tester round recorded.");
+            Assert.Equal(testerStatus, tester.Status);
+            Assert.Equal(testerBase, tester.LastVerification!.ReviewedCommit);
+        }
+        return new Scenario(kernel, goal, planner, developer, reviewer, tester);
     }
 
     private static HumanInputRequest CreateWait(Scenario scenario, string owner, int criterionIndex = 3,
@@ -189,5 +269,5 @@ public sealed class ReviewerVerdictEvidenceClosureTests
     }
 
     private sealed record Scenario(AgentOrchestratorKernel Kernel, Goal Goal, TaskSpec Planner,
-        TaskSpec Developer, TaskSpec Reviewer);
+        TaskSpec Developer, TaskSpec Reviewer, TaskSpec? Tester);
 }
