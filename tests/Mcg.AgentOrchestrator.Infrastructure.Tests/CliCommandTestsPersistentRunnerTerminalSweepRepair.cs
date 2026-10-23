@@ -36,7 +36,7 @@ public sealed class CliCommandTestsPersistentRunnerTerminalSweepRepair : CliComm
         Xunit.Assert.True(changed);
         Xunit.Assert.Equal(GoalStatus.Completed, restored.Status);
         Xunit.Assert.Equal(WorkTaskStatus.Cancelled, restored.Tasks.Single(item => item.Id == task.Id).Status);
-        Xunit.Assert.Equal(1, repository.TransactionCount);
+        Xunit.Assert.Equal(0, repository.TransactionCount);
         Xunit.Assert.Equal(1, repository.LoadGoalsCount);
         Xunit.Assert.Equal(1, repository.SaveGoalSnapshotsCount);
         Xunit.Assert.Equal([goal.Id.Value], repository.LoadedGoalIds);

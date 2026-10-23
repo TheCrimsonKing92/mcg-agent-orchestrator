@@ -1040,9 +1040,27 @@ internal sealed partial class GoalRefinementService
     private static RefinedSpec BuildFallbackSpec(string objective)
     {
         var declaredCriteria = ParseDeclaredAcceptanceCriteria(objective);
-        IReadOnlyList<string> criteria = declaredCriteria.Count > 0
-            ? declaredCriteria
-            : [$"The objective is achieved: {objective}"];
+        if (declaredCriteria.Count == 0)
+        {
+            IReadOnlyList<string> fallbackCriteria =
+            [
+                $"The objective is achieved: {objective}\n" +
+                "The Reviewer judges this criterion from the candidate diff and the evidence receipts already recorded for this goal.\n" +
+                "Reviewer owns; Reviewer executes. TEST-VERIFIABLE."
+            ];
+            return new RefinedSpec(
+                $"Implement: {objective}",
+                fallbackCriteria,
+                FallbackVerificationClassPolicy.Classify(fallbackCriteria),
+                [],
+                [])
+            {
+                AcceptanceGateOwnedAcceptanceCriteria = [],
+                OperatorOwnedAcceptanceCriteria = []
+            };
+        }
+
+        IReadOnlyList<string> criteria = declaredCriteria;
         var ownership = CriterionOwnershipDerivation.DeriveForRevision(criteria, [], []);
         return new RefinedSpec(
             $"Implement: {objective}",

@@ -1,5 +1,19 @@
 This command and setup reference preserves the earlier README operator material. The canonical guide for driving, observing, and recovering goals is [docs/operator-runbook.md](operator-runbook.md).
 
+## Task graph repair inbox
+
+`add-task [--goal <prefix>] <role> <description> [--before-role <role>]` submits an operator intent. It prints the intent id, pending status and replay key; no task exists until the conductor applies it. `--text-file <path>` supplies the description. Poll `operator-intent-status <id> --wait` for the applied/rejected outcome.
+
+For ordered atomic repair use `repair-task-graph [--goal <prefix>] --plan-file <path> [--idempotency-key <key>]`. Example plan for Developer → Reviewer:
+
+```json
+{"insertions":[{"role":"Planner","description":"Plan the change","beforeRole":"Developer"},{"role":"Researcher","description":"Establish evidence","beforeRole":"Planner"},{"role":"Tester","description":"Verify the change","beforeRole":"Reviewer"}],"expectedFinalRoleOrder":["Researcher","Planner","Developer","Tester","Reviewer"],"version":1}
+```
+
+Each placement resolves against the simulated preceding insertions and requires exactly one matching role. The conductor rejects the entire plan on invalid payload, missing/ambiguous placement, final-order mismatch or a new predecessor for an already-admitted/running/completed task. Rejection changes neither tasks nor progress. Lifecycle holds survive application. Separate bare commands are separate operations; submit one plan for an atomic repair.
+
+Bare replay binds the goal id and canonical complete request contents, independent of graph version and file location. It returns the original intent/outcome before or after application and restart. An identical later insertion requires a fresh explicit `--idempotency-key <key>`. Conflicting key reuse fails closed; plan/text contents are stored in the inbox. `--json` emits the existing intent envelope.
+
 ## Verify
 
 ```powershell

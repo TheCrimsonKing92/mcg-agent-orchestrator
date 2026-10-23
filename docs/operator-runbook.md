@@ -1,5 +1,13 @@
 # Operator Runbook
 
+## Atomic live task graph repair
+
+Use the [task graph inbox contract](cli-reference.md#task-graph-repair-inbox) for insertion and ordered repair. Submission acknowledges only durable inbox intake. Poll the returned intent id until Applied or Rejected; a bare replay returns that same operation even after restart. A distinct later identical insertion needs a fresh explicit idempotency key.
+
+Durable enqueue acknowledgment is the repair linearization point. The existing goal-scoped admission mutex covers acknowledgment and native launch authorization/ownership recording. At launch it checks both pending/claimed repair and the committed ordered graph identity bound to preparation. A rejected/expired repair releases the hold; stale preparation after a changed graph requires fresh preparation. Already-admitted work is preserved: repair cannot add predecessors to it. Repair preserves operator lifecycle holds.
+
+Operator-owned proof for goal 21da18e8 remains pending: use an isolated disposable workspace/store, configure the controllable fixture profile from `DispatchHostLifetimeHandoffTests`, create Developer → Reviewer and park before starting its live conductor. Submit one five-role plan with the loop live and the hold intact, then release through supported lifecycle. Keep Researcher blocked in the fixture; capture native admission, stop the isolated loop through its supported stop surface, reload/restart under hold and retain graph/intent/outcome receipts before supported cleanup. Preflight the exact candidate's profile, hold/release, native admission evidence and stop contracts before dispatch. Exactly five tasks and only Researcher admitted first are required; unit tests and this procedure are not that receipt.
+
 ## Host-owned worker build requests
 
 New Developer/Tester dispatches enroll in worker-build protocol 1 before their start gate opens. The sanctioned `Invoke-WorkerBuildCheck.ps1` adapter submits project/configuration selections to that dispatch host's local named pipe. `.orchestrator-context/worker-build-channel.json` is a locator, never authorization or evidence. The host checks the connected OS peer against its owned worker job and derives goal/task/dispatch authority from canonical state. Requests cannot name an executable, store, process to stop, or lease owner.
