@@ -1,4 +1,5 @@
 using System.Globalization;
+using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.App.Cli;
@@ -21,6 +22,8 @@ internal static class CliConductorStatusReader
         if (snapshot.Since.Previous is { } previous)
             output.WriteLine($"Previous stop: {previous.At:O}; reason={previous.Reason} (earlier generation)");
         output.WriteLine($"Supervisor build: {snapshot.SupervisorBuild ?? "unavailable"}");
+        if (snapshot.SupervisorJob is { } job && ProcessJobTrapProbe.Traps(job))
+            output.WriteLine($"Supervisor job: jobFlags={ProcessJobTrapProbe.FormatFlags(job.LimitFlags!.Value)} ends the conductor when the launching app closes; restart it from a terminal outside that job.");
         output.WriteLine(snapshot.Generation.State switch
         {
             "no-build" => "Generation: unavailable (no supervisor build recorded)",
