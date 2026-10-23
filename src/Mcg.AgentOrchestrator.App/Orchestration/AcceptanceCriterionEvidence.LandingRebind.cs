@@ -28,8 +28,8 @@ internal static partial class AcceptanceCriterionEvidence
                     executionDirectory ?? string.Empty, oldHead, candidateSha, integrationBranch,
                     out var evidence, out var reason))
             {
-                return FormatRefusedCarryDiagnostic(
-                    candidateSha, obligation, $"reason={reason}; head={oldHead}");
+                return FormatStaleBindingsDiagnostic(
+                    candidateSha, obligation, boundElsewhere, $"reason={reason}; head={oldHead}");
             }
             evidenceByHead.Add(oldHead, evidence);
         }

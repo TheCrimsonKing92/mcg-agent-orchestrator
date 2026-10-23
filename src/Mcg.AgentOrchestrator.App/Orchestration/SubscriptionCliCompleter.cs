@@ -1,5 +1,6 @@
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
+using System.Text;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
@@ -9,6 +10,16 @@ internal sealed record SubscriptionCliCompletionResult(
     string? FailureReason = null)
 {
     public bool Succeeded => ExitCode == 0;
+    public string RawStandardOutput { get; init; } = StandardOutput;
+}
+
+internal sealed record SubscriptionCliSemanticTextResult(
+    string Text,
+    string RawStandardOutput,
+    int ExitCode,
+    string? FailureReason)
+{
+    public bool Succeeded => ExitCode == 0 && FailureReason is null;
 }
 
 // Runs a single subscription-CLI text completion using a worker profile without dispatching a
@@ -91,6 +102,31 @@ internal sealed class SubscriptionCliCompleter
     internal async Task<SubscriptionCliCompletionResult> CompleteWithResultAsync(
         string prompt,
         string promptFileName,
+        CancellationToken cancellationToken) =>
+        (await InvokeAsync(prompt, promptFileName, cancellationToken).ConfigureAwait(false)).Result;
+
+    internal async Task<SubscriptionCliSemanticTextResult> CompleteSemanticTextWithResultAsync(
+        string prompt,
+        string promptFileName,
+        CancellationToken cancellationToken)
+    {
+        var (result, command) = await InvokeAsync(prompt, promptFileName, cancellationToken).ConfigureAwait(false);
+        // Do not pass provider text into a failure diagnostic: it can contain the prompt or stream.
+        if (!result.Succeeded)
+            return new(string.Empty, result.RawStandardOutput, result.ExitCode, $"subscription-cli-exit:{result.ExitCode}");
+
+        var kind = WorkerProviderCatalog.Default().ResolveProfile(_profileName).Identity.Kind;
+        if (kind is not (ProviderKind.OpenAICodexCli or ProviderKind.OpenAICodexLuna) || !HasJsonArgument(command))
+            return new(result.StandardOutput, result.RawStandardOutput, result.ExitCode, null);
+
+        return CodexJsonlUsageParser.TryParseCompletedAnswer(result.RawStandardOutput, out var answer, out var failure)
+            ? new(answer, result.RawStandardOutput, result.ExitCode, null)
+            : new(string.Empty, result.RawStandardOutput, result.ExitCode, failure);
+    }
+
+    private async Task<(SubscriptionCliCompletionResult Result, string Command)> InvokeAsync(
+        string prompt,
+        string promptFileName,
         CancellationToken cancellationToken)
     {
         var tempDir = Path.Combine(OrchestratorTempRoot.GetPurposeDirectory("cli-complete"), $"mcg-cli-complete-{Guid.NewGuid():N}");
@@ -103,12 +139,65 @@ internal sealed class SubscriptionCliCompleter
             var standardInput = _commandTemplate.Contains("{promptPath}", StringComparison.OrdinalIgnoreCase)
                 ? null
                 : prompt;
-            return await _runner(command, tempDir, standardInput, cancellationToken).ConfigureAwait(false);
+            return (await _runner(command, tempDir, standardInput, cancellationToken).ConfigureAwait(false), command);
         }
         finally
         {
             try { Directory.Delete(tempDir, recursive: true); } catch { }
         }
+    }
+
+    // Read literal PowerShell arguments, respecting quoted segments and escaped characters. In
+    // particular, a flag inside a quoted prompt, path, or nested command is not its own argument.
+    private static bool HasJsonArgument(string command)
+    {
+        var token = new StringBuilder();
+        char quote = '\0';
+        var found = false;
+        for (var i = 0; i < command.Length; i++)
+        {
+            var ch = command[i];
+            if (ch == '`' && quote != '\'' && i + 1 < command.Length)
+            {
+                token.Append(command[++i]);
+            }
+            else if (quote != '\0')
+            {
+                if (ch == quote)
+                {
+                    if (quote == '\'' && i + 1 < command.Length && command[i + 1] == '\'')
+                        token.Append(command[++i]);
+                    else
+                        quote = '\0';
+                }
+                else
+                    token.Append(ch);
+            }
+            else if (ch is '\'' or '"')
+                quote = ch;
+            else if (ch == '<' && token.Length == 0 && i + 1 < command.Length && command[i + 1] == '#')
+            {
+                // PowerShell block comments end at the first #>; their contents are not arguments.
+                i += 2;
+                while (i + 1 < command.Length && !(command[i] == '#' && command[i + 1] == '>')) i++;
+                if (i + 1 >= command.Length)
+                    return false;
+                i++;
+            }
+            else if (char.IsWhiteSpace(ch) || ch is ';' or '|' or '&' or '(' or ')')
+            {
+                found |= token.ToString() == "--json";
+                token.Clear();
+            }
+            else if (ch == '#' && token.Length == 0)
+            {
+                // A line comment is not an invocation argument.
+                while (i + 1 < command.Length && command[i + 1] is not ('\r' or '\n')) i++;
+            }
+            else
+                token.Append(ch);
+        }
+        return quote == '\0' && (found || token.ToString() == "--json");
     }
 
     internal static string SubstitutePlaceholders(
@@ -246,6 +335,9 @@ internal sealed class SubscriptionCliCompleter
         return new SubscriptionCliCompletionResult(
             result.StandardOutput.Trim(),
             result.ExitCode,
-            result.ExitCode == 0 ? null : $"subscription-cli-exit:{result.ExitCode}");
+            result.ExitCode == 0 ? null : $"subscription-cli-exit:{result.ExitCode}")
+        {
+            RawStandardOutput = result.StandardOutput
+        };
     }
 }

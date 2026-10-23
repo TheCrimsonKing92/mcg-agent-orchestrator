@@ -141,7 +141,7 @@ public sealed class SatisfiedAcceptancePatchCarryTests : HostCapacityBoundTestBa
                 goal, fixture.NewHead, kernel, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, fixture.Repository);
 
             Assert.Equal(
-                $"Acceptance passed for {fixture.NewHead}, but obligation '{before[0].Id}' is bound to {fixture.OldHead}. Rebind the obligation to the current candidate before recording its evidence. Carry-forward refused: reason=not-eligible.",
+                $"Acceptance passed for {fixture.NewHead}, but obligation '{before[0].Id}' is bound to {fixture.OldHead}. Rebind the obligation to the current candidate before recording its evidence. Carry-forward refused: reason=not-eligible. Also bound to other candidates: '{before[1].Id}' to {fixture.OldHead}.",
                 diagnostic);
             Assert.Equal(before, goal.CriterionEvidenceObligations.ToArray());
             Assert.Empty(CarryNotes(fixture.Repository, goal));
@@ -175,7 +175,7 @@ public sealed class SatisfiedAcceptancePatchCarryTests : HostCapacityBoundTestBa
                 goal, fixture.NewHead, kernel, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, fixture.Repository);
 
             Assert.Equal(
-                $"Acceptance passed for {fixture.NewHead}, but obligation '{before[0].Id}' is bound to {fixture.OldHead}. Rebind the obligation to the current candidate before recording its evidence. Carry-forward refused: reason=not-eligible.",
+                $"Acceptance passed for {fixture.NewHead}, but obligation '{before[0].Id}' is bound to {fixture.OldHead}. Rebind the obligation to the current candidate before recording its evidence. Carry-forward refused: reason=not-eligible. Also bound to other candidates: '{before[1].Id}' to {differentHead}.",
                 diagnostic);
             Assert.Equal(before, goal.CriterionEvidenceObligations.ToArray());
             Assert.Empty(CarryNotes(fixture.Repository, goal));

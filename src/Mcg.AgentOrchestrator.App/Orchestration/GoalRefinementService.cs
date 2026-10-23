@@ -946,9 +946,18 @@ internal sealed partial class GoalRefinementService
                     subscription.ReasoningEffort);
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             cts.CancelAfter(_subscriptionTimeout);
-            var stdout = await completer.CompleteAsync(prompt, "spec-refiner-prompt.md", cts.Token).ConfigureAwait(false);
-            var rawOutputDecision = await PersistRawOutputAsync(goalId, stdout).ConfigureAwait(false);
-            var output = SpecRefinerPlanner.Parse(stdout, declaredIndexUpperBound);
+            var completion = await completer.CompleteSemanticTextWithResultAsync(prompt, "spec-refiner-prompt.md", cts.Token).ConfigureAwait(false);
+            var rawOutputDecision = await PersistRawOutputAsync(goalId, completion.RawStandardOutput).ConfigureAwait(false);
+            if (!completion.Succeeded)
+            {
+                var detail = $"{completion.FailureReason}; exit_code={completion.ExitCode}";
+                return new RefinerAttempt(
+                    SpecRefinementOutput.Invalid(detail),
+                    invocation,
+                    new RefinementFailure("subscription-failed", detail),
+                    rawOutputDecision);
+            }
+            var output = SpecRefinerPlanner.Parse(completion.Text, declaredIndexUpperBound);
             return output.IsValid
                 ? new RefinerAttempt(output, invocation, RawOutputDecision: rawOutputDecision)
                 : new RefinerAttempt(
