@@ -13,6 +13,82 @@ public sealed record CodexJsonlParseResult(
 
 public static class CodexJsonlUsageParser
 {
+    // Internal completions require a successful final turn. Keep this strict contract separate
+    // from Parse, whose tolerant, concatenated worker output and usage behavior is intentional.
+    public static bool TryParseCompletedAnswer(string jsonl, out string answer, out string failureReason)
+    {
+        ArgumentNullException.ThrowIfNull(jsonl);
+        answer = string.Empty;
+        failureReason = string.Empty;
+        var openTurn = false;
+        var completedTurn = false;
+        string? candidate = null;
+        using var reader = new StringReader(jsonl);
+        while (reader.ReadLine() is { } line)
+        {
+            if (string.IsNullOrWhiteSpace(line)) continue;
+            try
+            {
+                using var document = JsonDocument.Parse(line);
+                var root = document.RootElement;
+                var type = GetString(root, "type");
+                if (string.IsNullOrWhiteSpace(type))
+                    return Fail("codex-transport:malformed-event", out failureReason);
+
+                switch (type)
+                {
+                    case "turn.started":
+                        if (openTurn) return Fail("codex-transport:nested-turn", out failureReason);
+                        openTurn = true;
+                        completedTurn = false;
+                        candidate = null;
+                        break;
+                    case "turn.completed":
+                        if (!openTurn) return Fail("codex-transport:unmatched-turn-completion", out failureReason);
+                        if (root.TryGetProperty("usage", out var usage) && usage.ValueKind != JsonValueKind.Object)
+                            return Fail("codex-transport:malformed-event", out failureReason);
+                        openTurn = false;
+                        completedTurn = true;
+                        break;
+                    case "turn.failed":
+                    case "error":
+                        return Fail("codex-transport:failed-turn", out failureReason);
+                    case "item.started":
+                    case "item.updated":
+                    case "item.completed":
+                        if (!openTurn) return Fail("codex-transport:item-outside-turn", out failureReason);
+                        if (!root.TryGetProperty("item", out var item) || string.IsNullOrWhiteSpace(GetString(item, "type")))
+                            return Fail("codex-transport:malformed-event", out failureReason);
+                        if (type == "item.completed" && GetString(item, "type") == "agent_message")
+                        {
+                            candidate = GetString(item, "text");
+                            if (candidate is null) return Fail("codex-transport:malformed-event", out failureReason);
+                        }
+                        break;
+                    // Thread/usage and future informational events cannot supply an answer.
+                }
+            }
+            catch (JsonException)
+            {
+                return Fail("codex-transport:malformed-json", out failureReason);
+            }
+        }
+
+        if (openTurn || !completedTurn)
+            return Fail("codex-transport:incomplete-turn", out failureReason);
+        if (string.IsNullOrWhiteSpace(candidate))
+            return Fail("codex-transport:missing-final-assistant", out failureReason);
+        answer = candidate;
+        return true;
+    }
+
+    private static bool Fail(string reason, out string failureReason)
+    {
+        // Fixed protocol classifications, never provider-supplied prose or JSON fragments.
+        failureReason = reason;
+        return false;
+    }
+
     public static CodexJsonlParseResult Parse(string jsonl)
     {
         ArgumentNullException.ThrowIfNull(jsonl);
