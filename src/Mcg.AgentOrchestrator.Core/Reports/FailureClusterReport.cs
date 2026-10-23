@@ -33,6 +33,7 @@ public static class FailureClusterReport
         "Background finding-candidate-rerun focused evidence is running",
         "Background deferred-no-change focused evidence is running",
         "Background pre-tester-deferred focused evidence is running",
+        "Background pre-tester-out-of-diff-rerun focused evidence is running",
         "Background verification-inconclusive-timed-out-selection-rerun focused evidence is running"
     });
 
