@@ -253,13 +253,22 @@ public sealed partial class SqliteOperatorIntentStore
         return ids;
     }
 
+    // A reference rebuilt from a persisted worker-build invocation carries no graph identity or state
+    // path; those fields bind the preparation only when the caller supplies them.
+    private static bool MatchesPreparation(TaskIntentAdmissionReference prepared, TaskIntentAdmissionReference reference) =>
+        prepared with
+        {
+            GraphIdentity = reference.GraphIdentity is null ? null : prepared.GraphIdentity,
+            StatePath = reference.StatePath is null ? null : prepared.StatePath
+        } == reference;
+
     // Called under the task mutex. Terminal intent rows remain the source for obsolete-version receipts.
     public TaskIntentSuppressionReceipt? RecordSuppression(TaskIntentAdmissionReference reference, string decisionKey,
         bool validateCommittedGraph = false, bool includeGraphRepair = true)
     {
         EnsureWritable();
         ValidateAdmissionReference(reference);
-        if (reference.DispatchedAt is { } at && GetPreparedAdmission(reference.GoalId, reference.TaskId, at) != reference)
+        if (reference.DispatchedAt is { } at && !MatchesPreparation(GetPreparedAdmission(reference.GoalId, reference.TaskId, at), reference))
             throw new InvalidOperationException("Task admission version does not match its durable preparation.");
         using var conn = OpenAdmissionWriteConnection();
         using var tx = conn.BeginTransaction();
