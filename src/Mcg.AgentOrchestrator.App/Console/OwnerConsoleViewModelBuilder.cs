@@ -125,6 +125,7 @@ internal sealed class OwnerConsoleViewModelBuilder(IOrchestratorStateQueries sta
 
     internal OwnerConsoleViewModel WithActivity(OwnerConsoleViewModel model, OwnerConsoleViewInputs inputs)
     {
+        var planned = OwnerConsoleStopClassifier.Classify(inputs.RecentEvents);
         OwnerConductEvent[] observed;
         OwnerAttentionObservation[] attention;
         lock (_observationGate) { observed = _observed.ToArray(); attention = _attention.Snapshot(); }
@@ -139,7 +140,8 @@ internal sealed class OwnerConsoleViewModelBuilder(IOrchestratorStateQueries sta
             Board = model.Board.Select(row => _goals.TryGetValue(row.GoalId, out var goal)
                 ? row with { Priority = PriorityBadge(goal, inputs.RecentEvents) } : row).ToImmutableArray(),
             Gate = WithPriority(model.Gate, inputs.RecentEvents), Status = model.Status with
-            { LastEventAge = Age(inputs.LastConductEvent), LandedToday = inputs.LandedToday } };
+            { LastEventAge = Age(inputs.LastConductEvent), PlannedStopReason = planned?.Reason,
+                PlannedStopAt = planned?.At, LandedToday = inputs.LandedToday } };
     }
 
     private OwnerConsoleGateProgress? WithPriority(OwnerConsoleGateProgress? gate, IReadOnlyList<OwnerConductEvent> events) =>
