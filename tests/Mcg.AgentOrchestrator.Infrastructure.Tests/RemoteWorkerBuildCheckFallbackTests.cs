@@ -31,7 +31,7 @@ public sealed class RemoteWorkerBuildCheckFallbackTests
         var fixture = new Fixture();
         if (fault == "red") fixture.LocalOutput = new(1, "Feature.cs: error CS1000: local compiler failure", "local stderr");
         var operation = fault == "budget" ? fixture.Operation with
-        { Deadline = fixture.Time.GetUtcNow() + TimeSpan.FromMinutes(7) + TimeSpan.FromSeconds(59) } : fixture.Operation;
+        { Deadline = fixture.Time.GetUtcNow() + OrchestratorBuildEvidenceCheck.DefaultTimeout + TimeSpan.FromSeconds(59) } : fixture.Operation;
         var baseline = fixture.Run(new(), operation);
         var receiptBytes = File.ReadAllBytes(fixture.ReceiptPath);
         Assert.False(File.Exists(fixture.LedgerPath));

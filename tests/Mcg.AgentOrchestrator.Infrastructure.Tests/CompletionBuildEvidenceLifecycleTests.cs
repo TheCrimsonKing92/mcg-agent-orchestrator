@@ -50,7 +50,7 @@ public sealed class CompletionBuildEvidenceLifecycleTests
         var fixture = new CompletionBuildEvidenceFixture();
         var runner = fixture.Runner();
         runner.RefreshLatestProcess(fixture.Kernel, fixture.GoalId, fixture.TaskId);
-        fixture.Clock.Advance(TimeSpan.FromMinutes(8));
+        fixture.Clock.Advance(OrchestratorBuildEvidenceCheck.DefaultTimeout + TimeSpan.FromMinutes(1));
         runner.RefreshLatestProcess(fixture.Kernel, fixture.GoalId, fixture.TaskId);
         Assert.Equal(CompletionBuildEvidencePhase.TimedOut, fixture.Task.CompletionBuildEvidence!.Phase);
         Assert.Equal(1, fixture.Stops);

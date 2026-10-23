@@ -56,7 +56,7 @@ public sealed class RemoteWorkerBuildCheckSettingsTests
                 """);
         }
         fixture.Runner().RefreshLatestProcess(fixture.Kernel, fixture.GoalId, fixture.TaskId);
-        Assert.Equal(fixture.Clock.UtcNow + TimeSpan.FromMinutes(7) + TimeSpan.FromSeconds(enabled ? 300 : 0),
+        Assert.Equal(fixture.Clock.UtcNow + OrchestratorBuildEvidenceCheck.DefaultTimeout + TimeSpan.FromSeconds(enabled ? 300 : 0),
             fixture.Task.CompletionBuildEvidence!.Deadline);
     }
 }
