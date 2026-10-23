@@ -26,11 +26,14 @@ internal sealed partial class ConductorDriver
                 DispatchFailureClassifier.Classify(candidate, verification).ClassifierReceipt) is { } rule &&
             (string.Equals(rule, DispatchFailureDiagnosticMarker.WorkerBuildCheckFailed, StringComparison.Ordinal) ||
              (string.Equals(rule, DispatchFailureDiagnosticMarker.WorkerBuildEvidenceMissing,
-                 StringComparison.Ordinal) && IsBuildSlotLockTimeout(verification))));
+                 StringComparison.Ordinal) && WorkerBuildCheckRecoveryText.NoBuildCause(
+                     verification.StandardError + Environment.NewLine + verification.StandardOutput) != WorkerBuildNoBuildCause.None)));
         if (task is null) return null;
-        var errors = WorkerBuildLogErrorReader.ReadNewest(_workerBuildArtifactsPath(goal.Id));
-        var lockTimeout = errors is null && IsBuildSlotLockTimeout(task.LastVerification!);
-        if (errors is null && !lockTimeout)
+        var cause = WorkerBuildCheckRecoveryText.NoBuildCause(
+            task.LastVerification!.StandardError + Environment.NewLine + task.LastVerification.StandardOutput);
+        var errors = cause == WorkerBuildNoBuildCause.SlotCapacity ? null : WorkerBuildLogErrorReader.ReadNewest(_workerBuildArtifactsPath(goal.Id));
+        var noBuild = errors is null && cause != WorkerBuildNoBuildCause.None;
+        if (errors is null && !noBuild)
         {
             ApplyPendingFailedGoalNotes(goal, pendingNotes);
             var escalated = Escalate(goal, goalPrefix, policy, state, decision.Reason);
@@ -46,7 +49,7 @@ internal sealed partial class ConductorDriver
                     Decision = FailedGoalRecoveryDecisionRecords.StaleRecoveryFacts(decision.Identity, staleReason) });
         }
         ApplyPendingFailedGoalNotes(goal, pendingNotes);
-        var errorBlock = WorkerBuildCheckRecoveryText.ErrorBlock(errors?.Format(20));
+        var errorBlock = WorkerBuildCheckRecoveryText.ErrorBlock(errors?.Format(20), cause);
         var worktreePath = _executionDirectory is null ? null : GoalWorktrees.TryResolve(_executionDirectory, goal.Id);
         if (worktreePath is null)
         {
@@ -96,7 +99,7 @@ internal sealed partial class ConductorDriver
             return escalated with { Outcome = ((ConductorAdvanceOutcome.Escalated)escalated.Outcome) with {
                 Decision = FailedGoalRecoveryDecisionRecords.BuildCheckRecoveryExhausted(decision.Identity, reason) } };
         }
-        var feedback = WorkerBuildCheckRecoveryText.RetryFeedback(task.WorkerBuildCheckRecoveryCount, committed, checkpoint, lockTimeout ? null : errors!.Format(50));
+        var feedback = WorkerBuildCheckRecoveryText.RetryFeedback(task.WorkerBuildCheckRecoveryCount, committed, checkpoint, noBuild ? null : errors!.Format(50), cause);
         try { _workerBuildRecoveryRetry(goal.Id, task.Id, feedback); }
         catch (InvalidOperationException ex)
         {
@@ -115,12 +118,5 @@ internal sealed partial class ConductorDriver
                     GoalLifecycle.ResolveState(refreshedGoal, GetFacts(refreshedGoal)), WorkerBuildCheckRecoveryText.RetryAppliedHeld) {
                     Decision = FailedGoalRecoveryDecisionRecords.BuildCheckRetryApplied(decision.Identity, WorkerBuildCheckRecoveryText.RetryAppliedHeld) });
         return ExecuteDispatchAndStart(refreshedGoal, goalPrefix, policy, GoalLifecycleState.WorkspaceReady);
-    }
-
-    private static bool IsBuildSlotLockTimeout(TaskVerificationRecord verification)
-    {
-        var output = verification.StandardError + Environment.NewLine + verification.StandardOutput;
-        return output.Contains(WorkerBuildCheckRecoveryText.BuildSlotLockTimeout, StringComparison.Ordinal) &&
-            !output.Split('\n').Any(WorkerBuildLogErrorReader.IsCompilerDiagnostic);
     }
 }
