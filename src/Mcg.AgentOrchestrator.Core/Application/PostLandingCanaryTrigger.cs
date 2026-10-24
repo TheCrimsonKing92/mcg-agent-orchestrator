@@ -108,6 +108,7 @@ public static class AcceptanceEngineSurfaceRegistry
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GateShardPermitPool",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GateShardPermitPool.Priority",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GateShardWaiterMarkers",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoPackageFocusedEvidence",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/HermeticSystemDrive",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/HermeticToolCacheEnvironment",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/MainBaselineDiscoveryCache",
