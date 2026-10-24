@@ -4,10 +4,11 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal static class GateTestObligationEvaluator
 {
-    internal enum Outcome { Pending, Satisfied, SelectorNotFound, Failed }
+    internal enum Outcome { Pending, Satisfied, SelectorNotFound, Failed, Waived }
 
     internal sealed record Result(
-        GateTestObligation Obligation, Outcome Outcome, IReadOnlyList<string> Selectors, string? SourceId);
+        GateTestObligation Obligation, Outcome Outcome, IReadOnlyList<string> Selectors, string? SourceId,
+        string? WaiverReason = null);
 
     internal static IReadOnlyList<Result> Evaluate(Goal goal, string orchestratorDirectory, string? candidateSha)
     {
@@ -23,7 +24,9 @@ internal static class GateTestObligationEvaluator
             .OrderByDescending(source => source.CompletedAt)
             .ThenBy(source => source.Id, StringComparer.Ordinal).ToArray();
 
-        return obligations.Select(obligation => EvaluateObligation(obligation, sources, orchestratorDirectory)).ToArray();
+        return obligations.Select(obligation => GateTestObligationWaivers.FindWaiver(goal, obligation) is { } waiver
+            ? new Result(obligation, Outcome.Waived, obligation.Selectors, null, waiver.WaiverReason)
+            : EvaluateObligation(obligation, sources, orchestratorDirectory)).ToArray();
     }
 
     private static Result EvaluateObligation(
