@@ -74,7 +74,8 @@ public sealed record AcceptanceRunExecutionOptions(
     string? ProjectHomeDirectory = null,
     string? IntegrationBranch = null,
     IReadOnlyList<MemberDeclaredTestRemoval>? MemberTestRemovals = null,
-    AcceptanceAttributionLaneScope? AttributionLaneScope = null);
+    AcceptanceAttributionLaneScope? AttributionLaneScope = null,
+    IReadOnlyList<GoalId>? AttemptMemberGoalIds = null);
 
 public sealed record AcceptanceOwnerProtectedCohortMember(GoalId GoalId, string CandidateSha);
 
@@ -133,6 +134,7 @@ internal abstract class AcceptanceRunExecutionOwner : IAcceptanceRunExecutionCon
         _options.OwnerProtectedCohortMembers;
     public IReadOnlyList<MemberDeclaredTestRemoval>? MemberTestRemovals => _options.MemberTestRemovals;
     public AcceptanceAttributionLaneScope? AttributionLaneScope => _options.AttributionLaneScope;
+    internal IReadOnlyList<GoalId>? AttemptMemberGoalIds => _options.AttemptMemberGoalIds;
     public CancellationToken CancellationToken => _lifetime.Token;
     public AcceptanceAttemptArtifactCustodyContext? ArtifactCustody { get; protected init; }
 
