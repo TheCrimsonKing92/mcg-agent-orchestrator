@@ -1,3 +1,5 @@
+using System.Globalization;
+using System.Text.Json.Nodes;
 using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
@@ -9,12 +11,15 @@ public sealed class CliEpicPlanReadOnlyRouteTests : CliTaskQueryTestSupport, IDi
 {
     private readonly string root = CreateTempDirectory();
     private const string MemberId = "abc10000aaaaaaaaaaaaaaaaaaaaaaaa";
+    // AgentReadEnvelope.Serialize stamps only this field; the payload has no clock-derived ages or durations.
+    private const string GeneratedAtField = "generatedAt";
 
     [Theory]
     [InlineData("epic-plan", "Board")]
     [InlineData("epic-plan", "Board", "--json")]
     public async Task ExactShapes_ReadAndWriterRoutes_PrintIdenticalPlans(params string[] args)
     {
+        var startedAt = DateTimeOffset.UtcNow;
         var workspace = await SeedAsync();
         var probe = NewReadProbe();
 
@@ -29,10 +34,31 @@ public sealed class CliEpicPlanReadOnlyRouteTests : CliTaskQueryTestSupport, IDi
 
         var operations = new List<string>();
         var writerOutput = ExecuteWriter(args, workspace, operations);
+        var endedAt = DateTimeOffset.UtcNow;
 
-        Assert.Equal(writerOutput, readOutput);
+        if (args.Length == 3)
+        {
+            Assert.Equal(
+                NormalizeClockFields(writerOutput, startedAt, endedAt),
+                NormalizeClockFields(readOutput, startedAt, endedAt));
+        }
+        else
+        {
+            Assert.Equal(writerOutput, readOutput);
+        }
         Assert.Contains("cli:epic-plan/TransactWithOutboxAsync", operations);
         Assert.Null(SqliteOrchestratorStateRepository.AmbientWriteOperationTag);
+    }
+
+    private static string NormalizeClockFields(string output, DateTimeOffset startedAt, DateTimeOffset endedAt)
+    {
+        var document = Assert.IsType<JsonObject>(JsonNode.Parse(output));
+        var generatedAt = document[GeneratedAtField]!.GetValue<string>();
+        Assert.True(DateTimeOffset.TryParseExact(generatedAt, "O", CultureInfo.InvariantCulture,
+            DateTimeStyles.None, out var timestamp), $"Invalid {GeneratedAtField}: {generatedAt}");
+        Assert.InRange(timestamp, startedAt, endedAt);
+        document[GeneratedAtField] = "<generated-at>";
+        return document.ToJsonString();
     }
 
     [Theory]
