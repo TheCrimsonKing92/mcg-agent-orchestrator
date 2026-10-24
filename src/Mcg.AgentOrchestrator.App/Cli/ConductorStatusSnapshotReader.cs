@@ -11,7 +11,7 @@ namespace Mcg.AgentOrchestrator.App.Cli;
 
 internal static class ConductorStatusSnapshotReader
 {
-    private sealed record Event(DateTimeOffset At, string Kind, string Detail);
+    internal sealed record Event(DateTimeOffset At, string Kind, string Detail);
 
     internal static DateTimeOffset? LatestTick(OrchestratorWorkspace workspace) =>
         LatestTick(ReadEvents(workspace.ConductEventsLogPath), workspace.RunEventStorePath);
@@ -20,6 +20,11 @@ internal static class ConductorStatusSnapshotReader
     {
         var logTick = events.Where(item => item.Kind.StartsWith("tick", StringComparison.OrdinalIgnoreCase))
             .MaxBy(item => item.At)?.At;
+        return LatestTick(logTick, runEventStorePath);
+    }
+
+    internal static DateTimeOffset? LatestTick(DateTimeOffset? logTick, string runEventStorePath)
+    {
         var dbTick = ReadLatestTick(runEventStorePath);
         return logTick is null ? dbTick : dbTick is null ? logTick : (logTick > dbTick ? logTick : dbTick);
     }
@@ -227,20 +232,24 @@ internal static class ConductorStatusSnapshotReader
                 FileShare.ReadWrite | FileShare.Delete);
             using var reader = new StreamReader(stream);
             while (reader.ReadLine() is { } line)
-            {
-                try
-                {
-                    using var document = JsonDocument.Parse(line);
-                    var root = document.RootElement;
-                    result.Add(new Event(root.GetProperty("timestamp").GetDateTimeOffset(),
-                        root.GetProperty("eventKind").GetString() ?? "",
-                        root.GetProperty("detail").GetString() ?? ""));
-                }
-                catch (Exception ex) when (ex is JsonException or InvalidOperationException or FormatException or KeyNotFoundException) { }
-            }
+                if (ParseEventLine(line) is { } item) result.Add(item);
         }
         catch (FileNotFoundException) { return []; }
         return result;
+    }
+
+    internal static Event? ParseEventLine(string line)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(line);
+            var root = document.RootElement;
+            return new(root.GetProperty("timestamp").GetDateTimeOffset(),
+                root.GetProperty("eventKind").GetString() ?? "",
+                root.GetProperty("detail").GetString() ?? "");
+        }
+        catch (Exception ex) when (ex is JsonException or InvalidOperationException or FormatException or KeyNotFoundException)
+        { return null; }
     }
 
     private static string? ReadBuildCommit(string? detail)
