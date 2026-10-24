@@ -28,11 +28,7 @@ internal static class GoPackageFocusedEvidence
             try
             {
                 var check = element.Deserialize<AcceptanceManifestCheck>(JsonOptions);
-                if (check?.Type?.Equals("command", StringComparison.OrdinalIgnoreCase) == true &&
-                    !string.IsNullOrWhiteSpace(check.Command) &&
-                    Path.GetFileNameWithoutExtension(check.Command.Replace('\\', '/').Split('/')[^1])
-                        .Equals("go", StringComparison.OrdinalIgnoreCase) &&
-                    check.Arguments is { Count: > 0 } && check.Arguments[0] == "test")
+                if (check is not null && IsGoTestCommand(check))
                     return check;
             }
             catch (JsonException)
@@ -42,6 +38,13 @@ internal static class GoPackageFocusedEvidence
         }
         return null;
     }
+
+    internal static bool IsGoTestCommand(AcceptanceManifestCheck check) =>
+        check.Type?.Equals("command", StringComparison.OrdinalIgnoreCase) == true &&
+        !string.IsNullOrWhiteSpace(check.Command) &&
+        Path.GetFileNameWithoutExtension(check.Command.Replace('\\', '/').Split('/')[^1])
+            .Equals("go", StringComparison.OrdinalIgnoreCase) &&
+        check.Arguments is { Count: > 0 } && check.Arguments[0] == "test";
 
     internal static bool Applies(AcceptanceGateEngineSettings? settings) =>
         settings?.DeclaredGoTestCheck is not null &&
