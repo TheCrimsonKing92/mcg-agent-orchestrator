@@ -259,6 +259,7 @@ internal static partial class LandingExecutor
         }
 
         string? candidateRevision = null;
+        RootCheckoutLandingGuard.Inspection checkoutInspection;
         try
         {
             var blockReason = mutationBlocker?.Invoke();
@@ -281,6 +282,14 @@ internal static partial class LandingExecutor
                 eventWriter?.AppendGoalEscalated(goal.Id, GoalLifecycleState.Verified, goal.Status, conflictReason, IntegrationBranchName);
                 return new LandingResult(goal.Id.Value, goalPrefix, new LandingDecision.Escalate(conflictReason), IntegrationBranchName,
                     false, $"Parked on {IntegrationBranchName}: {conflictReason}");
+            }
+
+            checkoutInspection = RootCheckoutLandingGuard.Inspect(
+                GitRunner, executionDirectory, workspace.IntegrationBranch, boundMainRevision, candidateRevision!);
+            if (checkoutInspection.Outcome == RootCheckoutLandingGuard.Outcome.Hold)
+            {
+                OperatorInbox.RecordLandingEscalation(workspace, goal, checkoutInspection.Reason!, IntegrationBranchName, channel);
+                return BuildMutationBlockedResult(goal, goalPrefix, checkoutInspection.Reason!);
             }
 
             var anchor = CreateLandingAnchor(executionDirectory, goal, candidateRevision!);
@@ -374,16 +383,20 @@ internal static partial class LandingExecutor
             candidateRevision!, GoalPromotionFact.SoloProvenance, promotionClock);
         DeleteLandingAnchor(executionDirectory, goal, candidateRevision!);
 
-        var synchronizeWorktree = RunGit(
-            executionDirectory,
-            "read-tree",
-            "-m",
-            "-u",
-            boundMainRevision,
-            candidateRevision!);
-        if (synchronizeWorktree.ExitCode != 0)
+        if (checkoutInspection.Outcome == RootCheckoutLandingGuard.Outcome.FastForward &&
+            RootCheckoutLandingGuard.IsOnBranch(GitRunner, executionDirectory, workspace.IntegrationBranch))
         {
-            throw new InvalidOperationException($"main advanced to {candidateRevision}, but the execution worktree could not synchronize: {FormatGitFailure(synchronizeWorktree)}");
+            var synchronizeWorktree = RunGit(
+                executionDirectory,
+                "read-tree",
+                "-m",
+                "-u",
+                boundMainRevision,
+                candidateRevision!);
+            if (synchronizeWorktree.ExitCode != 0)
+            {
+                throw new InvalidOperationException($"main advanced to {candidateRevision}, but the execution worktree could not synchronize: {FormatGitFailure(synchronizeWorktree)}");
+            }
         }
 
         eventWriter?.AppendGoalLanded(goal.Id, IntegrationBranchName, goalBranch,
@@ -531,7 +544,8 @@ internal static partial class LandingExecutor
 
         if (reachability.Succeeded)
         {
-            if (currentMain.Equals(intent.MergeCommitSha, StringComparison.OrdinalIgnoreCase))
+            if (currentMain.Equals(intent.MergeCommitSha, StringComparison.OrdinalIgnoreCase) &&
+                RootCheckoutLandingGuard.IsOnBranch(GitRunner, workspace.ExecutionDirectory, workspace.IntegrationBranch))
             {
                 var recoveryBaseline = string.IsNullOrWhiteSpace(intent.BoundMainRevision)
                     ? $"{intent.MergeCommitSha}^1"
@@ -774,6 +788,16 @@ internal static partial class LandingExecutor
             }
         }
 
+        var checkoutInspection = RootCheckoutLandingGuard.Inspect(
+            GitRunner, executionDirectory, workspace.IntegrationBranch, liveMain, commit);
+        if (checkoutInspection.Outcome == RootCheckoutLandingGuard.Outcome.Hold)
+        {
+            foreach (var goal in goals)
+                OperatorInbox.RecordLandingEscalation(workspace, goal, checkoutInspection.Reason!, IntegrationBranchName);
+            return new AcceptanceCohortLandingResult(
+                AcceptanceCohortLandingOutcome.RetryableHold, $"Cohort landing held: {checkoutInspection.Reason}");
+        }
+
         // The prepared intent captures the exact integration ref predecessor before either ref moves.
         // Recovery can therefore restore integration when the process exits before the main CAS, or
         // replay post-main lifecycle effects when the tested commit is already reachable from main.
@@ -890,13 +914,17 @@ internal static partial class LandingExecutor
         RecordSuccessfulPromotion(workspace,
             receipt.Identity.Members.Select(member => (member.GoalId, member.CandidateRevision)).ToArray(),
             receipt.Identity.ObservedMainRevision, commit, GoalPromotionFact.CohortProvenance, promotionClock);
-        var refreshCheckout = RunGit(
-            executionDirectory,
-            "read-tree", "-m", "-u", receipt.Identity.ObservedMainRevision, commit);
-        if (refreshCheckout.ExitCode != 0)
+        if (checkoutInspection.Outcome == RootCheckoutLandingGuard.Outcome.FastForward &&
+            RootCheckoutLandingGuard.IsOnBranch(GitRunner, executionDirectory, workspace.IntegrationBranch))
         {
-            throw new InvalidOperationException(
-                $"Main advanced to the exact cohort commit, but its checked-out files could not be refreshed: {refreshCheckout.Error}");
+            var refreshCheckout = RunGit(
+                executionDirectory,
+                "read-tree", "-m", "-u", receipt.Identity.ObservedMainRevision, commit);
+            if (refreshCheckout.ExitCode != 0)
+            {
+                throw new InvalidOperationException(
+                    $"Main advanced to the exact cohort commit, but its checked-out files could not be refreshed: {refreshCheckout.Error}");
+            }
         }
 
         var coverage = store.FinalizeLanding(receipt.Identity.Value, receipt.ReceiptId);

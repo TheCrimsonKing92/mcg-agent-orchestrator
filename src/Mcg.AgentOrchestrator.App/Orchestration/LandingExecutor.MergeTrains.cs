@@ -143,6 +143,16 @@ internal static partial class LandingExecutor
             }
         }
 
+        var checkoutInspection = RootCheckoutLandingGuard.Inspect(
+            GitRunner, executionDirectory, workspace.IntegrationBranch, liveMain, commit);
+        if (checkoutInspection.Outcome == RootCheckoutLandingGuard.Outcome.Hold)
+        {
+            foreach (var goal in goals)
+                OperatorInbox.RecordLandingEscalation(workspace, goal, checkoutInspection.Reason!, IntegrationBranchName);
+            return new AcceptanceCohortLandingResult(
+                AcceptanceCohortLandingOutcome.RetryableHold, $"Merge train landing held: {checkoutInspection.Reason}");
+        }
+
         store.PrepareLanding(receipt, commit, priorIntegrationRevision);
         foreach (var goal in goals)
         {
@@ -212,11 +222,15 @@ internal static partial class LandingExecutor
         RecordSuccessfulPromotion(workspace,
             receipt.Identity.Members.Select(member => (member.GoalId, member.CandidateRevision)).ToArray(),
             receipt.Identity.ObservedMainRevision, commit, GoalPromotionFact.MergeTrainProvenance, promotionClock);
-        var checkout = RunGit(executionDirectory, "read-tree", "-m", "-u", receipt.Identity.ObservedMainRevision, commit);
-        if (checkout.ExitCode != 0)
+        if (checkoutInspection.Outcome == RootCheckoutLandingGuard.Outcome.FastForward &&
+            RootCheckoutLandingGuard.IsOnBranch(GitRunner, executionDirectory, workspace.IntegrationBranch))
         {
-            throw new InvalidOperationException(
-                $"Main advanced to the exact merge train commit, but checkout refresh failed: {checkout.Error}");
+            var checkout = RunGit(executionDirectory, "read-tree", "-m", "-u", receipt.Identity.ObservedMainRevision, commit);
+            if (checkout.ExitCode != 0)
+            {
+                throw new InvalidOperationException(
+                    $"Main advanced to the exact merge train commit, but checkout refresh failed: {checkout.Error}");
+            }
         }
 
         var coverage = store.FinalizeLanding(receipt.Identity.Value, receipt.ReceiptId);
