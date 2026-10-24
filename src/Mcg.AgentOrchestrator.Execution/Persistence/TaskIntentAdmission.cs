@@ -7,7 +7,7 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 
 // Version means a task's dispatch-admission revision, not the goal snapshot version.
 public sealed record TaskIntentAdmissionReference(string StorePath, string GoalId, string TaskId, long Version,
-    DateTimeOffset? DispatchedAt = null);
+    DateTimeOffset? DispatchedAt = null, string? GraphIdentity = null, string? StatePath = null);
 
 public sealed record TaskIntentSuppressionReceipt(
     string DecisionKey, string GoalId, string TaskId, string IntentId, string Verb,
@@ -24,13 +24,14 @@ public static class TaskIntentAdmission
     public const int SuppressedExitCode = 87;
 
     // Keep ownership on one thread even when the store callback performs asynchronous I/O.
-    // The named kernel object is task-scoped and is never inherited by the worker.
+    // Goal-only intake/application use the goal key; task intake retains its task key.
+    // Native admission takes goal then task, never the inverse. No inherited handle.
     internal static T Serialize<T>(string storePath, string goalId, string? taskId, Func<T> action)
     {
-        if (string.IsNullOrWhiteSpace(taskId)) return action();
         var path = Path.GetFullPath(storePath);
         if (OperatingSystem.IsWindows()) path = path.ToUpperInvariant();
-        var key = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes($"{path}\n{goalId}\n{taskId}")));
+        var target = string.IsNullOrWhiteSpace(taskId) ? $"{path}\n{goalId}" : $"{path}\n{goalId}\n{taskId}";
+        var key = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(target)));
         using var mutex = new Mutex(false, (OperatingSystem.IsWindows() ? "Global\\" : "") + "mcg-task-intent-" + key);
         var owned = false;
         try
@@ -48,24 +49,31 @@ public static class TaskIntentAdmission
         finally { if (owned) mutex.ReleaseMutex(); }
     }
 
+    public static T SerializeGoal<T>(string storePath, string goalId, Func<T> action) =>
+        Serialize(storePath, goalId, null, action);
+
     public static Process Launch(TaskIntentAdmissionReference reference, string decisionKey, Func<Process> start)
         => Launch(reference, decisionKey, start, readIdentity: null);
 
     // A dispatch-scoped action is not another worker launch. The same task mutex linearizes it
     // against intent intake, and the canonical prepared revision must still authorize the action.
     internal static void ExecuteAuthorized(TaskIntentAdmissionReference reference, string decisionKey, Action action)
-        => Serialize(reference.StorePath, reference.GoalId, reference.TaskId, () =>
+        => Serialize(reference.StorePath, reference.GoalId, null, () =>
+           Serialize(reference.StorePath, reference.GoalId, reference.TaskId, () =>
         {
             var store = SqliteOperatorIntentStore.OpenAdmissionAuthority(reference.StorePath);
-            var denial = store.RecordSuppression(reference, decisionKey);
+            // The caller already owns this worker/job. Compatible graph repair preserves its
+            // build actions; task-intent revision/holds still authorize every action.
+            var denial = store.RecordSuppression(reference, decisionKey, includeGraphRepair: false);
             if (denial is not null) throw new TaskIntentDispatchSuppressedException(denial);
             action();
             return true;
-        });
+        }));
 
     internal static Process Launch(TaskIntentAdmissionReference reference, string decisionKey, Func<Process> start,
         Func<Process, SpawnProcessIdentityReadResult>? readIdentity)
-        => Serialize(reference.StorePath, reference.GoalId, reference.TaskId, () =>
+        => Serialize(reference.StorePath, reference.GoalId, null, () =>
+           Serialize(reference.StorePath, reference.GoalId, reference.TaskId, () =>
         {
             var store = SqliteOperatorIntentStore.OpenAdmissionAuthority(reference.StorePath);
             store.RequireAdmissionSchema();
@@ -78,7 +86,7 @@ public static class TaskIntentAdmission
             }
             if (store.HasLaunch(decisionKey))
                 throw new InvalidOperationException("Task admission launch identity was already consumed.");
-            var denial = store.RecordSuppression(reference, decisionKey);
+            var denial = store.RecordSuppression(reference, decisionKey, validateCommittedGraph: true);
             if (denial is not null) throw new TaskIntentDispatchSuppressedException(denial);
             var process = start();
             try
@@ -106,7 +114,7 @@ public static class TaskIntentAdmission
                 // The start callback retains the handle for the caller's output/exit-artifact teardown.
                 throw;
             }
-        });
+        }));
 
     private static SpawnProcessIdentityReadResult ReadLaunchIdentity(Process process)
     {
@@ -147,7 +155,7 @@ public sealed partial class SqliteOperatorIntentStore
             CREATE TABLE IF NOT EXISTS task_intent_launches (
                 decision_key TEXT PRIMARY KEY, goal_id TEXT NOT NULL, task_id TEXT NOT NULL,
                 task_version INTEGER NOT NULL, process_id INTEGER NOT NULL,
-                process_started_at TEXT NOT NULL, process_path TEXT NOT NULL);
+                process_started_at TEXT NOT NULL, process_path TEXT NOT NULL, dispatched_at TEXT);
             CREATE TABLE IF NOT EXISTS task_intent_preparations (
                 goal_id TEXT NOT NULL, task_id TEXT NOT NULL, dispatched_at TEXT NOT NULL,
                 task_version INTEGER NOT NULL, PRIMARY KEY(goal_id, task_id, dispatched_at));
@@ -198,10 +206,12 @@ public sealed partial class SqliteOperatorIntentStore
         ValidateAdmissionReference(reference);
         using var conn = OpenConnection();
         using var cmd = conn.CreateCommand();
-        cmd.CommandText = "INSERT OR IGNORE INTO task_intent_preparations VALUES ($goal,$task,$at,$version)";
+        cmd.CommandText = "INSERT OR IGNORE INTO task_intent_preparations (goal_id,task_id,dispatched_at,task_version,graph_identity,state_path) VALUES ($goal,$task,$at,$version,$graph,$state)";
         BindTarget(cmd, reference.GoalId, reference.TaskId);
         cmd.Parameters.AddWithValue("$at", dispatchedAt.ToString("O"));
         cmd.Parameters.AddWithValue("$version", reference.Version);
+        cmd.Parameters.AddWithValue("$graph", (object?)reference.GraphIdentity ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$state", (object?)reference.StatePath ?? DBNull.Value);
         cmd.ExecuteNonQuery();
     }
 
@@ -209,20 +219,26 @@ public sealed partial class SqliteOperatorIntentStore
     {
         using var conn = OpenConnection();
         using var cmd = conn.CreateCommand();
-        cmd.CommandText = "SELECT task_version FROM task_intent_preparations WHERE goal_id = $goal AND task_id = $task AND dispatched_at = $at";
+        cmd.CommandText = "SELECT task_version,graph_identity,state_path FROM task_intent_preparations WHERE goal_id = $goal AND task_id = $task AND dispatched_at = $at";
         BindTarget(cmd, goalId, taskId);
         cmd.Parameters.AddWithValue("$at", dispatchedAt.ToString("O"));
         // Legacy unversioned preparations are conservatively fenced by any task intent.
-        return new(_dbPath, goalId, taskId, Convert.ToInt64(cmd.ExecuteScalar() ?? 0L), dispatchedAt);
+        using var reader = cmd.ExecuteReader();
+        return reader.Read()
+            ? new(_dbPath, goalId, taskId, reader.GetInt64(0), dispatchedAt,
+                reader.IsDBNull(1) ? null : reader.GetString(1), reader.IsDBNull(2) ? null : reader.GetString(2))
+            : new(_dbPath, goalId, taskId, 0, dispatchedAt);
     }
 
-    public TaskIntentAdmissionReference CaptureAdmission(string goalId, string taskId)
+    public TaskIntentAdmissionReference CaptureAdmission(string goalId, string taskId,
+        string? graphIdentity = null, string? statePath = null)
     {
         using var conn = OpenConnection();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = "SELECT revision FROM task_intent_admission WHERE goal_id = $goal AND task_id = $task";
         BindTarget(cmd, goalId, taskId);
-        return new(_dbPath, goalId, taskId, Convert.ToInt64(cmd.ExecuteScalar() ?? 0L));
+        return new(_dbPath, goalId, taskId, Convert.ToInt64(cmd.ExecuteScalar() ?? 0L),
+            GraphIdentity: graphIdentity, StatePath: statePath);
     }
 
     public IReadOnlySet<string> ListHeldTaskIds(string goalId)
@@ -237,12 +253,22 @@ public sealed partial class SqliteOperatorIntentStore
         return ids;
     }
 
+    // A reference rebuilt from a persisted worker-build invocation carries no graph identity or state
+    // path; those fields bind the preparation only when the caller supplies them.
+    private static bool MatchesPreparation(TaskIntentAdmissionReference prepared, TaskIntentAdmissionReference reference) =>
+        prepared with
+        {
+            GraphIdentity = reference.GraphIdentity is null ? null : prepared.GraphIdentity,
+            StatePath = reference.StatePath is null ? null : prepared.StatePath
+        } == reference;
+
     // Called under the task mutex. Terminal intent rows remain the source for obsolete-version receipts.
-    public TaskIntentSuppressionReceipt? RecordSuppression(TaskIntentAdmissionReference reference, string decisionKey)
+    public TaskIntentSuppressionReceipt? RecordSuppression(TaskIntentAdmissionReference reference, string decisionKey,
+        bool validateCommittedGraph = false, bool includeGraphRepair = true)
     {
         EnsureWritable();
         ValidateAdmissionReference(reference);
-        if (reference.DispatchedAt is { } at && GetPreparedAdmission(reference.GoalId, reference.TaskId, at).Version != reference.Version)
+        if (reference.DispatchedAt is { } at && !MatchesPreparation(GetPreparedAdmission(reference.GoalId, reference.TaskId, at), reference))
             throw new InvalidOperationException("Task admission version does not match its durable preparation.");
         using var conn = OpenAdmissionWriteConnection();
         using var tx = conn.BeginTransaction();
@@ -264,6 +290,8 @@ public sealed partial class SqliteOperatorIntentStore
                 reader.GetString(1), reader.GetString(2), reference.Version, reader.GetInt64(0), reader.GetString(3),
                 reader.GetString(3) is "Pending" or "Claimed" ? "pending-task-intent" : "task-admission-version-changed");
         }
+        if (includeGraphRepair)
+            receipt ??= ReadGraphSuppression(conn, tx, reference, decisionKey, validateCommittedGraph);
         if (receipt is not null)
         {
             using var insert = conn.CreateCommand();
@@ -298,13 +326,14 @@ public sealed partial class SqliteOperatorIntentStore
     {
         using var conn = OpenAdmissionWriteConnection();
         using var cmd = conn.CreateCommand();
-        cmd.CommandText = "INSERT INTO task_intent_launches VALUES ($key,$goal,$task,$version,$pid,$started,$path)";
+        cmd.CommandText = "INSERT INTO task_intent_launches (decision_key,goal_id,task_id,task_version,process_id,process_started_at,process_path,dispatched_at) VALUES ($key,$goal,$task,$version,$pid,$started,$path,$at)";
         BindTarget(cmd, reference.GoalId, reference.TaskId);
         cmd.Parameters.AddWithValue("$key", decisionKey);
         cmd.Parameters.AddWithValue("$version", reference.Version);
         cmd.Parameters.AddWithValue("$pid", identity.ProcessId);
         cmd.Parameters.AddWithValue("$started", identity.StartedAt.ToString("O"));
         cmd.Parameters.AddWithValue("$path", identity.ImagePath);
+        cmd.Parameters.AddWithValue("$at", (object?)reference.DispatchedAt?.ToString("O") ?? DBNull.Value);
         cmd.ExecuteNonQuery();
     }
 

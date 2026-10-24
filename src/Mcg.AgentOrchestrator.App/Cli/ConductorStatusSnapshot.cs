@@ -1,3 +1,4 @@
+using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.App.Cli;
@@ -13,7 +14,8 @@ internal sealed record ConductorStatusSnapshot(
     ConductorStatusSnapshot.LandingObservation? MostRecentLanding,
     ConductorStatusSnapshot.AdoptionObservation? WorkerAdoption,
     ConductorStatusSnapshot.IntentsObservation PendingIntents,
-    IReadOnlyList<ProviderUsageHoldRow>? ProviderHolds = null)
+    IReadOnlyList<ProviderUsageHoldRow>? ProviderHolds = null,
+    ProcessJobReading? SupervisorJob = null)
 {
     internal string ConductorState => OwnerPid is null ? "stopped" : Since.Kind == "starting" ? "starting" : "running";
 

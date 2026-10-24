@@ -443,13 +443,14 @@ public sealed class CliCommandTestsTaskQueries : CliTaskQueryTestSupport
 
                 if (args[0].Equals("add-task", StringComparison.Ordinal))
                 {
-                    var exception = CapturePersistentException(
+                    var output = ExecutePersistent(
                         args,
                         repository,
                         OrchestratorWorkspace.ForDirectory(root),
                         ref currentGoal);
-                    Xunit.Assert.Equal("State mutation is not allowed for this test.", exception.Message);
-                    Xunit.Assert.Equal(1, repository.MutationAttempts);
+                    Xunit.Assert.Contains("Operator intent queued:", output, StringComparison.Ordinal);
+                    Xunit.Assert.Contains("verb=repair-task-graph", output, StringComparison.Ordinal);
+                    Xunit.Assert.Equal(0, repository.MutationAttempts);
                 }
                 else
                 {
@@ -463,7 +464,7 @@ public sealed class CliCommandTestsTaskQueries : CliTaskQueryTestSupport
                     Xunit.Assert.Equal(0, repository.MutationAttempts);
                 }
 
-                Xunit.Assert.True(repository.ListOutboxMessagesCount >= 1);
+                Xunit.Assert.True(args[0] == "add-task" ? repository.ListOutboxMessagesCount == 0 : repository.ListOutboxMessagesCount >= 1);
                 Xunit.Assert.Equal(0, repository.ListGoalMetadataCount);
                 Xunit.Assert.Equal(0, repository.LoadGoalsCount);
                 Xunit.Assert.Equal(0, repository.FullLoadAttempts);

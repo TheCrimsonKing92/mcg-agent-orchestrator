@@ -241,8 +241,13 @@ internal static class CliCommandHelp
 
     private static readonly CommandHelpEntry AddTask = new(
         AddTaskUsage,
-        "Add a task to the current or explicitly targeted goal.",
-        ["--goal", "--before-role", "--text-file", "--help", "-h"]);
+        "Enqueue a task insertion; poll the returned intent identity for application. Bare replay returns the same operation; a fresh --idempotency-key requests a distinct insertion.",
+        ["--goal", "--before-role", "--text-file", "--idempotency-key", "--operator-actor", "--actor-kind", "--json", "--help", "-h"]);
+
+    private static readonly CommandHelpEntry TaskGraphRepair = new(
+        CliTaskGraphRepairCommand.Usage,
+        "Enqueue one atomic ordered plan. The conductor validates and applies it; expectedFinalRoleOrder is optional. Poll the intent id. Bare replay is stable across restart; use a fresh --idempotency-key for a distinct operation.",
+        ["--goal", "--plan-file", "--idempotency-key", "--operator-actor", "--actor-kind", "--json", "--help", "-h"]);
 
     private static readonly CommandHelpEntry Retry = new(
         RetryUsage,
@@ -1089,6 +1094,12 @@ internal static class CliCommandHelp
         if (args[0].Equals("add-task", StringComparison.OrdinalIgnoreCase))
         {
             entry = AddTask;
+            return true;
+        }
+
+        if (args[0].Equals("repair-task-graph", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = TaskGraphRepair;
             return true;
         }
 

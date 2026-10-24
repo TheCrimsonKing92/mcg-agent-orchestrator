@@ -2,6 +2,7 @@ namespace Mcg.AgentOrchestrator.Core;
 
 public static class OperatorIntentVerbs
 {
+    public const string TaskGraphRepair = "repair-task-graph";
     public const string GoalPriority = "goal-priority";
     public const string ProviderReset = "provider-reset";
     public const string GateCancel = "gate-cancel";

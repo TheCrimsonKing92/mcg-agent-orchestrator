@@ -40,7 +40,8 @@ internal sealed partial class GoalDispatchOperations
         goal = kernel.GetGoal(goal.Id);
         var intentStore = SqliteOperatorIntentStore.ForDirectories(workspace.OrchestratorDirectory, workspace.LogDirectory);
         var intentAdmissions = goal.Tasks.ToDictionary(task => task.Id,
-            task => intentStore.CaptureAdmission(goal.Id.Value, task.Id.Value));
+            task => intentStore.CaptureAdmission(goal.Id.Value, task.Id.Value,
+                TaskGraphIdentity.Compute(goal), workspace.SqliteStatePath));
         var heldTaskIds = intentStore.ListHeldTaskIds(goal.Id.Value);
         foreach (var taskId in heldTaskIds)
         {

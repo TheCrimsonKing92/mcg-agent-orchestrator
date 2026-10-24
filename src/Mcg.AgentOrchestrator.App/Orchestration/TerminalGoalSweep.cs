@@ -535,6 +535,18 @@ internal static partial class TerminalGoalSweep
             }
 
             var goalPendingRecovery = kernel.GetGoal(originalGoal.Id);
+            var recoveryJournal = GoalOperationJournal.Read(executionDirectory, originalGoal.Id);
+            var boundGraphs = new[] { GoalOperationJournal.TryGetLatestLandingIntent(recoveryJournal)?.TaskGraphIdentity,
+                GoalOperationJournal.TryGetLatestTerminalDisposition(recoveryJournal)?.TaskGraphIdentity };
+            var authoritativeGraph = TaskGraphIdentity.Compute(goalPendingRecovery);
+            if (boundGraphs.FirstOrDefault(graph => graph is not null && graph != authoritativeGraph) is { } landedGraph)
+            {
+                blockers.Add(new TerminalGoalSweepBlocker("landing-graph-changed",
+                    $"Landing evidence covers graph {landedGraph}, authoritative graph is {authoritativeGraph}; newly uncovered tasks cannot be terminalized.",
+                    $"goal-diagnostics {prefix}", originalGoal.Id, prefix));
+                results.Add(new TerminalGoalSweepGoalResult(originalGoal.Id, prefix, repairs, blockers));
+                continue;
+            }
             var hasPendingAcceptanceEvidence = goalPendingRecovery.OutstandingCriterionEvidenceObligations.Any(item =>
                 item.Owner == CriterionEvidenceOwner.Acceptance &&
                 item.State == CriterionEvidenceState.Pending &&

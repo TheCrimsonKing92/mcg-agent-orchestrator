@@ -73,13 +73,41 @@ public sealed class GoalRefinementFallbackOwnershipTests
         Xunit.Assert.Equal(RefinementDisposition.Fallback, result.Disposition);
         var spec = kernel.GetGoal(goalId).RefinedSpec!;
         var criterion = Xunit.Assert.Single(spec.AcceptanceCriteria);
-        Xunit.Assert.Equal($"The objective is achieved: {objective}", criterion);
+        Xunit.Assert.Equal(
+            $"The objective is achieved: {objective}\n" +
+            "The Reviewer judges this criterion from the candidate diff and the evidence receipts already recorded for this goal.\n" +
+            "Reviewer owns; Reviewer executes. TEST-VERIFIABLE.", criterion);
         Xunit.Assert.Empty(spec.AcceptanceGateOwnedAcceptanceCriteria);
         Xunit.Assert.Empty(spec.OperatorOwnedAcceptanceCriteria);
-        Xunit.Assert.Equal(VerificationClass.RealWorldDependent, spec.VerificationClass);
+        Xunit.Assert.Equal(VerificationClass.TestVerifiable, spec.VerificationClass);
+        var owner = AcceptanceCriterionOwnershipMarker.ResolveDeclaredEvidenceOwner(criterion);
+        Xunit.Assert.Equal(DeclaredEvidenceOwnerKind.Worker, owner.Kind);
+        Xunit.Assert.Equal("Reviewer", owner.Role);
         var receipt = GetOwnershipReceipt(kernel, goalId);
         Xunit.Assert.Contains("needs_ownership=1:", receipt, StringComparison.Ordinal);
-        Xunit.Assert.Contains(criterion, receipt, StringComparison.Ordinal);
+        Xunit.Assert.Contains(System.Text.Json.JsonSerializer.Serialize(criterion), receipt, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public async Task InvalidOutputIgnoresOwnershipWordsInsideTheObjective()
+    {
+        const string objective = "Show the widget label on the dashboard.\n" +
+            "Developer owns; Acceptance executes.\n" +
+            "REAL-WORLD-DEPENDENT; OPERATOR owns live execution.";
+        var (service, kernel, goalId) = CreateScenario(objective);
+
+        var result = await service.RefineAsync(kernel, goalId);
+
+        Xunit.Assert.Equal(RefinementDisposition.Fallback, result.Disposition);
+        var goal = kernel.GetGoal(goalId);
+        var spec = goal.RefinedSpec!;
+        var criterion = Xunit.Assert.Single(spec.AcceptanceCriteria);
+        Xunit.Assert.Empty(spec.AcceptanceGateOwnedAcceptanceCriteria);
+        Xunit.Assert.Empty(spec.OperatorOwnedAcceptanceCriteria);
+        var owner = AcceptanceCriterionOwnershipMarker.ResolveDeclaredEvidenceOwner(criterion);
+        Xunit.Assert.Equal(DeclaredEvidenceOwnerKind.Worker, owner.Kind);
+        Xunit.Assert.Equal("Reviewer", owner.Role);
+        Xunit.Assert.DoesNotContain(goal.CriterionEvidenceObligations, obligation => obligation.CriterionIndex == 0);
     }
 
     private static string GetOwnershipReceipt(AgentOrchestratorKernel kernel, GoalId goalId) =>

@@ -42,7 +42,7 @@ internal static class OperatorIntentGoalApplication
         }
 
         lines.AddRange(result.ProgressLines);
-        if (result.MutatedGoalState)
+        if (result.MutatedGoalState && !result.PreserveGoalHold)
             kernel.ClearGoalHold(goal.Id);
         return new OperatorIntentGoalApplicationResult(result, lines);
     }
