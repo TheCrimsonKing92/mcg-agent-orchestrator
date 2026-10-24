@@ -6,6 +6,8 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 /// <summary>Discovers a module from declarations; commands are measured only by a supplied measurer.</summary>
 public sealed class GoProjectDiscoveryAdapter : IProjectDiscoveryAdapter
 {
+    private const string GoExecutablePackage = "main";
+
     // Go's go/build knownOS and knownArch filename suffix vocabulary, including historical targets.
     private static readonly HashSet<string> OperatingSystems = new(StringComparer.Ordinal)
     {
@@ -61,7 +63,7 @@ public sealed class GoProjectDiscoveryAdapter : IProjectDiscoveryAdapter
             units.Add(new(id, High(importPath, new FactSource("go.mod", module.Path.Line)),
                 High(id, source), High<bool?>(test is not null, testSource)));
             var target = id == "." ? "." : "./" + id;
-            commands.Add(new(id, High(first.Source.Package.Value == "main"
+            commands.Add(new(id, High(first.Source.Package.Value == GoExecutablePackage
                     ? $"go build -o NUL {target}" : $"go build {target}", source),
                 test is null ? null : High($"go test {target}", testSource)));
             if (test is not null)
