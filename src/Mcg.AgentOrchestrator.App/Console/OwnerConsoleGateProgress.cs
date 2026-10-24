@@ -21,7 +21,8 @@ internal sealed record OwnerConsoleGateProgress(bool Live, string Kind,
     int DoneCount, int TotalCount, TimeSpan? IdleAge = null,
     IReadOnlyList<OwnerConsoleGateProgress>? OtherLiveGates = null,
     IReadOnlyList<OwnerConsoleHostActivity>? HostActivity = null,
-    OwnerConsoleGateCapacity? Capacity = null)
+    OwnerConsoleGateCapacity? Capacity = null,
+    IReadOnlyList<OwnerConsoleGateEnd>? Ended = null)
 {
     internal bool Failing => Lanes.Any(lane => !lane.IsAttribution &&
         lane.State == OwnerConsoleGateLaneState.Done && lane.Outcome == "failed");

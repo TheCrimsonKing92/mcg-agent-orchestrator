@@ -42,6 +42,7 @@ internal sealed class OwnerConsoleGateProgressLoader(string logPath, string mani
                 id => titles.FirstOrDefault(pair => pair.Key.StartsWith(id, StringComparison.Ordinal)).Value);
             return gate with
             {
+                Ended = OwnerConsoleGateEnd.Read(events),
                 Capacity = new(executors, Math.Min(maxConcurrentShards, coreBudget ?? Math.Max(1, Environment.ProcessorCount / 2))),
                 HostActivity = OwnerConsoleHostEvidenceRuns.Read(tail, now),
                 Lanes = gate.Lanes.Select(row => row.State == OwnerConsoleGateLaneState.Done && row.Outcome == "failed" && !row.IsAttribution
