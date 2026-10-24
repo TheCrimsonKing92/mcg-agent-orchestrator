@@ -21,12 +21,12 @@ internal static partial class FocusedEvidenceRequestResolver
         out FocusedEvidenceCoverage coverage,
         out FocusedEvidenceRejection rejection)
     {
+        if (GoPackageFocusedEvidence.Applies(engineSettings))
+            return GoPackageFocusedEvidence.TryBuild(request, engineSettings, worktreePath,
+                out checks, out coverage, out rejection);
         checks = [];
         coverage = new FocusedEvidenceCoverage(TargetToChecks: []);
-        rejection = new FocusedEvidenceRejection(
-            FocusedEvidenceRejectionCode.EmptyRequest,
-            request,
-            "empty evidence request");
+        rejection = new FocusedEvidenceRejection(FocusedEvidenceRejectionCode.EmptyRequest, request, "empty evidence request");
         var items = request
             .Split(';')
             .Where(item => !string.IsNullOrWhiteSpace(item))
@@ -457,7 +457,7 @@ internal static partial class FocusedEvidenceRequestResolver
         }
 
         return DeclaredTestProjectInventory.TryResolve(
-            normalized, engineSettings, out project, engineSettings?.DeclaredDotnetTestChecks);
+            normalized, engineSettings, out project, engineSettings?.DeclaredDotnetTestChecks) || GoPackageFocusedEvidence.TryResolveProject(normalized, engineSettings, out project);
     }
 
     private static bool TryNormalizeFocusedEvidenceFilter(

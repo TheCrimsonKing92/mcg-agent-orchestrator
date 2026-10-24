@@ -266,9 +266,9 @@ internal static class FocusedEvidenceExecution
                 armContextApplied: true).ConfigureAwait(false);
         }
 
-        var checks = await runFocusedEvidenceChecks(
+        var checks = GoPackageFocusedEvidence.AnnotateResults(focusedChecks, await runFocusedEvidenceChecks(
             worktreePath, focusedChecks, goalId, stableSlotIndex, stableSlotLease,
-            executionEnvironment, cancellationToken, continueAfterFailure, executionOwner).ConfigureAwait(false);
+            executionEnvironment, cancellationToken, continueAfterFailure, executionOwner).ConfigureAwait(false));
         var disposition = ClassifyFocusedEvidenceArm(checks);
         var notRun = FocusedEvidenceNotRunPlan.Compare(focusedChecks, checks, coverage, continueAfterFailure);
         if (notRun.Checks.Count > 0 && disposition == FindingEvidenceArmDisposition.Green)
