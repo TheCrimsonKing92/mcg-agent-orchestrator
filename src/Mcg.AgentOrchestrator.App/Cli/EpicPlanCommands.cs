@@ -35,13 +35,7 @@ internal static class EpicPlanCommands
             throw new InvalidOperationException($"Epic '{positions[0]}' was not found.");
         if (command == "epic-plan")
         {
-            var row = EpicProgressReadModel.LoadEpic(context.Workspace, positions[0], includeReasons: true);
-            if (json) EpicProgressAgentReadView.Print([row]);
-            else
-            {
-                PrintPlan(row.Epic, row.Plan!);
-                PortfolioTextView.PrintOutcome(row.Outcome, row.Plan);
-            }
+            PrintPlanRead(context.Workspace, positions[0], json);
             return false;
         }
         var (epic, legacy) = EpicPlanWritePreparation.Resolve(context.Workspace.PortfolioStorePath, positions[0]);
@@ -75,6 +69,19 @@ internal static class EpicPlanCommands
         write.GetAwaiter().GetResult();
         Console.WriteLine($"Updated epic plan: [{epic.Id}] {epic.Title}");
         return false;
+    }
+
+    internal static void PrintPlanRead(OrchestratorWorkspace workspace, string reference, bool json)
+    {
+        if (!File.Exists(workspace.PortfolioStorePath))
+            throw new InvalidOperationException($"Epic '{reference}' was not found.");
+        var row = EpicProgressReadModel.LoadEpic(workspace, reference, includeReasons: true);
+        if (json) EpicProgressAgentReadView.Print([row]);
+        else
+        {
+            PrintPlan(row.Epic, row.Plan!);
+            PortfolioTextView.PrintOutcome(row.Outcome, row.Plan);
+        }
     }
 
     private static void PrintPlan(PortfolioEpic epic, EpicPlanView view)

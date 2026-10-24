@@ -27,6 +27,7 @@ public sealed class CliCommandCapabilitiesTestsQueryRouteNoWriterEffects : CliTa
             ["round-value"] = [["round-value"]],
             ["board-simulate"] = [["board-simulate", "--day", "2026-10-15"]],
             ["epic-outcome-proposals"] = [["epic-outcome-proposals"], ["epic-outcome-proposals", "--json"]],
+            ["epic-plan"] = [["epic-plan", "Board"], ["epic-plan", "Board", "--json"]],
             ["architecture"] = [["architecture"]],
             ["config"] = [["config", "agents"], ["config", "profiles"], ["config", "policy"], ["config", "doctor"]],
             ["model-outcomes"] = [["model-outcomes"]],
