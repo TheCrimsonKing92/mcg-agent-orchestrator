@@ -1,5 +1,4 @@
 using System.Text.Json;
-using System.Threading.Channels;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Check = Mcg.AgentOrchestrator.Infrastructure.GoalAcceptanceVerifier.AcceptanceManifestCheck;
@@ -125,8 +124,8 @@ public sealed class RemoteLaneCoordinatorTestsQueuedAndBusy
         internal readonly CancellationTokenSource Stop = new();
         internal readonly RemoteLaneCoordinator Coordinator;
         private readonly RemoteLaneExecutorEntry _entry = new("one", 60);
-        private readonly TaskCompletionSource<DecisionHandle> _submitted = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        private DecisionHandle? _handle;
+        private readonly TaskCompletionSource<RemoteLaneGatedDecisionHandle> _submitted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private RemoteLaneGatedDecisionHandle? _handle;
         private Task<RemoteLaneOutcome>? _run;
         internal string Ledger => RemoteExecutorHealthLedger.ResolveStorePath(Fake.Root);
 
@@ -139,7 +138,7 @@ public sealed class RemoteLaneCoordinatorTestsQueuedAndBusy
                 {
                     var submission = await ssh.SubmitAsync(request, token);
                     Fake.Handle = Assert.IsType<SshRemoteLaneHandle>(submission.Handle);
-                    _handle = new(Fake.Handle, token);
+                    _handle = new(Fake.Handle, Stop.Token);
                     _submitted.SetResult(_handle);
                     return submission with { Handle = _handle };
                 }
@@ -184,31 +183,4 @@ public sealed class RemoteLaneCoordinatorTestsQueuedAndBusy
         }
     }
 
-    // Gate each lease iteration before its heartbeat/clock pair. The test advances time and
-    // finishes the SSH poll before releasing it, so the two reads cannot straddle an advance.
-    private sealed class DecisionHandle(SshRemoteLaneHandle inner, CancellationToken token)
-        : IRemoteLaneHandle, IRemoteLaneQueuedJobCancellation, IRemoteLaneAttemptDiagnosticsSource
-    {
-        internal readonly Channel<bool> Permit = Channel.CreateUnbounded<bool>();
-        internal readonly Channel<bool> Decisions = Channel.CreateUnbounded<bool>();
-        public DateTimeOffset? NewestHeartbeat
-        {
-            get
-            {
-                Completed(Permit.Reader.ReadAsync(token).AsTask(), "lease decision permitted").GetAwaiter().GetResult();
-                return inner.NewestHeartbeat;
-            }
-        }
-        public RemoteLaneResult? TryGetResult()
-        {
-            var result = inner.TryGetResult();
-            Decisions.Writer.TryWrite(true);
-            return result;
-        }
-        public void Abandon() => inner.Abandon();
-        public void RequestQueuedJobCancellation() => inner.RequestQueuedJobCancellation();
-        public RemoteLaneHandleDiagnostics Snapshot() => inner.Snapshot();
-        public Task<RemoteLaneRunnerLogCapture> CaptureRunnerLogAsync(CancellationToken cancellationToken) =>
-            inner.CaptureRunnerLogAsync(cancellationToken);
-    }
 }

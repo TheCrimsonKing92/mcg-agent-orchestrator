@@ -1,6 +1,4 @@
-using System.Collections.Concurrent;
 using System.Text.Json;
-using System.Threading.Channels;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Check = Mcg.AgentOrchestrator.Infrastructure.GoalAcceptanceVerifier.AcceptanceManifestCheck;
 using TransportFixture = SshRemoteLaneHandleTestsQueuedLiveness.Fixture;
@@ -215,8 +213,8 @@ public sealed class RemoteLaneCoordinatorTestsQueuedLiveness
         internal readonly TransportFixture Transport;
         internal readonly CancellationTokenSource Stop = new();
         private readonly RemoteLaneCoordinator _coordinator;
-        private readonly TaskCompletionSource<DecisionHandle> _submitted = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        private DecisionHandle? _handle;
+        private readonly TaskCompletionSource<RemoteLaneGatedDecisionHandle> _submitted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private RemoteLaneGatedDecisionHandle? _handle;
         private Task<RemoteLaneOutcome>? _run;
         internal string Ledger => RemoteExecutorHealthLedger.ResolveStorePath(Transport.Fake.Root);
 
@@ -229,7 +227,7 @@ public sealed class RemoteLaneCoordinatorTestsQueuedLiveness
                 {
                     var submission = await Transport.Executor.SubmitAsync(request, token);
                     Transport.Fake.Handle = Assert.IsType<SshRemoteLaneHandle>(submission.Handle);
-                    _handle = new(Transport.Handle, token);
+                    _handle = new(Transport.Handle, Stop.Token);
                     _submitted.SetResult(_handle);
                     return submission with { Handle = _handle };
                 }
@@ -289,33 +287,4 @@ public sealed class RemoteLaneCoordinatorTestsQueuedLiveness
         }
     }
 
-    // Gate each iteration before the heartbeat/clock pair, just as the existing queued/busy fixture does.
-    private sealed class DecisionHandle(SshRemoteLaneHandle inner, CancellationToken token)
-        : IRemoteLaneHandle, IRemoteLaneQueuedJobCancellation, IRemoteLaneAttemptDiagnosticsSource
-    {
-        internal readonly Channel<bool> Permit = Channel.CreateUnbounded<bool>();
-        internal readonly Channel<bool> Decisions = Channel.CreateUnbounded<bool>();
-        internal readonly ConcurrentQueue<DateTimeOffset?> Heartbeats = new();
-        public DateTimeOffset? NewestHeartbeat
-        {
-            get
-            {
-                Completed(Permit.Reader.ReadAsync(token).AsTask(), "lease decision permitted").GetAwaiter().GetResult();
-                var heartbeat = inner.NewestHeartbeat;
-                Heartbeats.Enqueue(heartbeat);
-                return heartbeat;
-            }
-        }
-        public RemoteLaneResult? TryGetResult()
-        {
-            var result = inner.TryGetResult();
-            Decisions.Writer.TryWrite(true);
-            return result;
-        }
-        public void Abandon() => inner.Abandon();
-        public void RequestQueuedJobCancellation() => inner.RequestQueuedJobCancellation();
-        public RemoteLaneHandleDiagnostics Snapshot() => inner.Snapshot();
-        public Task<RemoteLaneRunnerLogCapture> CaptureRunnerLogAsync(CancellationToken cancellationToken) =>
-            inner.CaptureRunnerLogAsync(cancellationToken);
-    }
 }
