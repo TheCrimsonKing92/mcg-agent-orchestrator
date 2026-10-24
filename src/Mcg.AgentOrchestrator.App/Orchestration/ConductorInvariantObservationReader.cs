@@ -60,7 +60,7 @@ internal sealed class ConductorInvariantObservationReader(string conductEventsLo
                         if (matches.Length != 1) continue;
                         var goal = matches[0];
                         var reason = Value("reason") ?? "";
-                        ConductorFinishedAttemptDiagnosis.Retain(goalLines, goal.Id.Value, new(at, Value("result") ?? "", reason));
+                        ConductorFinishedAttemptDiagnosis.Retain(goalLines, goal.Id.Value, new(at, Value("result") ?? "", reason, Value("decision")));
                         var capacity = reason.Contains("acceptance_width_", StringComparison.Ordinal) ||
                             reason.Contains("CohortCapacity", StringComparison.Ordinal) ||
                             reason.Contains("Acceptance_cohort_gate_owns_this_member", StringComparison.Ordinal);

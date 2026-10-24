@@ -24,7 +24,7 @@ internal static class OwnerConsoleStageDescriber
                 return dependency.Success ? "held: depends on " + dependency.Groups[1].Value :
                     "held: " + OwnerActivityNarrator.WaitingOn(blocker);
             case OwnerConsoleAttention.GateRunning:
-                if (gate is not null) return "verifying (no live gate)";
+                if (gate is not null) return OwnerConsoleVerifyingGate.Stage(goal, gate, now);
                 var started = OwnerConsoleBoardSortKey.LatestPolicy(goal)?.OccurredAt;
                 return "gate running" + (started is null ? "" : $" {Math.Max(0, (int)(now - started.Value).TotalMinutes)}m");
             case OwnerConsoleAttention.WaitingForGate:

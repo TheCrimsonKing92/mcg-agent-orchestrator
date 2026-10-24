@@ -82,6 +82,49 @@ public sealed class ConductorBatchLoopTestsLiveAcceptanceRunIdentity : Conductor
         Assert.False(ConductorBatchLoop.DecideLiveAcceptanceAdmission(census, 2).IsAdmitted);
     }
 
+    [Xunit.Fact]
+    public void UnclaimedForeignGoalShards_CountOnceAndAdmitAtWidthTwo()
+    {
+        var census = Census([
+            Gate(4601, "run-a", "231f9591-foreign"),
+            Gate(4602, "run-a", "231f9591-foreign"),
+            Gate(4603, "run-a", "231f9591-foreign")]);
+
+        Assert.Equal(1, census.OccupiedCount);
+        Assert.Equal("live acceptance occupants goal:231f9591", census.Describe());
+        Assert.True(ConductorBatchLoop.DecideLiveAcceptanceAdmission(census, 2).IsAdmitted);
+    }
+
+    [Xunit.Fact]
+    public void DistinctForeignGoalsWithSamePrefix_FillWidthTwo()
+    {
+        var census = Census([
+            Gate(4611, "run-a", "231f9591-foreign-one"),
+            Gate(4612, "run-a", "231f9591-foreign-two")]);
+
+        Assert.Equal(2, census.OccupiedCount);
+        Assert.False(ConductorBatchLoop.DecideLiveAcceptanceAdmission(census, 2).IsAdmitted);
+    }
+
+    [Xunit.Fact]
+    public void UnclaimedGoalIdentity_TrimsAndIgnoresCaseAcrossRuns()
+    {
+        var census = Census([
+            Gate(4621, "run-a", "231f9591-foreign"),
+            Gate(4622, "run-b", " 231F9591-FOREIGN ")]);
+
+        Assert.Equal(1, census.OccupiedCount);
+    }
+
+    [Xunit.Fact]
+    public void EmptyAndWhitespaceGoalIds_KeepDistinctProcessKeys()
+    {
+        var census = Census([Gate(4631, "run-a", ""), Gate(4632, "run-a", "   ")]);
+
+        Assert.Equal(2, census.OccupiedCount);
+        Assert.Equal("live acceptance occupants pid:4631,pid:4632", census.Describe());
+    }
+
     [Xunit.Theory]
     [Xunit.InlineData("train:aaaa+bbbb", 1)]
     [Xunit.InlineData(" TRAIN:AAAA+BBBB ", 1)]

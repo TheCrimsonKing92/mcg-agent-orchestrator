@@ -27,6 +27,6 @@ internal sealed class OwnerGoalDetailQuery(IOrchestratorStateQueries state, IGoa
         var events = tail.ReadLast(goalId, 100)
             .Select(line => OwnerGoalLifecycleEvent.TryParse(line, goalId, out var item) ? item : null)
             .Where(item => item is not null).Select(item => OwnerGoalLifecycleEvent.WithRole(item!, roles)).ToArray();
-        return new OwnerGoalDetailSnapshot(goal, position, events, gate?.Invoke()?.ForMember(goalId));
+        return new OwnerGoalDetailSnapshot(goal, position, events).WithGate(gate?.Invoke());
     }
 }

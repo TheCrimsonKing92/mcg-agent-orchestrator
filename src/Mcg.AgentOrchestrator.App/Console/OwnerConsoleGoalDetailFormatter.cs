@@ -16,7 +16,7 @@ internal static class OwnerConsoleGoalDetailFormatter
     {
         var detail = await query.LoadAsync(id, token);
         if (detail is null) { output.WriteLine("goal state unavailable"); return null; }
-        if (gate is not null) detail = detail with { Gate = gate()?.ForMember(id) };
+        if (gate is not null) detail = detail.WithGate(gate());
         Render(detail, output, zone ?? TimeZoneInfo.Local);
         return detail.Goal;
     }
@@ -39,7 +39,8 @@ internal static class OwnerConsoleGoalDetailFormatter
         if (stage != goal.Status.ToString()) output.WriteLine("Stage: " + stage);
         var role = OwnerConsoleGoalDetail.Stage(goal);
         if (role != "-") output.WriteLine("Role: " + role);
-        if (OwnerConsoleGoalLanding.Line(goal, detail.LandingQueuePosition, zone) is { } landing)
+        if ((OwnerConsoleVerifyingGate.Landing(detail, zone) ??
+            OwnerConsoleGoalLanding.Line(goal, detail.LandingQueuePosition, zone)) is { } landing)
             output.WriteLine("Landing: " + landing);
         if (detail.Gate is { } liveGate) output.WriteLine("Gate: " + OwnerGoalDetailGateLine.Text(liveGate));
         output.WriteLine("Tasks:");
