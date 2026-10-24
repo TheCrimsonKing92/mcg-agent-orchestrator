@@ -19,7 +19,8 @@ public sealed class AcceptanceLaneMembershipTests
             typeof(DotnetBuildEnvironmentManagerTestsLocalHostOnlyLockAttribution),
             typeof(DotnetBuildEnvironmentManagerTestsLocalHostOnlyLoopHandoffStdout),
             typeof(DotnetBuildEnvironmentManagerTestsLocalHostOnlyLoopHandoffSuppressionFailure),
-            typeof(DotnetBuildEnvironmentManagerTestsLocalHostOnlyHandleProbe)
+            typeof(DotnetBuildEnvironmentManagerTestsLocalHostOnlyHandleProbe),
+            typeof(DotnetBuildEnvironmentManagerTestsLocalHostOnlyLoopHandoffBreakawayFallback)
         };
         var expectedMethods = new[]
         {
@@ -27,7 +28,10 @@ public sealed class AcceptanceLaneMembershipTests
             "LockAttributionRestartManagerNamesFileHolder",
             "ConductorLoopHandoffWindowsLauncherInheritsRedirectedStdoutHandle",
             "ConductorLoopHandoffSuppressionFailureStillStartsSuccessor",
-            "LockAttributionHandleProbeReturnsResultsForRealHeldFile"
+            "LockAttributionHandleProbeReturnsResultsForRealHeldFile",
+            "BreakawayDeniedRetriesOnceWithoutBreakaway",
+            "OtherNativeErrorsAreNotRetried",
+            "DeniedFallbackFailureRemovesOutputFiles"
         };
         var testMethods = descriptors.SelectMany(descriptor => typeof(AcceptanceLaneMembershipTests).Assembly
                 .GetType(descriptor.FullName)!.GetMethods(BindingFlags.Instance | BindingFlags.Public))
@@ -50,9 +54,13 @@ public sealed class AcceptanceLaneMembershipTests
                 .Select(descriptor => descriptor.FullName).Order());
         foreach (var type in expectedTypes)
         {
-            var method = Xunit.Assert.Single(testMethods.Where(method => method.DeclaringType == type));
-            Xunit.Assert.Contains(method.Name, expectedMethods);
-            Xunit.Assert.True(HasLocalHostOnlyTrait(method));
+            var methods = testMethods.Where(method => method.DeclaringType == type).ToArray();
+            Xunit.Assert.NotEmpty(methods);
+            foreach (var method in methods)
+            {
+                Xunit.Assert.Contains(method.Name, expectedMethods);
+                Xunit.Assert.True(HasLocalHostOnlyTrait(method));
+            }
             // Check both the written filters and collection-resolved filters. Reverting the
             // manifest places these tests back in the remote-capable lane and fails here.
             foreach (var membership in new[] { lanes, resolved })
