@@ -32,6 +32,7 @@ internal static class CliReadOnlyCommandRunner
         CliNextFullQueryCommand.IsNextFullQueryCommand(args) ||
         CliNextAutonomyQueryCommand.IsNextAutonomyQueryCommand(args) ||
         CliGoalsEpicQueryCommand.IsGoalsEpicQueryCommand(args) ||
+        CliEpicPlanQueryCommand.IsEpicPlanQueryCommand(args) ||
         CliInspectionQueryCommand.IsInspectionQueryCommand(args) ||
         CliBacklogQueryCommand.IsBacklogQueryCommand(args);
 
@@ -200,6 +201,13 @@ internal static class CliReadOnlyCommandRunner
         if (CliGoalsEpicQueryCommand.IsGoalsEpicQueryCommand(args))
         {
             CliGoalsEpicQueryCommand.Execute(args, workspace);
+            changed = false;
+            return true;
+        }
+
+        if (CliEpicPlanQueryCommand.IsEpicPlanQueryCommand(args))
+        {
+            CliEpicPlanQueryCommand.Execute(args, workspace);
             changed = false;
             return true;
         }
