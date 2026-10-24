@@ -4654,9 +4654,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 profileRoot[profileRootPath.Length..].TrimStart(Path.DirectorySeparatorChar);
             environment["APPDATA"] = appData;
             environment["LOCALAPPDATA"] = localAppData;
-            var powershellDirectory = Path.Combine(profileRoot, "powershell");
-            Directory.CreateDirectory(powershellDirectory);
-            environment["PSModuleAnalysisCachePath"] = Path.Combine(powershellDirectory, "ModuleAnalysisCache");
+            HermeticToolCacheEnvironment.Apply(environment, profileRoot);
         }
 
         environment["MCG_ORCHESTRATOR_REPOSITORY_ROOT"] = Path.GetFullPath(repositoryRoot);
@@ -4702,7 +4700,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         name.Equals(AcceptanceAttemptTrxPrefixVariable, StringComparison.OrdinalIgnoreCase) || name.Equals(DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable, StringComparison.OrdinalIgnoreCase) ||
         name.Equals(TempRootApparatusLossReceiptStore.GateInvocationIdVariable, StringComparison.OrdinalIgnoreCase) ||
         name.Equals(TempRootApparatusLossReceiptStore.ReceiptPathVariable, StringComparison.OrdinalIgnoreCase) ||
-        name.Equals("MCG_ORCHESTRATOR_REPOSITORY_ROOT", StringComparison.OrdinalIgnoreCase);
+        name.Equals("MCG_ORCHESTRATOR_REPOSITORY_ROOT", StringComparison.OrdinalIgnoreCase) || GoToolCacheEnvironment.IsVariable(name);
 
     private static bool IsInheritedHermeticVerificationEnvironmentVariable(string name) =>
         IsHermeticSystemLocationVariable(name) ||
