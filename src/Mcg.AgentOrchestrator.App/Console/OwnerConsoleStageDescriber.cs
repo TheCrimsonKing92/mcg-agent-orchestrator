@@ -14,6 +14,8 @@ internal static class OwnerConsoleStageDescriber
             gate?.ForMember(goal.Id.Value) is { } live)
             return live.TotalCount > 0 ? $"in gate: {live.DoneCount}/{live.TotalCount}, {OwnerConsoleGateFormatter.Remaining(live.RemainingSeconds)} left" :
                 $"gate running {(int)live.Elapsed.TotalMinutes}m";
+        if (gate?.ForMember(goal.Id.Value) is null && !(goal.Status == GoalStatus.Verifying && gate is null) &&
+            OwnerConsoleLandingBlockerText.Board(goal, now) is { } held) return held;
         switch (key.Rank)
         {
             case OwnerConsoleAttention.NeedsYou: return OwnerQuestion;

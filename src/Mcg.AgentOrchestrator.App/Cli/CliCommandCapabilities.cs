@@ -19,6 +19,7 @@ internal static class CliCommandCapabilities
         "round-value",
         "board-simulate",
         "epic-outcome-proposals",
+        "epic-plan",
         "architecture", "config", "model-outcomes",
         "backlog-list", "backlog-show", "backlog-similar", "goal-events", "timeline",
         "owner-digest", "context-usage", "next", "readiness"

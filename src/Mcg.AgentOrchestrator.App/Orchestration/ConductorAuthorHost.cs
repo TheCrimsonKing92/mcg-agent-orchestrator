@@ -67,6 +67,7 @@ internal sealed partial class ConductorAuthorHost
     internal IReadOnlySet<GoalId> ServiceTick(AgentOrchestratorKernel kernel, string? onlyGoalId = null)
     {
         var changed = new HashSet<GoalId>();
+        AuthorOwnerQuestionHoldReconciler.Reconcile(kernel, _collaboration, _conduct, onlyGoalId, changed);
         if (!Enabled) return changed;
         Harvest(kernel, onlyGoalId, changed);
         foreach (var goal in kernel.Goals.Where(goal => !goal.IsTerminal &&
