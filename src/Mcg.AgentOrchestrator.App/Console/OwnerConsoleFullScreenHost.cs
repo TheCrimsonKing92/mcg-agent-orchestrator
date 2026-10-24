@@ -52,6 +52,8 @@ internal static class OwnerConsoleFullScreenHost
         Task? reader = null;
         Task periodicRefresh = Task.CompletedTask;
         Task streamRefresh = Task.CompletedTask;
+        OwnerConsoleRefreshCoalescer? coalescer = null;
+        var timings = new OwnerConsoleRefreshTimings(clock);
         void Post(string phase, Action action) => app.Invoke(diagnostics?.ObservePost(phase, action) ?? action);
         try
         {
@@ -61,17 +63,23 @@ internal static class OwnerConsoleFullScreenHost
             var cohortEvidence = new OwnerActivityEvidenceReader(Path.Combine(workspace.OrchestratorDirectory, "cohort-acceptance.db"));
             var gateEvidence = new OwnerGateFailureEvidence(workspace.OrchestratorDirectory);
             var jointEvidence = new OwnerJointGateFailureEvidence(workspace.OrchestratorDirectory);
-            var gateMotion = new OwnerGateMotionReader(workspace.ConductEventsLogPath, clock);
+            var conductTail = new OwnerConsoleJsonlTail(workspace.ConductEventsLogPath);
+            var durationPath = AcceptanceLaneDurationStore.ResolveStorePath(workspace.RootDirectory);
+            var durationTail = new OwnerConsoleJsonlTail(durationPath);
+            var gateMotion = new OwnerGateMotionReader(workspace.ConductEventsLogPath, clock, conductTail);
+            var latestTick = new OwnerConsoleLatestTickReader(conductTail, workspace.RunEventStorePath);
             var gateProgress = new OwnerConsoleGateProgressLoader(workspace.ConductEventsLogPath,
                 Path.Combine(workspace.RootDirectory, "config", "acceptance-manifest.json"),
-                AcceptanceLaneDurationStore.ResolveStorePath(workspace.RootDirectory), clock,
-                executorConfigPath: RemoteLaneExecutorConfiguration.ResolveStorePath(workspace.RootDirectory));
+                durationPath, clock,
+                executorConfigPath: RemoteLaneExecutorConfiguration.ResolveStorePath(workspace.RootDirectory),
+                conductTail: conductTail, durationTail: durationTail);
             var changes = new ChangeStreamFileReader(Path.Combine(workspace.LogDirectory, Orchestration.ChangeStreamWriter.FileName));
             var builder = new OwnerConsoleViewModelBuilder(state, questions,
                 new ConductorLeaseLiveness(workspace.OrchestratorDirectory), new PortfolioGoalEpicLookup(workspace.PortfolioStorePath), clock,
                 item => item.EventKind == "acceptance-cohort" ? jointEvidence.Read(item, cohortEvidence.Read(item)) :
-                    gateEvidence.Read(item) ?? jointEvidence.Read(item), gateMotion.Describe,
-                latestTick: () => Cli.ConductorStatusSnapshotReader.LatestTick(workspace), gateProgress: gateProgress.Load);
+                    gateEvidence.Read(item) ?? jointEvidence.Read(item), id => timings.Time("gate-motion", () => gateMotion.Describe(id)),
+                latestTick: () => timings.Time("latest-tick", latestTick.Read),
+                gateProgress: titles => timings.Time("gate-progress", () => gateProgress.Load(titles)));
             var opened = clock.GetUtcNow();
             DateTimeOffset? last = null;
             var landings = 0;
@@ -84,7 +92,7 @@ internal static class OwnerConsoleFullScreenHost
                 label => app.Invoke(() => { if (!token.IsCancellationRequested) view!.SetWorking("refresh", label); }),
                 message => app.Invoke(() => { if (!token.IsCancellationRequested) view!.ShowNotice(message, OwnerConsoleNoticeSeverity.Failure, OwnerConsoleNoticeSource.Refresh); }));
 
-            async Task RefreshAsync(OwnerConductEvent? item = null, bool skipIfBusy = false, OwnerConsoleRefreshScope? scope = null)
+            async Task RefreshAsync(IReadOnlyList<OwnerConductEvent>? items = null, bool skipIfBusy = false, OwnerConsoleRefreshScope? scope = null)
             {
                 using var trace = diagnostics?.Begin("refresh-work", detail: skipIfBusy ? "skip-if-busy" : "queued");
                 if (skipIfBusy)
@@ -96,7 +104,7 @@ internal static class OwnerConsoleFullScreenHost
                 {
                     if (clock.GetLocalNow().Date != landingDate)
                     { landingDate = clock.GetLocalNow().Date; landings = 0; countedLandings.Clear(); }
-                    if (item is not null)
+                    foreach (var item in items ?? [])
                     {
                         last = item.Timestamp;
                         if (OwnerActivityNarrator.IsLanding(item) &&
@@ -104,25 +112,36 @@ internal static class OwnerConsoleFullScreenHost
                         OwnerConsoleStartupActivity.Append(recent, item, OwnerConsoleStartupActivity.MaxRawEvents);
                     }
                     var inputs = new OwnerConsoleViewInputs(opened, last, recent.ToArray(), landings);
-                    await refreshOperation.RunAsync(item is null ? "refresh" : "refresh after conductor event", async stepToken =>
+                    await refreshOperation.RunAsync(items is not { Count: > 0 } ? "refresh" : "refresh after conductor event", async stepToken =>
                     {
-                        var board = await builder.BuildBoardAsync(stepToken);
+                        var board = await timings.TimeAsync("board", () => builder.BuildBoardAsync(stepToken));
                         boardIds = board.Board.Select(row => row.GoalId).ToArray();
-                        foreach (var lifecycle in activityLoader.ReadNew(boardIds, scope ?? OwnerConsoleRefreshScope.All)) OwnerConsoleStartupActivity.Append(recent, builder.EnrichEvent(lifecycle), OwnerConsoleStartupActivity.MaxRawEvents);
+                        foreach (var lifecycle in timings.Time("lifecycle-tail", () => activityLoader.ReadNew(boardIds, scope ?? OwnerConsoleRefreshScope.All).ToArray())) OwnerConsoleStartupActivity.Append(recent, builder.EnrichEvent(lifecycle), OwnerConsoleStartupActivity.MaxRawEvents);
                         var programHealth = OwnerConsoleProgramHealthNotice.Current(recent); app.Invoke(() => { if (!token.IsCancellationRequested) view!.NoticeStrip.SetProgramHealth(programHealth); });
-                        var (decisions, hidden) = await builder.ReadDecisionsAsync(stepToken);
-                        var model = builder.WithActivity(builder.WithDecisions(board, decisions, hidden),
+                        var (decisions, hidden) = await timings.TimeAsync("decisions", () => builder.ReadDecisionsAsync(stepToken));
+                        var landedToday = timings.Time("landed-today", () => OwnerConsoleLandedToday.Count(workspace.GoalLifecycleEventsDirectory, clock));
+                        var model = timings.Time("activity", () => builder.WithActivity(builder.WithDecisions(board, decisions, hidden),
                             inputs with { RecentEvents = recent.ToArray(),
-                                LandedToday = Math.Max(landings, OwnerConsoleLandedToday.Count(workspace.GoalLifecycleEventsDirectory, clock)) });
+                                LandedToday = Math.Max(landings, landedToday) }));
                         stepToken.ThrowIfCancellationRequested();
-                        Post("refresh-render", () => { if (!token.IsCancellationRequested) view!.Render(model); });
+                        Post("refresh-render", () =>
+                        {
+                            if (!token.IsCancellationRequested)
+                                timings.Time("render", () => { view!.Render(model); return true; });
+                        });
                     }, token);
                 }
                 catch (OperationCanceledException) when (token.IsCancellationRequested) { }
                 catch (Exception ex)
                 { app.Invoke(() => view!.ShowNotice(ex.Message, OwnerConsoleNoticeSeverity.Failure, OwnerConsoleNoticeSource.Refresh)); }
-                finally { rebuild.Release(); }
+                finally
+                {
+                    rebuild.Release();
+                    diagnostics?.Mark("refresh-loaders", detail: timings.Detail());
+                }
             }
+
+            coalescer = new((items, scope) => RefreshAsync(items, scope: scope));
 
             rebuild.Wait(token);
             try
@@ -171,7 +190,7 @@ internal static class OwnerConsoleFullScreenHost
                 events = activityLoader.Events ?? new OwnerConsoleStartupEventSource(workspace.ConductEventsLogPath, clock);
                 await new OwnerConsoleEventPump(events, clock,
                     message => app.Invoke(() => { if (!token.IsCancellationRequested) view!.ShowNotice(message, OwnerConsoleNoticeSeverity.Failure, OwnerConsoleNoticeSource.Refresh); }))
-                    .RunAsync(item => RefreshAsync(item, scope: OwnerConsoleRefreshScope.None), token);
+                    .RunAsync(item => { coalescer.Request(item, OwnerConsoleRefreshScope.None); return Task.CompletedTask; }, token);
             });
             periodicRefresh = Task.Run(async () =>
             {
@@ -183,7 +202,8 @@ internal static class OwnerConsoleFullScreenHost
                     await RefreshAsync(skipIfBusy: true);
                 }
             }, token);
-            streamRefresh = Task.Run(() => new OwnerConsoleStreamRefresh(changes, scope => RefreshAsync(scope: scope), clock).RunAsync(token), token);
+            streamRefresh = Task.Run(() => new OwnerConsoleStreamRefresh(changes,
+                scope => { coalescer.Request(null, scope); return Task.CompletedTask; }, clock).RunAsync(token), token);
             app.Run(view!.Window);
             return 0;
         }
@@ -207,6 +227,12 @@ internal static class OwnerConsoleFullScreenHost
             if (reader is not null)
             {
                 try { await reader.WaitAsync(OwnerConsoleLoopOptions.Default.ShutdownBound, clock, CancellationToken.None); }
+                catch (OperationCanceledException) { }
+                catch (TimeoutException) { }
+            }
+            if (coalescer is not null)
+            {
+                try { await coalescer.Completion.WaitAsync(OwnerConsoleLoopOptions.Default.ShutdownBound, clock, CancellationToken.None); }
                 catch (OperationCanceledException) { }
                 catch (TimeoutException) { }
             }

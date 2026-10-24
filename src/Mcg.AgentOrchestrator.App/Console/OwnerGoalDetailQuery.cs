@@ -7,6 +7,10 @@ namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 internal sealed class OwnerGoalDetailQuery(IOrchestratorStateQueries state, IGoalEventTail tail,
     Func<OwnerConsoleGateProgress?>? gate = null)
 {
+    internal Task<string?> ResolveGoalIdAsync(string idOrPrefix, OwnerConsoleCapturedOutput output,
+        CancellationToken cancellationToken) =>
+        OwnerConsoleGoalDetail.ResolveAsync(state, idOrPrefix, output, cancellationToken);
+
     internal async Task<OwnerGoalDetailSnapshot?> LoadAsync(string goalId, CancellationToken cancellationToken)
     {
         var kernel = await state.LoadGoalsAsync([new GoalId(goalId)], cancellationToken);

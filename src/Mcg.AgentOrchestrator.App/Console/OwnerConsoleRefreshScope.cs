@@ -19,6 +19,10 @@ internal sealed record OwnerConsoleRefreshScope
         new(false, goalIds.Where(id => !string.IsNullOrWhiteSpace(id))
             .Distinct(StringComparer.OrdinalIgnoreCase).ToArray());
 
+    internal OwnerConsoleRefreshScope Union(OwnerConsoleRefreshScope other) =>
+        _all || other._all ? All : _goalIds.Length == 0 ? other : other._goalIds.Length == 0 ? this :
+            For(_goalIds.Concat(other._goalIds));
+
     internal IReadOnlyCollection<string> Resolve(IReadOnlyCollection<string> boardGoalIds) =>
         _all ? boardGoalIds : boardGoalIds.Where(boardId =>
             _goalIds.Any(id => boardId.StartsWith(id, StringComparison.OrdinalIgnoreCase))).ToArray();

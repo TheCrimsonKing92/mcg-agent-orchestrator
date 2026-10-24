@@ -9,7 +9,7 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 internal static class DotnetSharedStateHazardReader
 {
     public static IReadOnlyList<SharedStateHazard> Read(string root, IReadOnlyList<ProjectUnit> units,
-        IReadOnlyList<UnitDependency> dependencies, List<ProjectOwnerQuestion> questions)
+        IReadOnlyList<UnitDependency> dependencies, List<ProjectOwnerQuestion> questions, DiscoveryTrackedPaths tracked)
     {
         var hazards = new List<SharedStateHazard>();
         var knownUnits = units.Select(unit => unit.Id).ToHashSet(StringComparer.Ordinal);
@@ -17,7 +17,7 @@ internal static class DotnetSharedStateHazardReader
         foreach (var unit in units.Where(unit => unit.IsTest.Value == true).OrderBy(unit => unit.Id, StringComparer.Ordinal))
         {
             var directory = Path.GetDirectoryName(Path.Combine(root, unit.Id))!;
-            var sources = ReadSources(root, directory, unit.Id, questions);
+            var sources = ReadSources(root, directory, unit.Id, questions, tracked);
             LiteralConstant[]? constants = null;
             LiteralConstant[]? directConstants = null;
             var seen = new HashSet<string>(StringComparer.Ordinal);
@@ -51,7 +51,7 @@ internal static class DotnetSharedStateHazardReader
                             if (!foundInUnit && ReferenceName(expression) is { } referenceName && referenceName.Contains('.'))
                             {
                                 directConstants ??= ReadDirectConstants(root, unit.Id, knownUnits,
-                                    dependencies, referencedConstants, questions);
+                                    dependencies, referencedConstants, questions, tracked);
                                 literal = Resolve(expression, directConstants, out _);
                             }
                         }
@@ -104,12 +104,12 @@ internal static class DotnetSharedStateHazardReader
             argument.Expression.IsKind(SyntaxKind.TrueLiteralExpression)) == true;
 
     private static SortedDictionary<string, string> ReadSources(string root, string directory, string unitId,
-        List<ProjectOwnerQuestion> questions)
+        List<ProjectOwnerQuestion> questions, DiscoveryTrackedPaths tracked)
     {
         var sources = new SortedDictionary<string, string>(StringComparer.Ordinal);
         if (!Directory.Exists(directory) || !ProjectFactHelpers.IsSafePath(root, directory))
             return sources;
-        foreach (var path in SourcePaths(root, directory).Order(StringComparer.Ordinal))
+        foreach (var path in SourcePaths(root, directory, tracked).Order(StringComparer.Ordinal))
         {
             var relative = Path.GetRelativePath(root, path).Replace('\\', '/');
             try
@@ -126,21 +126,22 @@ internal static class DotnetSharedStateHazardReader
         return sources;
     }
 
-    private static IEnumerable<string> SourcePaths(string root, string directory)
+    private static IEnumerable<string> SourcePaths(string root, string directory, DiscoveryTrackedPaths tracked)
     {
         foreach (var file in Directory.EnumerateFiles(directory, "*.cs"))
-            if (ProjectFactHelpers.IsSafePath(root, file))
+            if (tracked.IncludesFile(file) && ProjectFactHelpers.IsSafePath(root, file))
                 yield return file;
         foreach (var child in Directory.EnumerateDirectories(directory))
         {
             var name = Path.GetFileName(child);
-            if (name.Equals("bin", StringComparison.OrdinalIgnoreCase) ||
+            if (!tracked.IncludesDirectory(child) ||
+                name.Equals("bin", StringComparison.OrdinalIgnoreCase) ||
                 name.Equals("obj", StringComparison.OrdinalIgnoreCase) ||
                 name is ".git" or ".scratch" or ".orchestrator-prototype" or ".orchestrator-worktrees" or "TestResults" or "playwright-report" ||
                 !ProjectFactHelpers.IsSafePath(root, child) ||
                 Directory.EnumerateFiles(child).Any(file => Path.GetExtension(file).ToLowerInvariant() is ".csproj" or ".fsproj" or ".vbproj"))
                 continue;
-            foreach (var file in SourcePaths(root, child))
+            foreach (var file in SourcePaths(root, child, tracked))
                 yield return file;
         }
     }
@@ -172,7 +173,7 @@ internal static class DotnetSharedStateHazardReader
 
     private static LiteralConstant[] ReadDirectConstants(string root, string unitId, HashSet<string> knownUnits,
         IReadOnlyList<UnitDependency> dependencies, Dictionary<string, LiteralConstant[]> cache,
-        List<ProjectOwnerQuestion> questions)
+        List<ProjectOwnerQuestion> questions, DiscoveryTrackedPaths tracked)
     {
         var constants = new List<LiteralConstant>();
         foreach (var target in dependencies.Where(edge => edge.FromUnit == unitId)
@@ -183,7 +184,7 @@ internal static class DotnetSharedStateHazardReader
             if (!cache.TryGetValue(target, out var referenced))
             {
                 var directory = Path.GetDirectoryName(Path.Combine(root, target))!;
-                referenced = ReadConstants(ReadSources(root, directory, target, questions));
+                referenced = ReadConstants(ReadSources(root, directory, target, questions, tracked));
                 cache.Add(target, referenced);
             }
             constants.AddRange(referenced);

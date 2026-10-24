@@ -36,6 +36,8 @@ public sealed class GoProjectDiscoveryAdapter : IProjectDiscoveryAdapter
             throw new InvalidOperationException("go.mod declares no module directive.");
 
         var questions = new List<ProjectOwnerQuestion>();
+        var tracked = DiscoveryTrackedPaths.Read(root);
+        tracked.AskIfDegraded(questions);
         var exclusions = new HashSet<string>(excludedDirectoryNames ?? [], StringComparer.OrdinalIgnoreCase);
         exclusions.UnionWith(["bin", "obj", ".git", "testdata", "vendor"]);
         var skipped = new HashSet<string>(StringComparer.Ordinal);
@@ -134,7 +136,8 @@ public sealed class GoProjectDiscoveryAdapter : IProjectDiscoveryAdapter
                 if (directory != root)
                 {
                     var name = Path.GetFileName(directory);
-                    if (exclusions.Contains(name) || name.StartsWith('.') || name.StartsWith('_') || !IsSafePath(root, directory))
+                    if (!tracked.IncludesDirectory(directory) || exclusions.Contains(name) || name.StartsWith('.') ||
+                        name.StartsWith('_') || !IsSafePath(root, directory))
                     { skipped.Add(relative); return; }
                     if (File.Exists(Path.Combine(directory, "go.mod")))
                     {
@@ -147,7 +150,8 @@ public sealed class GoProjectDiscoveryAdapter : IProjectDiscoveryAdapter
                 foreach (var path in Directory.GetFiles(directory, "*.go").Order(StringComparer.Ordinal))
                 {
                     var name = Path.GetFileName(path);
-                    if (!name.EndsWith(".go", StringComparison.Ordinal) || name.StartsWith('.') || name.StartsWith('_') || !IsSafePath(root, path)) continue;
+                    if (!tracked.IncludesFile(path) || !name.EndsWith(".go", StringComparison.Ordinal) ||
+                        name.StartsWith('.') || name.StartsWith('_') || !IsSafePath(root, path)) continue;
                     var filePath = Path.GetRelativePath(root, path).Replace('\\', '/');
                     try
                     {
