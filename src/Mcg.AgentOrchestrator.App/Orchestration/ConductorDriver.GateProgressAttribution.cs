@@ -79,7 +79,7 @@ internal sealed partial class ConductorDriver
             catch (Exception) { /* Event-log setup is observational. */ }
         }, GateRunIdentity: trainKey, ProjectHomeDirectory: workspace.ProjectHomeDirectoryOrNull, IntegrationBranch: workspace.IntegrationBranch,
             MemberTestRemovals: MemberDeclaredTestRemovals.FromMembers(members.Select(member =>
-                (member.GoalId, goalsById.TryGetValue(member.GoalId, out var goal) ? goal.Objective : null))));
+                (member.GoalId, goalsById.TryGetValue(member.GoalId, out var goal) ? goal.Objective : null))), AttemptMemberGoalIds: members.Select(member => member.GoalId).ToArray());
     }
 
     private static void TryAppendGateProgressEvent(
