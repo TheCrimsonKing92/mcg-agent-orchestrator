@@ -5,7 +5,7 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal sealed partial class ConductorDriver
 {
-    private FailedGoalFindingObservation BuildReceiptClosureOrDeliveryRetry(
+    internal FailedGoalFindingObservation BuildReceiptClosureOrDeliveryRetry(
         Goal goal,
         TaskSpec task,
         string candidateSha,
@@ -38,7 +38,7 @@ internal sealed partial class ConductorDriver
                 var note = $"FINDING_RECEIPT_CLOSURE task={task.Id.Value[..8]} " +
                     $"findings={string.Join(',', resolved.Keys.Order(StringComparer.Ordinal))} " +
                     $"receipts={string.Join(',', closable.Select(pair => pair.Receipt.ReceiptId).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal))} " +
-                    $"candidate={reviewedSha}; no worker dispatched";
+                    $"candidate={reviewedSha}{OutsideDiffFindingRerun.FormatClosureDecision(closable)}; no worker dispatched";
                 kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord(
                     "conductor finding-receipt-closure", prior.WorkingDirectory, 0, note, "", _utcNow(),
                     ReviewedCommit: reviewedSha,

@@ -123,6 +123,7 @@ internal sealed partial class ConductorDriver
                     candidate.TriggeringTask.LastVerification!));
         if (trigger is not null &&
             (TryRouteTesterFindingToPendingEvidence(goal, policy, trigger, out observation) ||
+             OutsideDiffFindingRerun.TryRoute(this, goal, policy, trigger.TriggeringTask, trigger.TargetTask, trigger.DeveloperOwnedFindings, out observation) ||
              TryDeliverGreenTesterFindingEvidence(goal, policy, trigger, out observation)))
         {
             return true;
