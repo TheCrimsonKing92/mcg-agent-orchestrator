@@ -13,7 +13,8 @@ public sealed record ProjectModel(
     IReadOnlyList<EnvironmentNeed> EnvironmentNeeds,
     IReadOnlyList<UnitMeasurement> Measurements,
     IReadOnlyList<SharedStateHazard> Hazards,
-    ProjectFact<string>? IntegrationBranch = null)
+    ProjectFact<string>? IntegrationBranch = null,
+    ProjectStack Stack = ProjectStack.Dotnet)
 {
     public const int CurrentSchemaVersion = 4;
 }

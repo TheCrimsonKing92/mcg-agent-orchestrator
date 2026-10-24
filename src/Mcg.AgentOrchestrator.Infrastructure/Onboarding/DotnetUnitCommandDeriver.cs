@@ -15,7 +15,7 @@ internal static class DotnetUnitCommandDeriver
                 element.Name.LocalName == "Import" && element.Attribute("Sdk") is not null) == true;
         var source = new FactSource(id, Math.Max(1, (project as IXmlLineInfo)?.LineNumber ?? 1));
         var path = id.Any(char.IsWhiteSpace) ? $"\"{id}\"" : id;
-        var build = DotnetProjectDiscoveryAdapter.Fact($"dotnet build {path}",
+        var build = ProjectFactHelpers.Fact($"dotnet build {path}",
             sdkDeclared ? FactConfidence.High : FactConfidence.Low, source,
             $"commands/{id}/build", "Confirm the build command; no parsed SDK declaration establishes it.", questions);
         ProjectFact<string>? test = null;
@@ -29,7 +29,7 @@ internal static class DotnetUnitCommandDeriver
             } : "undetermined";
             var confidence = command == "undetermined" ? FactConfidence.Low
                 : (FactConfidence)Math.Max((int)isTest.Confidence, (int)runner!.Confidence);
-            test = DotnetProjectDiscoveryAdapter.Fact(command, confidence, runner?.Source ?? isTest.Source,
+            test = ProjectFactHelpers.Fact(command, confidence, runner?.Source ?? isTest.Source,
                 $"commands/{id}/test", "Confirm the test command; test status or runner is uncertain.", questions);
         }
         return new UnitCommands(id, build, test);

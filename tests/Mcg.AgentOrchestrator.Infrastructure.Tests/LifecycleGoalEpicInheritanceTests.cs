@@ -2,12 +2,119 @@ using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
+using System.Text.Json;
 using Xunit;
 
 // Parallel-safe: all stores, worktrees and build leases use test-owned temporary roots;
 // console output is captured by the AsyncLocal router, and lifecycle execution is fake.
 public sealed class LifecycleGoalEpicInheritanceTests : CliCommandTestBase
 {
+    [Theory]
+    [InlineData("lifecycle-goal")]
+    [InlineData("lifecycle-simple-goal")]
+    public void PersistentRunner_CommitsBeforeNativeAdmission_AndRetainsStoppedProgress(string command)
+    {
+        using var fixture = new Fixture(command);
+        var workspace = fixture.Context.Workspace;
+        var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+        var original = repository.LoadAsync().GetAwaiter().GetResult();
+        var other = original.CreateGoal("Unrelated stored goal",
+            [new(TaskId.New(), "Unrelated", AgentRole.Developer)]);
+        original.RequestHumanInput(other.Id, other.Tasks[0].Id, "Preserve other request");
+        repository.SaveAsync(original).GetAwaiter().GetResult();
+        var storedOther = JsonSerializer.Serialize(original.ExportGoalSnapshot(other.Id));
+        var storedHumans = JsonSerializer.Serialize(original.ExportSnapshot().HumanInputRequests);
+        var agents = fixture.Context.Agents;
+        var profiles = fixture.Context.WorkerProfiles;
+        Goal? current = null;
+        var launchCalls = 0;
+        var factoryCalls = 0;
+        var args = Parts(command);
+        args.Add("--confirm-readiness-risk");
+
+        CaptureConsole(() =>
+        {
+            var failure = Assert.Throws<InvalidOperationException>(() => CliPersistentStateRunner.ExecuteCommand(
+                args, repository, workspace, ref agents, fixture.Context.Providers, ref profiles, ref current,
+                createLifecycleContext: (loaded, persist) =>
+                {
+                    factoryCalls++;
+                    Assert.False(StateDbWriteSession.IsActiveFor(workspace.SqliteStatePath));
+                    return CreateLifecycleContext(fixture.Root, new FakeGoalWorktreeService(fixture.Root, goalId =>
+                        {
+                            // Creation must be durable before workspace external work, not
+                            // merely rescued later by RunGoalService's direct-call bootstrap.
+                            Assert.True(repository.LoadGoalAsync(goalId).GetAwaiter().GetResult() is not null,
+                                "Lifecycle creation must be committed before workspace work.");
+                            Assert.False(StateDbWriteSession.IsActiveFor(workspace.SqliteStatePath));
+                        }),
+                        FakeAcceptanceVerifier.Passed(), fiveRole: command == "lifecycle-goal",
+                        loadedKernel: loaded, persistKernel: persist, runGoal: (kernel, goal) =>
+                            RunGoalService.RunAsync(kernel, agents, profiles, workspace, goal, true,
+                                advanceStep: (_, _, _, _, target, _, _) =>
+                                {
+                                    Assert.False(StateDbWriteSession.IsActiveFor(workspace.SqliteStatePath));
+                                    var committed = repository.LoadGoalAsync(target.Id).GetAwaiter().GetResult();
+                                    Assert.NotNull(committed);
+                                    Assert.Equal(TaskGraphIdentity.Compute(target), TaskGraphIdentity.Compute(committed!));
+                                    Assert.Equal(target.Id, GoalOperationJournal.TryFindLifecycleGoal(
+                                        workspace.ExecutionDirectory, command, args[1]));
+                                    var store = SqliteOperatorIntentStore.ForDirectories(
+                                        workspace.OrchestratorDirectory, workspace.LogDirectory);
+                                    var admission = store.CaptureAdmission(target.Id.Value, target.Tasks[0].Id.Value,
+                                        TaskGraphIdentity.Compute(target), workspace.SqliteStatePath);
+                                    Assert.Throws<AdmissionProbe>(() => TaskIntentAdmission.Launch(admission,
+                                        "lifecycle-first", () => { launchCalls++; throw new AdmissionProbe(); }));
+                                    kernel.ReportTaskProgress(target.Id, target.Tasks[0].Id,
+                                        WorkTaskStatus.Running, "Lifecycle admission observed");
+                                    return new Mcg.AgentOrchestrator.App.Application.GoalAdvanceLoopOutcome(
+                                        target.Id, false, 1, "Stopped after admission probe.", null, [], StateChanged: true);
+                                }));
+                }));
+            Assert.Contains("stopped after run-goal", failure.Message);
+        });
+
+        Assert.Equal(1, factoryCalls);
+        Assert.Equal(1, launchCalls);
+        Assert.NotNull(current);
+        var reloaded = repository.LoadAsync().GetAwaiter().GetResult();
+        var saved = reloaded.GetGoal(current!.Id);
+        Assert.Equal(WorkTaskStatus.Running, saved.Tasks[0].Status);
+        Assert.NotEmpty(saved.Tasks);
+        Assert.Equal(TaskGraphIdentity.Compute(current), TaskGraphIdentity.Compute(saved));
+        Assert.Equal(storedOther, JsonSerializer.Serialize(reloaded.ExportGoalSnapshot(other.Id)));
+        Assert.Equal(storedHumans, JsonSerializer.Serialize(reloaded.ExportSnapshot().HumanInputRequests));
+    }
+
+    private sealed class AdmissionProbe : Exception;
+
+    [Theory]
+    [InlineData("lifecycle-goal")]
+    [InlineData("lifecycle-simple-goal")]
+    public void PersistentRunner_CreationFailure_DoesNotPublishReplayJournal(string command)
+    {
+        using var fixture = new Fixture(command);
+        var workspace = fixture.Context.Workspace;
+        var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+        var agents = fixture.Context.Agents;
+        var profiles = fixture.Context.WorkerProfiles;
+        Goal? current = null;
+        var saves = 0;
+        CaptureConsole(() => Assert.Throws<CreationRejected>(() => CliPersistentStateRunner.ExecuteCommand(
+            Parts(command), repository, workspace, ref agents, fixture.Context.Providers, ref profiles, ref current,
+            createLifecycleContext: (loaded, _) => CreateLifecycleContext(fixture.Root,
+                new FakeGoalWorktreeService(fixture.Root), FakeAcceptanceVerifier.Passed(),
+                fiveRole: command == "lifecycle-goal", loadedKernel: loaded,
+                persistKernel: _ => { saves++; throw new CreationRejected(); }))));
+
+        Assert.Equal(1, saves);
+        Assert.Empty(repository.LoadAsync().GetAwaiter().GetResult().Goals);
+        Assert.Null(GoalOperationJournal.TryFindLifecycleGoal(
+            workspace.ExecutionDirectory, command, Parts(command)[1]));
+    }
+
+    private sealed class CreationRejected : Exception;
+
     [Theory]
     [InlineData("lifecycle-goal")]
     [InlineData("lifecycle-simple-goal")]
@@ -220,16 +327,16 @@ public sealed class LifecycleGoalEpicInheritanceTests : CliCommandTestBase
             Assert.Contains("--confirm-readiness-risk", error.Message);
         });
 
-        const string prefix = "Lifecycle goal: ";
-        var createdLine = Assert.Single(Lines(output).Where(line => line.StartsWith(prefix, StringComparison.Ordinal)));
-        var createdId = createdLine[prefix.Length..];
-        Assert.True(Guid.TryParseExact(createdId, "N", out _), createdLine);
-        Assert.Contains("Stage workspace create:", output);
+        Assert.DoesNotContain("Lifecycle goal:", output);
+        Assert.DoesNotContain("Stage workspace create:", output);
         Assert.DoesNotContain("Stage run-goal:", output);
         Assert.DoesNotContain("Assigned goal", output);
         var persisted = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath).LoadAsync().GetAwaiter().GetResult();
-        Assert.DoesNotContain(persisted.Goals, goal => goal.Objective == objective || goal.Id.Value == createdId);
-        Assert.Null(portfolio.GetGoalMembershipAsync(createdId).GetAwaiter().GetResult());
+        Assert.Empty(persisted.Goals);
+        Assert.NotNull(current);
+        Assert.Null(portfolio.GetGoalMembershipAsync(current!.Id.Value).GetAwaiter().GetResult());
+        Assert.Null(GoalWorktrees.TryResolve(workspace.ExecutionDirectory, current.Id));
+        Assert.Null(GoalOperationJournal.TryFindLifecycleGoal(workspace.ExecutionDirectory, command, objective));
     }
 
     [Theory]
@@ -300,14 +407,18 @@ public sealed class LifecycleGoalEpicInheritanceTests : CliCommandTestBase
         FakeGoalWorktreeService worktrees,
         FakeAcceptanceVerifier verifier,
         bool fiveRole = false,
-        Action<Action>? registerPostCommitAction = null)
+        Action<Action>? registerPostCommitAction = null,
+        AgentOrchestratorKernel? loadedKernel = null,
+        Action<AgentOrchestratorKernel>? persistKernel = null,
+        Func<AgentOrchestratorKernel, Goal, Task<RunGoalService.RunGoalResult>>? runGoal = null)
     {
         var workspace = OrchestratorWorkspace.ForDirectory(root);
         // Direct contexts need the same migrated WAL state database as the persistent runner.
         _ = StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath);
-        var kernel = new AgentOrchestratorKernel();
+        var kernel = loadedKernel ?? new AgentOrchestratorKernel();
         var agents = fiveRole ? EchoAgents() : [EchoDeveloper()];
-        return new CliExecutionContext(kernel, workspace, SeedSpecRefiner(workspace), agents, EchoProfiles(), null, registerPostCommitAction: registerPostCommitAction)
+        return new CliExecutionContext(kernel, workspace, SeedSpecRefiner(workspace), agents, EchoProfiles(), null,
+            persistKernel: persistKernel, registerPostCommitAction: registerPostCommitAction)
         {
             AcceptanceVerifier = verifier,
             Worktrees = worktrees,
@@ -317,6 +428,7 @@ public sealed class LifecycleGoalEpicInheritanceTests : CliCommandTestBase
             RunGoalSleep = (_, _) => Task.CompletedTask,
             RunGoalOverride = goal =>
             {
+                if (runGoal is not null) return runGoal(kernel, goal);
                 foreach (var task in goal.Tasks)
                 {
                     kernel.RecordTaskVerification(
@@ -389,7 +501,7 @@ public sealed class LifecycleGoalEpicInheritanceTests : CliCommandTestBase
         ]);
     }
 
-    private sealed class FakeGoalWorktreeService(string root) : ICliGoalWorktreeService
+    private sealed class FakeGoalWorktreeService(string root, Action<GoalId>? beforeEnsure = null) : ICliGoalWorktreeService
     {
         private readonly Dictionary<GoalId, string> worktrees = [];
 
@@ -403,6 +515,7 @@ public sealed class LifecycleGoalEpicInheritanceTests : CliCommandTestBase
 
         public string Ensure(string executionDirectory, GoalId goalId)
         {
+            beforeEnsure?.Invoke(goalId);
             EnsureCount++;
             if (!worktrees.TryGetValue(goalId, out var path))
             {

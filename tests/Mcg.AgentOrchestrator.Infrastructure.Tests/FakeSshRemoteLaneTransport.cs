@@ -20,6 +20,8 @@ internal sealed class FakeSshRemoteLaneTransport : IAsyncDisposable
     internal bool ThrowOnCancelCopy;
     internal string? FetchStderr;
     internal bool WritePartialFetch;
+    internal string? HoldNextPollFile;
+    internal FileStream? HeldPollFile;
     internal readonly Dictionary<string, string> FetchContents = new();
     internal string Noise = "";
     internal SshRemoteLaneHandle? Handle;
@@ -45,6 +47,9 @@ internal sealed class FakeSshRemoteLaneTransport : IAsyncDisposable
             if (poll.Status is not null) File.WriteAllText(Path.Combine(destination, "status.json"), JsonSerializer.Serialize(poll.Status), new System.Text.UTF8Encoding(true));
             if (poll.Malformed) File.WriteAllText(Path.Combine(destination, "status.json"), "{");
             File.WriteAllText(Path.Combine(destination, "heartbeat.txt"), poll.Heartbeat);
+            if (Interlocked.Exchange(ref HoldNextPollFile, null) is { } heldName)
+                HeldPollFile = new FileStream(Path.Combine(destination, heldName), FileMode.Create,
+                    FileAccess.ReadWrite, FileShare.None);
             return new(poll.Exit, Noise, poll.TimedOut, Stderr: poll.Stderr ?? Noise);
         }
         Calls.Enqueue(new(args, directory, bound));
