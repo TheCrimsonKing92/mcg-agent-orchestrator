@@ -40,7 +40,7 @@ internal sealed partial class ConductorDriver
                     $"receipts={string.Join(',', closable.Select(pair => pair.Receipt.ReceiptId).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal))} " +
                     $"candidate={reviewedSha}{OutsideDiffFindingRerun.FormatClosureDecision(closable)}; no worker dispatched";
                 kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord(
-                    "conductor finding-receipt-closure", prior.WorkingDirectory, 0, note, "", _utcNow(),
+                    "conductor finding-receipt-closure", prior.WorkingDirectory, 0, OutsideDiffFindingRerun.ClosureOutput(note, resolved.Values), "", _utcNow(),
                     ReviewedCommit: reviewedSha,
                     MergedReviewFindings: prior.MergedReviewFindings!
                         .Select(finding => resolved.GetValueOrDefault(finding.StableId, finding)).ToArray(),

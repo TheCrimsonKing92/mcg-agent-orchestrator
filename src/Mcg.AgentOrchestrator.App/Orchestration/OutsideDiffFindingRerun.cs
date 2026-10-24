@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
@@ -333,6 +334,16 @@ internal static class OutsideDiffFindingRerun
         var ids = closable.Where(pair => pair.Finding.EvidenceOutcome?.DecisionReason == DecisionReason)
             .Select(pair => pair.Finding.StableId).ToArray();
         return ids.Length == 0 ? "" : $"; decision={DecisionReason}; stable_ids={Encode(ids)}";
+    }
+
+    internal static string ClosureOutput(string note, IEnumerable<ReviewFinding> resolved)
+    {
+        var findings = resolved.ToArray();
+        if (!findings.Any(finding => finding.EvidenceOutcome?.DecisionReason == DecisionReason)) return note;
+        // The merged snapshot records closure now; structured fields also preserve it when later
+        // Tester submissions replay historical rounds from their authoritative output.
+        return note + Environment.NewLine + "findings: " + JsonSerializer.Serialize(findings) +
+            Environment.NewLine + "touched_anchors: []";
     }
 
     private static FailedGoalFindingObservation Unusable(string receiptId, string detail) =>

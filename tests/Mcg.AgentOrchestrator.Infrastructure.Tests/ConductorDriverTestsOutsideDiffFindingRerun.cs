@@ -33,6 +33,8 @@ public sealed class ConductorDriverTestsOutsideDiffFindingRerun
         Assert.Equal(Reason, fixture.Finding.EvidenceOutcome!.DecisionReason);
         Assert.Equal(FindingEvidenceOutcomeReason.ValidEvidence, fixture.Finding.EvidenceOutcome.ResultReason);
         Assert.Equal(WorkTaskStatus.Completed, fixture.Tester.Status);
+        Assert.True(WorkerResultBlockers.TryFindReviewFindingRound(fixture.Tester.LastVerification, out var closureRound, out _));
+        Assert.Equal(ReviewFindingState.Resolved, Assert.Single(closureRound.Findings).State);
         Assert.Empty(fixture.Retried);
         Assert.Single(fixture.Requests);
         var closure = Assert.Single(fixture.Goal.Timeline.Where(evt => evt.Kind == ProgressKind.TaskNote &&
@@ -79,7 +81,7 @@ public sealed class ConductorDriverTestsOutsideDiffFindingRerun
         Assert.Empty(fixture.Requests);
         Assert.Empty(fixture.RequestMarkers);
         Assert.Equal(fixture.Developer.Id, Assert.Single(fixture.Retried));
-        Assert.Equal(RetryCause.NewTestFinding, Assert.Single(fixture.RetryCauses));
+        Assert.Equal(RetryCause.NewSourceFinding, Assert.Single(fixture.RetryCauses));
         using var control = new Fixture(changed: [TestPath], seedReceipt: false);
         control.ReportAndSeed();
         control.AdvanceToDecision();
@@ -202,6 +204,7 @@ public sealed class ConductorDriverTestsOutsideDiffFindingRerun
         Assert.Single(fixture.RequestMarkers);
         Assert.Equal(ReviewFindingState.Open, fixture.Finding.State);
         fixture.ReloadAndRecreateDriver();
+        Assert.Equal(FirstSha, fixture.Developer.LastDispatch!.ResultCommit);
         fixture.AdvanceToDecision();
         Assert.Single(fixture.Requests);
         Assert.Single(fixture.RequestMarkers);
@@ -325,6 +328,7 @@ public sealed class ConductorDriverTestsOutsideDiffFindingRerun
             (Kernel, Goal) = SoftwareGoal();
             foreach (var task in Goal.Tasks.TakeWhile(task => task.Id != Tester.Id))
                 PassVerification(Kernel, Goal, task, hasCommittedChanges: task.RequiredRole == AgentRole.Developer);
+            Kernel.RecordDispatchResultCommit(Goal.Id, Developer.Id, Sha);
             CreateDriver();
         }
 
