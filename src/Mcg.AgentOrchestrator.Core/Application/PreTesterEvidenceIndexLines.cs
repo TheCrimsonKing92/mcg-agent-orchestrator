@@ -60,9 +60,20 @@ public static class PreTesterEvidenceIndexLines
 
     public static IReadOnlyList<string> ForTester(Goal goal, TaskSpec task, string? candidateSha)
     {
-        if (task.RequiredRole != AgentRole.Tester) return [];
-        var entry = Latest(goal, task.Id, candidateSha);
+        if (task.RequiredRole is not (AgentRole.Tester or AgentRole.Reviewer)) return [];
+        var testerId = task.RequiredRole == AgentRole.Tester ? task.Id :
+            goal.Tasks.FirstOrDefault(candidate => candidate.RequiredRole == AgentRole.Tester)?.Id;
+        if (testerId is null) return [];
+        var entry = Latest(goal, testerId, candidateSha);
         if (entry is null || entry.Outcome == "started") return [];
+        var rerun = entry.Outcome == "red" ? PreTesterOutOfDiffRerunMarker.Latest(
+            goal, testerId, entry.CandidateSha, entry.ReceiptId) : null;
+        var rerunLines = rerun is null ? Array.Empty<string>() : new[] { rerun.Verdict == "non-blocking"
+            ? $"evidence_nonblocking_failures: {string.Join(',', rerun.FailingTests)}; source_receipt={rerun.SourceReceipt}; " +
+              $"rerun_receipt={rerun.RerunReceipt}; failure_history={rerun.HistoryText}. " +
+              "These failures are outside the candidate diff, passed a same-candidate rerun, and have failed on other goals; they do not block this candidate."
+            : $"evidence_out_of_diff_rerun: rerun_receipt={rerun.RerunReceipt}; rerun={rerun.Rerun}; verdict=blocking" };
+        if (task.RequiredRole == AgentRole.Reviewer) return rerunLines;
         var state = entry.Outcome == "green" ? "executed-on-candidate" : entry.Outcome;
         var lines = new List<string>
         {
@@ -73,6 +84,7 @@ public static class PreTesterEvidenceIndexLines
         };
         if (entry.NotRun.Count > 0) lines.Add($"evidence_not_run: {string.Join(',', entry.NotRun)}");
         if (entry.FailingTests.Count > 0) lines.Add($"evidence_failing_tests: {string.Join(',', entry.FailingTests)}");
+        lines.AddRange(rerunLines);
         return lines;
     }
 }

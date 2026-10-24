@@ -89,8 +89,10 @@ internal sealed class WorkerSkillSelector(WorkerSkillResolver? resolver = null, 
         TaskSpec task,
         string workingDirectory)
     {
+        var stack = ProjectStackFor(workingDirectory);
         return SelectSkills(goal, task)
             .DistinctBy(skill => skill.Name, StringComparer.OrdinalIgnoreCase)
+            .Where(skill => stack == ProjectStack.Dotnet || skill.Name != "dotnet-windows-build-hygiene")
             .Where(skill => _targetHome.IsOrchestratorHome || !RequiresHomeOrWorktreeCopy(skill.Name) ||
                 File.Exists(Path.Combine(workingDirectory, skill.RelativePath)))
             .Select(skill => _resolver.Resolve(
@@ -101,6 +103,9 @@ internal sealed class WorkerSkillSelector(WorkerSkillResolver? resolver = null, 
                 BuildSkillReason(skill.Name, goal, task)))
             .ToArray();
     }
+
+    internal static ProjectStack ProjectStackFor(string workingDirectory) =>
+        TargetToolchainDetector.Detect(workingDirectory) == Toolchain.Go ? ProjectStack.Go : ProjectStack.Dotnet;
 
     private IEnumerable<SkillCandidate> SelectSkills(Goal goal, TaskSpec task)
     {

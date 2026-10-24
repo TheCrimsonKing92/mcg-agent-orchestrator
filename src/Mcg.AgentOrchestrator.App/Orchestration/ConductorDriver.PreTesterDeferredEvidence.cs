@@ -6,6 +6,14 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal sealed partial class ConductorDriver
 {
+    internal Func<Goal, IReadOnlyList<string>, IReadOnlyDictionary<string, IReadOnlyList<string>>>? PreTesterFailureHistory { get; set; }
+
+    private PreTesterOutOfDiffRerun OutOfDiffRerun(string worktree) => new(worktree, _executionDirectory,
+        _getLandingFileScopes, PreTesterFailureHistory ?? ((goal, identities) => CrossGoalTestFailureHistory.Read(
+            _cohortWorkspace, (_cohortKernel ?? _conductorTickKernel)?.Goals ?? [], goal, identities, _utcNow())),
+        TryReconcileFocusedEvidenceAttempt, _recordFindingEvidenceRequest, _recordFindingEvidenceRun,
+        CreateFindingEvidenceBatchId, CreateFindingEvidenceReceiptId);
+
     private bool TryRouteCoveredPreTesterRequest(
         Goal goal,
         TaskSpec requestingTask,
@@ -102,6 +110,11 @@ internal sealed partial class ConductorDriver
             {
                 if (TryEscalatePreTesterRedLoop(goal, goalPrefix, policy, fromState, out result)) return true;
                 throw new InvalidDataException("Actionable pre-Tester RED has no Developer retry or escalation.");
+            }
+            if (prior.Outcome == "red" && OutOfDiffRerun(worktreePath).TryRun(goal, tester, prior, policy, out var priorHold, out var priorHoldKind))
+            {
+                result = MakeResult(goal.Id.Value, goalPrefix, policy, FocusedEvidencePendingHeld(fromState, priorHold, priorHoldKind));
+                return true;
             }
             RecordPreTesterDeferredEvidenceExit(goal, developer, testsField,
                 PreTesterDeferredEvidenceExit.PriorOutcomeNotStarted, prior.Outcome,
@@ -220,7 +233,7 @@ internal sealed partial class ConductorDriver
             return true;
         }
         var liveHead = _getPreReviewEvidenceContext(goal).CandidateSha?.Trim();
-        if (IsSupersededPreTesterCandidate(worktreePath, candidateSha, liveHead))
+        if (PreTesterDeferredEvidenceReads.IsSupersededPreTesterCandidate(worktreePath, candidateSha, liveHead))
         {
             decision = FailedGoalFindingObservation.Observed(
                 FailedGoalFindingObservationKind.FindingEvidencePending,
@@ -253,6 +266,12 @@ internal sealed partial class ConductorDriver
                 $"PRE_TESTER_BUILD_PHASE_REFRESH: candidate_sha={candidateSha}; receipt_id={receiptId}"));
             return true;
         }
+        if (outcome == "red" && OutOfDiffRerun(worktreePath).TryRun(GetCurrentGoal(goal), tester,
+                new(outcome, candidateSha!, receiptId, selectionNames, notRun, attempt?.ResultPath, failingTests), policy, out var hold, out var holdKind))
+        {
+            result = MakeResult(goal.Id.Value, goalPrefix, policy, FocusedEvidencePendingHeld(fromState, hold, holdKind));
+            return true;
+        }
         if (outcome != "actionable-red") return false;
         if (TryEscalatePreTesterRedLoop(GetCurrentGoal(goal), goalPrefix, policy, fromState, out result))
             return true;
@@ -268,17 +287,6 @@ internal sealed partial class ConductorDriver
         return true;
     }
 
-    private static bool IsSupersededPreTesterCandidate(
-        string worktreePath, string? candidateSha, string? liveHead)
-    {
-        if (string.IsNullOrWhiteSpace(candidateSha) || string.IsNullOrWhiteSpace(liveHead) ||
-            string.Equals(candidateSha, liveHead, StringComparison.OrdinalIgnoreCase)) return false;
-        var ancestry = GitCli.Run(worktreePath, "merge-base", "--is-ancestor", candidateSha, liveHead);
-        // Only a completed negative ancestry query proves supersession; git faults keep today's behavior.
-        return ancestry.ProcessStarted && !ancestry.DrainTimedOut && ancestry.ExitCode == 1 &&
-               string.IsNullOrWhiteSpace(ancestry.Error);
-    }
-
     private bool TryEscalatePreTesterRedLoop(
         Goal goal,
         string goalPrefix,
@@ -288,7 +296,7 @@ internal sealed partial class ConductorDriver
     {
         result = default!;
         var tester = goal.Tasks.First(task => task.RequiredRole == AgentRole.Tester);
-        var lastOperatorAnswer = LastOperatorRedLoopAnswerIndex(goal);
+        var lastOperatorAnswer = PreTesterDeferredEvidenceReads.LastOperatorRedLoopAnswerIndex(goal);
         var redHistory = goal.Timeline
             .Where((evt, index) => index > lastOperatorAnswer)
             .Where(evt => evt.TaskId == tester.Id && evt.Kind == ProgressKind.FindingEvidenceRunRecorded &&
@@ -308,23 +316,4 @@ internal sealed partial class ConductorDriver
         return true;
     }
 
-    private static int LastOperatorRedLoopAnswerIndex(Goal goal)
-    {
-        var lastEscalation = goal.Timeline
-            .Select((evt, index) => (evt, index))
-            .Where(item => item.evt.TaskId is null && item.evt.Kind == ProgressKind.GoalPolicyDecision &&
-                           item.evt.Message.Contains("PRE_TESTER_RED_LOOP:", StringComparison.Ordinal))
-            .Select(item => item.index).DefaultIfEmpty(-1).Max();
-        if (lastEscalation < 0) return -1;
-
-        for (var index = goal.Timeline.Count - 1; index > lastEscalation; index--)
-        {
-            var evt = goal.Timeline[index];
-            if (evt.Kind == ProgressKind.TaskRetried &&
-                !evt.Message.StartsWith("ACTIONABLE_CANDIDATE_RED ", StringComparison.Ordinal) &&
-                goal.Tasks.Any(task => task.Id == evt.TaskId && task.RequiredRole == AgentRole.Developer))
-                return index;
-        }
-        return -1;
-    }
 }

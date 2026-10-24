@@ -50,7 +50,7 @@ internal sealed partial class WorkerArtifactWriter
         var scratchRoot = Path.Combine(workingDirectory, ".orchestrator-context");
         var contextDirectory = Path.Combine(scratchRoot, goal.Id.Value);
         Directory.CreateDirectory(contextDirectory);
-        WorkerStandingRules.WriteContextArtifact(task.RequiredRole, contextDirectory);
+        WorkerStandingRules.WriteContextArtifact(task.RequiredRole, contextDirectory, WorkerSkillSelector.ProjectStackFor(workingDirectory));
 
         // Self-ignore the scratch tree so it never dirties repositories whose root
         // .gitignore lacks the tracked orchestrator rule.
@@ -343,16 +343,31 @@ internal sealed partial class WorkerArtifactWriter
 
         if (task.RequiredRole is AgentRole.Developer or AgentRole.Tester)
         {
-            var buildInvocation = OrchestratorBuildEvidenceCheck.FormatScriptInvocation(OrchestratorBuildEvidenceCheck.ResolveScriptPath());
-            lines.InsertRange(6,
-            [
-                string.Empty,
-                "## Build/Test Verification",
-                $"- Run `{buildInvocation} <project.csproj> [project.csproj...]` from your worktree root before writing WORKER_RESULT for every project whose sources you changed; this is the only sanctioned worker-side .NET build check.",
-                "- Report the build result in WORKER_RESULT `tests`, for example `tests: pass - build: 0 errors (Invoke-WorkerBuildCheck)` or `tests: fail - <build error>`.",
-                $"- Compiling every changed project is required through `{buildInvocation}`. Do not run raw `dotnet test`, `.\\scripts\\Invoke-IsolatedDotnet.ps1`, or any other worker-side test execution because tests belong to the acceptance gate.",
-                "- If no .NET project sources changed, report the non-.NET verification you ran or `tests: not-run - no .NET project sources changed; orchestrator acceptance gate verifies via stable slots`."
-            ]);
+            if (WorkerSkillSelector.ProjectStackFor(workingDirectory) == ProjectStack.Go)
+            {
+                lines.InsertRange(6,
+                [
+                    string.Empty,
+                    "## Build/Test Verification",
+                    "- Run `go build ./...`, `go vet ./...` and `go test ./...` from the worktree root before WORKER_RESULT; use `go test ./<package> -run '<TestRegex>'` while iterating.",
+                    "- Report each result in WORKER_RESULT `tests`, for example `tests: pass - go build, go vet, go test ./... ok` or `tests: fail - <package>: <first failing test or build error>`.",
+                    "- Do not run the .NET worker build helper or any `dotnet` command.",
+                    "- The acceptance gate re-runs the Go checks and decides the verdict."
+                ]);
+            }
+            else
+            {
+                var buildInvocation = OrchestratorBuildEvidenceCheck.FormatScriptInvocation(OrchestratorBuildEvidenceCheck.ResolveScriptPath());
+                lines.InsertRange(6,
+                [
+                    string.Empty,
+                    "## Build/Test Verification",
+                    $"- Run `{buildInvocation} <project.csproj> [project.csproj...]` from your worktree root before writing WORKER_RESULT for every project whose sources you changed; this is the only sanctioned worker-side .NET build check.",
+                    "- Report the build result in WORKER_RESULT `tests`, for example `tests: pass - build: 0 errors (Invoke-WorkerBuildCheck)` or `tests: fail - <build error>`.",
+                    $"- Compiling every changed project is required through `{buildInvocation}`. Do not run raw `dotnet test`, `.\\scripts\\Invoke-IsolatedDotnet.ps1`, or any other worker-side test execution because tests belong to the acceptance gate.",
+                    "- If no .NET project sources changed, report the non-.NET verification you ran or `tests: not-run - no .NET project sources changed; orchestrator acceptance gate verifies via stable slots`."
+                ]);
+            }
         }
 
         if (!string.IsNullOrWhiteSpace(task.VerificationPlan))
@@ -470,6 +485,7 @@ internal sealed partial class WorkerArtifactWriter
             {
                 lines.Add("## Go Verification");
                 lines.Add("- Use `go build ./...` to verify the project compiles.");
+                lines.Add("- Use `go vet ./...` to check for suspicious code.");
                 lines.Add("- Use `go test ./...` to run the full test suite.");
                 lines.Add("- Use `go test ./path/to/package/...` for focused package tests.");
             }

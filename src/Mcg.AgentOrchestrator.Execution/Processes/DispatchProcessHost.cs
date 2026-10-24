@@ -321,6 +321,7 @@ public static class DispatchProcessHost
         if (!parameters.SandboxLowIntegrity)
         {
             ConfigurePowerShellModuleAnalysisCache(startInfo.Environment, sandboxRoot);
+            GoToolCacheEnvironment.Apply(startInfo.Environment, sandboxRoot);
             ExcludeSandboxFromGit(parameters.WorkingDirectory);
             return new WorkerSandboxPreparationResult(false, false);
         }
@@ -419,6 +420,7 @@ public static class DispatchProcessHost
             var sandboxBin = CreateSandboxBinDirectory(sandboxRoot);
             Directory.CreateDirectory(tempDir);
             ConfigurePowerShellModuleAnalysisCache(startInfo.Environment, sandboxRoot);
+            GoToolCacheEnvironment.Apply(startInfo.Environment, sandboxRoot);
             TrackAction("materialize-shims", () => WriteWorkerCommandShims(sandboxBin, startInfo.Environment["PATH"]));
 
             // The credential source this dispatch actually seeded, carried to the setup artifact so an

@@ -100,7 +100,9 @@ internal sealed record AcceptancePartitionVerdictCacheOptions(
     Func<string, string, string, IReadOnlyList<string>>? ResolveChangedFiles = null,
     Func<string, string, string, IReadOnlyList<string>>? ResolveLaneCarryChangedFiles = null,
     IReadOnlyList<AcceptanceManifestCheck>? IdenticalTreeChecks = null,
-    Func<DisjointLandingFactsRequest, DisjointLandingFacts?>? ResolveDisjointLandingFacts = null);
+    Func<DisjointLandingFactsRequest, DisjointLandingFacts?>? ResolveDisjointLandingFacts = null,
+    IReadOnlyList<string>? MemberGoalIds = null,
+    Action<string>? EmitDiagnostic = null);
 
 internal sealed partial class AcceptancePartitionVerdictCache
 {
@@ -134,6 +136,10 @@ internal sealed partial class AcceptancePartitionVerdictCache
     private AcceptanceLaneCarryShadow? LaneCarryShadow { get; init; }
     private AcceptanceDisjointLandingLaneReuse.Session DisjointLandingReuse { get; init; } = null!;
     private AcceptanceLaneFlakeLedger LaneFlakeLedger { get; init; } = null!;
+    private string WorktreePath { get; init; } = null!;
+    private IReadOnlyList<string>? MemberGoalIds { get; init; }
+    private Func<string, string, string, IReadOnlyList<string>> ResolveChangedFiles { get; init; } = null!;
+    private Action<string> EmitDiagnostic { get; init; } = Console.WriteLine;
     private bool _shadowsPending;
     internal bool HasPendingShadows => (TestReuseShadow is not null || LaneCarryShadow is not null) && _shadowsPending;
 
@@ -284,6 +290,10 @@ internal sealed partial class AcceptancePartitionVerdictCache
             identicalTreeIdentities)
         {
             LaneFlakeLedger = new AcceptanceLaneFlakeLedger(options.WorktreePath),
+            WorktreePath = options.WorktreePath,
+            MemberGoalIds = options.MemberGoalIds?.ToArray(),
+            ResolveChangedFiles = options.ResolveChangedFiles ?? AcceptanceTestReuseShadow.ResolveChangedFilesFromGit,
+            EmitDiagnostic = options.EmitDiagnostic ?? Console.WriteLine,
             DisjointLandingReuse = new AcceptanceDisjointLandingLaneReuse.Session(
                 options.WorktreePath, options.GoalId.Value, attemptId,
                 GoalAcceptanceVerifier.NormalizeShaToken(candidateTreeSha),
@@ -602,10 +612,39 @@ internal sealed partial class AcceptancePartitionVerdictCache
         Console.Out.Flush();
     }
 
+    internal async Task<AcceptanceCheckResult> SelectPartitionVerdictAsync(
+        AcceptanceManifestCheck check, AcceptanceCheckResult firstRun, AcceptanceCheckResult probe,
+        Func<AcceptanceManifestCheck, Task<AcceptanceCheckResult>> confirm,
+        CancellationToken cancellationToken = default)
+    {
+        if (!AcceptanceProbeRerunCredit.IsEligiblePredicate(firstRun.CompletionDecision?.FailedPredicate))
+            return SelectPartitionVerdict(check, firstRun, probe);
+
+        // Validate the retry state before allowing an additional invocation; never await under _gate.
+        if (!TryBuildCacheKey(check, out var partitionId, out _, out _) || firstRun.CompletionDecision?.Passed != false)
+            throw new InvalidOperationException($"Within-attempt probe for '{check.Name}' lacks a typed failed first-run decision.");
+        lock (_gate)
+        {
+            if (!_retries.Any(receipt => receipt.PartitionId.Equals(partitionId, StringComparison.OrdinalIgnoreCase)))
+                throw new InvalidOperationException($"Within-attempt probe for '{check.Name}' has no recorded retry receipt.");
+        }
+        var credit = await AcceptanceProbeRerunCredit.EvaluateAsync(check, firstRun, probe, GoalId, MemberGoalIds,
+            since => LaneFlakeLedger.Read(check.Name, since),
+            () => ResolveChangedFiles(WorktreePath, MainSha, VerifyingCommitSha), WorktreePath,
+            confirm, cancellationToken).ConfigureAwait(false);
+        if (!credit.Granted && credit.Identities.Count > 0)
+            EmitDiagnostic($"LANE_RERUN_CREDIT_DENIED lane=\"{check.Name}\" reason={credit.DenialReason}");
+        return SelectPartitionVerdict(check, firstRun, probe, credit.Granted ? credit : null);
+    }
+
     internal AcceptanceCheckResult SelectPartitionVerdict(
         AcceptanceManifestCheck check,
         AcceptanceCheckResult firstRun,
-        AcceptanceCheckResult probe)
+        AcceptanceCheckResult probe) => SelectPartitionVerdict(check, firstRun, probe, null);
+
+    private AcceptanceCheckResult SelectPartitionVerdict(
+        AcceptanceManifestCheck check, AcceptanceCheckResult firstRun, AcceptanceCheckResult probe,
+        AcceptanceProbeRerunCredit.Decision? credit)
     {
         if (!TryBuildCacheKey(check, out var partitionId, out var filterHash, out var cacheKey) ||
             firstRun.CompletionDecision is not { Passed: false, FailedPredicate: { Length: > 0 } } decision)
@@ -676,7 +715,7 @@ internal sealed partial class AcceptancePartitionVerdictCache
         var rerunVerdict = progress is null ? null : AcceptanceTimedOutProbeEvidence.TryComposeRerunPass(
             firstRun, probe, completedReceipt.OriginalInvocationId, completedReceipt.RetryInvocationId, progress);
         var detail =
-            $"partition_id={partitionId} predicate={decision.FailedPredicate} verdict_source={(rerunVerdict is null ? "first_run" : "rerun")} " +
+            $"partition_id={partitionId} predicate={decision.FailedPredicate} verdict_source={(credit is not null ? "rerun-credit" : rerunVerdict is null ? "first_run" : "rerun")} " +
             $"probe_ran=true flake_confirmed={probe.Passed.ToString().ToLowerInvariant()}" +
             (rerunPass ? $" apparatus_reason={AcceptanceWithinAttemptRerunEvidence.Reason}" : string.Empty) +
             (verdict.WithinAttemptRerun is { FailedPredicate: AcceptanceShardCompletionPredicates.TimedOut } evidence
@@ -699,7 +738,7 @@ internal sealed partial class AcceptancePartitionVerdictCache
                 PartitionPairKey: PairKey,
                 PartitionId: partitionId,
                 PartitionFilterHash: filterHash,
-                PartitionVerdict: rerunVerdict is not null || firstRun.Passed ? "GREEN" : "RED",
+                PartitionVerdict: credit is not null || rerunVerdict is not null || firstRun.Passed ? "GREEN" : "RED",
                 PartitionAttemptId: AttemptId,
                 PartitionRetryReceipt: completedReceipt)]);
         if (rerunVerdict?.LaneRerun is { } laneRerun)
@@ -715,6 +754,25 @@ internal sealed partial class AcceptancePartitionVerdictCache
             }
             Console.WriteLine($"LANE_RERUN lane=\"{check.Name}\" outcome=flake first_predicate=timed-out first_trx=none first_run_progress=growing first_invocation={laneRerun.FirstInvocationId} rerun_invocation={laneRerun.RerunInvocationId}");
             Console.Out.Flush();
+        }
+        if (credit?.Confirmation is { } confirmation)
+        {
+            var confirmationId = GoalAcceptanceVerifier.BuildInvocationIdentity(check, confirmation.TestResultRunOrdinal, AttemptId);
+            var creditEvidence = new AcceptanceLaneRerunEvidence(completedReceipt.OriginalInvocationId,
+                firstRun.TestResultPaths ?? [], credit.Identities, decision.FailedPredicate,
+                confirmationId, confirmation.TestResultPaths ?? [], confirmation.FailingTestIdentities ?? [],
+                confirmation.CompletionDecision?.FailedPredicate, AcceptanceLaneRerunEvidence.Flake);
+            try
+            {
+                LaneFlakeLedger.Append(AcceptanceLaneFlakeRow.FromEvidence(
+                    GoalId, AttemptId, check.Name, CandidateTreeSha, creditEvidence, DateTimeOffset.UtcNow));
+            }
+            catch (Exception ex)
+            {
+                EmitDiagnostic($"LANE_FLAKE_LEDGER_WRITE_FAILED lane=\"{check.Name}\" error={ex.Message.ReplaceLineEndings(" ")}");
+            }
+            EmitDiagnostic($"LANE_RERUN_CREDIT lane=\"{check.Name}\" identities={credit.Identities.Count} history_goals={string.Join(',', credit.HistoryGoals)} confirm_invocation={confirmationId}");
+            return probe;
         }
         return rerunVerdict ?? verdict;
     }
