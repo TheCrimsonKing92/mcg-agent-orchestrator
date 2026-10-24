@@ -1262,6 +1262,7 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
                     "acceptance attempt metadata path has no parent directory"),
                 attemptWriterLeaseTimeout);
             var workspace = OwnedChildWorkspaceResolver.ForParallelAcceptanceAttempt(attempt);
+            using var heartbeatOwner = GateHeartbeatOwner.Push(workspace.OrchestratorDirectory);
             using var holderContainment = attempt.HolderContractVersion == 1
                 ? new AcceptanceHolderLease().Claim(AcceptanceHolderBinding.For(attempt),
                     AcceptanceHolderLease.CurrentGeneration(), workspace) : null;

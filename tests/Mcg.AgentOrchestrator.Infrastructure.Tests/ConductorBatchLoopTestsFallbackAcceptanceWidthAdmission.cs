@@ -187,6 +187,68 @@ public sealed class ConductorBatchLoopTestsFallbackAcceptanceWidthAdmission : Co
     private static ConductorAdvanceOutcome.Held Held(ConductorAdvanceResult result)
         => Assert.IsType<ConductorAdvanceOutcome.Held>(result.Outcome);
 
+    [Xunit.Fact]
+    public void DocsCompletion_SixForeignProjectPids_AdmitsAtWidthOne()
+    {
+        var ownDirectory = Path.Combine(Path.GetTempPath(), $"mcg-own-{Guid.NewGuid():N}");
+        var foreignDirectory = Path.Combine(Path.GetTempPath(), $"mcg-foreign-{Guid.NewGuid():N}");
+        AssertProjectOwnerCompletionTick(ownDirectory, foreignDirectory, expectLaunch: true);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(true)]
+    [Xunit.InlineData(false)]
+    public void DocsCompletion_SixOwnOrUnknownProjectPids_HoldsAtWidthOne(bool ownOwner)
+    {
+        var ownDirectory = Path.Combine(Path.GetTempPath(), $"mcg-own-{Guid.NewGuid():N}");
+        var recordedOwner = ownOwner ? ownDirectory.ToUpperInvariant() + Path.DirectorySeparatorChar : null;
+        AssertProjectOwnerCompletionTick(ownDirectory, recordedOwner, expectLaunch: false);
+    }
+
+    private static void AssertProjectOwnerCompletionTick(
+        string ownDirectory, string? recordedOwner, bool expectLaunch)
+    {
+        using var fixture = new AdmissionFixture();
+        using var owner = GateHeartbeatOwner.Push(ownDirectory);
+        using var probe = GateLoadContextProbe.PushLiveGateOccupantProbe(() =>
+            Enumerable.Range(4701, 6).Select(pid => new GateLoadContextProbe.LiveGateOccupant(
+                pid, null, pid - 4701, TimeSpan.Zero,
+                RunClass: GateHeartbeatRunClass.Acceptance, RunId: "foreign-train-run",
+                OwnerStateDirectory: recordedOwner)).ToArray());
+        var goal = fixture.CreateGoal();
+        var refreshed = false;
+        BatchTickSummary? tick = null;
+        var loop = new ConductorBatchLoop(refreshGoalDispatchesBeforeAdvance: (kernel, current) =>
+        {
+            Assert.Equal(goal.Id, current.Id);
+            PassVerification(kernel, current, current.Tasks.Single());
+            Assert.Equal(GoalStatus.Verified, current.Status);
+            refreshed = true;
+            return null;
+        });
+
+        loop.Run(fixture.Kernel, fixture.Driver, Width(1), NoStopPath(),
+            maxIterations: 1, onlyGoalId: goal.Id.Value, onTick: current => tick = current);
+
+        Assert.True(refreshed);
+        Assert.NotNull(tick);
+        Assert.Equal(expectLaunch ? 1 : 0, fixture.LaunchCount(goal));
+        if (expectLaunch)
+        {
+            Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.Running,
+                Assert.Single(fixture.Attempts(goal)).Outcome);
+            Assert.Equal(GoalStatus.Verifying, goal.Status);
+        }
+        else
+        {
+            Assert.Empty(fixture.Attempts(goal));
+            Assert.Equal(GoalStatus.Verified, goal.Status);
+            Assert.Contains(tick.ProgressLines!, line =>
+                line.Contains("acceptance_width_1_reached", StringComparison.Ordinal) &&
+                line.Contains("pid:4701", StringComparison.Ordinal));
+        }
+    }
+
     private static string WidthReason(Goal occupant)
         => $"acceptance width 1 reached; live acceptance occupants goal:{occupant.Id.Value[..8]}; retry on next conduct tick";
 

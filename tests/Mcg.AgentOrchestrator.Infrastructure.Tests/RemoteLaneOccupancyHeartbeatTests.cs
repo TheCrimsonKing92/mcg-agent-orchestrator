@@ -47,6 +47,34 @@ public sealed class RemoteLaneOccupancyHeartbeatTests
     }
 
     [Xunit.Fact]
+    public void Beat_PushedOwner_WritesOwnerAndAttemptIdentity()
+    {
+        using var fixture = new RemoteRun();
+        var ownerDirectory = Path.Combine(Path.GetTempPath(), $"mcg-remote-owner-{Guid.NewGuid():N}");
+        using var owner = GateHeartbeatOwner.Push(ownerDirectory);
+        var now = fixture.Clock.GetUtcNow();
+
+        fixture.Coordinator.Occupancy!.Beat("Zulu", now.AddSeconds(-2), now);
+
+        var path = Assert.Single(fixture.Files());
+        Assert.StartsWith("activity-0.heartbeat-", Path.GetFileName(path));
+        Assert.Equal(fixture.HeartbeatPath, path);
+        var snapshot = fixture.Snapshot();
+        Assert.Equal(ownerDirectory, snapshot.OwnerStateDirectory);
+        Assert.Equal("running", snapshot.State);
+        Assert.Equal("remote-lane-wait", snapshot.Phase);
+        Assert.Equal("Zulu", snapshot.CurrentTarget);
+        Assert.Equal(Environment.ProcessId, snapshot.ProcessId);
+        Assert.Equal(Environment.ProcessId, snapshot.ChildPid);
+        Assert.Equal(RemoteRun.Goal, snapshot.GoalId);
+        Assert.Equal(GateHeartbeatRunClass.Acceptance, snapshot.RunClass);
+        Assert.Equal(RemoteRun.RunId, snapshot.RunId);
+        Assert.Equal(now, snapshot.StartedAt);
+        Assert.Equal(now, snapshot.LastObservedAt);
+        Assert.Equal(now.AddSeconds(-2), snapshot.LastProgressAt);
+    }
+
+    [Xunit.Fact]
     public void RepeatedBeats_WriteOnlyAtFifteenSecondIntervals()
     {
         using var fixture = new RemoteRun();
