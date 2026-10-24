@@ -136,7 +136,7 @@ internal static class SourceSizeRatchet
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs", 1713),
             // Goal 0e30d5e9 extracted impact-plan mapping to PreReviewEvidenceContextBuilder.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.PreReviewEvidence.cs", 467),
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.ReviewRecovery.cs", 439),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.ReviewRecovery.cs", 437),
             // Goal 568eb0fe prevents terminal RED replay from preparing another retry and retains
             // exhausted retry outcomes at the existing acceptance completion boundary.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.LandingCompletion.cs", 652),
@@ -515,7 +515,7 @@ internal static class SourceSizeRatchet
             // Measured 14888 lines across the same 70 partial files; no extra headroom.
             // Goal 568eb0fe adds admission guards and idempotent terminal RED routing at their
             // existing conductor boundaries; lifecycle/disposition authority stays in Goal and the store.
-            new SourceClassCeiling("ConductorDriver", 14772, 70), // Provider hold redispatch hook and injected recovery seam.
+            new SourceClassCeiling("ConductorDriver", 14667, 70), // Provider hold redispatch hook and injected recovery seam.
             // Goal b7c2f833: epic-at-creation validation and post-commit inheritance call sites
             // require handler glue; resolution/assignment remain in the separate EpicAtCreation type.
             // Measured 12223 total lines across the existing 30 partial files after integrating main; no extra headroom.

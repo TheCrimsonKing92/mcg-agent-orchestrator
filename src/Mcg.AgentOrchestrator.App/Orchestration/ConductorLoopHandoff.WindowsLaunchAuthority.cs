@@ -45,13 +45,16 @@ internal static partial class ConductorLoopHandoff
 
     private static void TryAppendWindowsLaunchAuthority(
         ConductLoopLaunchRequest request, object authority, int nativeError, int? successorPid,
-        DateTimeOffset? successorStartedAt = null)
+        DateTimeOffset? successorStartedAt = null, string? fallback = null)
     {
         // The caller captures CreateProcessW's error before this best-effort diagnostic I/O.
         try
         {
             TryAppendWindowsSpawnEvent(request,
-                JsonSerializer.Serialize(new { api = "CreateProcessW", nativeError, successorPid, successorStartedAt, authority }),
+                fallback is null
+                    ? JsonSerializer.Serialize(new { api = "CreateProcessW", nativeError, successorPid, successorStartedAt, authority })
+                    : JsonSerializer.Serialize(new { api = "CreateProcessW", nativeError, successorPid, successorStartedAt, authority,
+                        fallback, fallbackDetail = $"fallback={fallback}" }),
                 "loop-handoff-launch-authority");
         }
         catch (Exception ex)

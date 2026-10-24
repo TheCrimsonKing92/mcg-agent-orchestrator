@@ -1,0 +1,8 @@
+package core
+
+import (
+	"os/exec"
+	"testing"
+)
+
+func TestVet(t *testing.T) { _ = exec.Command("go", "vet", ".") }

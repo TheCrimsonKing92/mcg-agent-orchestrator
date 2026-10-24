@@ -15,6 +15,8 @@ public sealed class IntegrationBranchLiteralConventionTests
             "Single definition of the default integration branch.", "public const string Default ="),
         new("Mcg.AgentOrchestrator.App/Console/OwnerActivityNarrator.cs", "main",
             "Classifies user-facing activity text; does not construct git arguments.", "Contains("),
+        new("Mcg.AgentOrchestrator.Infrastructure/Onboarding/GoProjectDiscoveryAdapter.cs", "main",
+            "Go executable package name, not a git branch.", "private const string GoExecutablePackage ="),
     ];
 
     [Fact]

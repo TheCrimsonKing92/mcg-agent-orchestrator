@@ -93,10 +93,12 @@ public static partial class WorkerResultBlockers
                 (value.StartsWith('<') && value.EndsWith('>')))
                 return Malformed($"Missing or unpopulated terminal field: {required}.");
         }
-        if (!TryParseTestsStatus(fields["tests"], out var testsStatus) ||
-            !TryParseBlockersStatus(fields["blockers"], out _) ||
-            TryFindMalformedEvidenceBoundOutcome(output, out _))
-            return Malformed("Terminal tests/blockers status is malformed.");
+        if (TryFindMalformedEvidenceBoundOutcome(output, out var outcomeDiagnostic))
+            return Malformed(outcomeDiagnostic);
+        if (!TryParseTestsStatus(fields["tests"], out var testsStatus))
+            return Malformed($"Terminal field tests must start with pass, fail, deferred, not-run or 'inconclusive - <evidence>'; got {QuoteTerminalFieldValue(fields["tests"])}.");
+        if (!TryParseBlockersStatus(fields["blockers"], out _))
+            return Malformed($"Terminal field blockers must start with none or a blocker description; got {QuoteTerminalFieldValue(fields["blockers"])}.");
 
         // Parse only the captured final block: no mutable artifact re-read or stderr fallback.
         var capturedBlock = string.Join('\n', lines[start..(end + 1)]);
@@ -109,10 +111,12 @@ public static partial class WorkerResultBlockers
         if (role == AgentRole.Reviewer)
         {
             var verdict = fields["verdict"].ToLowerInvariant();
-            if (verdict is not ("pass" or "needs-work" or "fail" or "blocked-at-cap") ||
-                !TryFindReviewFindingRound(terminal, out _, out _) ||
-                !TryFindCriteriaVerdicts(terminal, out _, out _))
-                return Malformed("Reviewer verdict, findings or criteria_verdicts is malformed.");
+            if (verdict is not ("pass" or "needs-work" or "fail" or "blocked-at-cap"))
+                return Malformed($"Reviewer field verdict must be pass, needs-work, fail or blocked-at-cap; got {QuoteTerminalFieldValue(fields["verdict"])}.");
+            if (!TryFindReviewFindingRound(terminal, out _, out var findingsDiagnostic))
+                return Malformed("Reviewer field findings is malformed: " + findingsDiagnostic);
+            if (!TryFindCriteriaVerdicts(terminal, out _, out var criteriaDiagnostic))
+                return Malformed("Reviewer field criteria_verdicts is malformed: " + criteriaDiagnostic);
             // Parsed findings and criterion verdicts are reports, not completion authority.
             // The kernel applies convergence, operator waivers and authoritative ownership
             // before deciding whether a complete report can pass its semantic gates.
@@ -128,6 +132,12 @@ public static partial class WorkerResultBlockers
         }
 
         return new(VerificationTerminalContractStatus.Valid, string.Empty);
+    }
+
+    private static string QuoteTerminalFieldValue(string value)
+    {
+        var trimmed = value.Trim();
+        return "'" + (trimmed.Length > 160 ? trimmed[..160] + "..." : trimmed) + "'";
     }
 
     private static VerificationTerminalContractAssessment Malformed(string diagnostic) =>

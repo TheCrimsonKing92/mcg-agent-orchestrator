@@ -122,7 +122,7 @@ internal sealed partial class ConductorDriver
         return true;
     }
 
-    private static bool HasUnconsumedRetry(TaskSpec task) =>
+    internal static bool HasUnconsumedRetry(TaskSpec task) =>
         task.LatestRetryAt is not null &&
         task.Status is WorkTaskStatus.Pending or WorkTaskStatus.Assigned &&
         task.LastDispatch is null &&
@@ -340,7 +340,7 @@ internal sealed partial class ConductorDriver
                     FindingEvidenceArmDisposition.ApparatusFailure or FindingEvidenceArmDisposition.Inconclusive) ||
                 !TryGetFindingEvidenceCoverage(FindingEvidenceExecutedCoverage.ExecutedRequest(candidateReceipt, FormatFindingEvidenceSelection), out var executedCoverage) ||
                 !requestedCoverage.SetEquals(executedCoverage) ||
-                !HasContentBoundRedTrxCoverage(
+                !FindingEvidenceTrxCoverage.HasContentBoundRedTrxCoverage(
                     candidateArm,
                     ResolveFindingEvidenceRequiredTestClasses(candidateReceipt.Request)))
             {
@@ -352,109 +352,6 @@ internal sealed partial class ConductorDriver
         }
 
         return false;
-    }
-
-    private static bool HasContentBoundRedTrxCoverage(
-        FindingEvidenceArmReceipt candidateArm,
-        IReadOnlyCollection<string> requiredTestClasses)
-    {
-        if (candidateArm is not { ExecutedTestCount: > 0 } ||
-            candidateArm.TestResultPaths is not { Count: > 0 } testResultPaths ||
-            candidateArm.ReceiptArtifacts is not { Count: > 0 } receiptArtifacts ||
-            requiredTestClasses.Count == 0 ||
-            !AcceptanceCohortGateEvidence.HasCoherentTrxEvidence(testResultPaths))
-        {
-            return false;
-        }
-
-        try
-        {
-            var normalizedPaths = testResultPaths
-                .Select(Path.GetFullPath)
-                .Order(StringComparer.OrdinalIgnoreCase)
-                .ToArray();
-            var trxArtifacts = receiptArtifacts
-                .Where(artifact => artifact.Kind.Equals("trx", StringComparison.Ordinal))
-                .OrderBy(artifact => artifact.Path, StringComparer.OrdinalIgnoreCase)
-                .ToArray();
-            if (trxArtifacts.Length != normalizedPaths.Length ||
-                !trxArtifacts.Select(artifact => artifact.Path)
-                    .SequenceEqual(normalizedPaths, StringComparer.OrdinalIgnoreCase))
-            {
-                return false;
-            }
-
-            var executedCount = 0;
-            var failedCount = 0;
-            var executedClasses = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            XNamespace trx = "http://microsoft.com/schemas/VisualStudio/TeamTest/2010";
-            foreach (var artifact in trxArtifacts)
-            {
-                using var stream = File.Open(artifact.Path, FileMode.Open, FileAccess.Read, FileShare.Read);
-                if (stream.Length != artifact.Length || artifact.Length <= 0)
-                {
-                    return false;
-                }
-
-                var hash = Convert.ToHexStringLower(SHA256.HashData(stream));
-                if (!hash.Equals(artifact.Sha256, StringComparison.Ordinal))
-                {
-                    return false;
-                }
-
-                stream.Position = 0;
-                var document = XDocument.Load(stream, LoadOptions.None);
-                var definitions = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-                foreach (var test in document.Root?
-                             .Element(trx + "TestDefinitions")?
-                             .Elements(trx + "UnitTest") ?? [])
-                {
-                    var id = (string?)test.Attribute("id");
-                    var className = (string?)test.Element(trx + "TestMethod")?.Attribute("className");
-                    if (string.IsNullOrWhiteSpace(id) || string.IsNullOrWhiteSpace(className) ||
-                        !definitions.TryAdd(id, className))
-                    {
-                        return false;
-                    }
-                }
-
-                foreach (var result in document.Root?
-                             .Element(trx + "Results")?
-                             .Elements(trx + "UnitTestResult") ?? [])
-                {
-                    var outcome = (string?)result.Attribute("outcome");
-                    if (!string.Equals(outcome, "Passed", StringComparison.OrdinalIgnoreCase) &&
-                        !string.Equals(outcome, "Failed", StringComparison.OrdinalIgnoreCase))
-                    {
-                        continue;
-                    }
-
-                    var id = (string?)result.Attribute("testId");
-                    if (string.IsNullOrWhiteSpace(id) || !definitions.TryGetValue(id, out var className))
-                    {
-                        return false;
-                    }
-
-                    executedCount++;
-                    if (string.Equals(outcome, "Failed", StringComparison.OrdinalIgnoreCase))
-                    {
-                        failedCount++;
-                    }
-                    executedClasses.Add(className);
-                    executedClasses.Add(className.Split('.').Last());
-                }
-            }
-
-            return failedCount > 0 &&
-                executedCount == candidateArm.ExecutedTestCount &&
-                requiredTestClasses.All(required => executedClasses.Contains(required));
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or
-                                   System.Xml.XmlException or ArgumentException or NotSupportedException or
-                                   PathTooLongException or OverflowException)
-        {
-            return false;
-        }
     }
 
     private void ReattachReusableRedFindingEvidence(

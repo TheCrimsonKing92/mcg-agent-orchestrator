@@ -3,7 +3,7 @@ using System.Text;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
-/// <summary>Executes dotnet directly, with bounded lifetime and no shell interpretation.</summary>
+/// <summary>Executes learned dotnet or go commands directly, with bounded lifetime and no shell interpretation.</summary>
 public sealed class ProcessUnitCommandMeasurer : IUnitCommandMeasurer
 {
     private readonly TimeSpan _timeout;
@@ -15,12 +15,19 @@ public sealed class ProcessUnitCommandMeasurer : IUnitCommandMeasurer
             throw new ArgumentOutOfRangeException(nameof(timeout));
     }
 
+    public static string? MeasurableTool(string command)
+    {
+        var tool = Tokenize(command).FirstOrDefault();
+        return tool is "dotnet" or "go" ? tool : null;
+    }
+
     public UnitCommandMeasurementResult Measure(string repositoryRoot, string unitId, UnitCommandKinds kind, string command)
     {
+        var tool = MeasurableTool(command);
+        if (tool is null)
+            return UnitCommandMeasurementResult.Failed("Only learned dotnet or go commands can be measured.");
         var tokens = Tokenize(command);
-        if (tokens.Count == 0 || tokens[0] != "dotnet")
-            return UnitCommandMeasurementResult.Failed("Only learned dotnet commands can be measured.");
-        var start = new ProcessStartInfo("dotnet")
+        var start = new ProcessStartInfo(tool)
         {
             WorkingDirectory = repositoryRoot,
             UseShellExecute = false,
@@ -35,11 +42,11 @@ public sealed class ProcessUnitCommandMeasurer : IUnitCommandMeasurer
         try
         {
             if (!process.Start())
-                return UnitCommandMeasurementResult.Failed("The dotnet process did not start.");
+                return UnitCommandMeasurementResult.Failed($"The {tool} process did not start.");
         }
         catch (Exception exception) when (exception is System.ComponentModel.Win32Exception or IOException)
         {
-            return UnitCommandMeasurementResult.Failed($"Could not start dotnet: {exception.Message}");
+            return UnitCommandMeasurementResult.Failed($"Could not start {tool}: {exception.Message}");
         }
         process.StandardInput.Close();
         var stdout = process.StandardOutput.BaseStream.CopyToAsync(Stream.Null);
@@ -53,8 +60,8 @@ public sealed class ProcessUnitCommandMeasurer : IUnitCommandMeasurer
         }
         Task.WhenAll(stdout, stderr).GetAwaiter().GetResult();
         clock.Stop();
-        return !exited ? UnitCommandMeasurementResult.Failed("The dotnet command timed out.")
-            : process.ExitCode != 0 ? UnitCommandMeasurementResult.Failed($"The dotnet command exited with code {process.ExitCode}.")
+        return !exited ? UnitCommandMeasurementResult.Failed($"The {tool} command timed out.")
+            : process.ExitCode != 0 ? UnitCommandMeasurementResult.Failed($"The {tool} command exited with code {process.ExitCode}.")
             : UnitCommandMeasurementResult.Succeeded(clock.Elapsed.TotalSeconds);
     }
 

@@ -16,5 +16,5 @@ internal sealed partial class ConductorDriver
                 new AcceptanceOwnerProtectedCohortMember(binding.GoalId, binding.CandidateRevision)).ToArray(),
             GateRunIdentity: CohortGateRunIdentity(bindings.Select(binding => binding.GoalId.Value)),
             CohortRemoteLanes: true,
-            ProjectHomeDirectory: projectHomeDirectory, MemberTestRemovals: memberTestRemovals);
+            ProjectHomeDirectory: projectHomeDirectory, MemberTestRemovals: memberTestRemovals, AttemptMemberGoalIds: bindings.Select(binding => binding.GoalId).ToArray());
 }
