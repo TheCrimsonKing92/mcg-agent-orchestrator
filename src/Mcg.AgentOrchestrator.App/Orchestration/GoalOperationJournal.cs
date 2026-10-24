@@ -110,7 +110,8 @@ internal sealed record GoalTerminalDisposition(
     string Detail,
     GoalTerminalDispositionSource Source = GoalTerminalDispositionSource.General,
     string? IntegrateSha = null,
-    TerminalGoalSweepReconciliationReceipt? Reconciliation = null);
+    TerminalGoalSweepReconciliationReceipt? Reconciliation = null,
+    string? TaskGraphIdentity = null);
 
 internal sealed record GoalLandingIntent(
     string GoalId,
@@ -120,7 +121,8 @@ internal sealed record GoalLandingIntent(
     DateTimeOffset RecordedAt,
     string Source,
     string? BoundMainRevision = null,
-    string? PreviousIntegrationRevision = null);
+    string? PreviousIntegrationRevision = null,
+    string? TaskGraphIdentity = null);
 
 internal sealed record GoalLifecycleJournalEntry(
     string IdempotencyKey,
@@ -330,7 +332,8 @@ internal static partial class GoalOperationJournal
             recordedAt ?? DateTimeOffset.UtcNow,
             source,
             NormalizeSha(boundMainRevision),
-            NormalizeSha(previousIntegrationRevision));
+            NormalizeSha(previousIntegrationRevision),
+            TaskGraphIdentity.Compute(goal));
         BeforeLandingIntentAppend?.Invoke(intent);
         Append(
             executionDirectory,
@@ -677,6 +680,7 @@ internal static partial class GoalOperationJournal
         Goal goal,
         GoalTerminalDisposition disposition)
     {
+        disposition = disposition with { TaskGraphIdentity = TaskGraphIdentity.Compute(goal) };
         Completed(executionDirectory, goal, TerminalDispositionOperation, JsonSerializer.Serialize(disposition, JsonOptions));
         Completed(executionDirectory, goal, "conductor:land", disposition.Detail);
         Completed(executionDirectory, goal, "conductor:record", disposition.Detail);
@@ -1060,7 +1064,7 @@ internal static partial class GoalOperationJournal
         }
     }
 
-    private static GoalTerminalDisposition? TryGetLatestTerminalDisposition(GoalOperationJournalSummary journal)
+    internal static GoalTerminalDisposition? TryGetLatestTerminalDisposition(GoalOperationJournalSummary journal)
     {
         var latestTerminalDisposition = journal.LatestByOperation
             .LastOrDefault(entry => entry.Operation.Equals(TerminalDispositionOperation, StringComparison.OrdinalIgnoreCase));

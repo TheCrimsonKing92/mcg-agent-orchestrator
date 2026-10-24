@@ -12,6 +12,7 @@ internal static class CliHandledVerbRegistry
         "abandon",
         "add",
         "add-task",
+        "repair-task-graph",
         "agent",
         "answer",
         "architecture",

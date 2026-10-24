@@ -186,6 +186,53 @@ public sealed class RemoteLaneRedEvidenceTests : IDisposable
         Assert.Equal("exit=1 failed=1 first=unknown: ", Retain([source], 1));
     }
 
+    [Fact]
+    public void LongLaneName_RetainsBoundedReceiptAndReportsFirstFailure()
+    {
+        var lane = "reviewer focused evidence: infrastructure tests " + string.Join("|",
+            Enumerable.Range(1, 40).Select(n => $"FullyQualifiedName~Class{n}Fixture"));
+        Assert.True(lane.Length >= 1000);
+        var source = WriteTrx("long-lane.trx", (FirstTest, "long lane failure"));
+
+        var reason = RemoteLaneRedEvidence.Retain([source], AttemptPrefix, ExecutorId, lane, 2);
+
+        Assert.Equal($"exit=2 failed=1 first={FirstTest}: long lane failure", reason);
+        var retained = Assert.Single(Directory.GetFiles(AttemptFolder));
+        var name = Path.GetFileName(retained);
+        Assert.True(name.Length <= 200);
+        Assert.StartsWith("remote-red-mcg-exec-1-", name);
+        Assert.EndsWith("-1.trx", name);
+        Assert.Equal(File.ReadAllBytes(source), File.ReadAllBytes(retained));
+    }
+
+    [Fact]
+    public void LongLaneNamesSharingAPrefixRetainDistinctReceipts()
+    {
+        var shared = "reviewer focused evidence: infrastructure tests " + new string('x', 400);
+        var firstLane = shared + string.Join("|",
+            Enumerable.Range(1, 40).Select(n => $"FullyQualifiedName~AlphaClass{n}Fixture"));
+        var secondLane = shared + string.Join("|",
+            Enumerable.Range(1, 40).Select(n => $"FullyQualifiedName~BetaClass{n}Fixture"));
+        Assert.True(firstLane.Length >= 1000);
+        Assert.True(secondLane.Length >= 1000);
+        Assert.Equal(firstLane[..400], secondLane[..400]);
+        Assert.NotEqual(firstLane, secondLane);
+        var firstSource = WriteTrx("first-long-lane.trx", (FirstTest, "first lane failure"));
+        var secondSource = WriteTrx("second-long-lane.trx", ("RemoteTests.SecondFailure", "second lane failure"));
+
+        var firstReason = RemoteLaneRedEvidence.Retain([firstSource], AttemptPrefix, ExecutorId, firstLane, 2);
+        var secondReason = RemoteLaneRedEvidence.Retain([secondSource], AttemptPrefix, ExecutorId, secondLane, 2);
+
+        Assert.Equal($"exit=2 failed=1 first={FirstTest}: first lane failure", firstReason);
+        Assert.Equal("exit=2 failed=1 first=RemoteTests.SecondFailure: second lane failure", secondReason);
+        var retained = Directory.GetFiles(AttemptFolder);
+        Assert.Equal(2, retained.Length);
+        Assert.Equal(2, retained.Select(Path.GetFileName).Distinct().Count());
+        Assert.All(retained, path => Assert.True(Path.GetFileName(path).Length <= 200));
+        Assert.Single(retained, path => File.ReadAllBytes(firstSource).SequenceEqual(File.ReadAllBytes(path)));
+        Assert.Single(retained, path => File.ReadAllBytes(secondSource).SequenceEqual(File.ReadAllBytes(path)));
+    }
+
     private string Retain(IReadOnlyList<string> sources, int exitCode) =>
         RemoteLaneRedEvidence.Retain(sources, AttemptPrefix, ExecutorId, Lane, exitCode);
 

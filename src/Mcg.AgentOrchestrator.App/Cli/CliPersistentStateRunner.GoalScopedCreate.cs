@@ -5,7 +5,7 @@ namespace Mcg.AgentOrchestrator.App.Cli;
 
 internal static partial class CliPersistentStateRunner
 {
-    private static async Task<T> CommitGoalCreationAsync<T>(
+    internal static async Task<T> CommitGoalCreationAsync<T>(
         IOrchestratorStateOutboxRepository repository,
         OrchestratorWorkspace workspace,
         GoalSnapshot preparedSnapshot,

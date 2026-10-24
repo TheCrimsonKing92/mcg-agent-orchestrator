@@ -22,7 +22,7 @@ internal static class RemoteLaneRedEvidence
                 {
                     if (!File.Exists(source)) continue;
                     var destination = Path.Combine(folder,
-                        $"remote-red-{executorId}-{laneKey}-{copied.Count + 1}.trx");
+                        AcceptanceArtifactFileNames.BoundFileName($"remote-red-{executorId}-{laneKey}", $"-{copied.Count + 1}.trx"));
                     temporary = destination + $".tmp-{Guid.NewGuid():N}";
                     File.Copy(source, temporary);
                     File.Move(temporary, destination, overwrite: true);

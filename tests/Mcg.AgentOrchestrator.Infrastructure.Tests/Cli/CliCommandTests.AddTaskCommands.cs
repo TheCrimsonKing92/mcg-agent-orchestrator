@@ -3,6 +3,16 @@ using Mcg.AgentOrchestrator.App.Cli;
 public sealed class CliCommandTestsAddTaskCommands
 {
     [Xunit.Fact]
+    public void NormalizeArgs_ReplayMetadata_DoesNotBecomeDescription()
+    {
+        var normalized = CliArgumentParser.NormalizeArgs([
+            "add-task", "--goal", "abcdef12", "Tester", "Verify", "the", "repair",
+            "--idempotency-key", "operation-2", "--json", "--before-role", "Reviewer"]);
+        Xunit.Assert.Equal(new[] { "add-task", "--goal", "abcdef12", "Tester", "Verify the repair",
+            "--idempotency-key", "operation-2", "--json", "--before-role", "Reviewer" }, normalized);
+    }
+
+    [Xunit.Fact]
     public void NormalizeArgs_TextFileBeforeRole_PreservesExactArgv()
     {
         var args = new[]

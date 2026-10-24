@@ -78,7 +78,8 @@ internal static class ConductorStatusSnapshotReader
         var landing = ReadLatestLanding(workspace.GoalLifecycleEventsDirectory);
         return new(owner, since, buildCommit, generation, tick, goalSnapshot,
             landing is null ? null : new(landing.Value.Goal, landing.Value.At),
-            ReadAdoption(workspace.RunEventStorePath), ReadIntents(workspace), providerHolds);
+            ReadAdoption(workspace.RunEventStorePath), ReadIntents(workspace), providerHolds,
+            ReadSupervisorJob(build?.Detail));
     }
 
     private static ConductorStatusSnapshot.AdoptionObservation? ReadAdoption(string path)
@@ -253,6 +254,34 @@ internal static class ConductorStatusSnapshotReader
             return document.RootElement.TryGetProperty("commitSha", out var commit) ? commit.GetString() : null;
         }
         catch (JsonException) { return null; }
+    }
+
+    private static ProcessJobReading ReadSupervisorJob(string? detail)
+    {
+        if (detail is null) return ProcessJobReading.Unknown;
+        var start = detail.IndexOf('{');
+        if (start < 0) return ProcessJobReading.Unknown;
+        try
+        {
+            using var document = JsonDocument.Parse(detail[start..]);
+            var root = document.RootElement;
+            if (!root.TryGetProperty("jobMembership", out var membership)) return ProcessJobReading.Unknown;
+            bool? inJob = membership.ValueKind switch
+            {
+                JsonValueKind.True => true,
+                JsonValueKind.False => false,
+                JsonValueKind.String when bool.TryParse(membership.GetString(), out var value) => value,
+                _ => null
+            };
+            uint? flags = null;
+            if (root.TryGetProperty("innermostJobLimitFlags", out var limitFlags) &&
+                limitFlags.ValueKind == JsonValueKind.String && limitFlags.GetString() is { Length: 10 } text &&
+                text.StartsWith("0x", StringComparison.Ordinal) &&
+                uint.TryParse(text.AsSpan(2), NumberStyles.AllowHexSpecifier, CultureInfo.InvariantCulture, out var parsed))
+                flags = parsed;
+            return new(inJob, flags);
+        }
+        catch (JsonException) { return ProcessJobReading.Unknown; }
     }
 
     private static DateTimeOffset? ReadLatestTick(string path)

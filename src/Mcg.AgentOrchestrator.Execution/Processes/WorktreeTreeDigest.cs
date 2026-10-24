@@ -91,18 +91,28 @@ internal static class WorktreeTreeDigest
             start.ArgumentList.Add(arg);
         if (environment is not null)
             foreach (var (key, value) in environment) start.Environment[key] = value;
+        return RunProcess(start, 60_000, PipeDrain.DefaultTimeoutMilliseconds);
+    }
+
+    internal static WorktreeTreeDigestGitStep RunProcess(
+        ProcessStartInfo start, int processTimeoutMilliseconds, int drainTimeoutMilliseconds)
+    {
         using var process = Process.Start(start) ?? throw new IOException("Could not start git.");
-        var output = process.StandardOutput.ReadToEndAsync();
-        var error = process.StandardError.ReadToEndAsync();
-        if (!process.WaitForExit(60_000))
+        // Dedicated drains keep output independent of thread-pool availability without blocking the exit wait.
+        var outputDrain = PipeDrain.Start(process.StandardOutput, "digest-stdout-drain");
+        var errorDrain = PipeDrain.Start(process.StandardError, "digest-stderr-drain");
+        if (!process.WaitForExit(processTimeoutMilliseconds))
         {
             if (!process.HasExited) process.Kill(entireProcessTree: true);
             return new(-1, string.Empty,
-                WorktreeTreeDigestFailure.FirstLine(error.IsCompletedSuccessfully ? error.Result : null), true, TimeoutKind: "wait");
+                WorktreeTreeDigestFailure.FirstLine(errorDrain.Text), true, TimeoutKind: "wait");
         }
-        if (!Task.WaitAll([output, error], 5_000))
+        var drainDeadline = Environment.TickCount64 + drainTimeoutMilliseconds;
+        var outputDrained = outputDrain.Join(drainDeadline);
+        var errorDrained = errorDrain.Join(drainDeadline);
+        if (!outputDrained || !errorDrained)
             return new(-1, string.Empty,
-                WorktreeTreeDigestFailure.FirstLine(error.IsCompletedSuccessfully ? error.Result : null), true, TimeoutKind: "drain");
-        return new(process.ExitCode, output.Result, WorktreeTreeDigestFailure.FirstLine(error.Result), false);
+                WorktreeTreeDigestFailure.FirstLine(errorDrain.Text), true, TimeoutKind: "drain");
+        return new(process.ExitCode, outputDrain.Text, WorktreeTreeDigestFailure.FirstLine(errorDrain.Text), false);
     }
 }

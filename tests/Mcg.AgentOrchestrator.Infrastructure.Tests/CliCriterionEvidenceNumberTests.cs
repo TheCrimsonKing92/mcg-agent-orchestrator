@@ -209,6 +209,27 @@ public sealed class CliCriterionEvidenceNumberTests
     }
 
     [Fact]
+    public void RefusedCarryHoldNamesEveryStaleObligation()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Rebind all stale gate evidence");
+        kernel.RecordGoalRefinement(goal.Id, new RefinedSpec("Gate evidence", ["First gate passes", "Second gate passes"],
+            VerificationClass.TestVerifiable, [], []));
+        kernel.MapCriterionEvidenceOwner(goal.Id, 0, 1, CriterionEvidenceOwner.Acceptance,
+            "operator", expectedCandidateSha: "old-candidate");
+        kernel.MapCriterionEvidenceOwner(goal.Id, 1, 1, CriterionEvidenceOwner.Acceptance,
+            "operator", expectedCandidateSha: "old-candidate");
+
+        var hold = AcceptanceCriterionEvidence.DescribeRefusedCarryHold(
+            goal, Candidate, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, null);
+
+        Assert.NotNull(hold);
+        Assert.Contains(" Also bound to other candidates: 'criterion-v1-1' to old-candidate.", hold.Reason, StringComparison.Ordinal);
+        Assert.Contains($"criterion-evidence-map --goal {goal.Id.Value} --criterion 1 --version 1 acceptance acceptance:full-gate criterion-v1-0 {Candidate}", hold.Reason, StringComparison.Ordinal);
+        Assert.Contains($"criterion-evidence-map --goal {goal.Id.Value} --criterion 2 --version 1 acceptance acceptance:full-gate criterion-v1-1 {Candidate}", hold.Reason, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void RejectedReviewerAttestationPrintsNumberedRepairCommand()
     {
         var kernel = new AgentOrchestratorKernel();

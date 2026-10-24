@@ -180,7 +180,10 @@ public sealed class CliCommandTestsPersistentRunnerCommandsAcceptance : CliComma
         Xunit.Assert.Equal(1, AcceptanceStableSlotTestSupport.LastSelectionCount);
         Xunit.Assert.True(verifierObservedUnlockedState);
         Xunit.Assert.Equal(1, verifier.RunCount);
-        Xunit.Assert.Equal(2, repository.TransactionCount);
+        var checkpoint = Xunit.Assert.Single(repository.LastGoalSnapshotSaveRequests!);
+        Xunit.Assert.Equal(goal.Id.Value, checkpoint.Current.Id);
+        Xunit.Assert.False(checkpoint.RejectConflict);
+        Xunit.Assert.Equal(GoalStatus.Completed, checkpoint.Current.Status);
         Xunit.Assert.Equal(0, repository.LoadCount);
         Xunit.Assert.Equal(1, repository.LoadGoalsCount);
         Xunit.Assert.Equal(1, repository.LoadGoalCount);
@@ -287,8 +290,11 @@ public sealed class CliCommandTestsPersistentRunnerCommandsAcceptance : CliComma
                 ref profiles,
                 ref currentGoal));
 
-            Xunit.Assert.Equal(2, repository.TransactionCount);
-            Xunit.Assert.Equal(2, repository.SaveGoalSnapshotsCount);
+            var checkpoint = Xunit.Assert.Single(repository.LastGoalSnapshotSaveRequests!);
+            Xunit.Assert.Equal(goal.Id.Value, checkpoint.Current.Id);
+            Xunit.Assert.False(checkpoint.RejectConflict);
+            Xunit.Assert.Equal(GoalStatus.Completed, checkpoint.Current.Status);
+            Xunit.Assert.NotNull(checkpoint.Baseline.LatestAcceptanceFailure);
             Xunit.Assert.False(changed);
             Xunit.Assert.Contains("Acceptance evidence bundle: passed", output);
             Xunit.Assert.Contains($"Goal {goal.Id.Value[..8]} acceptance: accepted", output);
@@ -666,30 +672,5 @@ public sealed class CliCommandTestsPersistentRunnerCommandsAcceptance : CliComma
         Xunit.Assert.Equal("main", RunGitOutput(root, "branch", "--show-current").Trim());
         Xunit.Assert.False(File.Exists(Path.Combine(root, "feature.txt")));
     }
-
-    [Xunit.Fact(DisplayName = "Acceptance_merge_guard_names_every_invalidating_task_projection_field")]
-    public void AcceptanceMergeGuardNamesEveryInvalidatingTaskProjectionField()
-    {
-        var baseline = new AcceptanceMergeGuardSnapshot(
-            GoalStatus.Verified,
-            [new AcceptanceMergeGuardTask("task-one", AgentRole.Developer, WorkTaskStatus.Completed)]);
-
-        Xunit.Assert.Equal("Goal.Status", AcceptanceMergeGuard.Compare(
-            baseline,
-            baseline with { GoalStatus = GoalStatus.Active })!.Field);
-        Xunit.Assert.Equal("Tasks added/removed", AcceptanceMergeGuard.Compare(
-            baseline,
-            baseline with { Tasks = [] })!.Field);
-        Xunit.Assert.Equal("Tasks added/removed", AcceptanceMergeGuard.Compare(
-            baseline,
-            baseline with { Tasks = [.. baseline.Tasks, new("task-two", AgentRole.Tester, WorkTaskStatus.Pending)] })!.Field);
-        Xunit.Assert.Equal("Task task-one.RequiredRole", AcceptanceMergeGuard.Compare(
-            baseline,
-            baseline with { Tasks = [new("task-one", AgentRole.Tester, WorkTaskStatus.Completed)] })!.Field);
-        Xunit.Assert.Equal("Task task-one.Status", AcceptanceMergeGuard.Compare(
-            baseline,
-            baseline with { Tasks = [new("task-one", AgentRole.Developer, WorkTaskStatus.Running)] })!.Field);
-    }
-
 
 }

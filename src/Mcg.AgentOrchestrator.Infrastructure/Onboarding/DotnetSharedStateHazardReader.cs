@@ -79,7 +79,7 @@ internal static class DotnetSharedStateHazardReader
                     var source = new FactSource(path, attribute.GetLocation().GetLineSpan().StartLinePosition.Line + 1);
                     if (!seen.Add(key.Length == 0 ? $"unknown:{path}#{source.Line}" : $"key:{key}"))
                         continue;
-                    var fact = DotnetProjectDiscoveryAdapter.Fact(key, confidence, source,
+                    var fact = ProjectFactHelpers.Fact(key, confidence, source,
                         $"hazards/{unit.Id}/{path}#{source.Line}",
                         $"Confirm the isolation key for collection name '{name}'; no literal value could be resolved in this unit.", questions);
                     hazards.Add(new SharedStateHazard(unit.Id, name, fact));
@@ -107,7 +107,7 @@ internal static class DotnetSharedStateHazardReader
         List<ProjectOwnerQuestion> questions)
     {
         var sources = new SortedDictionary<string, string>(StringComparer.Ordinal);
-        if (!Directory.Exists(directory) || !DotnetProjectDiscoveryAdapter.IsSafePath(root, directory))
+        if (!Directory.Exists(directory) || !ProjectFactHelpers.IsSafePath(root, directory))
             return sources;
         foreach (var path in SourcePaths(root, directory).Order(StringComparer.Ordinal))
         {
@@ -118,7 +118,7 @@ internal static class DotnetSharedStateHazardReader
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
             {
-                DotnetProjectDiscoveryAdapter.Ask($"hazards/{unitId}/{relative}",
+                ProjectFactHelpers.Ask($"hazards/{unitId}/{relative}",
                     $"Confirm shared-state declarations; source could not be read: {exception.Message}",
                     new FactSource(relative, 1), questions);
             }
@@ -129,7 +129,7 @@ internal static class DotnetSharedStateHazardReader
     private static IEnumerable<string> SourcePaths(string root, string directory)
     {
         foreach (var file in Directory.EnumerateFiles(directory, "*.cs"))
-            if (DotnetProjectDiscoveryAdapter.IsSafePath(root, file))
+            if (ProjectFactHelpers.IsSafePath(root, file))
                 yield return file;
         foreach (var child in Directory.EnumerateDirectories(directory))
         {
@@ -137,7 +137,7 @@ internal static class DotnetSharedStateHazardReader
             if (name.Equals("bin", StringComparison.OrdinalIgnoreCase) ||
                 name.Equals("obj", StringComparison.OrdinalIgnoreCase) ||
                 name is ".git" or ".scratch" or ".orchestrator-prototype" or ".orchestrator-worktrees" or "TestResults" or "playwright-report" ||
-                !DotnetProjectDiscoveryAdapter.IsSafePath(root, child) ||
+                !ProjectFactHelpers.IsSafePath(root, child) ||
                 Directory.EnumerateFiles(child).Any(file => Path.GetExtension(file).ToLowerInvariant() is ".csproj" or ".fsproj" or ".vbproj"))
                 continue;
             foreach (var file in SourcePaths(root, child))

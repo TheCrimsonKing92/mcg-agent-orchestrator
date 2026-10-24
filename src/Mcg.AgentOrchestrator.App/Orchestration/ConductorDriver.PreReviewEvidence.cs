@@ -346,7 +346,7 @@ internal sealed partial class ConductorDriver
                     policy,
                     fromState,
                     $"PRE_REVIEW_MAPPING_NEEDS_INPUT: {mismatch}; no Tester task is available. " +
-                    $"Add one with: {BuildAddTesterCommand(goalPrefix, context.CandidateSha)}");
+                    $"Enqueue the insertion and poll operator-intent-status <returned-id> until Applied before re-evaluating. Add one with: {BuildAddTesterCommand(goalPrefix, context.CandidateSha)}");
                 return true;
             }
 
