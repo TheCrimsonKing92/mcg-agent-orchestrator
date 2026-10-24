@@ -29,9 +29,11 @@ public sealed class DotnetProjectDiscoveryAdapter : IProjectDiscoveryAdapter
             throw new DirectoryNotFoundException($"Repository root does not exist: {root}");
 
         var questions = new List<ProjectOwnerQuestion>();
+        var tracked = DiscoveryTrackedPaths.Read(root);
+        tracked.AskIfDegraded(questions);
         var exclusions = new HashSet<string>(excludedDirectoryNames ?? [], StringComparer.OrdinalIgnoreCase);
         exclusions.UnionWith(["bin", "obj", ".git"]);
-        var discovery = EnumerateFiles(root, exclusions);
+        var discovery = EnumerateFiles(root, exclusions, tracked);
         var files = discovery.Files.Order(StringComparer.Ordinal).ToArray();
         foreach (var path in discovery.MissingDirectories.Select(path => Relative(root, path))
                      .Order(StringComparer.Ordinal).Distinct(PathComparer))
@@ -124,7 +126,7 @@ public sealed class DotnetProjectDiscoveryAdapter : IProjectDiscoveryAdapter
 
         var environment = DotnetEnvironmentNeedReader.Read(root, commands, questions);
         var measurements = UnitMeasurementCollector.Collect(root, commands, measurer, measuredKinds, questions);
-        var hazards = DotnetSharedStateHazardReader.Read(root, units, dependencies, questions);
+        var hazards = DotnetSharedStateHazardReader.Read(root, units, dependencies, questions, tracked);
         var learned = IntegrationBranchReader.Read(root);
         if (learned.Branch is null)
             Ask(LearnedIntegrationBranch.OwnerQuestionKey, $"What is the integration branch? {learned.Reason}",
@@ -312,7 +314,7 @@ public sealed class DotnetProjectDiscoveryAdapter : IProjectDiscoveryAdapter
         }
     }
 
-    private TraversalResult EnumerateFiles(string root, HashSet<string> exclusions)
+    private TraversalResult EnumerateFiles(string root, HashSet<string> exclusions, DiscoveryTrackedPaths tracked)
     {
         var files = new List<string>();
         var missingDirectories = new List<string>();
@@ -335,13 +337,16 @@ public sealed class DotnetProjectDiscoveryAdapter : IProjectDiscoveryAdapter
         {
             // File attributes and all project reads remain outside the directory handlers.
             foreach (var file in entries.Files)
-                if ((IsProjectFile(file) || Path.GetExtension(file).ToLowerInvariant() is ".sln" or ".slnx") &&
+                if (tracked.IncludesFile(file) &&
+                    (IsProjectFile(file) || Path.GetExtension(file).ToLowerInvariant() is ".sln" or ".slnx") &&
                     (traversal.GetAttributes(file) & FileAttributes.ReparsePoint) == 0)
                     files.Add(file);
 
             foreach (var directory in entries.Directories)
             {
                 if (exclusions.Contains(Path.GetFileName(directory)))
+                    continue;
+                if (!tracked.IncludesDirectory(directory))
                     continue;
                 FileAttributes attributes;
                 try
