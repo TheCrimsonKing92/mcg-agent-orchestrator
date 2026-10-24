@@ -6,6 +6,10 @@ namespace Mcg.AgentOrchestrator.App.Cli;
 
 internal static class OperatorIntentSubmissionOutput
 {
+    internal static void PrintGraphRepair(OperatorIntentRecord persisted, string directory, bool json) =>
+        Print(persisted, directory, json,
+            $"Operator intent queued: id={persisted.Id} verb={persisted.Verb} goal={persisted.GoalId} status={persisted.Status} replay_key={persisted.IdempotencyKey}; poll with operator-intent-status {persisted.Id} (or add --wait).",
+            $"Outcome: {persisted.Outcome ?? "pending"}. Bare replay returns this operation across apply/restart. Use --idempotency-key <fresh-key> for a distinct later identical insertion.");
     internal static IReadOnlyList<string> PrepareOperatorIntentArguments(
         IReadOnlyList<string> args, out bool emitAgentReadEnvelope)
     {

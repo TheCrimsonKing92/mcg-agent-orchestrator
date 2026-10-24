@@ -95,7 +95,8 @@ internal static class ProjectCliCommand
                 : registry.GetRequiredProject(name);
         var workspaceDirectory = ProjectDiscoveryModelLocation.ResolveDirectory(project, rootOverride, defaultRootDirectory,
             registry.DataRootDirectory);
-        IProjectDiscoveryAdapter adapter = new DotnetProjectDiscoveryAdapter();
+        IProjectDiscoveryAdapter adapter = ProjectDiscoveryAdapterSelector.Select(rootOverride ?? project.RootDirectory,
+            RepositorySourceInventory.ExcludedDirectoryNames);
         var measurer = measuredKinds is null ? null : measurerFactory is null ? new ProcessUnitCommandMeasurer()
             : measurerFactory() ?? throw new InvalidOperationException("The measurement factory returned no measurer.");
         var model = adapter.Discover(rootOverride ?? project.RootDirectory, RepositorySourceInventory.ExcludedDirectoryNames,

@@ -177,10 +177,13 @@ internal sealed partial class ConductorContinuitySupervisor
     private void RecordSupervisorBuild(string reason)
     {
         if (supervisorHandoff is null) return;
+        var job = ProcessJobTrapProbe.ReadForSupervisor();
         RecordSupervisorEvent("supervisor-build", "active", "SUPERVISOR_BUILD",
             new { reason, commitSha = supervisorHandoff.OwnBuild.CommitSha,
                 runDir = supervisorHandoff.OwnBuild.RunDirectory,
-                pid = supervisorHandoff.Seam.Self.ProcessId });
+                pid = supervisorHandoff.Seam.Self.ProcessId,
+                jobMembership = ProcessJobTrapProbe.FormatMembership(job),
+                innermostJobLimitFlags = job.LimitFlags is { } flags ? ProcessJobTrapProbe.FormatFlags(flags) : null });
     }
 
     private void RecordSupervisorHandoffPreparationFailure(ConductorActivationBuild target, Exception error)

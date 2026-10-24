@@ -26,12 +26,14 @@ internal static partial class AcceptanceCriterionEvidence
     private static string FormatRefusedCarryHold(
         Goal goal, string candidateSha, CriterionEvidenceObligation obligation, string? refusal)
     {
-        var prefix = FormatRefusedCarryDiagnostic(candidateSha, obligation, refusal);
-        var commands = goal.GetOutstandingCriterionEvidenceObligations(candidateSha)
+        var stale = goal.GetOutstandingCriterionEvidenceObligations(candidateSha)
             .Where(item => item.Owner == CriterionEvidenceOwner.Acceptance &&
                 !string.IsNullOrWhiteSpace(item.ExpectedCandidateSha) &&
                 !string.Equals(item.ExpectedCandidateSha, candidateSha, StringComparison.OrdinalIgnoreCase) &&
                 string.Equals(item.RequiredScope, CriterionEvidenceScopes.FullAcceptanceGate, StringComparison.Ordinal))
+            .ToArray();
+        var prefix = FormatStaleBindingsDiagnostic(candidateSha, obligation, stale, refusal);
+        var commands = stale
             .Select(item => $"criterion-evidence-map --goal {goal.Id.Value} --criterion {item.CriterionNumber} --version {item.CriterionVersion} acceptance {item.RequiredScope} {item.FindingStableId ?? item.Id} {candidateSha}");
         return $"{prefix} Operator rebind: {string.Join("; ", commands)}";
     }
@@ -39,6 +41,20 @@ internal static partial class AcceptanceCriterionEvidence
     private static string FormatRefusedCarryDiagnostic(
         string candidateSha, CriterionEvidenceObligation obligation, string? refusal) =>
         $"Acceptance passed for {candidateSha}, but obligation '{obligation.Id}' is bound to {obligation.ExpectedCandidateSha ?? "no candidate"}. Rebind the obligation to the current candidate before recording its evidence. Carry-forward refused: {refusal ?? "reason=not-eligible"}.";
+
+    private static string FormatStaleBindingsDiagnostic(
+        string candidateSha, CriterionEvidenceObligation obligation,
+        IEnumerable<CriterionEvidenceObligation> stale, string? refusal)
+    {
+        var diagnostic = FormatRefusedCarryDiagnostic(candidateSha, obligation, refusal);
+        var others = stale
+            .Where(item => !string.Equals(item.Id, obligation.Id, StringComparison.Ordinal))
+            .Select(item => $"'{item.Id}' to {item.ExpectedCandidateSha}")
+            .ToArray();
+        return others.Length == 0
+            ? diagnostic
+            : $"{diagnostic} Also bound to other candidates: {string.Join("; ", others)}.";
+    }
 
     private static bool TryPlanPatchEquivalentBindings(
         Goal goal, string candidateSha, string integrationBranch, string? executionDirectory,

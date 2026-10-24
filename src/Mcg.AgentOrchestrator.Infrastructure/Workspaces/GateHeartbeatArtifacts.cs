@@ -58,7 +58,9 @@ public sealed record GateHeartbeatSnapshot(
     string? RetainedStderrPath = null,
     string? RetainedStderrSha256 = null,
     string? RunClass = null,
-    string? RunId = null);
+    string? RunId = null,
+    DateTimeOffset? PreStopObservedAt = null,
+    DateTimeOffset? PreStopProgressAt = null);
 
 public sealed record GateHeartbeatStatus(
     int SlotIndex,
@@ -287,6 +289,21 @@ public static class GateHeartbeatArtifacts
         }
     }
 
+    internal static GateHeartbeatSnapshot? TryReadSnapshot(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+            return null;
+
+        try
+        {
+            return JsonSerializer.Deserialize<GateHeartbeatSnapshot>(File.ReadAllText(path), JsonOptions);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
     public static void Write(string path, GateHeartbeatSnapshot snapshot)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(path) ?? ".");
@@ -303,7 +320,8 @@ public static class GateHeartbeatArtifacts
         }
         catch
         {
-            // Heartbeats are observability artifacts; they must never decide acceptance.
+            // Missing, unreadable or older-format heartbeats keep today's RED verdict;
+            // a heartbeat write failure can never make a lane worse than today.
         }
     }
 

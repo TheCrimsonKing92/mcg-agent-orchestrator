@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Xml;
 using System.Xml.Linq;
+using static Mcg.AgentOrchestrator.Infrastructure.ProjectFactHelpers;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
@@ -139,7 +140,7 @@ public sealed class DotnetProjectDiscoveryAdapter : IProjectDiscoveryAdapter
                 .Select(group => group.OrderByDescending(edge => edge.Confidence).First())
                 .OrderBy(edge => edge.FromUnit, StringComparer.Ordinal).ThenBy(edge => edge.ToUnit, StringComparer.Ordinal).ToArray(),
             setups, questions.DistinctBy(question => question.FactKey)
-                .OrderBy(question => question.FactKey, StringComparer.Ordinal).ToArray(), commands, environment, measurements, hazards, learned.Branch);
+                .OrderBy(question => question.FactKey, StringComparer.Ordinal).ToArray(), commands, environment, measurements, hazards, learned.Branch, ProjectStack.Dotnet);
     }
 
     private static ProjectFact<bool?> DiscoverTestStatus(string id, Declaration[] properties,
@@ -406,22 +407,6 @@ public sealed class DotnetProjectDiscoveryAdapter : IProjectDiscoveryAdapter
         }
     }
 
-    internal static bool IsSafePath(string root, string path)
-    {
-        var relative = Relative(root, path);
-        if (relative == ".." || relative.StartsWith("../", StringComparison.Ordinal) || Path.IsPathRooted(relative))
-            return false;
-        var current = root;
-        foreach (var segment in relative.Split('/'))
-        {
-            current = Path.Combine(current, segment);
-            if ((File.Exists(current) || Directory.Exists(current)) &&
-                (File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0)
-                return false;
-        }
-        return true;
-    }
-
     private static bool IsProjectFile(string path) => Path.GetExtension(path).ToLowerInvariant() is ".csproj" or ".fsproj" or ".vbproj";
     private static string Relative(string root, string path) => Path.GetRelativePath(root, path).Replace('\\', '/');
     private static FactSource Source(string root, string path, XElement element) =>
@@ -432,17 +417,6 @@ public sealed class DotnetProjectDiscoveryAdapter : IProjectDiscoveryAdapter
         !value.Contains("$(", StringComparison.Ordinal) && !value.Contains("@(", StringComparison.Ordinal) &&
         !element.AncestorsAndSelf().Any(ancestor => ancestor.Attribute("Condition") is not null ||
             ancestor.Name.LocalName is "Choose" or "When" or "Otherwise" or "Target");
-
-    internal static ProjectFact<T> Fact<T>(T value, FactConfidence confidence, FactSource source,
-        string key, string reason, List<ProjectOwnerQuestion> questions)
-    {
-        if (confidence != FactConfidence.High)
-            Ask(key, reason, source, questions);
-        return new ProjectFact<T>(value, source, confidence);
-    }
-
-    internal static void Ask(string key, string reason, FactSource source, List<ProjectOwnerQuestion> questions) =>
-        questions.Add(new ProjectOwnerQuestion(key, $"{key}: {reason}", source));
 
     private sealed record Declaration(string Name, string Value, FactSource Source, bool Reliable);
 }

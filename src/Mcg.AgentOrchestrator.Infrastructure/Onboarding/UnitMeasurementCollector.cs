@@ -46,6 +46,6 @@ internal static class UnitMeasurementCollector
         }
 
         void Skip(UnitCommands unit, string label, ProjectFact<string> command, string reason) =>
-            DotnetProjectDiscoveryAdapter.Ask($"commands/{unit.UnitId}/{label}/duration", reason, command.Source, questions);
+            ProjectFactHelpers.Ask($"commands/{unit.UnitId}/{label}/duration", reason, command.Source, questions);
     }
 }
