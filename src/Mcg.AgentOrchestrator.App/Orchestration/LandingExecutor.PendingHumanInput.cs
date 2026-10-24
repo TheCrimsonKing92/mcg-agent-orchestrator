@@ -11,7 +11,7 @@ internal static partial class LandingExecutor
         // A grouped pass alone does not establish named evidence for an individual member.
         var resolution = ProspectiveEvidenceGateResolver.Resolve(kernel, goal, orchestratorDirectory, candidateRevision);
         var obligationLines = GateTestObligationEvaluator.Evaluate(goal, orchestratorDirectory, candidateRevision)
-            .Where(result => result.Outcome != GateTestObligationEvaluator.Outcome.Satisfied)
+            .Where(result => result.Outcome is not (GateTestObligationEvaluator.Outcome.Satisfied or GateTestObligationEvaluator.Outcome.Waived))
             .Select(result =>
             {
                 var outcome = result.Outcome switch
