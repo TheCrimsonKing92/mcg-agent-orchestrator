@@ -9,17 +9,17 @@ public sealed class ConductorBatchLoopTestsResolvedOwnerQuestionHold : Conductor
 {
     public ConductorBatchLoopTestsResolvedOwnerQuestionHold(ITestOutputHelper output) : base(output) { }
 
-    [Xunit.Fact(Timeout = 30000)]
+    [Xunit.Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Xunit.Trait("Category", "CrossTick")]
     public Task Resolved_unparked_goal_is_persisted_then_dispatched() =>
         RunScenario(resolve: true, unpark: true);
 
-    [Xunit.Fact(Timeout = 30000)]
+    [Xunit.Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Xunit.Trait("Category", "CrossTick")]
     public Task Open_unparked_goal_stays_held_and_visible_in_attention() =>
         RunScenario(resolve: false, unpark: true);
 
-    [Xunit.Fact(Timeout = 30000)]
+    [Xunit.Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Xunit.Trait("Category", "CrossTick")]
     public Task Resolved_parked_goal_stays_held_without_dispatch() =>
         RunScenario(resolve: true, unpark: false);
