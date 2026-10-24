@@ -82,12 +82,15 @@ internal static partial class CliPersistentStateRunner
         WorktreeCleanupContext? acceptanceCleanupContext = null,
         Func<TimeSpan?, Action<DotnetBuildStableSlotWait>?, DotnetBuildEnvironmentLease>? stableSlotSelector = null,
         bool skipReadOnlyRoute = false,
-        ConductorLoopLeaseController? startupLoopLease = null)
+        ConductorLoopLeaseController? startupLoopLease = null,
+        Func<AgentOrchestratorKernel, Action<AgentOrchestratorKernel>, CliExecutionContext>? createLifecycleContext = null)
     {
         if (!skipReadOnlyRoute && CliReadOnlyCommandRunner.TryExecute(args, stateRepository, workspace, providers, channel, ref agents, ref workerProfiles, ref currentGoal, out var readOnlyResult))
             return readOnlyResult;
         if (CliEpicOutcomeCommands.IsMutation(args))
             return CliEpicOutcomeCommands.Submit(args, workspace, operatorIntentSubmissionSource);
+        if (CliTaskGraphRepairCommand.IsCommand(args))
+            return CliTaskGraphRepairCommand.Execute(args, stateRepository, workspace, ref currentGoal, operatorIntentSubmissionSource);
         if (args.Count > 0 && args[0].Equals("epic-bar", StringComparison.OrdinalIgnoreCase) && !CliCommandHelp.IsCommandSpecificHelp(args))
             return CliEpicOutcomeCommands.ExecuteLegacyBar(args, workspace, operatorIntentSubmissionSource);
         using var writeOperationTag = SqliteOrchestratorStateRepository.UseWriteOperationTag(
@@ -232,6 +235,18 @@ internal static partial class CliPersistentStateRunner
         if (IsGoalReplacementCommand(args))
         {
             return ExecuteGoalReplacementOutsideTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel);
+        }
+
+        if (CliLifecycleGoalExecution.IsCommand(args))
+        {
+            return CliLifecycleGoalExecution.Execute(args, stateRepository, workspace, ref agents, providers,
+                ref workerProfiles, ref currentGoal, channel, createLifecycleContext);
+        }
+
+        if (args.Count > 0 && args[0].Equals("run-goal", StringComparison.OrdinalIgnoreCase))
+        {
+            return CliRunGoalExecution.Execute(args, stateRepository, workspace, ref agents, providers,
+                ref workerProfiles, ref currentGoal, channel);
         }
 
         if (IsGoalCreateCommand(args))
@@ -817,11 +832,12 @@ internal static partial class CliPersistentStateRunner
                 CliGoalPrefixArguments.GetOptionalArgument(args, "--confirm-goal-mark-landed", "--force"));
             var kernel = LoadSingleGoalKernel(stateRepository, goalId, cancellation.Token);
             currentGoal = ResolveCurrentGoal(kernel, goalId.Value);
+            var ownedCheckpoint = new CliOwnedGoalCheckpoint(stateRepository, kernel, goalId, cancellation.Token);
 
             void Persist(AgentOrchestratorKernel checkpoint)
             {
                 slowStep = "state-save-commit";
-                PersistSingleGoalSnapshot(stateRepository, checkpoint, goalId, cancellation.Token);
+                ownedCheckpoint.Persist(checkpoint);
                 slowStep = "command-handler";
             }
 
@@ -990,6 +1006,7 @@ internal static partial class CliPersistentStateRunner
                 var sweepKernel = heartbeat.Run(ConductorStartupHeartbeat.Phases.SweepKernelLoad, () => LoadConductLoopSweepKernel(
                     stateRepository, startupKernel, workspace.ExecutionDirectory, workspace.IntegrationBranch, watchGoalId, cleanupContext.Hooks));
                 var sweepTimelineBaseline = TerminalGoalSweepLifecycleEvents.Capture(sweepKernel);
+                var sweepCheckpoint = new CliOwnedGoalCheckpoint(stateRepository, sweepKernel);
                 var sweep = heartbeat.Run(ConductorStartupHeartbeat.Phases.TerminalSweep, () => TerminalGoalSweep.Run(
                     sweepKernel,
                     workspace.ExecutionDirectory, workspace.IntegrationBranch,
@@ -1006,8 +1023,7 @@ internal static partial class CliPersistentStateRunner
                 heartbeat.Run(ConductorStartupHeartbeat.Phases.SweepSurfacing, () => { ConsoleViews.PrintTerminalGoalSweep(sweep, includeBlockers: ConductLoopWillExitBeforeFirstTick(args, workspace.ConductorStopFilePath));
                     TerminalGoalSweepAttention.Surface(sweepKernel, sweep, workspace.OrchestratorDirectory, watchGoalId); });
                 heartbeat.Run(ConductorStartupHeartbeat.Phases.SweepPersistence, () => {
-                    if (!sweep.Changed) return;
-                    PersistSweepChanges(sweepKernel, stateRepository, sweep.Goals.Select(goal => goal.GoalId).ToArray());
+                    PersistSweepChanges(sweepKernel, sweepCheckpoint, workspace.OrchestratorDirectory);
                     TerminalGoalSweepLifecycleEvents.Publish(
                         sweepKernel, sweepTimelineBaseline, sweep.Goals.Select(goal => goal.GoalId),
                         new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory, integrationBranch: workspace.IntegrationBranch), Console.WriteLine);
@@ -1677,19 +1693,9 @@ internal static partial class CliPersistentStateRunner
 
     internal static void PersistSweepChanges(
         AgentOrchestratorKernel sweepKernel,
-        ITransactionalOrchestratorStateRepository stateRepository,
-        IReadOnlyCollection<GoalId> changedGoalIds)
-    {
-        if (changedGoalIds.Count == 0)
-        {
-            return;
-        }
-
-        foreach (var goalId in changedGoalIds)
-        {
-            PersistSingleGoalSnapshot(stateRepository, sweepKernel, goalId);
-        }
-    }
+        CliOwnedGoalCheckpoint checkpoint,
+        string orchestratorDirectory)
+        => checkpoint.PersistSweep(sweepKernel, orchestratorDirectory);
 
     private static AgentOrchestratorKernel MergeKernels(
         AgentOrchestratorKernel baseKernel,
@@ -1782,9 +1788,9 @@ internal static partial class CliPersistentStateRunner
             ResolveSingleGoalCommandGoalPrefix(args));
         var kernel = LoadSingleGoalKernel(stateRepository, goalId);
         currentGoal = ResolveCurrentGoal(kernel, goalId.Value);
+        var ownedCheckpoint = new CliOwnedGoalCheckpoint(stateRepository, kernel, goalId);
 
-        void Persist(AgentOrchestratorKernel checkpoint) =>
-            PersistSingleGoalSnapshot(stateRepository, checkpoint, goalId);
+        void Persist(AgentOrchestratorKernel checkpoint) => ownedCheckpoint.Persist(checkpoint);
 
         var shouldSave = CliCommandDispatcher.ExecuteCommand(
             args,
@@ -2050,10 +2056,11 @@ internal static partial class CliPersistentStateRunner
         IOperatorChannel? channel = null)
     {
         var kernel = stateRepository.LoadAsync().GetAwaiter().GetResult();
+        var initialGoalSnapshots = kernel.ExportSnapshot().Goals.ToDictionary(snapshot => snapshot.Id, StringComparer.Ordinal);
         currentGoal = ResolveCurrentGoal(kernel, currentGoal?.Id.Value);
 
-        void Persist(AgentOrchestratorKernel checkpoint) =>
-            stateRepository.SaveAsync(checkpoint).GetAwaiter().GetResult();
+        var persistCheckpoint = CreateCommandCheckpoint(stateRepository, workspace, kernel, initialGoalSnapshots);
+        void Persist(AgentOrchestratorKernel checkpoint) => persistCheckpoint(checkpoint);
 
         var shouldSave = CliCommandDispatcher.ExecuteCommand(
             args,
@@ -2072,6 +2079,7 @@ internal static partial class CliPersistentStateRunner
             Persist(kernel);
         }
 
+        currentGoal = ResolveCurrentGoal(kernel, currentGoal?.Id.Value);
         return shouldSave;
     }
 
@@ -3884,6 +3892,11 @@ internal static partial class CliPersistentStateRunner
         return applied > 0;
     }
 
+    internal static Action<AgentOrchestratorKernel> CreateCommandCheckpoint(
+        ITransactionalOrchestratorStateRepository repository, OrchestratorWorkspace workspace,
+        AgentOrchestratorKernel loaded, IDictionary<string, GoalSnapshot> baselines) =>
+        CliCommandCheckpoint.Create(repository, workspace, loaded, baselines);
+
     private static bool ExecuteAcceptanceOutsideTransaction(
         IReadOnlyList<string> args,
         ITransactionalOrchestratorStateRepository stateRepository,
@@ -3922,11 +3935,7 @@ internal static partial class CliPersistentStateRunner
             ("goal", goalId.Value[..8]),
             ("goalCount", 1));
         var initialGoalSnapshot = ExportGoalSnapshot(kernel, goalId);
-        var initialGoalJson = JsonSerializer.Serialize(initialGoalSnapshot);
-        var conductTickBaselines = new Dictionary<string, GoalSnapshot>(StringComparer.Ordinal)
-        {
-            [initialGoalSnapshot.Id] = initialGoalSnapshot
-        };
+        var checkpoints = new CliAcceptanceCheckpoint(stateRepository, workspace, kernel, goalId, initialGoalSnapshot);
 
         var reconcileStarted = System.Diagnostics.Stopwatch.StartNew();
         cleanupContext ??= WorktreeCleanupContext.Load(attentionStoreDirectory: workspace.OrchestratorDirectory);
@@ -3960,24 +3969,11 @@ internal static partial class CliPersistentStateRunner
             kernel, targetSweepBaseline, targetSweep.Goals.Select(goal => goal.GoalId),
             new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory, integrationBranch: workspace.IntegrationBranch), Console.WriteLine, targetSweepTimelineEnd);
 
-        void Persist(AgentOrchestratorKernel checkpoint) =>
-            PersistSingleGoalSnapshot(stateRepository, checkpoint, goalId);
+        void Persist(AgentOrchestratorKernel checkpoint) => checkpoints.Persist(checkpoint);
 
-        void PersistCurrentGoal(AgentOrchestratorKernel checkpoint, GoalId goalId)
+        void PersistCurrentGoal(AgentOrchestratorKernel checkpoint, GoalId id)
         {
-            PersistSingleGoalSnapshot(stateRepository, checkpoint, goalId);
-        }
-
-        void ApplyCriticalDurableResults(
-            AgentOrchestratorKernel checkpoint,
-            IReadOnlyList<GoalSnapshotSaveResult> results)
-        {
-            foreach (var result in results)
-            {
-                _ = RebaseCheckpointAfterDurableSave(checkpoint, result);
-                if (result.PersistedSnapshot is not null)
-                    conductTickBaselines[result.GoalId] = result.PersistedSnapshot;
-            }
+            checkpoints.Persist(checkpoint, id);
         }
 
         void PersistCriticalCurrentGoal(
@@ -3986,13 +3982,7 @@ internal static partial class CliPersistentStateRunner
         {
             try
             {
-                PersistCriticalGoalSnapshotsOrThrow(
-                    stateRepository,
-                    checkpoint,
-                    changedGoalIds,
-                    conductTickBaselines,
-                    workspace.SqliteStatePath,
-                    results => ApplyCriticalDurableResults(checkpoint, results));
+                checkpoints.PersistCritical(checkpoint, changedGoalIds);
             }
             catch (DispatchCheckpointConflictException)
             {
@@ -4090,7 +4080,7 @@ internal static partial class CliPersistentStateRunner
             ref workerProfiles,
             ref currentGoal,
             channel,
-            () => stateRepository.LoadAsync().GetAwaiter().GetResult(),
+            checkpoints.Reload,
             Persist,
             finalizeAcceptanceMerge: Finalize,
             acceptanceVerifier: acceptanceVerifier,
@@ -4098,7 +4088,8 @@ internal static partial class CliPersistentStateRunner
             registerAcceptanceGuardAbort: () => acceptanceGuardAborted = true,
             prepareAcceptanceMergeGuard: PrepareAcceptanceMergeGuard,
             persistCriticalGoalKernel: PersistCriticalCurrentGoal,
-            recordDurableGoalBaseline: snapshot => conductTickBaselines[snapshot.Id] = snapshot,
+            recordDurableGoalBaseline: checkpoints.RecordDurableBaseline,
+            persistGoalKernel: checkpoints.PersistGoals,
             stableSlotSelector: stableSlotSelector,
             cleanupContext: cleanupContext);
 
@@ -4108,13 +4099,18 @@ internal static partial class CliPersistentStateRunner
         {
             if (!acceptanceGuardAborted)
             {
-                PersistIfTargetGoalChangedSinceLoad(kernel, goalId, initialGoalJson);
+                // Finalize is store-side progress, not baseline advancement. The handler also
+                // records completion locally, then may add backlog/cleanup notes. Merge that
+                // delta against the original baseline so neither durable completion nor those
+                // later notes are replaced by Finalize's earlier snapshot.
+                PersistIfTargetGoalChangedSinceLoad(kernel);
+                currentGoal = kernel.GetGoal(goalId);
                 PublishSweepEvents();
             }
             return shouldSave;
         }
 
-        if (acceptanceGuardAborted)
+        if (acceptanceGuardAborted || criticalCheckpointRejected)
         {
             return shouldSave;
         }
@@ -4133,20 +4129,17 @@ internal static partial class CliPersistentStateRunner
         }
         else
         {
-            PersistIfTargetGoalChangedSinceLoad(kernel, goalId, initialGoalJson);
+            PersistIfTargetGoalChangedSinceLoad(kernel);
         }
         if (!criticalCheckpointRejected)
             PublishSweepEvents();
 
         return shouldSave;
 
-        void PersistIfTargetGoalChangedSinceLoad(AgentOrchestratorKernel checkpoint, GoalId id, string initialJson)
+        void PersistIfTargetGoalChangedSinceLoad(AgentOrchestratorKernel checkpoint)
         {
-            var currentGoalJson = JsonSerializer.Serialize(ExportGoalSnapshot(checkpoint, id));
-            if (!string.Equals(initialJson, currentGoalJson, StringComparison.Ordinal))
-            {
-                Persist(checkpoint);
-            }
+            if (!criticalCheckpointRejected)
+                Persist(checkpoint); // Shared owner detects goal and human-request changes.
         }
     }
 
@@ -4230,8 +4223,8 @@ internal static partial class CliPersistentStateRunner
         var initialGoalSnapshots = kernel.ExportSnapshot().Goals.ToDictionary(snapshot => snapshot.Id, StringComparer.Ordinal);
         currentGoal = ResolveCurrentGoal(kernel, currentGoal?.Id.Value);
 
-        void Persist(AgentOrchestratorKernel checkpoint) =>
-            stateRepository.SaveAsync(checkpoint).GetAwaiter().GetResult();
+        var persistCheckpoint = CreateCommandCheckpoint(stateRepository, workspace, kernel, initialGoalSnapshots);
+        void Persist(AgentOrchestratorKernel checkpoint) => persistCheckpoint(checkpoint);
 
         var shouldSave = CliCommandDispatcher.ExecuteCommand(
             args,
@@ -4258,6 +4251,7 @@ internal static partial class CliPersistentStateRunner
             Persist(kernel);
         }
 
+        currentGoal = ResolveCurrentGoal(kernel, currentGoal?.Id.Value);
         return shouldSave;
     }
 

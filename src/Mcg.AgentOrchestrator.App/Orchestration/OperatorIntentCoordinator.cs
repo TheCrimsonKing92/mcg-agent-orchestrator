@@ -9,6 +9,7 @@ internal sealed record OperatorIntentExecutionResult(
     IReadOnlyList<string> ProgressLines)
 {
     public bool RejectedAdjudication { get; init; }
+    public bool PreserveGoalHold { get; init; }
 }
 
 internal sealed partial class OperatorIntentCoordinator
@@ -164,9 +165,37 @@ internal sealed partial class OperatorIntentCoordinator
     {
         if (_pendingCompletions.TryGetValue(goal.Id.Value, out var uncommitted) && uncommitted.Count > 0)
         {
-            return new OperatorIntentExecutionResult(
-                MutatedGoalState: true,
-                [$"OPERATOR_INTENT goal={goal.Id.Value[..8]} result=waiting-for-state-commit count={uncommitted.Count}"]);
+            // A rejected checkpoint can rebase the kernel onto stored state without our marker.
+            // Resume the existing claim/expiry protocol; an in-memory completion is not authority.
+            var preserveGoalHold = false;
+            uncommitted.RemoveAll(completion =>
+            {
+                OperatorIntentRecord? stored;
+                try
+                {
+                    stored = _store.GetAsync(completion.IntentId).GetAwaiter().GetResult();
+                }
+                catch
+                {
+                    // An unreadable verb cannot prove that a repair is safe to release or resume.
+                    preserveGoalHold = true;
+                    return false;
+                }
+
+                if (stored?.Verb != OperatorIntentVerbs.TaskGraphRepair)
+                    return false;
+                if (!goal.Timeline.Any(item => item.OperatorIntentApplied?.IntentId == completion.IntentId))
+                    return true;
+                preserveGoalHold = true;
+                return false;
+            });
+            if (uncommitted.Count == 0)
+                _pendingCompletions.Remove(goal.Id.Value);
+            else
+                return new OperatorIntentExecutionResult(
+                    MutatedGoalState: true,
+                    [$"OPERATOR_INTENT goal={goal.Id.Value[..8]} result=waiting-for-state-commit count={uncommitted.Count}"])
+                    { PreserveGoalHold = preserveGoalHold };
         }
 
         var mutated = false;
@@ -299,7 +328,8 @@ internal sealed partial class OperatorIntentCoordinator
 
         return new OperatorIntentExecutionResult(mutated, lines)
         {
-            RejectedAdjudication = rejectedAdjudication
+            RejectedAdjudication = rejectedAdjudication,
+            PreserveGoalHold = appliedVerbs.Contains(OperatorIntentVerbs.TaskGraphRepair)
         };
     }
 
@@ -393,6 +423,17 @@ internal sealed partial class OperatorIntentCoordinator
     {
         switch (intent.Verb)
         {
+            case OperatorIntentVerbs.TaskGraphRepair:
+                var plan = Deserialize<TaskGraphRepairOperatorIntentPayload>(intent);
+                if (_store is SqliteOperatorIntentStore sqlite)
+                    sqlite.SerializeGoalAdmission(goal.Id.Value, () =>
+                    {
+                        TaskGraphRepair.Apply(kernel, goal.Id, plan, sqlite.ListAdmittedTaskIds(goal));
+                        return true;
+                    });
+                else
+                    TaskGraphRepair.Apply(kernel, goal.Id, plan);
+                return;
             case OperatorIntentVerbs.GateCancel:
                 (GateCancellation ?? throw new InvalidOperationException("gate-cancel-unavailable")).Apply(kernel, goal, intent, _utcNow());
                 return;

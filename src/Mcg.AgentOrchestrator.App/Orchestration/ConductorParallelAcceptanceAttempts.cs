@@ -1686,7 +1686,7 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
             new AcceptanceRunExecutionOptions(
                 RunId: attempt.AttemptId,
                 ResultsPrefix: prefix,
-                LivenessCheckHint: attempt.MetadataPath));
+                LivenessCheckHint: attempt.MetadataPath, AttemptMemberGoalIds: [candidate.Goal.Id]));
     }
 
     private void EmitAttemptLeaseReceipt(

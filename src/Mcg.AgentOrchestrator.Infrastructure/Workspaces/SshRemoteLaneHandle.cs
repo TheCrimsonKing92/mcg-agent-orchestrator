@@ -166,6 +166,8 @@ internal sealed class SshRemoteLaneHandle : IRemoteLaneHandle, IRemoteLaneAttemp
                     catch (Exception ex) { lock (_sync) _fault = ex; return; }
                     finally
                     {
+                        try { Directory.Delete(folder, recursive: true); }
+                        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
                         onPollCompleted?.Invoke(new(index, folder));
                         // Pacing has no bearing on the lease; only the injected coordinator clock does.
                         if (!_stop.IsCancellationRequested && _result is null && _fault is null)

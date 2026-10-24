@@ -253,7 +253,7 @@ public static IReadOnlyList<string> SplitCommand(string line)
         return SplitObjectiveCommandWithFlags(command, remainder);
     }
 
-    if (command.Equals("add-task", StringComparison.OrdinalIgnoreCase))
+    if (command.Equals("add-task", StringComparison.OrdinalIgnoreCase) || command.Equals("repair-task-graph", StringComparison.OrdinalIgnoreCase))
     {
         return SplitAddTaskCommand(command, remainder);
     }

@@ -186,7 +186,7 @@ public sealed partial class SqliteOperatorIntentStore : IOperatorIntentStore
     {
         EnsureWritable();
         ValidateNewIntent(intent);
-        intent = intent with { AdmissionExpiresAt = HasTaskTarget(intent)
+        intent = intent with { AdmissionExpiresAt = HasTaskTarget(intent) || intent.Verb == Mcg.AgentOrchestrator.Core.OperatorIntentVerbs.TaskGraphRepair
             ? _utcNow().AddMinutes(5) : null };
         await using var conn = OpenConnection();
         await using var tx = conn.BeginTransaction();
@@ -512,6 +512,9 @@ public sealed partial class SqliteOperatorIntentStore : IOperatorIntentStore
             AddColumnIfMissing(conn, "operator_intents", "actor_kind", "TEXT");
             AddColumnIfMissing(conn, "operator_intents", "admission_expires_at", "TEXT");
             SetupTaskAdmission(conn);
+            AddColumnIfMissing(conn, "task_intent_launches", "dispatched_at", "TEXT");
+            AddColumnIfMissing(conn, "task_intent_preparations", "graph_identity", "TEXT");
+            AddColumnIfMissing(conn, "task_intent_preparations", "state_path", "TEXT");
             RunNonQuery(conn, "CREATE INDEX IF NOT EXISTS idx_operator_intents_actionable ON operator_intents(goal_id, status, created_at, id)");
             StoreSchemaVersions.UpgradeToCurrent(conn, StoreSchemaRegistry.OperatorIntents);
             RunNonQuery(conn, "COMMIT");
@@ -585,6 +588,9 @@ public sealed partial class SqliteOperatorIntentStore : IOperatorIntentStore
         ArgumentException.ThrowIfNullOrWhiteSpace(intent.Verb);
         ArgumentException.ThrowIfNullOrWhiteSpace(intent.GoalId);
         ArgumentException.ThrowIfNullOrWhiteSpace(intent.PayloadJson);
+        if (intent.Verb == OperatorIntentVerbs.TaskGraphRepair &&
+            (intent.TaskId is not null || intent.GoalId == OperatorIntentScopes.Workspace))
+            throw new ArgumentException("Graph repair requires a goal target and no task target.", nameof(intent));
         ArgumentException.ThrowIfNullOrWhiteSpace(intent.Actor);
         ArgumentException.ThrowIfNullOrWhiteSpace(intent.Channel);
         ArgumentException.ThrowIfNullOrWhiteSpace(intent.AuthenticationAssurance);

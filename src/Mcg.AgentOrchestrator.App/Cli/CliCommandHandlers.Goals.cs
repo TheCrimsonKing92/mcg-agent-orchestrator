@@ -716,6 +716,9 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             }
 
             var hadWorktree = context.Worktrees.TryResolve(landedDir, landedId) is not null;
+            var previousLanding = GoalOperationJournal.TryGetLatestLandingIntent(GoalOperationJournal.Read(landedDir, landedId));
+            if (previousLanding?.TaskGraphIdentity is { } coveredGraph && coveredGraph != TaskGraphIdentity.Compute(landedGoal))
+                throw new InvalidOperationException("Landing evidence does not cover the authoritative task graph; inspect goal-diagnostics before recording another landing.");
             context.Kernel.CompleteGoalFromMergeEvidence(
                 landedId,
                 landedMergeSha,

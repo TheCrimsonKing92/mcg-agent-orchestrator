@@ -14,6 +14,8 @@ internal static class InconclusiveTesterRedRoute
 
         var entry = PreTesterEvidenceIndexLines.Latest(goal, tester.Id, candidateSha);
         if (entry is not { Outcome: "red", FailingTests.Count: > 0 }) return null;
+        if (PreTesterOutOfDiffRerunMarker.Latest(goal, tester.Id, entry.CandidateSha, entry.ReceiptId)
+            is { Verdict: "non-blocking" }) return null;
         var classes = FindingEvidenceExecutedCoverage.ExecutedSelections(entry.Selections, entry.NotRun)
             .Select(selection => selection[(selection.LastIndexOf(':') + 1)..].Split('.')[^1])
             .ToHashSet(StringComparer.OrdinalIgnoreCase);

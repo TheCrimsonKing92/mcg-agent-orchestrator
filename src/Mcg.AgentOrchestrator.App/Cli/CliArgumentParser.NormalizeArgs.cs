@@ -251,40 +251,10 @@ public static IReadOnlyList<string> NormalizeArgs(string[] args)
         return NormalizeObjectiveCommandWithFlags(args);
     }
 
-    if (command.Equals("add-task", StringComparison.OrdinalIgnoreCase))
+    if (CliTaskGraphRepairCommand.IsCommand(args))
     {
-        if (args.Length < 3)
-        {
-            return args;
-        }
-
-        var targetIndex = args[1].Equals("--goal", StringComparison.OrdinalIgnoreCase) ? 3 : 1;
-        if (targetIndex >= args.Length)
-        {
-            return args;
-        }
-
-        var beforeRoleIndex = Array.FindIndex(
-            args,
-            targetIndex + 1,
-            arg => arg.Equals("--before-role", StringComparison.OrdinalIgnoreCase));
-        var textFileIndex = Array.FindIndex(
-            args,
-            targetIndex + 1,
-            arg => arg.Equals("--text-file", StringComparison.OrdinalIgnoreCase));
-        if (beforeRoleIndex < 0 || (textFileIndex >= 0 && textFileIndex < beforeRoleIndex))
-        {
-            return NormalizeTargetTextCommandWithFileFlags(args, targetIndex, "--text-file");
-        }
-
-        var normalized = args.Take(targetIndex + 1).ToList();
-        if (beforeRoleIndex > targetIndex + 1)
-        {
-            normalized.Add(string.Join(' ', args.Skip(targetIndex + 1).Take(beforeRoleIndex - targetIndex - 1)));
-        }
-
-        normalized.AddRange(args.Skip(beforeRoleIndex));
-        return normalized;
+        if (args.Any(arg => arg is "--help" or "-h")) return args;
+        return CliTaskGraphRepairCommand.Normalize(args);
     }
 
     if (command.Equals("agent", StringComparison.OrdinalIgnoreCase) ||

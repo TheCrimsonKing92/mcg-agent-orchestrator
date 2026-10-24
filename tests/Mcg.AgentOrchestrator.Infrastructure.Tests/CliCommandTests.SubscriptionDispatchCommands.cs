@@ -2222,6 +2222,9 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
         CliCommandDispatcher.ExecuteCommand(["progress", "1", "running", "--text-file", progressPath], kernel, workspace, ref agents, providers, ref profiles, ref currentGoal);
         CliCommandDispatcher.ExecuteCommand(["verify-manual", "1", "passed", "--text-file", verifyPath], kernel, workspace, ref agents, providers, ref profiles, ref currentGoal);
         CliCommandDispatcher.ExecuteCommand(["add-task", "Tester", "--text-file", addTaskPath], kernel, workspace, ref agents, providers, ref profiles, ref currentGoal);
+        Xunit.Assert.DoesNotContain(goal.Tasks, candidate => candidate.Description == addTaskText);
+        new OperatorIntentCoordinator(SqliteOperatorIntentStore.ForDirectories(workspace.OrchestratorDirectory, workspace.LogDirectory))
+            .ExecutePending(kernel, goal);
         var request = kernel.RequestHumanInput(goal.Id, task.Id, "Need a longer answer.");
         CliCommandDispatcher.ExecuteCommand(["answer", request.Id.Value[..8], "--text-file", answerPath], kernel, workspace, ref agents, providers, ref profiles, ref currentGoal);
 
@@ -2275,7 +2278,7 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
     }
 
     [Xunit.Fact]
-    public void AddTask_GoalTarget_AddsTaskToNamedGoal()
+    public void AddTask_GoalTarget_EnqueuesBeforeApplyingToNamedGoal()
     {
         var workspace = CreateRefinedWorkspace(CreateTempDirectory());
         var kernel = new AgentOrchestratorKernel();
@@ -2305,6 +2308,9 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
             ref profiles,
             ref currentGoal);
 
+        Xunit.Assert.DoesNotContain(target.Tasks, task => task.RequiredRole == AgentRole.Tester);
+        new OperatorIntentCoordinator(SqliteOperatorIntentStore.ForDirectories(workspace.OrchestratorDirectory, workspace.LogDirectory))
+            .ExecutePending(kernel, target);
         Xunit.Assert.Contains(target.Tasks, task =>
             task.RequiredRole == AgentRole.Tester && task.Description == "Resolve pre-review mapping");
         Xunit.Assert.True(

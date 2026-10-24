@@ -65,6 +65,10 @@ internal static class RunGoalService
         AdvanceStepFunc? advanceStep = null,
         CancellationToken cancellationToken = default)
     {
+        if (StateDbWriteSession.IsActiveFor(workspace.SqliteStatePath))
+            throw new InvalidOperationException(
+                "RUN_GOAL_REQUIRES_COMMITTED_STATE: commit goal creation and leave the state write transaction before starting workers.");
+
         var interval = pollInterval ?? DefaultPollInterval;
         var sleepImpl = sleep ?? ((delay, ct) => Task.Delay(delay, ct));
         var clockImpl = clock ?? new SystemClock();
@@ -76,6 +80,9 @@ internal static class RunGoalService
         var handledEvidenceCountsByTask = new Dictionary<TaskId, int>();
         var executed = false;
         var stateChanged = false;
+
+        if (!cancellationToken.IsCancellationRequested)
+            await EnsureGoalCreatedAsync(kernel, workspace, goal).ConfigureAwait(false);
 
         while (!cancellationToken.IsCancellationRequested)
         {
@@ -161,6 +168,33 @@ internal static class RunGoalService
             null,
             completedTasks,
             new RunGoalStopEvidence(null, null, "run-goal was cancelled.", null));
+    }
+
+    private static async Task EnsureGoalCreatedAsync(
+        AgentOrchestratorKernel kernel, OrchestratorWorkspace workspace, Goal goal)
+    {
+        // Direct callers may hand us a new in-memory goal. Lifecycle creation is
+        // committed by its checkpoint before reaching this method. Native admission
+        // requires a committed graph even for the first worker; never relax that check
+        // or replace an existing graph with this caller's potentially stale snapshot.
+        var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+        if (await repository.LoadGoalAsync(goal.Id).ConfigureAwait(false) is not null)
+            return;
+
+        var snapshot = kernel.ExportGoalSnapshot(goal.Id);
+        var humans = kernel.ExportSnapshot().HumanInputRequests
+            .Where(request => request.GoalId == snapshot.Id).ToArray();
+        await CliPersistentStateRunner.CommitGoalCreationAsync(repository, workspace, snapshot, (current, _) =>
+        {
+            // Recheck inside the creation transaction: a concurrent creator wins;
+            // its graph must remain authoritative for the final admission check.
+            if (current.Goals.Any(existing => existing.Id == goal.Id))
+                return Task.FromResult((false, false, (IReadOnlyList<OrchestratorStateOutboxMessage>)[]));
+
+            GoalCreationPreconditionValidator.Validate(current, snapshot, workspace);
+            current.ReplaceGoalStateWithSnapshot(snapshot, humans);
+            return Task.FromResult((true, true, (IReadOnlyList<OrchestratorStateOutboxMessage>)[]));
+        }).ConfigureAwait(false);
     }
 
     private static void AddNewTerminalTaskSummaries(

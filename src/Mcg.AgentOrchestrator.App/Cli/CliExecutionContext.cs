@@ -71,6 +71,8 @@ public AgentOrchestratorKernel ReloadResolvedParkedHumanWaitKernel() =>
 /// </summary>
 public void PersistCheckpoint(AgentOrchestratorKernel checkpointKernel) => persistKernel?.Invoke(checkpointKernel);
 
+public bool HasCheckpointPersistence => persistKernel is not null;
+
 public void PersistGoalCheckpoint(AgentOrchestratorKernel checkpointKernel, IReadOnlyCollection<GoalId> changedGoalIds) =>
     persistGoalKernel?.Invoke(checkpointKernel, changedGoalIds);
 

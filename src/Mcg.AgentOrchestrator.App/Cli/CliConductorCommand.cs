@@ -19,7 +19,8 @@ internal static class CliConductorCommand
         Func<OrchestratorWorkspace, ITransactionalOrchestratorStateRepository>? stateRepository = null,
         OrchestratorHome? home = null,
         Func<string, IReadOnlyList<StoreSetupResult>>? storeSetup = null, TimeProvider? time = null,
-        Action? verifyBinding = null, WorkspaceInvocationBinding? invocationBinding = null)
+        Action? verifyBinding = null, WorkspaceInvocationBinding? invocationBinding = null,
+        IProcessJobProbe? jobProbe = null)
     {
         output ??= Console.Out;
         error ??= Console.Error;
@@ -72,7 +73,8 @@ internal static class CliConductorCommand
                     return ApplyIntents(args, workspace, owner, stateRepository, output, error);
                 case "start":
                     return Start(workspace, owner, args.Count == 3, launcher ?? new SystemConductorProcessLauncher(),
-                         output, error, home ?? OrchestratorHome.ResolveForProcess(), storeSetup, invocationBinding);
+                         output, error, home ?? OrchestratorHome.ResolveForProcess(), storeSetup, invocationBinding,
+                         jobProbe ?? (launcher is null ? ProcessJobTrapProbe.Native : ProcessJobTrapProbe.UnknownProbe));
                 case "status":
                     var snapshot = ConductorStatusSnapshotReader.Read(workspace, owner,
                         (bootTime ?? (() => DateTimeOffset.UtcNow - TimeSpan.FromMilliseconds(Environment.TickCount64)))(),
@@ -198,8 +200,15 @@ internal static class CliConductorCommand
 
     private static int Start(OrchestratorWorkspace workspace, int? owner, bool clearStop,
         IConductorProcessLauncher launcher, TextWriter output, TextWriter error, OrchestratorHome home,
-        Func<string, IReadOnlyList<StoreSetupResult>> storeSetup, WorkspaceInvocationBinding? invocationBinding)
+        Func<string, IReadOnlyList<StoreSetupResult>> storeSetup, WorkspaceInvocationBinding? invocationBinding,
+        IProcessJobProbe jobProbe)
     {
+        var job = jobProbe.Read();
+        if (ProcessJobTrapProbe.Traps(job))
+        {
+            error.WriteLine($"Refused: this shell's job ends its processes when it closes and does not allow breakaway (jobFlags={ProcessJobTrapProbe.FormatFlags(job.LimitFlags!.Value)}); start the conductor from a terminal outside that job.");
+            return 1;
+        }
         if (owner is not null)
         {
             error.WriteLine($"Refused: conductor already running (pid {owner}).");
