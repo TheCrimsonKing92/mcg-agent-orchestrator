@@ -90,6 +90,121 @@ public sealed class OwnerConsoleGoalDetailControllerBoundaryTests
         Assert.Contains("tail", violations);
     }
 
+    [Fact]
+    public async Task RunGoalCommand_PrefixAndMissing_MatchesResolverTextWithoutRawStores()
+    {
+        var harness = new OwnerConsoleHarness();
+        harness.AddGoal("3333333a-first", "First match", AgentRole.Developer);
+        harness.AddGoal("3333333b-second", "Second match", AgentRole.Developer);
+        var throwingState = new ThrowingState();
+        var throwingTail = new ThrowingTail();
+        var recordedTail = new RecordedTail([]);
+        var dialogs = new Dialogs();
+        using var controller = new OwnerConsoleScreenController(harness.Questions, harness.Answers, dialogs,
+            throwingState, throwingTail, harness.Conductor, harness.DigestReport, harness.Digest, harness.Clock,
+            goalDetail: new OwnerGoalDetailQuery(harness.State, recordedTail));
+
+        var baselineAmbiguous = new OwnerConsoleCapturedOutput();
+        await OwnerConsoleGoalDetail.ResolveAsync(harness.State, "3333333", baselineAmbiguous,
+            TestContext.Current.CancellationToken);
+        await controller.RunCommandAsync(":goal 3333333", cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal("Command result", Assert.Single(dialogs.Titles));
+        Assert.Equal(baselineAmbiguous.Text, Assert.Single(dialogs.Texts));
+
+        var baselineMissing = new OwnerConsoleCapturedOutput();
+        await OwnerConsoleGoalDetail.ResolveAsync(harness.State, "missing", baselineMissing,
+            TestContext.Current.CancellationToken);
+        await controller.RunCommandAsync(":goal missing", cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal(new[] { "Command result", "Command result" }, dialogs.Titles);
+        Assert.Equal(new[] { baselineAmbiguous.Text, baselineMissing.Text }, dialogs.Texts);
+        Assert.Equal(0, throwingState.Calls);
+        Assert.Equal(0, throwingTail.Calls);
+    }
+
+    [Fact]
+    public async Task RunGoalCommand_FullId_MatchesFormatterTextWithoutRawStores()
+    {
+        var harness = new OwnerConsoleHarness();
+        var goal = harness.AddGoal("44444444-detail", "Readable detail", AgentRole.Developer);
+        harness.AddGoal("44444444-detail-extra", "Other goal", AgentRole.Developer);
+        var recordedTail = new RecordedTail([JsonSerializer.Serialize(new
+        {
+            timestamp = DateTimeOffset.UnixEpoch, eventType = "TaskDispatched",
+            taskId = goal.Tasks[0].Id.Value
+        })]);
+        var throwingState = new ThrowingState();
+        var throwingTail = new ThrowingTail();
+        var dialogs = new Dialogs();
+        using var controller = new OwnerConsoleScreenController(harness.Questions, harness.Answers, dialogs,
+            throwingState, throwingTail, harness.Conductor, harness.DigestReport, harness.Digest, harness.Clock,
+            goalDetail: new OwnerGoalDetailQuery(harness.State, recordedTail));
+
+        await controller.RunCommandAsync(":goal " + goal.Id.Value,
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        var output = new OwnerConsoleHarness.FakeOutput();
+        await OwnerConsoleGoalDetailFormatter.ComposeAsync(harness.State, recordedTail, goal.Id.Value,
+            output, TestContext.Current.CancellationToken, harness.Clock.LocalTimeZone);
+        var expected = string.Join(Environment.NewLine, output.Text.Replace("\r", "").TrimEnd('\n').Split('\n'));
+        Assert.Equal(expected, Assert.Single(dialogs.Texts));
+        Assert.Equal(0, throwingState.Calls);
+        Assert.Equal(0, throwingTail.Calls);
+    }
+
+    [Fact]
+    public void RunCommand_Source_ReadsStoresOnlyInConstructorAndQueryInitializer()
+    {
+        var source = File.ReadAllText(Path.Combine(VerifiedRepositoryRoot.Find(), "src",
+            "Mcg.AgentOrchestrator.App", "Console", "OwnerConsoleScreenController.cs"));
+
+        Assert.Empty(ControllerStoreReadViolations(source));
+        Assert.DoesNotContain("ResolveAsync(state", source, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ControllerStoreGuard_OldResolveCall_ReportsState()
+    {
+        const string oldCall = "goalId = await OwnerConsoleGoalDetail.ResolveAsync(state, parts[1], output, stepToken);";
+        const string source = """
+            internal sealed class Controller(IOrchestratorStateQueries state, IGoalEventTail tail)
+            {
+                private readonly OwnerGoalDetailQuery _goalDetail = new OwnerGoalDetailQuery(state, tail);
+                async Task ExecuteAsync()
+                {
+                    var text = "goal state unavailable";
+                    goalId = await OwnerConsoleGoalDetail.ResolveAsync(state, parts[1], output, stepToken);
+                }
+            }
+            """;
+
+        Assert.Contains("state", ControllerStoreReadViolations(source));
+        Assert.Empty(ControllerStoreReadViolations(source.Replace(oldCall,
+            "goalId = await _goalDetail.ResolveGoalIdAsync(parts[1], output, stepToken);", StringComparison.Ordinal)));
+    }
+
+    private static IReadOnlyList<string> ControllerStoreReadViolations(string source)
+    {
+        var stripped = Regex.Replace(source, "\"(?:[^\"\\\\\r\n]|\\\\.)*\"", "\"\"");
+        var constructor = Regex.Match(stripped, @"\bclass\s+\w+\s*\(");
+        if (!constructor.Success) return ["missing primary constructor"];
+        var start = constructor.Index + constructor.Length - 1;
+        var end = start;
+        var depth = 0;
+        for (; end < stripped.Length; end++)
+        {
+            if (stripped[end] == '(') depth++;
+            else if (stripped[end] == ')' && --depth == 0) break;
+        }
+        if (end == stripped.Length) return ["missing primary constructor end"];
+        stripped = stripped.Remove(start, end - start + 1);
+        var initializer = Regex.Match(stripped, @"(?m)^[^\r\n]*\b_goalDetail\s*=[^\r\n]*");
+        if (!initializer.Success) return ["missing _goalDetail initializer"];
+        stripped = stripped.Remove(initializer.Index, initializer.Length);
+        return Regex.Matches(stripped, @"\b(?:state|tail)\b").Select(match => match.Value).ToArray();
+    }
+
     private static string ExtractComposeGoal(string source)
     {
         const string signature = "private async Task<OwnerConsoleGoalDialog.Content?> ComposeGoalAsync(";
@@ -154,7 +269,8 @@ public sealed class OwnerConsoleGoalDetailControllerBoundaryTests
     private sealed class Dialogs : IOwnerConsoleDialogs
     {
         internal readonly List<string> Texts = [];
-        public Task ShowTextAsync(string title, string text) { Texts.Add(text); return Task.CompletedTask; }
+        internal readonly List<string> Titles = [];
+        public Task ShowTextAsync(string title, string text) { Titles.Add(title); Texts.Add(text); return Task.CompletedTask; }
         public Task<bool> ConfirmAsync(string title, string text) => throw new InvalidOperationException();
         public Task<string?> PromptTextAsync(string title, string text) => throw new InvalidOperationException();
     }

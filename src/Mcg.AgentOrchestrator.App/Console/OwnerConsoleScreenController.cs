@@ -295,7 +295,7 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
                     break;
                 case "goal":
                     if (parts.Length != 2) { output.WriteLine("usage: goal <id-prefix>"); break; }
-                    goalId = await OwnerConsoleGoalDetail.ResolveAsync(state, parts[1], output, stepToken);
+                    goalId = await _goalDetail.ResolveGoalIdAsync(parts[1], output, stepToken);
                     break;
                 default:
                     output.WriteLine("unknown command");
