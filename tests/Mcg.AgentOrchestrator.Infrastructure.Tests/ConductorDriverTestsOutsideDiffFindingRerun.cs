@@ -58,6 +58,51 @@ public sealed class ConductorDriverTestsOutsideDiffFindingRerun
         Assert.Single(fixture.Notices);
     }
 
+    [Theory]
+    [InlineData("red")]
+    [InlineData("actionable-red")]
+    public void PreTesterRedWithoutFindingReceiptRerunsAndResolves(string outcome)
+    {
+        using var fixture = new Fixture(seedReceipt: false);
+        fixture.ReportAndSeed();
+        fixture.SeedPreTesterRed(outcome);
+        Assert.Empty(fixture.Tester.VerificationHistory.SelectMany(record => record.FindingEvidenceReceipts ?? []));
+        fixture.ReloadAndRecreateDriver();
+
+        fixture.Advance();
+        Assert.Equal("Infrastructure.Tests:Fixture.OutsideDiffTests", Assert.Single(fixture.Requests));
+        Assert.Single(fixture.RequestMarkers);
+        Assert.Empty(fixture.Retried);
+        fixture.AdvanceToDecision();
+
+        Assert.Equal(ReviewFindingState.Resolved, fixture.Finding.State);
+        Assert.Equal(Reason, fixture.Finding.EvidenceOutcome!.DecisionReason);
+        Assert.Equal(WorkTaskStatus.Completed, fixture.Tester.Status);
+        Assert.Contains("pre-tester-original-red", Assert.Single(fixture.Notices).Body);
+        Assert.Empty(fixture.Retried);
+    }
+
+    [Theory]
+    [InlineData("missing-result")]
+    [InlineData("stale-result")]
+    [InlineData("unaccepted-result")]
+    [InlineData("not-run")]
+    [InlineData("unrecorded-identity")]
+    [InlineData("missing-trx")]
+    public void PreTesterRedWithoutUsableProvenanceKeepsDeveloperDispatch(string fault)
+    {
+        using var fixture = new Fixture(seedReceipt: false);
+        fixture.ReportAndSeed();
+        fixture.SeedPreTesterRed("red", fault);
+        fixture.AdvanceToDecision();
+
+        Assert.Empty(fixture.Requests);
+        Assert.Empty(fixture.RequestMarkers);
+        Assert.Equal(fixture.Developer.Id, Assert.Single(fixture.Retried));
+        Assert.Equal(ReviewFindingState.Open, fixture.Finding.State);
+        Assert.Empty(fixture.Notices);
+    }
+
     [Fact]
     public void RedRerunWithGreenBaselineRoutesDeveloper()
     {
@@ -368,6 +413,26 @@ public sealed class ConductorDriverTestsOutsideDiffFindingRerun
                 "original conductor red", [ConductorDriver.CreateFindingEvidenceArmReceipt(red)]);
             Kernel.RecordFindingEvidenceOutcome(Goal.Id, Tester.Id, finding.StableId,
                 new FindingEvidenceOutcome(true, receipt.ReceiptId, ResultReason: FindingEvidenceOutcomeReason.CandidateRed), receipt);
+        }
+
+        public void SeedPreTesterRed(string outcome, string? fault = null)
+        {
+            var selection = "Infrastructure.Tests:Fixture.OutsideDiffTests";
+            var red = Arm(FindingEvidenceArm.Candidate, "Failed",
+                fault == "unrecorded-identity" ? ["Fixture.OutsideDiffTests.Case(train: True)"] : _names, Sha);
+            var evidence = new FocusedEvidenceRunResult(selection, fault != "unaccepted-result", false,
+                "pre-Tester original red", red.Checks, Arms: [red]);
+            var artifact = new ConductorParallelAcceptanceRunArtifact("focused-evidence", null, null, null, null,
+                null, fault == "stale-result" ? LaterSha : Sha, LaterSha, null, null,
+                FocusedEvidence: evidence);
+            var resultPath = Path.Combine(_root, "pre-tester.result.json");
+            if (fault != "missing-result")
+                File.WriteAllText(resultPath, JsonSerializer.Serialize(artifact, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+            if (fault == "missing-trx")
+                foreach (var path in red.Checks.SelectMany(check => check.TestResultPaths ?? [])) File.Delete(path);
+            Kernel.RecordFindingEvidenceRun(Goal.Id, Tester.Id, PreTesterEvidenceIndexLines.FormatMarker(
+                new(outcome, Sha, "pre-tester-original-red", [selection], fault == "not-run" ? [selection] : [],
+                    resultPath, _names)));
         }
 
         private void Report(IReadOnlyList<ReviewFinding> findings, string tests, string verdict)

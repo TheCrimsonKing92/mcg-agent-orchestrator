@@ -250,13 +250,8 @@ internal static class OutsideDiffFindingRerun
         var receipts = goal.Tasks.SelectMany(task => task.VerificationHistory)
             .SelectMany(record => record.FindingEvidenceReceipts ?? []).ToList();
         if (PreTesterEvidenceIndexLines.Latest(goal, tester.Id, sha) is { Outcome: "red" or "actionable-red" } entry &&
-            driver._focusedEvidenceAttemptCoordinator.ReadFocusedReceiptEvidence(goal.Id, entry.ReceiptId, sha) is { } evidence)
-        {
-            var selections = entry.Selections.Select(value => value.Split(':', 2))
-                .Where(parts => parts.Length == 2).Select(parts => new FindingEvidenceSelection(parts[0], parts[1])).ToArray();
-            receipts.Add(new(entry.ReceiptId, sha, new(selections), evidence.Accepted, evidence.Passed, evidence.Summary,
-                (evidence.Arms ?? []).Select(CreateFindingEvidenceArmReceipt).ToArray()));
-        }
+            ReadPreTesterReceipt(entry) is { } preTesterReceipt)
+            receipts.Add(preTesterReceipt);
         var settings = driver._getFindingEvidenceEngineSettings(goal);
         return receipts.Where(receipt => receipt.Accepted && string.Equals(receipt.CandidateSha, sha, StringComparison.OrdinalIgnoreCase))
             .SelectMany(receipt => (receipt.Arms ?? []).Where(arm => arm is
@@ -273,6 +268,36 @@ internal static class OutsideDiffFindingRerun
                         return new RedIdentity(identity, project, receipt.ReceiptId);
                     })) ))
             .DistinctBy(item => item.Identity).ToArray();
+    }
+
+    private static FindingEvidenceReceipt? ReadPreTesterReceipt(PreTesterEvidenceEntry entry)
+    {
+        if (string.IsNullOrWhiteSpace(entry.ResultPath) || entry.FailingTests.Count == 0) return null;
+        try
+        {
+            // Plain-red pre-Tester attempts retain their result path, but have no FocusedEvidenceReceiptId.
+            var artifact = JsonSerializer.Deserialize<ConductorParallelAcceptanceRunArtifact>(
+                File.ReadAllText(entry.ResultPath), new JsonSerializerOptions(JsonSerializerDefaults.Web));
+            if (artifact is not { Kind: "focused-evidence", FocusedEvidence: { Accepted: true } evidence } ||
+                !string.Equals(artifact.BranchHeadSha, entry.CandidateSha, StringComparison.OrdinalIgnoreCase)) return null;
+            var selections = FindingEvidenceExecutedCoverage.ExecutedSelections(entry.Selections, entry.NotRun)
+                .Select(value => value.Split(':', 2)).Where(parts => parts.Length == 2)
+                .Select(parts => new FindingEvidenceSelection(parts[0], parts[1])).ToArray();
+            var candidate = (evidence.Arms ?? []).Where(arm => arm.Arm == FindingEvidenceArm.Candidate)
+                .Select(CreateFindingEvidenceArmReceipt).SingleOrDefault();
+            if (candidate is not { Accepted: true, Disposition: FindingEvidenceArmDisposition.Red } ||
+                !string.Equals(candidate.Sha, entry.CandidateSha, StringComparison.OrdinalIgnoreCase) ||
+                entry.FailingTests.Any(identity => !(candidate.FailingTestIdentities ?? []).Contains(identity, StringComparer.Ordinal) ||
+                    !selections.Any(selection => SelectionContains(selection, identity)))) return null;
+            return new(entry.ReceiptId, entry.CandidateSha, new(selections), evidence.Accepted, evidence.Passed,
+                evidence.Summary, [candidate with { FailingTestIdentities = entry.FailingTests }]);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or
+                                   ArgumentException or NotSupportedException or InvalidOperationException)
+        {
+            // An index marker alone cannot establish executed, current-candidate failure evidence.
+            return null;
+        }
     }
 
     private static bool SelectionContains(FindingEvidenceSelection selection, string identity)
