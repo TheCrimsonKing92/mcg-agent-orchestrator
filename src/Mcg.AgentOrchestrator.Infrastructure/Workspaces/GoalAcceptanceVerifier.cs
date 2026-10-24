@@ -2585,7 +2585,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         DotnetTestBuildPhase? dotnetTestBuildPhase,
         CancellationToken cancellationToken)
     {
-        var arguments = BuildCommandArguments(check);
+        var arguments = GoTestJsonGateReceipt.PrepareArguments(check, BuildCommandArguments(check), _executionContext?.ResultsPrefix);
         if (IsDotnetCommand(arguments))
         {
             if (IsDotnetTestCommand(arguments) && GateUsesStableSlot(stableSlotIndex, stableSlotLease))
@@ -2631,13 +2631,13 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 Advisory: check.Advisory), false);
         }
 
-        return (new AcceptanceCheckResult(
+        return (GoTestJsonGateReceipt.Attach(check, arguments, result, worktreePath, _executionContext?.ResultsPrefix, TailOutput, new AcceptanceCheckResult(
             check.Name,
             result.ExitCode == 0,
             result.ExitCode,
             result.ExitCode == 0 && !GoPackageFocusedEvidence.IsEvidenceCheck(check) ? null : TailOutput(result.Output),
             ResultSummary: BuildGenericCommandResultSummary(result),
-            Advisory: check.Advisory), false);
+            Advisory: check.Advisory)), false);
     }
 
     private async Task<(AcceptanceCheckResult Result, bool Retried)> RunDotnetTestCheckAsync(
