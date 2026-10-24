@@ -17,6 +17,7 @@ internal sealed class ReviewerVerdictEvidenceClosure(
                 return request.GoalId == goal.Id && !request.IsCompleted &&
                     request.Kind == HumanWaitKind.ProspectiveAcceptanceEvidence &&
                     (string.Equals(owner, "reviewer", StringComparison.OrdinalIgnoreCase) ||
+                     string.Equals(owner, "worker", StringComparison.OrdinalIgnoreCase) ||
                      string.Equals(owner, "developer", StringComparison.OrdinalIgnoreCase) ||
                      string.Equals(owner, "tester", StringComparison.OrdinalIgnoreCase));
             }).ToArray();

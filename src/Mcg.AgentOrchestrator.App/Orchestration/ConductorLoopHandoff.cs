@@ -883,13 +883,15 @@ internal static partial class ConductorLoopHandoff
         ConductLoopLaunchRequest request,
         IReadOnlyList<string> command,
         Func<ProcessTreeGuiSuppression.ConsoleSpawnScope>? acquireConsoleSuppression = null,
-        Action? beforeCreateProcess = null)
+        Action? beforeCreateProcess = null,
+        Func<uint, Func<uint, DetachedProcessCreationOutcome>, DetachedProcessCreationOutcome>? createProcess = null)
     {
         var nativeCommand = ResolveWindowsNativeCommand(command, request.WorkingDirectory);
-        var commandLine = new StringBuilder(BuildWindowsProcessCommandLine(nativeCommand));
+        var commandLine = BuildWindowsProcessCommandLine(nativeCommand);
         var environment = BuildWindowsEnvironmentBlock(request);
         var stdoutHandle = IntPtr.Zero;
         var stderrHandle = IntPtr.Zero;
+        var processCreated = false;
 
         try
         {
@@ -946,44 +948,75 @@ internal static partial class ConductorLoopHandoff
 
                     beforeCreateProcess?.Invoke();
                     var creationFlags = WindowsSuccessorCreationFlags | (suppressionScope?.ChildCreationFlags ?? 0);
-                    var authority = CaptureWindowsLaunchAuthority(creationFlags, nativeCommand[0]);
-                    if (!CreateProcessW(
+                    DetachedProcessCreationOutcome CreateNativeProcess(uint flags)
+                    {
+                        // CreateProcessW may mutate this buffer, so each attempt starts from the original.
+                        var created = CreateProcessW(
                             lpApplicationName: nativeCommand[0],
-                            lpCommandLine: commandLine,
+                            lpCommandLine: new StringBuilder(commandLine),
                             lpProcessAttributes: IntPtr.Zero,
                             lpThreadAttributes: IntPtr.Zero,
                             bInheritHandles: true,
-                            dwCreationFlags: (WindowsCreationFlags)creationFlags,
+                            dwCreationFlags: (WindowsCreationFlags)flags,
                             lpEnvironment: environment,
                             lpCurrentDirectory: request.WorkingDirectory,
                             lpStartupInfo: ref startupInfo,
-                            lpProcessInformation: out var processInformation))
+                            lpProcessInformation: out var information);
+                        var nativeError = created ? 0 : Marshal.GetLastWin32Error();
+                        return new DetachedProcessCreationOutcome(created, information.hProcess,
+                            information.hThread, (int)information.dwProcessId, nativeError);
+                    }
+
+                    DetachedProcessCreationOutcome Attempt(uint flags, string? fallback, out object authority)
                     {
-                        var nativeError = Marshal.GetLastWin32Error();
-                        TryAppendWindowsLaunchAuthority(request, authority, nativeError, null);
+                        authority = CaptureWindowsLaunchAuthority(flags, nativeCommand[0]);
+                        var outcome = createProcess is null
+                            ? CreateNativeProcess(flags)
+                            : createProcess(flags, CreateNativeProcess);
+                        processCreated = outcome.Created;
+                        if (!outcome.Created)
+                            TryAppendWindowsLaunchAuthority(request, authority, outcome.NativeError, null, fallback: fallback);
+                        return outcome;
+                    }
+
+                    string? fallback = null;
+                    var processInformation = Attempt(creationFlags, fallback, out var authority);
+                    if (!processInformation.Created && DetachedLaunchBreakawayFallback.TryGetRetryFlags(
+                            creationFlags, processInformation.NativeError, out var retryFlags))
+                    {
+                        fallback = "inherit-job";
+                        processInformation = Attempt(retryFlags, fallback, out authority);
+                    }
+                    if (!processInformation.Created)
+                    {
                         throw new Win32Exception(
-                            nativeError,
-                            $"Failed to start breakaway conduct loop successor (nativeError={nativeError}).");
+                            processInformation.NativeError,
+                            $"Failed to start detached launch '{request.Name}' (nativeError={processInformation.NativeError}).");
                     }
 
                     try
                     {
-                        var successorStartedAt = ReadSuccessorStartTimeFromHandle(processInformation.hProcess);
+                        var successorStartedAt = ReadSuccessorStartTimeFromHandle(processInformation.ProcessHandle);
                         TryAppendWindowsLaunchAuthority(request, authority, 0,
-                            (int)processInformation.dwProcessId, successorStartedAt);
+                            processInformation.ProcessId, successorStartedAt, fallback);
                         // In a nested hierarchy, CREATE_BREAKAWAY_FROM_JOB escapes the immediate job
                         // and each permissive ancestor until the first non-breakaway ancestor. A true
                         // any-job probe can therefore mean the successor escaped the incumbent's
                         // kill-on-close job but remains in a longer-lived host job.
-                        var residualJobMembership = ProbeProcessJobMembership(processInformation.hProcess);
+                        var residualJobMembership = ProbeProcessJobMembership(processInformation.ProcessHandle);
 
-                        return CreateBreakawayLaunchResult(request, (int)processInformation.dwProcessId,
+                        var result = CreateBreakawayLaunchResult(request, processInformation.ProcessId,
                             residualJobMembership, successorStartedAt);
+                        return fallback is null ? result : result with
+                        {
+                            LaunchDetail = result.LaunchDetail.Replace("breakawaySucceeded=true", "breakawaySucceeded=false",
+                                StringComparison.Ordinal) + $" fallback={fallback}"
+                        };
                     }
                     finally
                     {
-                        CloseHandle(processInformation.hThread);
-                        CloseHandle(processInformation.hProcess);
+                        CloseHandle(processInformation.ThreadHandle);
+                        CloseHandle(processInformation.ProcessHandle);
                     }
                 }
                 finally
@@ -1002,6 +1035,21 @@ internal static partial class ConductorLoopHandoff
                 CloseHandle(stdoutHandle);
             if (stderrHandle != IntPtr.Zero)
                 CloseHandle(stderrHandle);
+            if (!processCreated)
+            {
+                // Only paths opened by this invocation are owned; close both handles before deletion.
+                if (stdoutHandle != IntPtr.Zero)
+                    DeleteFailedLaunchOutput(request.StdoutPath);
+                if (stderrHandle != IntPtr.Zero)
+                    DeleteFailedLaunchOutput(request.StderrPath);
+            }
+        }
+
+        static void DeleteFailedLaunchOutput(string path)
+        {
+            try { File.Delete(path); }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
         }
     }
 
