@@ -9,6 +9,8 @@ public static class ManifestCheckComparer
     public static IReadOnlyList<ManifestCheckComparison> Compare(ProjectModel model, string manifestJson)
     {
         var (checks, unresolved) = LearnedTestCheckDeriver.Derive(model);
+        if (model.Stack == ProjectStack.Go)
+            return GoManifestCheckComparer.Compare(unresolved, manifestJson);
         return Compare(checks, unresolved, manifestJson);
     }
 
@@ -16,6 +18,8 @@ public static class ManifestCheckComparer
         AppliedOwnerAnswers applied)
     {
         var (checks, unresolved) = LearnedTestCheckDeriver.Derive(model, applied);
+        if (model.Stack == ProjectStack.Go)
+            return GoManifestCheckComparer.Compare(unresolved, manifestJson);
         return CompareChecks(checks, unresolved, manifestJson);
     }
 

@@ -20,14 +20,15 @@ public static class LearnedTestCheckDeriver
             var runner = model.TestSetups.FirstOrDefault(setup => setup.UnitId == unit.Id)?.Runner;
             var key = $"commands/{unit.Id}/test";
             // Owner answers settle only unresolved runners; confident discovery retains its provenance.
-            if (runner is not { Value: "VSTest" or "MTP", Confidence: FactConfidence.High or FactConfidence.Medium } &&
+            if (!Confident(runner) &&
                 applied.AnsweredFacts.LastOrDefault(fact => fact.FactKey == key) is { } answered)
                 runner = new ProjectFact<string>(OwnerAnswerValidator.Validate(key, answered.Fact.Value),
                     answered.Fact.Source, FactConfidence.High);
-            if (runner is { Value: "VSTest" or "MTP", Confidence: FactConfidence.High or FactConfidence.Medium })
+            if (runner is not null && Confident(runner))
             {
                 checks.Add(new LearnedTestCheck(unit.Id.Replace('\\', '/'), runner.Value.ToLowerInvariant(),
-                    runner.Confidence, runner.Source));
+                    runner.Confidence, runner.Source,
+                    model.Stack == ProjectStack.Go ? LearnedTestCheckKind.GoTest : LearnedTestCheckKind.DotnetTest));
             }
             else
             {
@@ -37,5 +38,9 @@ public static class LearnedTestCheckDeriver
         }
 
         return (checks, unresolved);
+
+        bool Confident(ProjectFact<string>? runner) =>
+            runner is { Confidence: FactConfidence.High or FactConfidence.Medium } &&
+            (model.Stack == ProjectStack.Go ? runner.Value == "go" : runner.Value is "VSTest" or "MTP");
     }
 }

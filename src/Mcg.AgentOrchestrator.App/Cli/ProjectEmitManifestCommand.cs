@@ -92,7 +92,8 @@ internal static class ProjectEmitManifestCommand
         {
             if (File.Exists(temporary)) File.Delete(temporary);
         }
-        output.WriteLine($"Emitted manifest: {destination} ({LearnedTestCheckDeriver.Derive(model, OwnerAnswerApplier.Apply(model, answers)).Checks.Count} checks)");
+        using var manifest = JsonDocument.Parse(result.Json!);
+        output.WriteLine($"Emitted manifest: {destination} ({manifest.RootElement.GetProperty("checks").GetArrayLength()} checks)");
         return 0;
     }
 

@@ -211,7 +211,18 @@ internal sealed partial class AcceptancePartitionVerdictCache
         AcceptancePartitionVerdictCacheOptions options, out string? unavailableReason)
     {
         unavailableReason = null;
-        if (options.GoalId is null)
+        string goalId;
+        if (options.GoalId is not null)
+        {
+            goalId = options.GoalId.Value;
+        }
+        else if (options.MemberGoalIds is { Count: > 0 } members && !members.Any(string.IsNullOrWhiteSpace))
+        {
+            goalId = members.Order(StringComparer.Ordinal).First();
+            (options.EmitDiagnostic ?? Console.WriteLine)(
+                $"PARTITION_VERDICT_CACHE identity=lead-member goal={goalId} members={members.Count}");
+        }
+        else
         {
             unavailableReason = "goal-id-unknown";
             return null;
@@ -247,13 +258,13 @@ internal sealed partial class AcceptancePartitionVerdictCache
         }
 
         var manifestIdentity = options.ResolveManifestIdentity();
-        var journalPath = PartitionVerdictJournalPath(options.WorktreePath, options.GoalId.Value);
+        var journalPath = PartitionVerdictJournalPath(options.WorktreePath, goalId);
         var journal = ReadPartitionVerdictJournal(journalPath);
-        var pairKey = BuildPairKey(options.GoalId.Value, candidateTreeSha, mainSha, manifestIdentity);
+        var pairKey = BuildPairKey(goalId, candidateTreeSha, mainSha, manifestIdentity);
         var priorReuseAttemptCount = LatestPartitionReuseAttemptCount(journal, pairKey);
         var reusableGreenExists = options.EffectiveChecks.Any(check =>
             TryBuildCacheKey(
-                options.GoalId.Value,
+                goalId,
                 candidateTreeSha,
                 mainSha,
                 manifestIdentity,
@@ -261,16 +272,16 @@ internal sealed partial class AcceptancePartitionVerdictCache
                 out _,
                 out _,
                 out var cacheKey) &&
-            LatestGreenVerdict(journal, options.GoalId.Value, cacheKey) is not null);
+            LatestGreenVerdict(journal, goalId, cacheKey) is not null);
         reusableGreenExists |= identicalTreeChecks.Any(check =>
-            LatestGreenVerdict(journal, options.GoalId.Value,
-                BuildIdenticalTreeKey(options.GoalId.Value, candidateTreeSha, mainSha, manifestIdentity, check)) is not null);
+            LatestGreenVerdict(journal, goalId,
+                BuildIdenticalTreeKey(goalId, candidateTreeSha, mainSha, manifestIdentity, check)) is not null);
         var forceFullRerun = reusableGreenExists &&
             priorReuseAttemptCount + 1 >= options.FullRerunEveryN;
         var attemptId = options.ResolveAttemptId();
 
         return new AcceptancePartitionVerdictCache(
-            options.GoalId.Value,
+            goalId,
             GoalAcceptanceVerifier.NormalizeShaToken(candidateTreeSha),
             GoalAcceptanceVerifier.NormalizeShaToken(mainSha),
             manifestIdentity,
@@ -295,13 +306,13 @@ internal sealed partial class AcceptancePartitionVerdictCache
             ResolveChangedFiles = options.ResolveChangedFiles ?? AcceptanceTestReuseShadow.ResolveChangedFilesFromGit,
             EmitDiagnostic = options.EmitDiagnostic ?? Console.WriteLine,
             DisjointLandingReuse = new AcceptanceDisjointLandingLaneReuse.Session(
-                options.WorktreePath, options.GoalId.Value, attemptId,
+                options.WorktreePath, goalId, attemptId,
                 GoalAcceptanceVerifier.NormalizeShaToken(candidateTreeSha),
                 GoalAcceptanceVerifier.NormalizeShaToken(mainSha), journal.Records, options.ResolveDisjointLandingFacts),
-            LaneCarryShadow = partitionCount == 0 ? null : new AcceptanceLaneCarryShadow(options.WorktreePath, options.GoalId.Value, attemptId,
+            LaneCarryShadow = partitionCount == 0 ? null : new AcceptanceLaneCarryShadow(options.WorktreePath, goalId, attemptId,
                 GoalAcceptanceVerifier.NormalizeShaToken(candidateTreeSha), options.ResolveLaneCarryChangedFiles),
             TestReuseShadow = partitionCount == 0 ? null : new AcceptanceTestReuseShadow(
-                options.WorktreePath, options.GoalId.Value, attemptId,
+                options.WorktreePath, goalId, attemptId,
                 GoalAcceptanceVerifier.NormalizeShaToken(mainSha),
                 GoalAcceptanceVerifier.NormalizeShaToken(candidateTreeSha),
                 GoalAcceptanceVerifier.NormalizeShaToken(verifyingCommitSha),
