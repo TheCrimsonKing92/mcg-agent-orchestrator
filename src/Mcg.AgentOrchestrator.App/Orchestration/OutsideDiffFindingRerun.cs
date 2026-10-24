@@ -341,8 +341,11 @@ internal static class OutsideDiffFindingRerun
         var findings = resolved.ToArray();
         if (!findings.Any(finding => finding.EvidenceOutcome?.DecisionReason == DecisionReason)) return note;
         // The merged snapshot records closure now; structured fields also preserve it when later
-        // Tester submissions replay historical rounds from their authoritative output.
-        return note + Environment.NewLine + "findings: " + JsonSerializer.Serialize(findings) +
+        // Tester submissions replay historical rounds from their authoritative output. Outcomes
+        // stay in the conductor-owned ledger; the worker finding parser discards them and its
+        // enum converter cannot read their hyphenated wire values.
+        return note + Environment.NewLine + "findings: " + JsonSerializer.Serialize(
+            findings.Select(finding => finding with { EvidenceOutcome = null })) +
             Environment.NewLine + "touched_anchors: []";
     }
 

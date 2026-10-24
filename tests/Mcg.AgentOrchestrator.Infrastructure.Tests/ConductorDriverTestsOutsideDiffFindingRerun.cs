@@ -33,7 +33,8 @@ public sealed class ConductorDriverTestsOutsideDiffFindingRerun
         Assert.Equal(Reason, fixture.Finding.EvidenceOutcome!.DecisionReason);
         Assert.Equal(FindingEvidenceOutcomeReason.ValidEvidence, fixture.Finding.EvidenceOutcome.ResultReason);
         Assert.Equal(WorkTaskStatus.Completed, fixture.Tester.Status);
-        Assert.True(WorkerResultBlockers.TryFindReviewFindingRound(fixture.Tester.LastVerification, out var closureRound, out _));
+        Assert.True(WorkerResultBlockers.TryFindReviewFindingRound(fixture.Tester.LastVerification,
+            out var closureRound, out var closureDiagnostic), closureDiagnostic);
         Assert.Equal(ReviewFindingState.Resolved, Assert.Single(closureRound.Findings).State);
         Assert.Empty(fixture.Retried);
         Assert.Single(fixture.Requests);
