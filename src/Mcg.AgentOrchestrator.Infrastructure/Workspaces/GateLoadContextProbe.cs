@@ -306,7 +306,8 @@ internal static class GateLoadContextProbe
                 heartbeatAge,
                 status.Path,
                 snapshot.RunClass,
-                snapshot.RunId));
+                snapshot.RunId,
+                snapshot.OwnerStateDirectory));
         }
 
         return occupants;
@@ -401,9 +402,11 @@ internal static class GateLoadContextProbe
         TimeSpan HeartbeatAge,
         string SourcePath = "",
         string? RunClass = null,
-        string? RunId = null)
+        string? RunId = null,
+        string? OwnerStateDirectory = null)
     {
         internal bool CountsAsAcceptanceOccupant => GateHeartbeatRunClass.CountsAsAcceptanceOccupant(RunClass);
+        internal bool CountsForOwnProjectAcceptance => CountsAsAcceptanceOccupant && !GateHeartbeatOwner.IsForeign(OwnerStateDirectory);
         internal string Identity => ProcessId is > 0
             ? $"pid:{ProcessId.Value}"
             : $"goal:{GoalId ?? SourcePath}";
