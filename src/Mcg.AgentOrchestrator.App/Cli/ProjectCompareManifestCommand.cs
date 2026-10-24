@@ -29,7 +29,9 @@ internal static class ProjectCompareManifestCommand
             : name.Equals(OrchestratorWorkspace.DefaultProjectName, StringComparison.OrdinalIgnoreCase)
                 ? new OrchestratorProject(OrchestratorWorkspace.DefaultProjectName, Path.GetFullPath(defaultRootDirectory))
                 : registry.GetRequiredProject(name);
-        var model = new DotnetProjectDiscoveryAdapter().Discover(rootOverride ?? project.RootDirectory,
+        var root = rootOverride ?? project.RootDirectory;
+        var adapter = ProjectDiscoveryAdapterSelector.Select(root, RepositorySourceInventory.ExcludedDirectoryNames);
+        var model = adapter.Discover(root,
             RepositorySourceInventory.ExcludedDirectoryNames, null, UnitCommandKinds.None);
         string? answerDirectory = null;
         try

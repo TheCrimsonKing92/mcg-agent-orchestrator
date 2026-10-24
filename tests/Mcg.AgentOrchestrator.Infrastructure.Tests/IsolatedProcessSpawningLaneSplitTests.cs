@@ -27,7 +27,8 @@ public sealed class IsolatedProcessSpawningLaneSplitTests
         typeof(CriterionEvidencePatchCarryTests),
         typeof(WorkerBuildCheckRecoveryTests),
         typeof(WorkerBuildCheckRecoveryTestsLockTimeout),
-        typeof(WorkerBuildCheckRecoveryTestsEvidenceMissingLockTimeout)
+        typeof(WorkerBuildCheckRecoveryTestsEvidenceMissingLockTimeout),
+        typeof(WorkerBuildCheckRecoveryTestsCapacityBeforeStart)
     ];
 
     // Copied verbatim from config/acceptance-manifest.json at pre-split merge base df9d0460.
@@ -189,7 +190,7 @@ public sealed class IsolatedProcessSpawningLaneSplitTests
         // The reference carries later carve-outs unrelated to this split.
         return lanes.Where(lane => lane.Name != LaneA && lane.Name != LaneB)
             .Select(lane => lane.Name == Remainder
-                ? lane with { Filter = PreSplitRemainderFilter + "&FullyQualifiedName!~AcceptanceExecutionCacheIsolatedBuildTests" }
+                ? lane with { Filter = PreSplitRemainderFilter + "&FullyQualifiedName!~AcceptanceExecutionCacheIsolatedBuildTests&FullyQualifiedName!~WorkerBuildRequest&FullyQualifiedName!~ExitReconcileBuild&FullyQualifiedName!~CompletionBuild&FullyQualifiedName!~WorkerBuildScopeDispatch&FullyQualifiedName!~FocusedEvidenceUnionPlanning&FullyQualifiedName!~MergeTrainDeferralFixtureEquivalence&FullyQualifiedName!~MergeTrainRedAttributionReplayScenario&FullyQualifiedName!~LifecycleGoalEpicInheritance&FullyQualifiedName!~SourceSizeRatchetClassRetightener&FullyQualifiedName!~ProviderUsageSelfHeal&FullyQualifiedName!~EpicPlanSourceFacts&FullyQualifiedName!~EpicDetailReadSnapshot&FullyQualifiedName!~RemoteWorkerBuildCheckFallback&FullyQualifiedName!~DeveloperCascade&FullyQualifiedName!~WorkerBuildReceipt&FullyQualifiedName!~ProviderHoldAcrossRestart&FullyQualifiedName!~ProviderUsageHoldSelfRetry&FullyQualifiedName!~ProviderSignInFailover&FullyQualifiedName!~MainIntegrationSquash&FullyQualifiedName!~ProjectIntegrationBranch&FullyQualifiedName!~TerminalGoalSweepTerminalTaskClosure&FullyQualifiedName!~RelaunchDrainV1GroupedGate&FullyQualifiedName!~AttributedFailureAutoRoute&FullyQualifiedName!~AgentRosterReload" }
                 : lane).ToArray();
     }
 

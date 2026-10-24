@@ -180,6 +180,37 @@ public sealed class RemoteFirstFocusedEvidenceTests : RemoteFirstFocusedEvidence
         Assert.Equal(RemoteLaneOutcomeCode.RemoteRed, Assert.Single(scenario.Health()).Outcome);
     }
 
+    [Fact]
+    public async Task RemoteRed_LongCheckName_ReportsNamedFailureNotMissing()
+    {
+        using var scenario = CreateScenario();
+        scenario.CompletedExecutor(red: true);
+        var focused = FocusedCheck();
+        var check = new GoalAcceptanceVerifier.AcceptanceManifestCheck
+        {
+            Name = "reviewer focused evidence: infrastructure tests " + string.Join("|",
+                Enumerable.Range(1, 40).Select(n => $"FullyQualifiedName~Class{n}Fixture")),
+            Type = focused.Type, Project = focused.Project, Runner = focused.Runner,
+            Arguments = focused.Arguments, IsFocusedEvidenceSelection = focused.IsFocusedEvidenceSelection,
+            TimeoutMinutes = focused.TimeoutMinutes, ExclusiveResourceKeys = focused.ExclusiveResourceKeys,
+            RequiresBuildSystemChange = focused.RequiresBuildSystemChange,
+            FocusedEvidenceSelections = focused.FocusedEvidenceSelections
+        };
+        Assert.True(check.Name.Length >= 1000);
+
+        var result = Assert.Single((await scenario.DirectAsync([check])).Results);
+
+        Assert.False(result.Passed);
+        Assert.StartsWith("remote-first verdict exit=1 failed=1 first=AlphaTests.RemoteFailure:", result.OutputTail);
+        Assert.DoesNotContain("trx=missing", result.OutputTail);
+        Assert.Equal(0, scenario.LocalCalls);
+        var row = Assert.Single(scenario.Health());
+        Assert.Equal(RemoteLaneOutcomeCode.RemoteRed, row.Outcome);
+        Assert.Equal(result.OutputTail, row.Reason);
+        var laneFolder = Path.GetDirectoryName(Assert.Single(result.TestResultPaths!))!;
+        Assert.Single(Directory.GetFiles(laneFolder, "remote-red-*.trx"));
+    }
+
     [Theory]
     [InlineData("unreachable", "Unreachable")]
     [InlineData("transport-unavailable", "TransportUnavailable")]

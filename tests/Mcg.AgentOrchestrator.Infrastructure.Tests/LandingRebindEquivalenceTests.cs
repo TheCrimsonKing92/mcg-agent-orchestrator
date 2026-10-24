@@ -9,6 +9,72 @@ using static LandingExecutorTests;
 public sealed class LandingRebindEquivalenceTests : HostCapacityBoundTestBase
 {
     [Xunit.Fact]
+    public void TrainRebindRefusalNamesEveryStaleObligation()
+    {
+        var fixture = GoalOwnedLinesPatchEquivalenceTests.CreateConflictFixture(changeGoalLine: true);
+        try
+        {
+            const string secondHead = "0123456789abcdef0123456789abcdef01234567";
+            Assert.NotEqual(fixture.OldHead, secondHead);
+            var (kernel, goal) = BindThreeAcceptance(fixture.OldHead, secondHead);
+            var before = goal.CriterionEvidenceObligations.ToArray();
+            var (twinKernel, twinGoal) = BindAcceptance(fixture.OldHead);
+            var expected = AcceptanceCriterionEvidence.RebindRecordAndDescribeOutstanding(
+                twinGoal, fixture.NewHead, twinKernel, "test", TrunkBranchName.Default, fixture.Repository);
+            Assert.NotNull(expected);
+            Assert.Contains("Carry-forward refused:", expected, StringComparison.Ordinal);
+
+            var diagnostic = AcceptanceCriterionEvidence.RebindRecordAndDescribeOutstanding(
+                [goal], _ => fixture.NewHead, kernel, "test", TrunkBranchName.Default, fixture.Repository);
+
+            Assert.Equal(
+                $"goal {goal.Id.Value[..8]}: {expected} Also bound to other candidates: 'criterion-v1-1' to {fixture.OldHead}; 'criterion-v1-2' to {secondHead}.",
+                diagnostic);
+            Assert.Equal(before, goal.CriterionEvidenceObligations.ToArray());
+            Assert.Equal(new[] { fixture.OldHead, fixture.OldHead, secondHead },
+                goal.CriterionEvidenceObligations.Select(item => item.ExpectedCandidateSha).ToArray());
+            Assert.All(goal.CriterionEvidenceObligations,
+                item => Assert.Equal(CriterionEvidenceState.Pending, item.State));
+            Assert.Empty(LandingCarryEntries(fixture.Repository, goal));
+        }
+        finally
+        {
+            TryDeleteDirectory(fixture.Repository);
+        }
+    }
+
+    [Xunit.Fact]
+    public void SoloRefusalNamesEveryStaleObligation()
+    {
+        var fixture = GoalOwnedLinesPatchEquivalenceTests.CreateConflictFixture(changeGoalLine: true);
+        try
+        {
+            const string secondHead = "0123456789abcdef0123456789abcdef01234567";
+            Assert.NotEqual(fixture.OldHead, secondHead);
+            var (kernel, goal) = BindThreeAcceptance(fixture.OldHead, secondHead);
+            var before = goal.CriterionEvidenceObligations.ToArray();
+            var (twinKernel, twinGoal) = BindAcceptance(fixture.OldHead);
+            var expected = AcceptanceCriterionEvidence.RecordAndDescribeOutstanding(
+                twinGoal, fixture.NewHead, twinKernel, TrunkBranchName.Default, fixture.Repository);
+            Assert.NotNull(expected);
+            Assert.Contains("Carry-forward refused:", expected, StringComparison.Ordinal);
+
+            var diagnostic = AcceptanceCriterionEvidence.RecordAndDescribeOutstanding(
+                goal, fixture.NewHead, kernel, TrunkBranchName.Default, fixture.Repository);
+
+            Assert.StartsWith(expected, diagnostic, StringComparison.Ordinal);
+            Assert.EndsWith(
+                $" Also bound to other candidates: 'criterion-v1-1' to {fixture.OldHead}; 'criterion-v1-2' to {secondHead}.",
+                diagnostic, StringComparison.Ordinal);
+            Assert.Equal(before, goal.CriterionEvidenceObligations.ToArray());
+        }
+        finally
+        {
+            TryDeleteDirectory(fixture.Repository);
+        }
+    }
+
+    [Xunit.Fact]
     public void ChangedGoalLineLeavesBindingPendingWithExistingRefusalText()
     {
         var fixture = GoalOwnedLinesPatchEquivalenceTests.CreateConflictFixture(changeGoalLine: true);
@@ -147,6 +213,19 @@ public sealed class LandingRebindEquivalenceTests : HostCapacityBoundTestBase
         {
             TryDeleteDirectory(fixture.Repository);
         }
+    }
+
+    private static (AgentOrchestratorKernel Kernel, Goal Goal) BindThreeAcceptance(string oldHead, string secondHead)
+    {
+        var (kernel, goal) = SimpleGoal("Name every stale acceptance binding");
+        kernel.RecordGoalRefinement(goal.Id, new RefinedSpec(
+            goal.Objective, ["First gate evidence", "Second gate evidence", "Third gate evidence"],
+            VerificationClass.TestVerifiable, [], []));
+        for (var index = 0; index < 3; index++)
+            kernel.MapCriterionEvidenceOwner(goal.Id, index, 1, CriterionEvidenceOwner.Acceptance,
+                "reviewer", CriterionEvidenceScopes.FullAcceptanceGate,
+                expectedCandidateSha: index == 2 ? secondHead : oldHead);
+        return (kernel, goal);
     }
 
     private static GoalOperationJournalEntry[] LandingCarryEntries(string repository, Goal goal) =>

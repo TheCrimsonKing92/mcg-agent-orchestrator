@@ -84,7 +84,8 @@ internal sealed partial class GoalDispatchOperations
         WorkerProfileCatalog? subscriptionProfiles = null, bool? cascadeMechanicalReworkCheap = null)
     {
         var intentStore = SqliteOperatorIntentStore.ForDirectories(workspace.OrchestratorDirectory, workspace.LogDirectory);
-        var intentAdmission = intentStore.CaptureAdmission(goal.Id.Value, task.Id.Value);
+        var intentAdmission = intentStore.CaptureAdmission(goal.Id.Value, task.Id.Value,
+            TaskGraphIdentity.Compute(goal), workspace.SqliteStatePath);
         EnsureRefinedForTask(kernel, workspace, providers, goal, task);
         var subscriptionMetadata = TryBuildProfileSubscriptionMetadata(goal, task, profile, agents,
             subscriptionProfiles, ResolveCascadeTesterCheapFirst(workspace, cascadeTesterCheapFirst, conductorPolicy),
@@ -431,7 +432,8 @@ internal sealed partial class GoalDispatchOperations
         goal = kernel.GetGoal(goal.Id);
         var intentStore = SqliteOperatorIntentStore.ForDirectories(workspace.OrchestratorDirectory, workspace.LogDirectory);
         var intentAdmissions = goal.Tasks.ToDictionary(task => task.Id,
-            task => intentStore.CaptureAdmission(goal.Id.Value, task.Id.Value));
+            task => intentStore.CaptureAdmission(goal.Id.Value, task.Id.Value,
+                TaskGraphIdentity.Compute(goal), workspace.SqliteStatePath));
         var held = intentStore.ListHeldTaskIds(goal.Id.Value).Select(id => new TaskId(id)).ToHashSet();
         foreach (var id in held)
             if (intentAdmissions.TryGetValue(id, out var reference))
@@ -480,7 +482,8 @@ internal sealed partial class GoalDispatchOperations
         string? cascadeCheapModelAlias = null, bool? cascadeMechanicalReworkCheap = null)
     {
         var intentStore = SqliteOperatorIntentStore.ForDirectories(workspace.OrchestratorDirectory, workspace.LogDirectory);
-        var intentAdmission = intentStore.CaptureAdmission(goal.Id.Value, task.Id.Value);
+        var intentAdmission = intentStore.CaptureAdmission(goal.Id.Value, task.Id.Value,
+            TaskGraphIdentity.Compute(goal), workspace.SqliteStatePath);
         EnsureRefinedForTask(kernel, workspace, providers, goal, task);
         var home = _resolveHome(workspace);
         var prepared = WorkerProfileDispatcher.PrepareSubscriptionTask(

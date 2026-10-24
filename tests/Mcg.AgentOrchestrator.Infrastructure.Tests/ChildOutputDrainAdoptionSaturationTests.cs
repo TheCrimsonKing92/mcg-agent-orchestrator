@@ -11,6 +11,77 @@ using Mcg.AgentOrchestrator.Infrastructure;
 [Xunit.Collection("ProcessSpawningProcessLocal")]
 public sealed class ChildOutputDrainAdoptionSaturationTests
 {
+    [Xunit.Fact]
+    public void WorktreeTreeDigestComputesWithSaturatedThreadPool()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"mcg-digest-saturation-{Guid.NewGuid():N}");
+        try
+        {
+            InitializeDigestRepository(root);
+            Assert.True(WorktreeTreeDigest.TryCompute(root, out var expectedDigest, out var reason, out var failure),
+                WorktreeTreeDigestFailure.WithDetail(reason, failure));
+            Assert.Equal("matched", reason);
+            Assert.Null(failure);
+
+            PipeDrainThreadPoolSaturationTests.RunWithSaturatedThreadPool(() =>
+            {
+                Assert.True(WorktreeTreeDigest.TryCompute(root, out var digest, out var saturatedReason, out var saturatedFailure),
+                    WorktreeTreeDigestFailure.WithDetail(saturatedReason, saturatedFailure));
+                Assert.Equal("matched", saturatedReason);
+                Assert.Null(saturatedFailure);
+                Assert.Equal(expectedDigest, digest);
+            });
+        }
+        finally
+        {
+            try { if (Directory.Exists(root)) Directory.Delete(root, recursive: true); }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+        }
+    }
+
+    [Xunit.Fact]
+    public void WorktreeTreeDigestHungChildStillTimesOutAtProcessTimeout()
+    {
+        PipeDrainThreadPoolSaturationTests.RunWithSaturatedThreadPool(() =>
+        {
+            var start = new ProcessStartInfo("cmd.exe")
+            {
+                Arguments = "/d /c ping -n 30 127.0.0.1",
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true
+            };
+            var result = WorktreeTreeDigest.RunProcess(start, 500, PipeDrain.DefaultTimeoutMilliseconds);
+
+            Assert.Equal(-1, result.ExitCode);
+            Assert.True(result.TimedOut);
+            Assert.Equal("wait", result.TimeoutKind);
+            Assert.Equal(string.Empty, result.Output);
+        });
+    }
+
+    private static void InitializeDigestRepository(string root)
+    {
+        Directory.CreateDirectory(root);
+        RunDigestFixtureGit(root, "init");
+        File.AppendAllText(Path.Combine(root, ".git", "config"),
+            "\n[core]\n\tautocrlf = false\n[commit]\n\tgpgSign = false\n" +
+            "[user]\n\tname = Digest Test\n\temail = digest@example.test\n");
+        var path = Path.Combine(root, "tracked.txt");
+        File.WriteAllText(path, "committed\n");
+        RunDigestFixtureGit(root, "add", "-f", "--", "tracked.txt");
+        RunDigestFixtureGit(root, "commit", "-m", "Digest fixture");
+        File.WriteAllText(path, "uncommitted edit\n");
+    }
+
+    private static void RunDigestFixtureGit(string root, params string[] args)
+    {
+        var result = GitCli.Run(root, args);
+        Assert.True(result.ExitCode == 0, result.Error);
+    }
+
     [Xunit.Fact(DisplayName = "GoalWorktrees_direct_git_returns_complete_output_with_saturated_thread_pool")]
     public void GoalWorktreesDirectGitReturnsCompleteOutputWithSaturatedThreadPool()
     {

@@ -90,7 +90,7 @@ public sealed class StoreSchemaRegistryTests
         Assert.Equal("merge-train-acceptance.db", StoreSchemaRegistry.MergeTrainAcceptance.Database);
         Assert.Equal(1, StoreSchemaRegistry.DogfoodLog.CurrentVersion);
         Assert.Equal("dogfood-log.db", StoreSchemaRegistry.DogfoodLog.Database);
-        Assert.Equal(2, StoreSchemaRegistry.OperatorIntents.CurrentVersion);
+        Assert.Equal(4, StoreSchemaRegistry.OperatorIntents.CurrentVersion);
         Assert.Equal(SqliteOperatorIntentStore.DatabaseFileName, StoreSchemaRegistry.OperatorIntents.Database);
     }
 
@@ -117,6 +117,45 @@ public sealed class StoreSchemaRegistryTests
             Assert.True(versions.Read());
             Assert.Equal(StoreSchemaRegistry.OperatorIntents.StoreName, versions.GetString(0));
             Assert.False(versions.Read());
+        }
+        finally { if (Directory.Exists(root)) Directory.Delete(root, recursive: true); }
+    }
+
+    [Fact]
+    public void OperatorIntents_V3Upgrade_PreservesLaunchHistoryWithoutInventingAttempt()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "mcg-launch-schema-" + Guid.NewGuid().ToString("N"));
+        var path = Path.Combine(root, SqliteOperatorIntentStore.DatabaseFileName);
+        try
+        {
+            SqliteOperatorIntentStore.Setup(path);
+            using (var conn = new SqliteConnection(new SqliteConnectionStringBuilder
+                { DataSource = path, Mode = SqliteOpenMode.ReadWrite, Pooling = false }.ToString()))
+            {
+                conn.Open();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = """
+                    ALTER TABLE task_intent_launches DROP COLUMN dispatched_at;
+                    INSERT INTO task_intent_launches VALUES
+                        ('legacy-decision','goal','task',0,123,'2026-10-21T00:00:00+00:00','fixture');
+                    UPDATE store_schema_versions SET version=3 WHERE store_name='operator-intents';
+                    """;
+                cmd.ExecuteNonQuery();
+            }
+            SqliteOperatorIntentStore.Setup(path);
+            SqliteOperatorIntentStore.Setup(path);
+            using var upgraded = new SqliteConnection(new SqliteConnectionStringBuilder
+                { DataSource = path, Mode = SqliteOpenMode.ReadOnly, Pooling = false }.ToString());
+            upgraded.Open();
+            Assert.Equal(StoreSchemaState.Current, StoreSchemaVersions.Verify(upgraded, StoreSchemaRegistry.OperatorIntents));
+            using var read = upgraded.CreateCommand();
+            read.CommandText = "SELECT decision_key,task_id,dispatched_at FROM task_intent_launches";
+            using var reader = read.ExecuteReader();
+            Assert.True(reader.Read());
+            Assert.Equal("legacy-decision", reader.GetString(0));
+            Assert.Equal("task", reader.GetString(1));
+            Assert.True(reader.IsDBNull(2));
+            Assert.False(reader.Read());
         }
         finally { if (Directory.Exists(root)) Directory.Delete(root, recursive: true); }
     }

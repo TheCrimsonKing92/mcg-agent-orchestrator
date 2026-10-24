@@ -9,7 +9,7 @@ internal static class GroupedGateReceiptTrxEvidence
         string Kind, string ReceiptId, DateTimeOffset CompletedAt, IReadOnlyList<string> TrxPaths, int? BriefVersion = null);
 
     internal sealed record SelectorEvidence(
-        string Selector, int Passed, int Failed, int Superseded, bool Satisfied,
+        string Selector, int Passed, int Failed, int Superseded, int Skipped, bool Satisfied,
         IReadOnlyList<string>? AmbiguousClassNames = null)
     {
         internal string ReportedEntry => ProspectiveEvidenceTrxRows.FormatEntry(Selector, AmbiguousClassNames);
@@ -67,7 +67,7 @@ internal static class GroupedGateReceiptTrxEvidence
         catch (Exception)
         {
             // A partial receipt is never sufficient, even when its readable rows pass.
-            return selectors.Select(selector => new SelectorEvidence(selector, 0, 0, 0, false)).ToArray();
+            return selectors.Select(selector => new SelectorEvidence(selector, 0, 0, 0, 0, false)).ToArray();
         }
 
         return selectors.Select(selector =>
@@ -78,8 +78,10 @@ internal static class GroupedGateReceiptTrxEvidence
             var superseded = matches.Count(row => !row.Passed && rows.Any(rerun => rerun.Passed &&
                 string.Equals(rerun.FullIdentity, row.FullIdentity, StringComparison.Ordinal) &&
                 !string.Equals(rerun.Path, row.Path, StringComparison.OrdinalIgnoreCase)));
-            var failed = matches.Length - passed - superseded;
-            return new SelectorEvidence(selector, passed, failed, superseded,
+            var skipped = passed > 0 && matches.All(row => row.Passed || row.Outcome == "NotExecuted")
+                ? matches.Length - passed - superseded : 0;
+            var failed = matches.Length - passed - superseded - skipped;
+            return new SelectorEvidence(selector, passed, failed, superseded, skipped,
                 passed > 0 && failed == 0 && ambiguous is null, ambiguous);
         }).ToArray();
     }

@@ -14,6 +14,8 @@ internal sealed class GateHeartbeatRuntime
     private DateTimeOffset _lastProgressAt;
     private DateTimeOffset _lastProgressEmittedAt = DateTimeOffset.MinValue;
     private long _lastOutputBytes = -1;
+    private DateTimeOffset? _lastRunningObservedAt;
+    private DateTimeOffset? _lastRunningProgressAt;
 
     public GateHeartbeatRuntime(
         GateHeartbeatContext context,
@@ -39,6 +41,8 @@ internal sealed class GateHeartbeatRuntime
     public void WriteRunning(bool emitProgress)
     {
         var snapshot = BuildSnapshot("running", childPid: _processId);
+        _lastRunningObservedAt = snapshot.LastObservedAt;
+        _lastRunningProgressAt = snapshot.LastProgressAt;
         GateHeartbeatArtifacts.TryWrite(_context.HeartbeatPath, snapshot);
         MirrorToStableSlot(snapshot);
         if (emitProgress || snapshot.LastObservedAt - _lastProgressEmittedAt >= _progressInterval)
@@ -51,7 +55,11 @@ internal sealed class GateHeartbeatRuntime
 
     public void WriteFinal(string state, int? childPid, int? exitCode)
     {
-        var snapshot = BuildSnapshot(state, childPid, exitCode);
+        var snapshot = BuildSnapshot(state, childPid, exitCode) with
+        {
+            PreStopObservedAt = _lastRunningObservedAt,
+            PreStopProgressAt = _lastRunningProgressAt
+        };
         GateHeartbeatArtifacts.TryWrite(_context.HeartbeatPath, snapshot);
         if (_context.StableSlotHeartbeatPath is { } stableSlotPath)
         {

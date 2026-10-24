@@ -55,6 +55,16 @@ private static void HandleLifecycleGoal(CliExecutionContext context, IReadOnlyLi
             : GoalLifecycleCommands.CreateAndActivateGoal(context.Kernel, context.Agents, objective, context.Workspace, context.Providers, context.EventWriter);
     var goal = context.CurrentGoal;
     ApplySourceBacklogItemLink(context, goal, sourceBacklogLink);
+    // Persistent intake must reject readiness risk before durable creation. The
+    // in-memory dispatcher keeps its legacy journal-before-preflight ordering so
+    // a refused retry reuses the goal already retained in that kernel.
+    if (existingGoal is null && context.HasCheckpointPersistence)
+        CliLifecycleReadiness.EnsureBeforeCreation(context, goal, HasCliConfirmation(parts, "--confirm-readiness-risk"));
+    // The persistent lifecycle route runs outside a wrapping write transaction.
+    // Commit creation before publishing success, recording the replay journal or starting work.
+    context.PersistCheckpoint(context.Kernel);
+    goal = context.Kernel.GetGoal(goal.Id);
+    context.CurrentGoal = goal;
     if (existingGoal is null)
         EpicAtCreation.InheritAfterCommit(context, goal, requestedEpic, sourceBacklogLink?.Item.Id);
     var goalPrefix = goal.Id.Value[..8];
@@ -97,6 +107,9 @@ private static void HandleLifecycleGoal(CliExecutionContext context, IReadOnlyLi
     GoalOperationJournal.Begin(context.Workspace.ExecutionDirectory, goal, "run-goal", "Starting subscription-driven goal loop.");
     RecordPolicyAllowed(context, goal, policy, AutonomyAction.DispatchStart, commandName);
     var runGoalResult = RunGoal(context, goal, allowLargePaidSubscriptionStart: true);
+    context.PersistCheckpoint(context.Kernel);
+    goal = context.Kernel.GetGoal(goal.Id);
+    context.CurrentGoal = goal;
     Console.WriteLine("Stage run-goal:");
     ConsoleViews.PrintRunGoalResult(goal, runGoalResult, context.Agents);
     if (goal.Status != GoalStatus.Verified)

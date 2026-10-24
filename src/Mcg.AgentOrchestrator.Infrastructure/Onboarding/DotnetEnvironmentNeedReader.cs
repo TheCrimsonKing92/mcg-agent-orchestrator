@@ -15,7 +15,7 @@ internal static class DotnetEnvironmentNeedReader
         var global = Path.Combine(root, "global.json");
         var source = File.Exists(global) ? new FactSource("global.json", 1) : commands.FirstOrDefault()?.BuildCommand.Source;
         string? version = null;
-        if (File.Exists(global) && DotnetProjectDiscoveryAdapter.IsSafePath(root, global))
+        if (File.Exists(global) && ProjectFactHelpers.IsSafePath(root, global))
         {
             try
             {
@@ -32,12 +32,12 @@ internal static class DotnetEnvironmentNeedReader
             catch (Exception exception) when (exception is JsonException or IOException or UnauthorizedAccessException) { }
         }
         if (source is not null)
-            needs.Add(new EnvironmentNeed("dotnet-sdk", DotnetProjectDiscoveryAdapter.Fact(version ?? "undetermined",
+            needs.Add(new EnvironmentNeed("dotnet-sdk", ProjectFactHelpers.Fact(version ?? "undetermined",
                 version is null ? FactConfidence.Low : FactConfidence.High, source, "environment/dotnet-sdk",
                 "Which .NET SDK version is required? No readable SDK pin establishes it.", questions)));
 
         var manifest = ManifestPaths.FirstOrDefault(relative =>
-            File.Exists(Path.Combine(root, relative)) && DotnetProjectDiscoveryAdapter.IsSafePath(root, Path.Combine(root, relative)));
+            File.Exists(Path.Combine(root, relative)) && ProjectFactHelpers.IsSafePath(root, Path.Combine(root, relative)));
         if (manifest is null)
             return needs;
         try
@@ -52,14 +52,14 @@ internal static class DotnetEnvironmentNeedReader
                 var pinned = tool.Value.ValueKind == JsonValueKind.Object && tool.Value.TryGetProperty("version", out var value) &&
                     value.ValueKind == JsonValueKind.String ? value.GetString() : null;
                 if (string.IsNullOrWhiteSpace(pinned)) pinned = null;
-                needs.Add(new EnvironmentNeed(tool.Name, DotnetProjectDiscoveryAdapter.Fact(pinned ?? "undetermined",
+                needs.Add(new EnvironmentNeed(tool.Name, ProjectFactHelpers.Fact(pinned ?? "undetermined",
                     pinned is null ? FactConfidence.Low : FactConfidence.High, new FactSource(manifest, KeyLine(bytes, "tools", tool.Name)),
                     $"environment/{tool.Name}", "Confirm this tool's required version; its manifest has no version pin.", questions)));
             }
         }
         catch (Exception exception) when (exception is JsonException or IOException or UnauthorizedAccessException)
         {
-            DotnetProjectDiscoveryAdapter.Ask("environment/tool-manifest", $"Confirm tool requirements: {exception.Message}",
+            ProjectFactHelpers.Ask("environment/tool-manifest", $"Confirm tool requirements: {exception.Message}",
                 new FactSource(manifest, 1), questions);
         }
         return needs;

@@ -56,7 +56,11 @@ public sealed class OperatorIntentCoordinatorTerminalCompletionTests
             var error = Xunit.Assert.Throws<InvalidOperationException>(() => coordinator.CompletePersisted([goal.Id]));
             Xunit.Assert.Equal("operator intent store unavailable", error.Message);
             Xunit.Assert.Equal(OperatorIntentStatus.Claimed, (await store.GetAsync(first.Id))!.Status);
+            failing.ReadCount = 0;
             var waiting = coordinator.ExecutePending(kernel, goal);
+            Xunit.Assert.Equal(1, failing.ReadCount);
+            Xunit.Assert.True(coordinator.HasPendingCompletion(goal.Id.Value));
+            Xunit.Assert.Equal(caseName == "read-fails", waiting.PreserveGoalHold);
             Xunit.Assert.Equal($"OPERATOR_INTENT goal={goal.Id.Value[..8]} result=waiting-for-state-commit count=1",
                 Xunit.Assert.Single(waiting.ProgressLines));
 
@@ -67,6 +71,53 @@ public sealed class OperatorIntentCoordinatorTerminalCompletionTests
         finally
         {
             Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public async Task UnreadableRepairCompletionRetainsHoldUntilReadRecovery(bool checkpointRebased)
+    {
+        using var fixture = new GraphRepairTestFixture();
+        var intent = fixture.Enqueue();
+        var now = DateTimeOffset.UtcNow;
+        var failing = new FailingCompletionStore(fixture.Store, "read-fails");
+        var coordinator = new OperatorIntentCoordinator(failing, utcNow: () => now);
+        var kernel = await fixture.Repository.LoadGoalsAsync([fixture.Goal.Id]);
+        Xunit.Assert.True(coordinator.ExecutePending(kernel, kernel.GetGoal(fixture.Goal.Id)).PreserveGoalHold);
+        if (checkpointRebased)
+            kernel.ReplaceGoalWithSnapshot((await fixture.Repository.LoadGoalAsync(fixture.Goal.Id))!);
+        var before = GraphRepairTestFixture.Snapshot(kernel);
+
+        var waiting = coordinator.ExecutePending(kernel, kernel.GetGoal(fixture.Goal.Id));
+        Xunit.Assert.Equal(1, failing.ReadCount);
+        Xunit.Assert.True(waiting.PreserveGoalHold);
+        Xunit.Assert.True(coordinator.HasPendingCompletion(fixture.Goal.Id.Value));
+        Xunit.Assert.Equal($"OPERATOR_INTENT goal={fixture.Goal.Id.Value[..8]} result=waiting-for-state-commit count=1",
+            Xunit.Assert.Single(waiting.ProgressLines));
+        Xunit.Assert.Equal(before, GraphRepairTestFixture.Snapshot(kernel));
+        Xunit.Assert.Equal(OperatorIntentStatus.Claimed, (await fixture.Store.GetAsync(intent.Id))!.Status);
+
+        failing.FailReads = false;
+        failing.FailCompletion = false;
+        failing.ReadCount = 0;
+        now = intent.AdmissionExpiresAt!.Value.AddSeconds(1);
+        var recovered = coordinator.ExecutePending(kernel, kernel.GetGoal(fixture.Goal.Id));
+        Xunit.Assert.Equal(1, failing.ReadCount);
+        Xunit.Assert.Equal(!checkpointRebased, recovered.PreserveGoalHold);
+        if (checkpointRebased)
+        {
+            Xunit.Assert.False(recovered.MutatedGoalState);
+            Xunit.Assert.False(coordinator.HasPendingCompletion(fixture.Goal.Id.Value));
+            Xunit.Assert.Equal(2, kernel.GetGoal(fixture.Goal.Id).Tasks.Count);
+            Xunit.Assert.Equal(OperatorIntentStatus.Rejected, (await fixture.Store.GetAsync(intent.Id))!.Status);
+        }
+        else
+        {
+            Xunit.Assert.Equal(5, kernel.GetGoal(fixture.Goal.Id).Tasks.Count);
+            coordinator.CompletePersisted([fixture.Goal.Id]);
+            Xunit.Assert.Equal(OperatorIntentStatus.Applied, (await fixture.Store.GetAsync(intent.Id))!.Status);
         }
     }
 
@@ -107,6 +158,8 @@ public sealed class OperatorIntentCoordinatorTerminalCompletionTests
     private sealed class FailingCompletionStore(IOperatorIntentStore inner, string caseName) : IOperatorIntentStore
     {
         public bool FailCompletion { get; set; } = true;
+        public bool FailReads { get; set; } = true;
+        public int ReadCount { get; set; }
 
         public Task<OperatorIntentRecord> EnqueueAsync(OperatorIntentRecord intent, CancellationToken cancellationToken = default) =>
             inner.EnqueueAsync(intent, cancellationToken);
@@ -128,7 +181,8 @@ public sealed class OperatorIntentCoordinatorTerminalCompletionTests
 
         public async Task<OperatorIntentRecord?> GetAsync(string intentId, CancellationToken cancellationToken = default)
         {
-            if (caseName == "read-fails")
+            ReadCount++;
+            if (caseName == "read-fails" && FailReads)
             {
                 throw new IOException("operator intent read unavailable");
             }
