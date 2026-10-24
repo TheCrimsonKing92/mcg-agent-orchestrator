@@ -73,7 +73,11 @@ internal sealed class FindingReceiptClosureDiagnosis
             return Fail(BlockersUnreadable, $"Tester task {task.Id} has no readable blockers status.");
         if (blockers != WorkerResultBlockers.BlockersStatus.None)
             return Fail(WorkerBlockersReported, $"Tester task {task.Id} reported blockers status {blockers}.");
-        if (WorkerResultBlockers.TryFindFailingTests(verification, out var failingTests))
+        var openForException = ReviewFindings.GetOpenBlockingFindings(
+            verification.MergedReviewFindings ?? [], goal.EffectiveAcceptanceCriteriaCorrections);
+        if (WorkerResultBlockers.TryFindFailingTests(verification, out var failingTests) &&
+            !(openForException.Count > 0 && openForException.All(finding =>
+                OutsideDiffFindingRerun.AuthorizesClosure(goal, task, finding, candidateSha))))
             return Fail(FailingTestsReported, $"Tester task {task.Id} reported failing tests {failingTests}.");
         if (WorkerResultBlockers.TryGetTestsStatus(verification, out var tests) &&
             tests == WorkerResultBlockers.TestsStatus.Inconclusive)
@@ -93,7 +97,8 @@ internal sealed class FindingReceiptClosureDiagnosis
         var selected = new List<(ReviewFinding, FindingEvidenceReceipt)>();
         foreach (var finding in open)
         {
-            if (finding.Category != FindingCategory.TestEvidence)
+            if (finding.Category != FindingCategory.TestEvidence &&
+                !OutsideDiffFindingRerun.AuthorizesClosure(goal, task, finding, candidateSha))
                 return Fail(FindingCategoryNotTestEvidence, $"Finding {finding.StableId} has category {finding.Category}.");
             if (finding.EvidenceOutcome is not { Honoured: true } outcome)
                 return Fail(EvidenceOutcomeNotHonoured, $"Finding {finding.StableId} has no honoured evidence outcome.");

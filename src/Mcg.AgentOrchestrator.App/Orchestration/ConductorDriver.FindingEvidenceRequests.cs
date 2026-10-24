@@ -522,7 +522,7 @@ internal sealed partial class ConductorDriver
             $"reason={FindingEvidenceNotHonouredReasonJsonConverter.ToWireValue(reason)}; detail={TrimForConductorMessage(detail)}");
     }
 
-    private static bool TryNormalizeFindingEvidenceRequest(
+    internal static bool TryNormalizeFindingEvidenceRequest(
         FindingEvidenceRequest request,
         AcceptanceGateEngineSettings engineSettings,
         Func<string, string, IReadOnlyList<string>> resolveSiblingClasses,
@@ -609,13 +609,13 @@ internal sealed partial class ConductorDriver
         return true;
     }
 
-    private static string FormatFindingEvidenceSelection(FindingEvidenceSelection selection) =>
+    internal static string FormatFindingEvidenceSelection(FindingEvidenceSelection selection) =>
         selection.TestProject + ":" + selection.TestClass;
 
-    private static string BuildFindingEvidenceIdentity(FindingEvidenceRequest request) =>
+    internal static string BuildFindingEvidenceIdentity(FindingEvidenceRequest request) =>
         FindingEvidenceExecutionClassifier.BuildRequestIdentity(request);
 
-    private ActionableCandidateRedAttribution? TryAttributeActionableCandidateRed(
+    internal ActionableCandidateRedAttribution? TryAttributeActionableCandidateRed(
         Goal goal,
         string candidateSha,
         IReadOnlyList<FindingEvidenceArmReceipt> arms,
@@ -726,7 +726,7 @@ internal sealed partial class ConductorDriver
             .ToLowerInvariant()[..24];
     }
 
-    private static string CreateFindingEvidenceBatchId(
+    internal static string CreateFindingEvidenceBatchId(
         string candidateSha,
         string findingRoundFingerprint,
         string policyName,
@@ -747,7 +747,7 @@ internal sealed partial class ConductorDriver
                 : ConductorHoldOwner.None
         };
 
-    private sealed record ActionableCandidateRedAttribution(
+    internal sealed record ActionableCandidateRedAttribution(
         IReadOnlyList<ReviewFinding> Findings,
         IReadOnlyList<string> FailingTestIdentities,
         IReadOnlyList<string> CandidateTestResultPaths);

@@ -82,18 +82,18 @@ internal sealed partial class ConductorDriver
     private readonly Action<Goal, AcceptanceVerificationSummary> _runAdvisorySemanticAcceptance;
     private readonly Func<Goal, string, DotnetBuildEnvironmentLease?, CancellationToken, FocusedEvidenceRunResult> _runFocusedEvidence;
     private readonly Func<Goal, string, DotnetBuildEnvironmentLease?, CancellationToken, FocusedEvidenceRunResult> _runDualArmFocusedEvidence;
-    private readonly bool _focusedEvidenceRunnerConfigured;
-    private readonly Func<Goal, PreReviewEvidenceContext> _getPreReviewEvidenceContext;
-    private readonly Func<Goal, AcceptanceGateEngineSettings> _getFindingEvidenceEngineSettings;
+    internal readonly bool _focusedEvidenceRunnerConfigured;
+    internal readonly Func<Goal, PreReviewEvidenceContext> _getPreReviewEvidenceContext;
+    internal readonly Func<Goal, AcceptanceGateEngineSettings> _getFindingEvidenceEngineSettings;
     private readonly Func<Goal, string, string, IReadOnlyList<string>> _resolveFindingEvidenceSiblingClasses;
     private readonly Action<GoalId, TaskId, PreReviewEvidenceReceipt> _recordPreReviewEvidence;
     private readonly Action<GoalId, TaskId, string, int> _recordPreReviewMappingEscalationSuppressed;
     private readonly Func<GoalId, TaskId, string, RetryRoundKind?, RetryCause, TaskSpec> _retryTask;
     private readonly Action<GoalId, TaskId, string> _recordTaskNote;
-    private readonly Action<GoalId, TaskId, string> _recordFindingEvidenceRequest;
-    private readonly Action<GoalId, TaskId, string> _recordFindingEvidenceRun;
+    internal readonly Action<GoalId, TaskId, string> _recordFindingEvidenceRequest;
+    internal readonly Action<GoalId, TaskId, string> _recordFindingEvidenceRun;
     private readonly Action<GoalId, TaskId, string, IReadOnlyList<string>, string, AgentRole, string, string> _recordFindingEvidenceSuppressed;
-    private readonly Action<GoalId, TaskId, string, FindingEvidenceOutcome, FindingEvidenceReceipt?> _recordFindingEvidenceOutcome;
+    internal readonly Action<GoalId, TaskId, string, FindingEvidenceOutcome, FindingEvidenceReceipt?> _recordFindingEvidenceOutcome;
     private readonly Action<GoalId, TaskId, IReadOnlyList<FindingEvidenceRequestDisposition>> _recordFindingEvidenceRequestDispositions;
     private readonly Func<GoalId, TaskId, IReadOnlyList<string>, int> _recordCriterionRetryFeedback;
     private readonly Action<GoalId, TaskId> _clearCriterionRetryFeedback;
@@ -120,11 +120,11 @@ internal sealed partial class ConductorDriver
     private readonly Func<Goal, string, bool> _normalizeLifecycleState;
     private readonly Func<WorkerSandboxPrepRecoverableAction, bool> _recoverSandboxPrep;
     private readonly Action<Goal, string> _recordMissingBranchRetirement;
-    private readonly Func<Goal, IReadOnlyList<string>> _getLandingFileScopes;
+    internal readonly Func<Goal, IReadOnlyList<string>> _getLandingFileScopes;
     private readonly Func<Goal, bool> _isVerificationGateSatisfied;
     private readonly GateReadyCandidateProjector? _gateReadyCandidateProjector;
     private readonly AgentOrchestratorKernel? _cohortKernel;
-    private readonly OrchestratorWorkspace? _cohortWorkspace;
+    internal readonly OrchestratorWorkspace? _cohortWorkspace;
     private readonly GoalWorktreeCleanupHooks _cohortCleanupHooks = new();
     private readonly IGoalAcceptanceVerifier? _cohortAcceptanceVerifier;
     private readonly IGoalLifecycleEventWriter? _cohortEventWriter;
@@ -152,10 +152,10 @@ internal sealed partial class ConductorDriver
     private readonly Func<Goal, ReconcileAcceptanceLeaseState?> _getEvidenceMutationLease;
     private readonly Func<Goal, (string? BranchHeadSha, string? MainHeadSha)> _resolveAcceptanceHeads;
     private readonly Func<DateTimeOffset> _utcNow;
-    private readonly string? _executionDirectory;
+    internal readonly string? _executionDirectory;
     private readonly string _integrationBranch;
     private readonly ConductorParallelAcceptanceAttemptCoordinator _parallelAcceptanceAttemptCoordinator;
-    private readonly ConductorParallelAcceptanceAttemptCoordinator _focusedEvidenceAttemptCoordinator;
+    internal readonly ConductorParallelAcceptanceAttemptCoordinator _focusedEvidenceAttemptCoordinator;
     private readonly bool _parallelAcceptanceEnabled;
     private readonly List<(ConductorLandingReceipt Receipt, string CohortId, string ReceiptId)>
         _pendingRecoveredLandingReceipts = [];
@@ -1385,7 +1385,7 @@ internal sealed partial class ConductorDriver
     }
     internal GoalLifecycleFacts GetFacts(Goal goal) => _getFacts(goal);
 
-    private bool TryReconcileFocusedEvidenceAttempt(
+    internal bool TryReconcileFocusedEvidenceAttempt(
         Goal goal,
         ConductorAutonomyPolicy policy,
         string request,

@@ -8,7 +8,7 @@ internal sealed partial class ConductorDriver
 {
     private readonly HashSet<string> _resolvedMissingBaselineRequests = new(StringComparer.Ordinal);
 
-    private bool TryResumeUnconfirmedCandidateRed(
+    internal bool TryResumeUnconfirmedCandidateRed(
         Goal goal,
         TaskSpec requestingTask,
         ConductorAutonomyPolicy policy,
@@ -109,7 +109,7 @@ internal sealed partial class ConductorDriver
         return true;
     }
 
-    private bool TryResolveMissingBaseline(
+    internal bool TryResolveMissingBaseline(
         Goal goal,
         TaskSpec requestingTask,
         ConductorAutonomyPolicy policy,
@@ -432,7 +432,7 @@ internal sealed partial class ConductorDriver
                 System.Text.Encoding.UTF8.GetBytes(string.Join("\u001d", values)))).ToLowerInvariant()[..16];
     }
 
-    private static bool TryBuildUnattributableRedEscalation(
+    internal static bool TryBuildUnattributableRedEscalation(
         string candidateSha,
         IReadOnlyList<FindingEvidenceArmReceipt> arms,
         FindingEvidenceBatch batch,
@@ -474,7 +474,7 @@ internal sealed partial class ConductorDriver
         return false;
     }
 
-    private static FailedGoalFindingObservation BuildCappedFindingEvidenceDeliveryRetry(
+    internal static FailedGoalFindingObservation BuildCappedFindingEvidenceDeliveryRetry(
         Goal goal,
         TaskSpec task,
         string candidateSha,
@@ -619,7 +619,7 @@ internal sealed partial class ConductorDriver
         return true;
     }
 
-    private static FailedGoalFindingObservation BuildActionableCandidateRedDecision(
+    internal static FailedGoalFindingObservation BuildActionableCandidateRedDecision(
         Goal goal,
         TaskSpec requestingTask,
         string candidateSha,
@@ -688,7 +688,7 @@ internal sealed partial class ConductorDriver
                     .Any(changedPaths.Contains)));
     }
 
-    private static string NormalizeFindingEvidencePath(string? path) =>
+    internal static string NormalizeFindingEvidencePath(string? path) =>
         (path ?? string.Empty).Replace('\\', '/').Trim().TrimStart('.', '/');
 
     internal ConductorParallelAcceptanceRunResult RunPreReviewBaselineArmFocusedEvidence(
