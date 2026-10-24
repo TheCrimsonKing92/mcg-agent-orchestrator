@@ -19,7 +19,8 @@ internal static partial class ConductorSelfRelaunch
             staging.StateStorePath, staging.AgentCatalogPath, staging.WorkerProfilePath,
             staging.ModelFunctionCatalogPath, staging.DotnetPath, staging.PowerShellPath, handoffOptions)
         {
-            LandingAppBuildStore = staging.LandingAppBuildStore
+            LandingAppBuildStore = staging.LandingAppBuildStore,
+            RequiredCheckoutBranch = staging.RequiredCheckoutBranch
         });
     }
 
