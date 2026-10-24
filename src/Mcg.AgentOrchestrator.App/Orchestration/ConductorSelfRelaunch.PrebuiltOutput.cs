@@ -13,6 +13,7 @@ internal sealed partial record ConductorSelfRelaunchOptions
 
 internal sealed partial record ConductorSuccessorStagingOptions
 {
+    internal string? RequiredCheckoutBranch { get; init; }
     internal string? PrebuiltAppOutputDirectory { get; init; }
     internal LandingAppBuildStore? LandingAppBuildStore { get; init; }
 }

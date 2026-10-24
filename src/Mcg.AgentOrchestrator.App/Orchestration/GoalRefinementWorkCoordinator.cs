@@ -15,7 +15,8 @@ internal sealed record GoalRefinementWorkProcessResult(
 internal sealed record GoalRefinementWorkLaunchResult(
     bool Started,
     int? ProcessId,
-    string Detail);
+    string Detail,
+    bool LaunchThrew = false);
 
 /// <summary>
 /// Owns refinement after intake commits. The state outbox is the durable, leased work queue;
@@ -319,7 +320,7 @@ internal static partial class GoalRefinementWorkCoordinator
         }
 
         var launch = TryLaunch(workspace, goalId);
-        if (launch.Started)
+        if (launch.Started || launch.LaunchThrew)
         {
             store.Save(
                 goalId,
@@ -374,7 +375,8 @@ internal static partial class GoalRefinementWorkCoordinator
             return new GoalRefinementWorkLaunchResult(
                 false,
                 null,
-                $"executor-launch-failed:{ex.GetType().Name}:{SingleLine(ex.Message)}");
+                $"executor-launch-failed:{ex.GetType().Name}:{SingleLine(ex.Message)}",
+                LaunchThrew: true);
         }
     }
 

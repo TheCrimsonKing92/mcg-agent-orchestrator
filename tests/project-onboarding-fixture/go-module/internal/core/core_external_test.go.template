@@ -1,0 +1,9 @@
+package core_test
+
+import (
+	"testing"
+
+	"example.com/fixture/internal/core"
+)
+
+func TestValue(t *testing.T) { _ = core.Value() }

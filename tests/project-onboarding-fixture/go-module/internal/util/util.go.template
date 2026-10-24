@@ -1,0 +1,6 @@
+// Package util mentions import "C" only inside this comment.
+package util
+
+//go:build ignore
+
+func Name() string { return "fixture" }

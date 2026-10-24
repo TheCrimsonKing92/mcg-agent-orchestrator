@@ -19,6 +19,8 @@ internal sealed partial record ConductorSelfRelaunchOptions(
     TimeSpan BuildTimeout = default,
     TimeSpan SelfCheckTimeout = default)
 {
+    internal string? RequiredCheckoutBranch { get; init; }
+
     internal ConductorSuccessorStagingOptions Staging => new(
         RepositoryRoot,
         AppProjectPath,
@@ -35,7 +37,8 @@ internal sealed partial record ConductorSelfRelaunchOptions(
         SelfCheckTimeout)
     {
         PrebuiltAppOutputDirectory = PrebuiltAppOutputDirectory,
-        LandingAppBuildStore = LandingAppBuildStore
+        LandingAppBuildStore = LandingAppBuildStore,
+        RequiredCheckoutBranch = RequiredCheckoutBranch
     };
 }
 
@@ -194,6 +197,21 @@ internal static partial class ConductorSelfRelaunch
             throw new ConductorSelfRelaunchPreparationException(
                 "build",
                 "Merged git HEAD was empty.");
+        }
+
+        if (options.RequiredCheckoutBranch is { } requiredBranch)
+        {
+            var symbolicHead = RootCheckoutLandingGuard.ReadSymbolicHead(GitCli.Run, options.RepositoryRoot);
+            var changes = RootCheckoutLandingGuard.ReadTrackedChanges(GitCli.Run, options.RepositoryRoot);
+            if (!string.Equals(symbolicHead, $"refs/heads/{requiredBranch}", StringComparison.Ordinal) ||
+                !changes.Succeeded || changes.Paths.Count > 0)
+            {
+                var firstPath = changes.Paths.Count > 0
+                    ? $"; first changed path: {RootCheckoutLandingGuard.Escape(changes.Paths[0])}" : string.Empty;
+                var inspectionFailure = changes.Succeeded ? string.Empty : $"; inspection failed: {changes.Failure}";
+                throw new ConductorSelfRelaunchPreparationException("build",
+                    $"root checkout {RootCheckoutLandingGuard.Escape(options.RepositoryRoot)} must be on {requiredBranch} with no tracked changes before building the successor; found {symbolicHead ?? "detached HEAD or unavailable symbolic HEAD"}{firstPath}{inspectionFailure}");
+            }
         }
 
         var fromStore = options.PrebuiltAppOutputDirectory is null && options.LandingAppBuildStore is not null;

@@ -1,0 +1,5 @@
+package core
+
+import util "example.com/fixture/internal/util"
+
+func Value() string { return util.Name() }

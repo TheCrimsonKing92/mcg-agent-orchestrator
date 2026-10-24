@@ -1,0 +1,3 @@
+package ignored
+
+import "example.com/fixture/internal/missing"
