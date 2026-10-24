@@ -30,6 +30,11 @@ internal static class CliAttentionQueryCommand
             return TryExecuteSelective(args, stateQueries, workspace, providers, channel,
                 ref agents, ref workerProfiles, ref currentGoal);
 
+        var routed = AttentionShowReadRoute.TryExecute(args, stateQueries, workspace, providers, channel,
+            ref agents, ref workerProfiles, ref currentGoal);
+        if (routed is not null)
+            return routed.Value;
+
         var metadata = stateQueries.ListGoalMetadataAsync().GetAwaiter().GetResult();
         if (metadata.Any(goal =>
                 goal.Status.Equals(nameof(GoalStatus.Parked), StringComparison.OrdinalIgnoreCase)))
