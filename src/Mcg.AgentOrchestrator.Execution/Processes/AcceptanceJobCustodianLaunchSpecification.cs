@@ -8,8 +8,9 @@ internal sealed class AcceptanceJobCustodianLaunchSpecification
     private readonly string _executable;
     private readonly string[] _arguments;
     private readonly string _workingDirectory;
+    private readonly KeyValuePair<string, string>[] _environment;
     internal AcceptanceJobCustodianLaunchSpecification(string executable, IEnumerable<string> arguments,
-        string workingDirectory)
+        string workingDirectory, IReadOnlyDictionary<string, string>? environment = null)
     {
         if (!Path.IsPathFullyQualified(executable) || !File.Exists(executable) ||
             !Path.IsPathFullyQualified(workingDirectory) || !Directory.Exists(workingDirectory))
@@ -17,6 +18,7 @@ internal sealed class AcceptanceJobCustodianLaunchSpecification
         _executable = executable;
         _arguments = arguments.ToArray();
         _workingDirectory = workingDirectory;
+        _environment = environment?.ToArray() ?? [];
     }
 
     internal ProcessStartInfo CreateStartInfo()
@@ -27,6 +29,7 @@ internal sealed class AcceptanceJobCustodianLaunchSpecification
             RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true
         };
         foreach (var argument in _arguments) info.ArgumentList.Add(argument);
+        foreach (var (name, value) in _environment) info.Environment[name] = value;
         return info;
     }
 }

@@ -28,13 +28,32 @@ internal static class AcceptanceJobCustodianHost
             !File.Exists(Path.ChangeExtension(application, ".runtimeconfig.json")) ||
             !File.Exists(Path.ChangeExtension(application, ".deps.json")))
             throw new InvalidOperationException("Acceptance custody cannot establish the current managed runtime closure.");
+        IReadOnlyDictionary<string, string>? environment = null;
+        if (workspace.IsProjectScoped)
+        {
+            var parent = Directory.GetParent(Path.TrimEndingDirectorySeparator(workspace.OrchestratorDirectory));
+            var projects = workspace.IsTenantScoped ? parent?.Parent?.Parent : parent;
+            var dataRootDirectory = projects?.Parent?.FullName;
+            if (dataRootDirectory is null)
+                throw new InvalidOperationException("Acceptance custody cannot derive the project data root from the workspace state directory.");
+            var expected = OrchestratorWorkspace.ForProject(workspace.ProjectName, workspace.RootDirectory,
+                workspace.ExecutionDirectory, workspace.TenantName, dataRootDirectory: dataRootDirectory);
+            if (!WorkspaceInvocationBinding.SamePath(expected.OrchestratorDirectory, workspace.OrchestratorDirectory))
+                throw new InvalidOperationException("Acceptance custody project state directory does not match its workspace layout.");
+            var dataRoot = OrchestratorDataRoot.FromDirectory(dataRootDirectory);
+            environment = new Dictionary<string, string>
+            {
+                [OrchestratorDataRoot.EnvironmentVariable] = dataRoot.RootDirectory,
+                [OrchestratorProjectRegistry.RegistryHomeEnvironmentVariable] = dataRoot.ProjectsDirectory
+            };
+        }
         var args = new List<string>
         {
             application, "--repository-root", workspace.RootDirectory,
             "--expected-state-directory", workspace.OrchestratorDirectory,
             "--project", workspace.ProjectName, "--tenant", workspace.TenantName, Subcommand
         };
-        return new(host, args, workspace.ExecutionDirectory);
+        return new(host, args, workspace.ExecutionDirectory, environment);
     }
 
     internal static int Run(IReadOnlyList<string> args)
