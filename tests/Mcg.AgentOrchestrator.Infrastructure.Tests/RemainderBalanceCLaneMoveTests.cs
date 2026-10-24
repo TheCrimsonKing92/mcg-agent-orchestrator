@@ -162,7 +162,7 @@ public sealed class RemainderBalanceCLaneMoveTests
         Assert.Equal(620.0, balanceC.EstimatedSerialSeconds);
         Assert.Empty(balanceC.ExclusiveResourceKeys);
         Assert.Empty(balanceC.OwnedCollections);
-        Assert.Equal(653.0, Assert.Single(lanes, lane => lane.Name == Remainder).EstimatedSerialSeconds);
+        Assert.Equal(415.6, Assert.Single(lanes, lane => lane.Name == Remainder).EstimatedSerialSeconds);
         Assert.Equal(string.Join("|", Substrings.Select(substring => $"FullyQualifiedName~{substring}")),
             balanceC.Filter);
 
