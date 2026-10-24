@@ -124,7 +124,8 @@ internal static class ProjectInstallManifestCommand
             if (File.Exists(temporary)) File.Delete(temporary);
         }
         var previous = backup is null ? "no previous manifest" : $"previous saved as {backup}";
-        output.WriteLine($"Installed manifest: {live} ({LearnedTestCheckDeriver.Derive(model).Checks.Count} checks; {previous})");
+        using var manifest = JsonDocument.Parse(result.Json!);
+        output.WriteLine($"Installed manifest: {live} ({manifest.RootElement.GetProperty("checks").GetArrayLength()} checks; {previous})");
         return 0;
 
         int Refuse(string reason)
