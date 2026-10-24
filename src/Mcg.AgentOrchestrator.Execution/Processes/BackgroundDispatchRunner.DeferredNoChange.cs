@@ -10,8 +10,17 @@ public sealed partial class BackgroundDispatchRunner
         GoalWorktreeDispatchEvidence worktreeEvidence,
         string standardOutput,
         string standardError,
+        string worktreePath,
         ref string? standardErrorDiagnostic)
     {
+        if (GoDeveloperNoChangeCompletion.TryAccept(task, worktreePath, worktreeEvidence.Head,
+                worktreeEvidence.IsClean, worktreeEvidence.HasRelevantCommitAfterDispatch,
+                standardOutput, out var goMarker))
+        {
+            standardErrorDiagnostic = AppendDiagnostic(standardErrorDiagnostic ?? string.Empty, goMarker);
+            return true;
+        }
+
         if (!DeveloperDeferredNoChangeQualifier.TryQualify(
                 goal, task, worktreeEvidence.Head, worktreeEvidence.IsClean,
                 worktreeEvidence.HasRelevantCommitAfterDispatch,
