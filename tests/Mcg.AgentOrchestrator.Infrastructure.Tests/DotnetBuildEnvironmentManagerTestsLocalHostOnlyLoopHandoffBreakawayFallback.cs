@@ -11,9 +11,14 @@ public sealed class DotnetBuildEnvironmentManagerTestsLocalHostOnlyLoopHandoffBr
     public static bool IsWindows => OperatingSystem.IsWindows();
     private const uint Breakaway = 0x01000000;
 
+    [Trait("Category", "LocalHostOnly")]
     [Fact(Skip = "Requires Windows native process creation.", SkipUnless = nameof(IsWindows))]
     public void BreakawayDeniedRetriesOnceWithoutBreakaway()
     {
+        AssertRetryDecision(0x01080600u, 5, true);
+        AssertRetryDecision(0x00080600u, 5, false);
+        AssertRetryDecision(0x01080600u, 2, false);
+
         var root = CreateTempDirectory("mcg-breakaway-fallback");
         ConductorSupervisorProcessIdentity? successor = null;
         try
@@ -63,9 +68,11 @@ public sealed class DotnetBuildEnvironmentManagerTestsLocalHostOnlyLoopHandoffBr
         }
     }
 
+    [Trait("Category", "LocalHostOnly")]
     [Fact(Skip = "Requires Windows native process creation.", SkipUnless = nameof(IsWindows))]
     public void OtherNativeErrorsAreNotRetried() => AssertFailedLaunch(2, 1);
 
+    [Trait("Category", "LocalHostOnly")]
     [Fact(Skip = "Requires Windows native process creation.", SkipUnless = nameof(IsWindows))]
     public void DeniedFallbackFailureRemovesOutputFiles() => AssertFailedLaunch(5, 2);
 
@@ -94,11 +101,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsLocalHostOnlyLoopHandoffBr
         finally { TryDeleteDirectory(root); }
     }
 
-    [Theory]
-    [InlineData(0x01080600u, 5, true)]
-    [InlineData(0x00080600u, 5, false)]
-    [InlineData(0x01080600u, 2, false)]
-    public void RetryRequiresBreakawayAndAccessDenied(uint flags, int error, bool expected)
+    private static void AssertRetryDecision(uint flags, int error, bool expected)
     {
         Assert.Equal(expected, DetachedLaunchBreakawayFallback.TryGetRetryFlags(flags, error, out var retry));
         if (expected) Assert.Equal(flags & ~Breakaway, retry);
