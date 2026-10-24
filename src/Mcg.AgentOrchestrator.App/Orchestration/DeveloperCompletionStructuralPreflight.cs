@@ -60,7 +60,7 @@ internal static class DeveloperCompletionStructuralPreflight
         }
 
         var descriptors = AcceptanceTestClassSourceScanner.Scan(worktreePath);
-        violations.AddRange(TestCollectionGuardRules.FindLaneMembershipViolations(lanes, descriptors));
+        violations.AddRange(TestCollectionGuardRules.FindLaneViolations(lanes, descriptors));
         if (exemptions is not null)
             violations.AddRange(TestCollectionGuardRules.FindUnisolatedLaneClasses(lanes, descriptors,
                 TestCollectionGuardRules.DotnetBuildSlotsLaneName, TestCollectionGuardRules.DotnetBuildSlotsCollection,

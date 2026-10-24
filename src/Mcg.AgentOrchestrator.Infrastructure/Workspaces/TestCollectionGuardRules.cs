@@ -5,12 +5,17 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 internal static class TestCollectionGuardRules
 {
     public const string LaneMembershipRule = "lane-membership";
+    public const string LanePartitionRule = "lane-partition";
     public const string IsolatedCollectionRule = "isolated-collection";
     internal const string ExemptionsRelativePath = "config/isolated-collection-exemptions.json";
     internal const string DotnetBuildSlotsLaneName = "Dotnet build slots";
     internal const string DotnetBuildSlotsCollection = "DotnetBuildSlots";
 
     internal static IReadOnlyList<TestCollectionGuardViolation> FindLaneMembershipViolations(
+        IReadOnlyList<AcceptanceTestLane> lanes, IReadOnlyList<AcceptanceTestClassDescriptor> descriptors)
+        => FindLaneViolations(lanes, descriptors).Where(item => item.Rule == LaneMembershipRule).ToArray();
+
+    internal static IReadOnlyList<TestCollectionGuardViolation> FindLaneViolations(
         IReadOnlyList<AcceptanceTestLane> lanes, IReadOnlyList<AcceptanceTestClassDescriptor> descriptors)
     {
         var baseline = lanes.Select(lane => lane with { OwnedCollections = [] }).ToArray();
@@ -26,6 +31,16 @@ internal static class TestCollectionGuardRules
                     descriptor.FullName, descriptor.Collection, baselineNames, resolvedNames,
                     "Rename the class so its name contains one of its owning lane's FullyQualifiedName~ " +
                     "substrings in config/acceptance-manifest.json, or remove the owned collection; do not edit the manifest."));
+            }
+            if (resolvedNames.Length != 1)
+            {
+                var hint = resolvedNames.Length == 0
+                    ? $"Runnable test class '{descriptor.FullName}' is not assigned to any acceptance lane. "
+                    : $"Runnable test class '{descriptor.FullName}' is assigned to multiple acceptance lanes: [{string.Join(", ", resolvedNames)}]. ";
+                violations.Add(new TestCollectionGuardViolation(LanePartitionRule,
+                    descriptor.FullName, descriptor.Collection, baselineNames, resolvedNames,
+                    hint + "Rename the class so exactly one lane's FullyQualifiedName~ substring selects it and no " +
+                    "FullyQualifiedName!~ substring excludes it; do not edit the manifest."));
             }
         }
         return violations;
