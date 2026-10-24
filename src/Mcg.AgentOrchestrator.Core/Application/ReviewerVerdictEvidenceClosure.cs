@@ -25,6 +25,15 @@ internal sealed class ReviewerVerdictEvidenceClosure(
             {
                 var owner = request.EvidenceOwner!.Trim().ToLowerInvariant();
                 var reason = GetSkipReason(goal, reviewer, verification, request, out var verdict, out var developer);
+                string? reportTests = null;
+                if (reason == "verdict-not-met" && owner == "developer" &&
+                    ResolveCriterion(goal, request.PlannerIdentity!) is { } criterion)
+                {
+                    if (DeveloperReportEvidence.TryMatch(criterion, developer!, out reportTests, out var reportReason))
+                        reason = null;
+                    else
+                        reason = reportReason ?? reason;
+                }
                 var ownerTask = developer;
                 if (reason is null && owner == "tester")
                     reason = GetTesterSkipReason(goal, developer!.LastDispatch!.ResultCommit!, out ownerTask);
@@ -36,18 +45,42 @@ internal sealed class ReviewerVerdictEvidenceClosure(
                     continue;
                 }
 
-                var evidence = verdict!.Evidence[..Math.Min(400, verdict.Evidence.Length)];
-                var log = string.IsNullOrWhiteSpace(verification.StandardOutputPath)
-                    ? "unavailable" : verification.StandardOutputPath;
-                var ownerFields = owner == "reviewer" ? string.Empty : $" owner={owner} owner_task={ownerTask!.Id.Value}";
-                var answer = ($"REVIEWER_VERDICT_EVIDENCE task={reviewer.Id.Value} " +
-                    $"criterion_index={verdict.CriterionIndex}{ownerFields} candidate={verification.ReviewedCommit} " +
-                    $"worker_result_log={log} evidence={evidence}").Trim();
+                string answer;
+                if (reportTests is not null)
+                {
+                    var log = string.IsNullOrWhiteSpace(developer!.LastVerification!.StandardOutputPath)
+                        ? "unavailable" : developer.LastVerification.StandardOutputPath;
+                    answer = $"DEVELOPER_REPORT_EVIDENCE task={developer.Id.Value} " +
+                        $"criterion_index={request.PlannerIdentity!.CriterionIndex - 1} reviewer_task={reviewer.Id.Value} " +
+                        $"candidate={developer.LastDispatch!.ResultCommit} worker_result_log={log} " +
+                        $"tests={reportTests[..Math.Min(400, reportTests.Length)]}";
+                }
+                else
+                {
+                    var evidence = verdict!.Evidence[..Math.Min(400, verdict.Evidence.Length)];
+                    var log = string.IsNullOrWhiteSpace(verification.StandardOutputPath)
+                        ? "unavailable" : verification.StandardOutputPath;
+                    var ownerFields = owner == "reviewer" ? string.Empty : $" owner={owner} owner_task={ownerTask!.Id.Value}";
+                    answer = ($"REVIEWER_VERDICT_EVIDENCE task={reviewer.Id.Value} " +
+                        $"criterion_index={verdict.CriterionIndex}{ownerFields} candidate={verification.ReviewedCommit} " +
+                        $"worker_result_log={log} evidence={evidence}").Trim();
+                }
                 request.Complete(answer, clock.UtcNow, origin: HumanInputAnswerOrigin.Worker,
                     briefVersion: goal.AuthoritativeBrief.Version);
                 append(goal, request.TaskId, ProgressKind.HumanInputReceived, answer);
             }
         }
+    }
+
+    private static string? ResolveCriterion(Goal goal, PlannerEvidenceIdentity identity)
+    {
+        var version = goal.AuthoritativeRefinedSpecVersion;
+        var index = identity.CriterionIndex - 1;
+        if (version is null || version.BriefVersion != identity.BriefVersion ||
+            index < 0 || index >= version.Spec.AcceptanceCriteria.Count)
+            return null;
+        var criterion = version.Spec.AcceptanceCriteria[index];
+        return string.IsNullOrWhiteSpace(criterion) ? null : criterion;
     }
 
     private static string? GetSkipReason(Goal goal, TaskSpec reviewer, TaskVerificationRecord verification,
