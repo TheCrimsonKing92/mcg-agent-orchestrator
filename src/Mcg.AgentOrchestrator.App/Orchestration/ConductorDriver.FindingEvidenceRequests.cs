@@ -554,7 +554,7 @@ internal sealed partial class ConductorDriver
             if (string.IsNullOrWhiteSpace(project) ||
                 string.IsNullOrWhiteSpace(testClass) ||
                 originalTestClass.Length > FindingEvidenceFilterSyntax.MaximumLength ||
-                !FindingEvidenceFilterSyntax.IsSupported(testClass))
+                !(FindingEvidenceFilterSyntax.IsSupported(testClass) || GoPackageFocusedEvidence.Applies(engineSettings)))
             {
                 refusalDetail =
                     $"Every evidence selection requires a bounded valid test_project and test_class; " +
