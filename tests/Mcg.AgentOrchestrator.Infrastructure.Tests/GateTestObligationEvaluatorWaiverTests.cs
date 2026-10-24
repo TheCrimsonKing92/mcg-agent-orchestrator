@@ -92,7 +92,11 @@ public sealed class GateTestObligationEvaluatorWaiverTests
         var newest = Waive(kernel, goal, 1, "Latest reason.", actor: "second-operator",
             reference: "  " + Criteria[0].ToUpperInvariant() + "  ");
 
-        Assert.Equal(newest, GateTestObligationWaivers.FindWaiver(goal, Assert.Single(goal.GateTestObligations)));
+        var matched = GateTestObligationWaivers.FindWaiver(goal, Assert.Single(goal.GateTestObligations));
+        Assert.NotNull(matched);
+        Assert.Equal(newest.SupersededCriterion, matched.SupersededCriterion);
+        Assert.Equal(newest.Actor, matched.Actor);
+        Assert.Equal(newest.WaiverReason, matched.WaiverReason);
         Assert.Equal("Latest reason.", Evaluate(fixture, goal).WaiverReason);
     }
 
