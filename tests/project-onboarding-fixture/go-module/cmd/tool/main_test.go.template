@@ -1,0 +1,11 @@
+package main
+
+import (
+	"os/exec"
+	"testing"
+)
+
+func TestBuild(t *testing.T) {
+	cmd := exec.Command("go", "build", "-o", "tool_test.exe", ".")
+	_ = cmd
+}
