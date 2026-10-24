@@ -155,7 +155,7 @@ public sealed class ConductorDiagnosticDumpRetentionTests
     [Xunit.Fact]
     public void RegistryDescribesTheFixedDumpPolicy()
     {
-        Assert.Equal("operator-*.log files are swept at WorkerDeletionAge; conductor-tick-stall *.dmp dumps keep the newest 2 and older dumps past 3 days are reclaimed by ConductorDiagnosticDumpRetention; other files are not swept.",
+        Assert.Equal("operator-*.log files are swept at WorkerDeletionAge; conductor-tick-stall *.dmp dumps keep the newest 2 and older dumps past 3 days are reclaimed by ConductorDiagnosticDumpRetention; spec-refinement, post-landing-canary, conduct-supervisor, supervisor-handoff and supervisor-ready runs past 14 days or past the newest 500 per family are reclaimed by LogDirectoryFamilyRetention, keeping the newest 20; dispatch artifacts follow the worker artifact policy; other files are not swept.",
             OrchestratorArtifactRegistry.Classify("logs")!.Note);
     }
 
