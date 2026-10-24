@@ -60,7 +60,8 @@ public sealed record GateHeartbeatSnapshot(
     string? RunClass = null,
     string? RunId = null,
     DateTimeOffset? PreStopObservedAt = null,
-    DateTimeOffset? PreStopProgressAt = null);
+    DateTimeOffset? PreStopProgressAt = null,
+    string? OwnerStateDirectory = null);
 
 public sealed record GateHeartbeatStatus(
     int SlotIndex,
@@ -308,7 +309,9 @@ public static class GateHeartbeatArtifacts
     {
         Directory.CreateDirectory(Path.GetDirectoryName(path) ?? ".");
         var tempPath = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
-        File.WriteAllText(tempPath, JsonSerializer.Serialize(snapshot, JsonOptions));
+        var ownedSnapshot = snapshot.OwnerStateDirectory is null
+            ? snapshot with { OwnerStateDirectory = GateHeartbeatOwner.Current } : snapshot;
+        File.WriteAllText(tempPath, JsonSerializer.Serialize(ownedSnapshot, JsonOptions));
         File.Move(tempPath, path, overwrite: true);
     }
 

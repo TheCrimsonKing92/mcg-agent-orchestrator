@@ -104,7 +104,7 @@ internal sealed partial class ConductorBatchLoop
 
         foreach (var gate in liveGates.OrderBy(gate => gate.Identity, StringComparer.OrdinalIgnoreCase))
         {
-            if (!gate.CountsAsAcceptanceOccupant)
+            if (!gate.CountsForOwnProjectAcceptance)
             {
                 continue;
             }

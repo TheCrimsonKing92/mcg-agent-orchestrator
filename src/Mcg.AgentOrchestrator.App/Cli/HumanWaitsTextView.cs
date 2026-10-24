@@ -1,4 +1,5 @@
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.App.Orchestration;
 
 namespace Mcg.AgentOrchestrator.App.Cli;
 
@@ -11,7 +12,8 @@ internal static class HumanWaitsTextView
     {
         foreach (var goal in goals ?? [])
             foreach (var item in goal.GateTestObligations.Where(item => item.BriefVersion == goal.AuthoritativeBrief.Version))
-                Console.WriteLine($"  Gate evidence: identity={System.Text.Json.JsonSerializer.Serialize(item.PlannerIdentity)} goal={goal.Id} owner=acceptance-gate availability=post-implementation next=Acceptance executes [{string.Join(", ", item.Selectors)}]");
+                Console.WriteLine($"  Gate evidence: identity={System.Text.Json.JsonSerializer.Serialize(item.PlannerIdentity)} goal={goal.Id} owner=acceptance-gate availability=post-implementation next=Acceptance executes [{string.Join(", ", item.Selectors)}]" +
+                    (GateTestObligationWaivers.DescribeWaiver(goal, item) is { } waiver ? " " + waiver : ""));
         Console.WriteLine();
         Console.WriteLine(includeHistory
             ? $"Human waits: {requests.Count} wait(s)"

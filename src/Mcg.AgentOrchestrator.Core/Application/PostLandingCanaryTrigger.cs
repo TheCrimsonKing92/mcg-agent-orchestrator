@@ -49,6 +49,7 @@ public static class AcceptanceEngineSurfaceRegistry
         new("base-build-cache", ["src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/DotnetBaseBuildCache"]),
         new("gate-heartbeats", [
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GateHeartbeatArtifacts",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GateHeartbeatOwner",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GateHeartbeatLockHolderProjection"
         ]),
         new("attempt-artifact-custody", ["src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceAttemptArtifactCustody"]),
