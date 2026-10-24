@@ -21,6 +21,7 @@ public sealed class IsolatedProcessSpawningRemainderChainTests
         typeof(WorkerBuildCheckRecoveryDecisionTests),
         typeof(DeveloperUnusableEvidenceNoChangeDispatchTests),
         typeof(DeveloperDeferredNoChangeDispatchTests),
+        typeof(GoDeveloperNoChangeDispatchTests),
         typeof(ConfirmLegacyAcceptanceHolderSettlementScriptTests),
         typeof(ExecutorBuildCheckScriptTests),
         typeof(CandidateIdentityComputationTests),
@@ -47,6 +48,7 @@ public sealed class IsolatedProcessSpawningRemainderChainTests
         [nameof(WorkerBuildCheckRecoveryDecisionTests)] = 10.6,
         [nameof(DeveloperUnusableEvidenceNoChangeDispatchTests)] = 10.2,
         [nameof(DeveloperDeferredNoChangeDispatchTests)] = 9.7,
+        [nameof(GoDeveloperNoChangeDispatchTests)] = 9.7,
         [nameof(ConfirmLegacyAcceptanceHolderSettlementScriptTests)] = 8.2,
         [nameof(ExecutorBuildCheckScriptTests)] = 7.8,
         [nameof(CandidateIdentityComputationTests)] = 7.3,
@@ -114,7 +116,7 @@ public sealed class IsolatedProcessSpawningRemainderChainTests
         foreach (var type in MovedTypes)
             Xunit.Assert.Equal(SplitCollection, DeclaredCollection(type));
         var members = RunnableTypes().Where(type => DeclaredCollection(type) == SplitCollection).ToArray();
-        Xunit.Assert.Equal(13, members.Length);
+        Xunit.Assert.Equal(14, members.Length);
         Xunit.Assert.Equal(MovedTypes.Select(type => type.FullName).Order(StringComparer.Ordinal),
             members.Select(type => type.FullName).Order(StringComparer.Ordinal));
 
@@ -183,7 +185,7 @@ public sealed class IsolatedProcessSpawningRemainderChainTests
     {
         var (sums, unlisted) = Score(RemainderMembers(), PlanningSeconds);
         Xunit.Assert.Empty(unlisted);
-        Xunit.Assert.InRange(sums[SplitCollection], 214.2 - 0.05, 214.2 + 0.05);
+        Xunit.Assert.InRange(sums[SplitCollection], 223.9 - 0.05, 223.9 + 0.05);
         Xunit.Assert.InRange(sums[OriginalCollection], 229.4 - 0.05, 229.4 + 0.05);
         Xunit.Assert.InRange(sums[DeferredContextCollection], 129.5138644 - 1e-7, 129.5138644 + 1e-7);
         foreach (var (collection, seconds) in sums)

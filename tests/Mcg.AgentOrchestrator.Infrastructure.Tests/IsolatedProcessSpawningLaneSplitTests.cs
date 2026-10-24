@@ -51,6 +51,7 @@ public sealed class IsolatedProcessSpawningLaneSplitTests
         ["CriterionEvidencePatchCarryTests"] = 17.1,
         ["WorkerBuildCheckRecoveryTestsLockTimeout"] = 15.9,
         ["DeveloperDeferredNoChangeDispatchTests"] = 14.0,
+        ["GoDeveloperNoChangeDispatchTests"] = 14.0,
         ["LandingRebindEquivalenceTests"] = 12.9,
         ["DeveloperStaleFindingNoChangeDispatchTests"] = 12.6,
         ["RemoteFocusedEvidenceShadowTests"] = 12.5,

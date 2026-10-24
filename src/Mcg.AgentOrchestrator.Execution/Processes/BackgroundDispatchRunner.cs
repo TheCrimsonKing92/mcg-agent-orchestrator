@@ -1676,7 +1676,7 @@ public sealed partial class BackgroundDispatchRunner
                     task, decisionStandardOutput, decisionStandardError) ||
                     (fullStandardOutput.Content is not null && TryAcceptDeferredNoChange(
                         kernel.GetGoal(goalId), task, worktreeEvidence, authoritativeStandardOutput,
-                        decisionStandardError, ref standardErrorDiagnostic));
+                        decisionStandardError, processRecord.WorkingDirectory, ref standardErrorDiagnostic));
                 // A typed premise stop awaits clarification, so it need not manufacture a change.
                 // Preserve failed exits and let the dispatch classifier retain fault precedence.
                 var hasPremiseInvalidStop = exitCode == 0 && workerResultPresent &&

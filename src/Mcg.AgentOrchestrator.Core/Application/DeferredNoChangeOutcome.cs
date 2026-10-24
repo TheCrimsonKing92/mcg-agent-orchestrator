@@ -91,6 +91,10 @@ public static class DeveloperDeferredTestClassNames
             foreach (var part in AndListSeparator.Split(commaPart).Select(value => value.Trim()))
             {
                 if (barePrefix && IsValid(part)) names.Add(part);
+                else if (barePrefix && Regex.Match(part,
+                    @"^(?:[A-Za-z_][A-Za-z0-9_]*\.)*(?<class>[A-Z][A-Za-z0-9_]*)\.[A-Z][A-Za-z0-9_]*(?:\([^()]*\))?$",
+                    RegexOptions.CultureInvariant) is { Success: true } identity)
+                    names.Add(identity.Groups["class"].Value);
                 else barePrefix = false;
             }
         }
