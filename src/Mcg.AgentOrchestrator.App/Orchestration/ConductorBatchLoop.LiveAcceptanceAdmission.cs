@@ -117,7 +117,7 @@ internal sealed partial class ConductorBatchLoop
             }
 
             occupants.TryAdd(
-                gate.Identity,
+                LiveAcceptanceOccupantKey.For(gate),
                 !string.IsNullOrWhiteSpace(gate.GoalId)
                     ? $"goal:{ShortIdentity(gate.GoalId)}"
                     : gate.ProcessId is > 0

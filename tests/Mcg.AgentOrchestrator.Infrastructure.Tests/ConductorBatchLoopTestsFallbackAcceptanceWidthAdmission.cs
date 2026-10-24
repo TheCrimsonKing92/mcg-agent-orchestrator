@@ -24,6 +24,73 @@ public sealed class ConductorBatchLoopTestsFallbackAcceptanceWidthAdmission : Co
         => AssertCompletionTick(width: 2, withOccupant: true, expectLaunch: true);
 
     [Xunit.Fact]
+    public void DocsCompletion_OneForeignGoalWithThreePids_AdmitsAtWidthTwo()
+    {
+        using var fixture = new AdmissionFixture();
+        using var probe = GateLoadContextProbe.PushLiveGateOccupantProbe(() => [
+            new(4601, "231f9591-foreign", 0, TimeSpan.Zero,
+                RunClass: GateHeartbeatRunClass.Acceptance, RunId: "run-a"),
+            new(4602, "231f9591-foreign", 1, TimeSpan.Zero,
+                RunClass: GateHeartbeatRunClass.Acceptance, RunId: "run-a"),
+            new(4603, "231f9591-foreign", 2, TimeSpan.Zero,
+                RunClass: GateHeartbeatRunClass.Acceptance, RunId: "run-a")]);
+        var goal = fixture.CreateGoal();
+        var refreshed = false;
+        var loop = new ConductorBatchLoop(refreshGoalDispatchesBeforeAdvance: (kernel, current) =>
+        {
+            Assert.Equal(goal.Id, current.Id);
+            PassVerification(kernel, current, current.Tasks.Single());
+            Assert.Equal(GoalStatus.Verified, current.Status);
+            refreshed = true;
+            return null;
+        });
+
+        loop.Run(fixture.Kernel, fixture.Driver, Width(2), NoStopPath(),
+            maxIterations: 1, onlyGoalId: goal.Id.Value);
+
+        Assert.True(refreshed);
+        Assert.Equal(1, fixture.LaunchCount(goal));
+        Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.Running,
+            Assert.Single(fixture.Attempts(goal)).Outcome);
+        Assert.Equal(GoalStatus.Verifying, goal.Status);
+    }
+
+    [Xunit.Fact]
+    public void DocsCompletion_TwoForeignGoals_HoldsAtWidthTwo()
+    {
+        using var fixture = new AdmissionFixture();
+        using var probe = GateLoadContextProbe.PushLiveGateOccupantProbe(() => [
+            new(4611, "aaaaaaaa-foreign", 0, TimeSpan.Zero,
+                RunClass: GateHeartbeatRunClass.Acceptance, RunId: "run-a"),
+            new(4612, "bbbbbbbb-foreign", 1, TimeSpan.Zero,
+                RunClass: GateHeartbeatRunClass.Acceptance, RunId: "run-a")]);
+        var goal = fixture.CreateGoal();
+        var refreshed = false;
+        BatchTickSummary? tick = null;
+        var loop = new ConductorBatchLoop(refreshGoalDispatchesBeforeAdvance: (kernel, current) =>
+        {
+            Assert.Equal(goal.Id, current.Id);
+            PassVerification(kernel, current, current.Tasks.Single());
+            Assert.Equal(GoalStatus.Verified, current.Status);
+            refreshed = true;
+            return null;
+        });
+
+        loop.Run(fixture.Kernel, fixture.Driver, Width(2), NoStopPath(),
+            maxIterations: 1, onlyGoalId: goal.Id.Value, onTick: current => tick = current);
+
+        Assert.True(refreshed);
+        Assert.Equal(0, fixture.LaunchCount(goal));
+        Assert.Empty(fixture.Attempts(goal));
+        Assert.Equal(GoalStatus.Verified, goal.Status);
+        Assert.Contains(tick!.ProgressLines!, line =>
+            line.Contains($"GOAL goal={goal.Id.Value[..8]} result=held state=Verified", StringComparison.Ordinal) &&
+            line.Contains("acceptance_width_2_reached", StringComparison.Ordinal));
+        Assert.StartsWith("acceptance width 2 reached; live acceptance occupants goal:",
+            Held(fixture.Driver.AdvanceOnce(goal, Width(2))).Reason);
+    }
+
+    [Xunit.Fact]
     public void OwnRunningAttempt_WidthOne_ObservesWithoutLaunchingAgain()
     {
         using var fixture = new AdmissionFixture();
