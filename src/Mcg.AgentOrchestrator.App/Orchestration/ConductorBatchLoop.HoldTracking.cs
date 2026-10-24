@@ -21,6 +21,7 @@ internal sealed partial class ConductorBatchLoop
         List<string> tickLines,
         ConductEventLogWriter? conductEventLogWriter = null)
     {
+        ConductorLandingBlockerRecorder.Observe(kernel, goal, outcome, observedAt, changedGoalIds);
         if (outcome is ConductorAdvanceOutcome.Held held)
         {
             if (driver.SliceBatchParentExecutionGuard?.IsSliceBatchParent(goal) == true)
@@ -45,8 +46,7 @@ internal sealed partial class ConductorBatchLoop
             }
 
             TrackGoalHold(
-                kernel,
-                goal,
+                kernel, goal,
                 held.State.ToString(),
                 held.Reason,
                 observedAt,
