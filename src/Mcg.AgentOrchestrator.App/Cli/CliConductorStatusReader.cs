@@ -41,7 +41,11 @@ internal static class CliConductorStatusReader
         {
             output.WriteLine($"Non-terminal goals: {snapshot.Goals.NonTerminal!.Count}");
             foreach (var goal in snapshot.Goals.NonTerminal)
+            {
                 output.WriteLine($"  {goal.Id} | {goal.Status} | role={goal.Role}");
+                if (goal.LandingBlocker is { } blocker)
+                    output.WriteLine($"    landing-blocker: {blocker.Kind} since={blocker.Since.ToString("O", CultureInfo.InvariantCulture)} next={blocker.NextActor} verb={blocker.NextVerb} detail={blocker.Detail}");
+            }
             output.WriteLine($"Pending clarifications: {snapshot.Goals.PendingClarifications}; human waits: {snapshot.Goals.HumanWaits}");
         }
         output.WriteLine(snapshot.MostRecentLanding is { } landing

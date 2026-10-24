@@ -200,6 +200,27 @@ public sealed class Goal
     public string? MetadataResultCommit { get; private set; }
 
     public GoalHoldState? CurrentHold { get; private set; }
+    public GoalLandingBlocker? LandingBlocker { get; private set; }
+
+    public bool ObserveLandingBlocker(GoalLandingBlocker observed)
+    {
+        ArgumentNullException.ThrowIfNull(observed);
+        var prior = LandingBlocker;
+        var sameIdentity = prior is not null
+            && string.Equals(prior.Kind, observed.Kind, StringComparison.Ordinal)
+            && string.Equals(prior.Identity, observed.Identity, StringComparison.Ordinal);
+        var changed = !sameIdentity
+            || !string.Equals(prior!.Detail, observed.Detail, StringComparison.Ordinal);
+        LandingBlocker = sameIdentity ? observed with { Since = prior!.Since } : observed;
+        return changed;
+    }
+
+    public bool ClearLandingBlocker()
+    {
+        if (LandingBlocker is null) return false;
+        LandingBlocker = null;
+        return true;
+    }
 
     public DateTimeOffset? MetadataCreatedAt { get; private set; }
 
@@ -1221,7 +1242,8 @@ public sealed class Goal
             PriorityScheduling: PriorityScheduling,
             Isolation: Isolation == GoalIsolation.None ? null : GoalIsolations.Format(Isolation),
             ExplicitDisposition: ExplicitDisposition,
-            ParkedLifecycleStatus: ParkedLifecycleStatus);
+            ParkedLifecycleStatus: ParkedLifecycleStatus,
+            LandingBlocker: LandingBlocker);
     }
 
     internal static Goal FromSnapshot(GoalSnapshot snapshot)
@@ -1347,6 +1369,7 @@ public sealed class Goal
         goal.PriorityScheduling = snapshot.PriorityScheduling;
         goal.SetIsolation(GoalIsolations.ParseOrDefault(snapshot.Isolation));
         goal.RestoreHold(snapshot.CurrentHold);
+        goal.LandingBlocker = snapshot.LandingBlocker;
 
         return goal;
     }
