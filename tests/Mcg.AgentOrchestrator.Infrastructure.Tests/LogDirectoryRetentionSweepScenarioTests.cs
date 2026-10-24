@@ -15,8 +15,12 @@ public sealed class LogDirectoryRetentionSweepScenarioTests
         var repository = InfrastructureTestSupport.CreateMigratedStateRepository(workspace.SqliteStatePath);
         await repository.SaveGoalSnapshotsAsync(
         [
-            new GoalSnapshot(RetentionReclaimFixture.CompletedId, "completed retention goal", GoalStatus.Completed, [], []),
-            new GoalSnapshot(RetentionReclaimFixture.ActiveId, "active retention goal", GoalStatus.Active, [], [])
+            new GoalSnapshot(RetentionReclaimFixture.CompletedId, "completed retention goal", GoalStatus.Completed,
+                [new TaskSnapshot(TaskId.New().Value, "Completed retention task", AgentRole.Developer,
+                    WorkTaskStatus.Completed, null, null, null, null, null, null)], []),
+            new GoalSnapshot(RetentionReclaimFixture.ActiveId, "active retention goal", GoalStatus.Active,
+                [new TaskSnapshot(TaskId.New().Value, "Pending retention task", AgentRole.Developer,
+                    WorkTaskStatus.Pending, null, null, null, null, null, null)], [])
         ], Xunit.TestContext.Current.CancellationToken);
 
         var removed = new List<string>();
