@@ -8,26 +8,25 @@ using Xunit;
 public sealed class ProjectDiscoverStackSelectionCliTests
 {
     [Fact]
-    public void GoModRootIsRefusedWithoutWritingAModel()
+    public void GoModRootWritesAGoModel()
     {
         using var workspace = new ProjectOnboardingFixture("solution");
-        var sourceRoot = Path.Combine(workspace.Root, "go-repository");
-        Directory.CreateDirectory(sourceRoot);
-        File.WriteAllText(Path.Combine(sourceRoot, "go.mod"), "module example.test/sample\n");
+        using var source = new ProjectOnboardingFixture("go-module");
         var registry = new OrchestratorProjectRegistry(Path.Combine(workspace.Root, "registry"), Path.Combine(workspace.Root, "data"));
-        var modelDirectory = OrchestratorWorkspace.ForProject(Path.GetFileName(sourceRoot), sourceRoot,
-            dataRootDirectory: registry.DataRootDirectory).OrchestratorDirectory;
         using var output = new StringWriter();
 
-        var exception = Assert.Throws<InvalidOperationException>(() => ProjectCliCommand.Execute(
-            ["project", "discover", "--root", sourceRoot], registry, workspace.Root, null, output));
+        var exit = ProjectCliCommand.Execute(["project", "discover", "--root", source.Root], registry, workspace.Root, null, output);
 
-        Assert.Contains("go.mod", exception.Message);
-        Assert.Contains("No discovery adapter is available", exception.Message);
-        Assert.Equal("", output.ToString());
-        Assert.False(File.Exists(Path.Combine(modelDirectory, "project-model.json")));
-        Assert.False(File.Exists(Path.Combine(OrchestratorWorkspace.ForDirectory(workspace.Root).OrchestratorDirectory, "project-model.json")));
-        Assert.Empty(Directory.GetFiles(workspace.Root, ".project-model-*.tmp", SearchOption.AllDirectories));
+        Assert.Equal(0, exit);
+        var modelPath = Path.Combine(OrchestratorWorkspace.ForProject(Path.GetFileName(source.Root), source.Root,
+            dataRootDirectory: registry.DataRootDirectory).OrchestratorDirectory, "project-model.json");
+        Assert.True(File.Exists(modelPath));
+        var json = File.ReadAllText(modelPath);
+        Assert.Equal("go", JsonNode.Parse(json)!["stack"]!.GetValue<string>());
+        var model = ProjectModelJson.Deserialize(json);
+        Assert.Equal(ProjectStack.Go, model.Stack);
+        Assert.Equal(5, model.Units.Count);
+        Assert.Contains($"Project model: {modelPath}", output.ToString());
     }
 
     [Fact]

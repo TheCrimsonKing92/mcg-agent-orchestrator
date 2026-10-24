@@ -40,6 +40,7 @@ public static class ProjectDiscoveryAdapterSelector
         return detection.Stack switch
         {
             ProjectStack.Dotnet => new DotnetProjectDiscoveryAdapter(),
+            ProjectStack.Go when GoModReader.Read(Path.Combine(repositoryRoot, "go.mod")).Path is not null => new GoProjectDiscoveryAdapter(),
             ProjectStack.Go => throw new InvalidOperationException(
                 $"No discovery adapter is available for stack 'go' (marker {detection.Marker})."),
             _ => throw new InvalidOperationException($"No discovery adapter is available for this repository: {detection.Refusal}")
