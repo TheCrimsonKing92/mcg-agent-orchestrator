@@ -15,7 +15,8 @@ public static class LearnedAcceptanceManifest
         var applied = OwnerAnswerApplier.Apply(model, answers.OrderBy(answer => answer.FactKey, StringComparer.Ordinal)
             .ThenBy(answer => answer.RecordedUtc).ThenBy(answer => answer.Value, StringComparer.Ordinal).ToArray());
         var (checks, unresolved) = LearnedTestCheckDeriver.Derive(model, applied);
-        var checkNames = LearnedCheckNames.Assign(checks.Select(check => check.ProjectPath).ToArray());
+        var isGo = model.Stack == ProjectStack.Go;
+        var checkNames = isGo ? default : LearnedCheckNames.Assign(checks.Select(check => check.ProjectPath).ToArray());
         var learned = LearnedEngineSettingsDeriver.Derive(model);
         var settings = OwnerAnsweredEngineSettings.Overlay(learned, applied);
         var questions = settings.OwnerQuestions.Concat(applied.OpenQuestions)
@@ -28,33 +29,48 @@ public static class LearnedAcceptanceManifest
         EnsureTimeoutQuestion(OwnerAnswerValidator.DiscoveryKey, settings.DiscoveryMinutes);
 
         var blockers = unresolved.Select(unit => new ManifestBlocker(unit.FactKey,
-            $"no confident VSTest or MTP runner for {unit.UnitId}")).ToList();
-        foreach (var check in checks.Where(check => check.Runner == "mtp"))
-            if (mtpLayoutRefusals?.TryGetValue(check.ProjectPath, out var reason) == true)
-                blockers.Add(new ManifestBlocker("engine/mtpInvocations", reason));
+            isGo ? $"no confident go runner for {unit.UnitId}" : $"no confident VSTest or MTP runner for {unit.UnitId}")).ToList();
+        if (!isGo)
+            foreach (var check in checks.Where(check => check.Runner == "mtp"))
+                if (mtpLayoutRefusals?.TryGetValue(check.ProjectPath, out var reason) == true)
+                    blockers.Add(new ManifestBlocker("engine/mtpInvocations", reason));
         blockers.AddRange(questions.Select(question => new ManifestBlocker(question.FactKey, question.Question)));
-        if (checkNames.Collisions.Count > 0)
+        if (!isGo && checkNames.Collisions.Count > 0)
             blockers.Add(new ManifestBlocker("checks/names",
                 $"Two or more test projects produce the same check name: {string.Join(", ", checkNames.Collisions)}."));
         if (blockers.Count > 0)
             return new(null, blockers.AsReadOnly(), questions.AsReadOnly());
 
         var emittedChecks = new JsonArray();
-        var checkTimeouts = OwnerAnsweredCheckTimeouts.Read(applied);
-        foreach (var check in checks.OrderBy(check => check.ProjectPath.Replace('\\', '/'), StringComparer.Ordinal))
+        if (isGo)
         {
-            var path = check.ProjectPath.Replace('\\', '/');
-            var emittedCheck = new JsonObject
+            foreach (var check in GoVerificationChecks.Entries)
+                emittedChecks.Add(new JsonObject
+                {
+                    ["name"] = check.Name,
+                    ["type"] = "command",
+                    ["command"] = check.Command,
+                    ["arguments"] = new JsonArray(check.Arguments.Select(argument => (JsonNode?)JsonValue.Create(argument)).ToArray())
+                });
+        }
+        else
+        {
+            var checkTimeouts = OwnerAnsweredCheckTimeouts.Read(applied);
+            foreach (var check in checks.OrderBy(check => check.ProjectPath.Replace('\\', '/'), StringComparer.Ordinal))
             {
-                ["name"] = checkNames.Names[path],
-                ["type"] = "dotnet-test",
-                ["runner"] = check.Runner,
-                ["project"] = path
-            };
-            if (checkTimeouts.TryGetValue(path, out var timeout))
-                emittedCheck["timeoutMinutes"] = timeout.Minutes;
-            emittedCheck["arguments"] = new JsonArray();
-            emittedChecks.Add(emittedCheck);
+                var path = check.ProjectPath.Replace('\\', '/');
+                var emittedCheck = new JsonObject
+                {
+                    ["name"] = checkNames.Names[path],
+                    ["type"] = "dotnet-test",
+                    ["runner"] = check.Runner,
+                    ["project"] = path
+                };
+                if (checkTimeouts.TryGetValue(path, out var timeout))
+                    emittedCheck["timeoutMinutes"] = timeout.Minutes;
+                emittedCheck["arguments"] = new JsonArray();
+                emittedChecks.Add(emittedCheck);
+            }
         }
         var manifest = new JsonObject
         {
@@ -73,12 +89,15 @@ public static class LearnedAcceptanceManifest
             ["checks"] = emittedChecks,
             ["forbiddenChangedPathGlobs"] = new JsonArray()
         };
-        var mtpInvocations = new JsonArray();
-        foreach (var check in checks.Where(check => check.Runner == "mtp")
-            .OrderBy(check => check.ProjectPath, StringComparer.Ordinal))
-            mtpInvocations.Add(MtpInvocationDeriver.Derive(check.ProjectPath));
-        if (mtpInvocations.Count > 0)
-            manifest["engine"]!["mtpInvocations"] = mtpInvocations;
+        if (!isGo)
+        {
+            var mtpInvocations = new JsonArray();
+            foreach (var check in checks.Where(check => check.Runner == "mtp")
+                .OrderBy(check => check.ProjectPath, StringComparer.Ordinal))
+                mtpInvocations.Add(MtpInvocationDeriver.Derive(check.ProjectPath));
+            if (mtpInvocations.Count > 0)
+                manifest["engine"]!["mtpInvocations"] = mtpInvocations;
+        }
 
         var json = manifest.ToJsonString(new JsonSerializerOptions
         {
