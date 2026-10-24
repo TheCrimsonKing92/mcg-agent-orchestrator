@@ -20,6 +20,12 @@ public interface IOrchestratorStateQueries
         CancellationToken cancellationToken = default) =>
         throw new NotSupportedException("This repository does not support request-only human-input queries.");
 
+    /// <summary>Lists hot goal rows with stored gate obligations in whole-store load order, without hydrating snapshots.</summary>
+    Task<IReadOnlyList<GoalId>> ListGateTestObligationGoalIdsAsync(
+        IReadOnlyCollection<GoalId>? goalIds = null,
+        CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException("This repository does not support gate-obligation goal-id queries.");
+
     /// <summary>Projects steward questions for the specified terminal goals without loading snapshots into a kernel.</summary>
     Task<IReadOnlyList<TerminalOwnerQuestionHold>> ListTerminalOwnerQuestionHoldsAsync(
         IReadOnlyCollection<GoalId> goalIds,
