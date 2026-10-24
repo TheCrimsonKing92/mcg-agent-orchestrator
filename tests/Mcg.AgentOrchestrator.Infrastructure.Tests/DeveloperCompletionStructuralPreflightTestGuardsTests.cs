@@ -13,6 +13,13 @@ public sealed class DeveloperCompletionStructuralPreflightTestGuardsTests
     private const string MisfiledClass = "ConductorBatchLoopTestsMisfiledFixture";
     private const string TestDirectory = "tests/Mcg.AgentOrchestrator.Infrastructure.Tests";
     private const string FixturePath = TestDirectory + "/GuardFixture.cs";
+    private const string PartitionManifest = """
+        { "version": 1, "engine": { "infrastructureTestLanes": [
+          { "name": "Dotnet build slots", "filter": "FullyQualifiedName~ConductorBatchLoopTests", "ownedCollections": ["DotnetBuildSlots"] },
+          { "name": "Remainder balance B", "filter": "FullyQualifiedName~RunGoalServiceTests" },
+          { "name": "Remainder", "filter": "FullyQualifiedName!~ConductorBatchLoopTests&FullyQualifiedName!~RunGoalService" }
+        ] } }
+        """;
 
     [Theory]
     [InlineData(MisfiledClass, false, "isolated-collection")]
@@ -181,6 +188,105 @@ public sealed class DeveloperCompletionStructuralPreflightTestGuardsTests
             Assert.Equal(WorkTaskStatus.Assigned, tester.Status);
             Assert.Null(tester.LastDispatch);
             Assert.StartsWith("developer-completion structural pre-check failed:", Assert.Single(notes), StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(executionDirectory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Unassigned_class_retries_developer_before_tester_dispatch()
+    {
+        var executionDirectory = ConductorDriverTests.CreateTempDirectory();
+        try
+        {
+            var (kernel, goal) = SoftwareGoal("Lane partition structural preflight");
+            var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
+            var tester = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Tester);
+            foreach (var task in goal.Tasks.TakeWhile(task => task.Id != tester.Id))
+                PassVerification(kernel, goal, task);
+            using var fixture = new Fixture(GoalWorktrees.WorktreePath(executionDirectory, goal.Id));
+            File.WriteAllText(Path.Combine(fixture.Root, "config/acceptance-manifest.json"), PartitionManifest);
+            fixture.WriteClass("RunGoalServiceGraphAdmissionTests", isolated: false);
+            var retries = new List<(TaskId TaskId, string Message, RetryCause Cause)>();
+            var dispatchedRoles = new List<AgentRole>();
+            var notes = new List<string>();
+            var driver = MakeDriver(
+                getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+                dispatchAndStart: candidate =>
+                {
+                    dispatchedRoles.Add(candidate.Tasks.First(task => task.Status == WorkTaskStatus.Assigned).RequiredRole);
+                    return DispatchStartOutcome.Started();
+                },
+                retryTaskWithCause: (goalId, taskId, message, roundKind, cause) =>
+                {
+                    retries.Add((taskId, message, cause));
+                    return kernel.RetryTask(goalId, taskId, message, retryRoundKind: roundKind, retryCause: cause);
+                },
+                recordTaskNote: (_, _, message) => notes.Add(message),
+                executionDirectory: executionDirectory);
+
+            driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
+
+            var retry = Assert.Single(retries);
+            Assert.Equal(developer.Id, retry.TaskId);
+            Assert.Equal(RetryCause.NewSourceFinding, retry.Cause);
+            Assert.Contains(FixturePath, retry.Message, StringComparison.Ordinal);
+            Assert.Contains("RunGoalServiceGraphAdmissionTests", retry.Message, StringComparison.Ordinal);
+            Assert.Contains("[lane-partition]", retry.Message, StringComparison.Ordinal);
+            Assert.Contains("not assigned to any acceptance lane", retry.Message, StringComparison.Ordinal);
+            Assert.Equal([AgentRole.Developer], dispatchedRoles);
+            Assert.Equal(WorkTaskStatus.Assigned, tester.Status);
+            Assert.Null(tester.LastDispatch);
+            Assert.StartsWith("developer-completion structural pre-check failed:", Assert.Single(notes), StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(executionDirectory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Single_lane_class_keeps_pass_message_and_does_not_retry_developer()
+    {
+        var executionDirectory = ConductorDriverTests.CreateTempDirectory();
+        try
+        {
+            var (kernel, goal) = SoftwareGoal("Single lane structural preflight");
+            var tester = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Tester);
+            foreach (var task in goal.Tasks.TakeWhile(task => task.Id != tester.Id))
+                PassVerification(kernel, goal, task);
+            using var fixture = new Fixture(GoalWorktrees.WorktreePath(executionDirectory, goal.Id));
+            File.WriteAllText(Path.Combine(fixture.Root, "config/acceptance-manifest.json"), PartitionManifest);
+            fixture.WriteClass("RunGoalServiceGraphAdmissionTests", isolated: false);
+            var unassigned = DeveloperCompletionStructuralPreflight.Evaluate(fixture.Root);
+            Assert.True(unassigned.HasViolation, unassigned.Message);
+            Assert.Contains("[lane-partition]", unassigned.Message, StringComparison.Ordinal);
+            fixture.WriteClass("GoalCardRenderingTests", isolated: false);
+
+            var result = DeveloperCompletionStructuralPreflight.Evaluate(fixture.Root);
+
+            Assert.False(result.HasViolation, result.Message);
+            Assert.Equal(PassMessage, result.Message);
+            var retries = new List<TaskId>();
+            var notes = new List<string>();
+            var driver = MakeDriver(
+                getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+                dispatchAndStart: _ => DispatchStartOutcome.Started(),
+                retryTaskWithCause: (goalId, taskId, message, roundKind, cause) =>
+                {
+                    retries.Add(taskId);
+                    return kernel.RetryTask(goalId, taskId, message, retryRoundKind: roundKind, retryCause: cause);
+                },
+                recordTaskNote: (_, _, message) => notes.Add(message),
+                executionDirectory: executionDirectory);
+
+            driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
+
+            Assert.Empty(retries);
+            Assert.Contains(notes, note => note.StartsWith(
+                "developer-completion structural pre-check passed:", StringComparison.Ordinal));
         }
         finally
         {

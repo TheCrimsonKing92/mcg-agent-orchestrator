@@ -75,6 +75,79 @@ public sealed class TestCollectionGuardRulesTests
             lanes, descriptors, "Dotnet build slots", "DotnetBuildSlots", exemptions.Keys));
     }
 
+    [Fact]
+    public void Unassigned_class_reports_partition_violation_until_renamed()
+    {
+        AcceptanceTestLane[] lanes =
+        [
+            new("Dotnet build slots", "FullyQualifiedName~ConductorBatchLoopTests")
+            {
+                OwnedCollections = ["DotnetBuildSlots"]
+            },
+            new("Remainder balance B", "FullyQualifiedName~RunGoalServiceTests"),
+            new("Remainder", "FullyQualifiedName!~ConductorBatchLoopTests&FullyQualifiedName!~RunGoalService")
+        ];
+        var descriptor = new AcceptanceTestClassDescriptor("RunGoalServiceGraphAdmissionTests", null);
+
+        var violation = Assert.Single(TestCollectionGuardRules.FindLaneViolations(lanes, [descriptor]));
+
+        Assert.Equal("lane-partition", violation.Rule);
+        Assert.Equal(descriptor.FullName, violation.ClassFullName);
+        Assert.Null(violation.Collection);
+        Assert.Empty(violation.ResolvedLanes);
+        Assert.Contains("is not assigned to any acceptance lane", violation.RepairHint, StringComparison.Ordinal);
+        Assert.Equal("Runnable test class 'RunGoalServiceGraphAdmissionTests' is not assigned to any acceptance lane. " +
+            "Rename the class so exactly one lane's FullyQualifiedName~ substring selects it and no " +
+            "FullyQualifiedName!~ substring excludes it; do not edit the manifest.", violation.RepairHint);
+        Assert.Empty(TestCollectionGuardRules.FindLaneViolations(lanes,
+            [new AcceptanceTestClassDescriptor("RunGoalServiceTestsGraphAdmission", null)]));
+    }
+
+    [Fact]
+    public void Multiple_lanes_report_partition_violation_and_preserve_legacy_membership()
+    {
+        AcceptanceTestLane[] lanes =
+        [
+            new("first", "FullyQualifiedName~AlphaProbe"),
+            new("second", "FullyQualifiedName~AlphaProbeTests")
+        ];
+        var descriptor = new AcceptanceTestClassDescriptor("AlphaProbeTests", null);
+
+        var violation = Assert.Single(TestCollectionGuardRules.FindLaneViolations(lanes, [descriptor]));
+
+        Assert.Equal("lane-partition", violation.Rule);
+        Assert.Equal(descriptor.FullName, violation.ClassFullName);
+        Assert.Equal(["first", "second"], violation.ResolvedLanes);
+        Assert.Contains("assigned to multiple acceptance lanes: [first, second]", violation.RepairHint,
+            StringComparison.Ordinal);
+        Assert.Equal("Runnable test class 'AlphaProbeTests' is assigned to multiple acceptance lanes: [first, second]. " +
+            "Rename the class so exactly one lane's FullyQualifiedName~ substring selects it and no " +
+            "FullyQualifiedName!~ substring excludes it; do not edit the manifest.", violation.RepairHint);
+
+        var legacyDescriptor = new AcceptanceTestClassDescriptor("ConductorLegacyHolderAdmissionTests", "DotnetBuildSlots");
+        var legacy = Assert.Single(TestCollectionGuardRules.FindLaneMembershipViolations(Lanes, [legacyDescriptor]));
+        var shared = Assert.Single(TestCollectionGuardRules.FindLaneViolations(Lanes, [legacyDescriptor])
+            .Where(item => item.Rule == TestCollectionGuardRules.LaneMembershipRule));
+        Assert.Equal(legacy.Rule, shared.Rule);
+        Assert.Equal(legacy.ClassFullName, shared.ClassFullName);
+        Assert.Equal(legacy.Collection, shared.Collection);
+        Assert.Equal(legacy.BaselineLanes, shared.BaselineLanes);
+        Assert.Equal(legacy.ResolvedLanes, shared.ResolvedLanes);
+        Assert.Equal(legacy.RepairHint, shared.RepairHint);
+    }
+
+    [Fact]
+    public void Real_repository_assigns_every_runnable_class_to_exactly_one_lane()
+    {
+        var root = VerifiedRepositoryRoot.Find();
+        var lanes = AcceptanceGateEngineSettings.Load(root).InfrastructureTestLanes;
+        var descriptors = AcceptanceTestClassSourceScanner.Scan(root);
+
+        Assert.NotEmpty(descriptors);
+        Assert.DoesNotContain(TestCollectionGuardRules.FindLaneViolations(lanes, descriptors),
+            item => item.Rule == TestCollectionGuardRules.LanePartitionRule);
+    }
+
     [Theory]
     [InlineData("not json")]
     [InlineData("null")]
