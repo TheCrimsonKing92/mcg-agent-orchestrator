@@ -1,3 +1,5 @@
+using Mcg.AgentOrchestrator.Core;
+
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 // Owns only the rules. Persistence and transition side effects belong to program health.
@@ -33,10 +35,18 @@ internal static class ConductorInvariantWatchdog
         }
 
         foreach (var attempt in observation.FinishedAttempts ?? [])
-            if (observation.Now - attempt.FinishedAt > ConductorInvariantThresholds.FinishedUnreconciled)
+        {
+            var slotWait = attempt.Kind == ConductorParallelAcceptanceAttemptCoordinator.PreReviewEvidenceDispatchKind &&
+                attempt.LatestGoalLine is { Result: "held", Decision: { } decision } &&
+                decision.StartsWith(DispatchAdmissionPolicy.StageName + "/1/", StringComparison.Ordinal);
+            var age = observation.Now - attempt.FinishedAt;
+            if (slotWait && age <= ConductorInvariantThresholds.FinishedUnreconciledSlotWaitCeiling) continue;
+            if (age > ConductorInvariantThresholds.FinishedUnreconciled)
                 Add(new(ConductorInvariantThresholds.FinishedUnreconciledKind, attempt.AttemptId, attempt.FinishedAt,
                     $"goal:{Short(attempt.GoalId)},kind:{attempt.Kind},finishedAt:{attempt.FinishedAt:O},unreconciledFor:{(observation.Now - attempt.FinishedAt).TotalMinutes:F0}m" +
-                    (attempt.Diagnosis is { } diagnosis ? "," + diagnosis : "")));
+                    (attempt.Diagnosis is { } diagnosis ? "," + diagnosis : "") +
+                    (slotWait ? $",slotWaitSince:{attempt.LatestGoalLine!.At:O}" : "")));
+        }
 
         if (observation.Relaunch is { ScheduledAt: { } scheduled } relaunch)
         {

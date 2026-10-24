@@ -7,6 +7,7 @@ internal static class ConductorInvariantThresholds
     internal const string GateIdleWhileReadyKind = "gate-idle-while-ready";
     internal const string RepeatedRefusalKind = "repeated-refusal";
     internal static readonly TimeSpan FinishedUnreconciled = TimeSpan.FromMinutes(5);
+    internal static readonly TimeSpan FinishedUnreconciledSlotWaitCeiling = TimeSpan.FromMinutes(60);
     internal static readonly TimeSpan RelaunchWithoutActivation = TimeSpan.FromMinutes(15);
     internal static readonly TimeSpan ProbeWindowCeiling = AcceptanceAdmissionPathSet.CompletionTimeout + RelaunchWithoutActivation;
     internal static readonly TimeSpan GenerationBehindMain = TimeSpan.FromMinutes(30);

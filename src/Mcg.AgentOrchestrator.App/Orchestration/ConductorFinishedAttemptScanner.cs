@@ -54,10 +54,14 @@ internal static class ConductorFinishedAttemptScanner
                 if (finishPath is null) continue;
                 var finishedAt = new DateTimeOffset(File.GetLastWriteTimeUtc(finishPath));
                 if (attempt.CompletedAt is { } completed && completed < finishedAt) finishedAt = completed;
+                IReadOnlyList<ConductorGoalLine> lines = goalLines is not null &&
+                    goalLines.TryGetValue(attempt.GoalId, out var retained) ? retained : [];
+                ConductorGoalLine? latest = null;
+                foreach (var line in lines)
+                    if (latest is null || line.At >= latest.At) latest = line;
                 finished[attempt.AttemptId] = new(attempt.AttemptId, attempt.GoalId, attempt.Kind,
                     attempt.StartedAt, finishedAt, ConductorFinishedAttemptDiagnosis.Describe(
-                        attempt.AttemptId, finishedAt, path,
-                        goalLines is not null && goalLines.TryGetValue(attempt.GoalId, out var lines) ? lines : []));
+                        attempt.AttemptId, finishedAt, path, lines), latest);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException) { }
         }

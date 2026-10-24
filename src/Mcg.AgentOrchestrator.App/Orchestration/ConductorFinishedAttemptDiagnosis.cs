@@ -59,4 +59,4 @@ internal static class ConductorFinishedAttemptDiagnosis
     }
 }
 
-internal sealed record ConductorGoalLine(DateTimeOffset At, string Result, string Reason);
+internal sealed record ConductorGoalLine(DateTimeOffset At, string Result, string Reason, string? Decision = null);
