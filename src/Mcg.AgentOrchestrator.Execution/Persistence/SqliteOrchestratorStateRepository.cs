@@ -1821,6 +1821,36 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
         return results;
     }
 
+    public async Task<IReadOnlyList<GoalId>> ListGateTestObligationGoalIdsAsync(
+        IReadOnlyCollection<GoalId>? goalIds = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (goalIds is { Count: 0 }) return [];
+
+        await using var conn = OpenConnection();
+        await using var cmd = conn.CreateCommand();
+        var parameterNames = goalIds?.Select((_, index) => $"$goal_id{index}").ToArray();
+        var filter = parameterNames is null ? "" : $"AND id IN ({string.Join(", ", parameterNames)})";
+        cmd.CommandText = $"""
+            SELECT id FROM goals
+            WHERE CASE WHEN json_valid(snapshot_json)
+                THEN json_array_length(snapshot_json, '$.GateTestObligations') ELSE 0 END > 0
+                {filter}
+            ORDER BY rowid
+            """;
+        if (goalIds is not null)
+        {
+            var index = 0;
+            foreach (var goalId in goalIds)
+                cmd.Parameters.AddWithValue(parameterNames![index++], goalId.Value);
+        }
+        var results = new List<GoalId>();
+        await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+            results.Add(new GoalId(reader.GetString(0)));
+        return results;
+    }
+
     public async Task<IReadOnlyList<HumanInputRequestSnapshot>> ListOpenHumanInputRequestsAsync(
         CancellationToken cancellationToken = default)
     {

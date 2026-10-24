@@ -6,7 +6,8 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 internal static class ProspectiveEvidenceTrxRows
 {
     internal sealed record Row(
-        string FullIdentity, string ShortIdentity, string? ClassName, string? Outcome, string Path)
+        string FullIdentity, string ShortIdentity, string? ClassName, string? Outcome, string Path,
+        string? AliasIdentity = null)
     {
         internal bool Passed => Outcome == "Passed";
     }
@@ -26,6 +27,15 @@ internal static class ProspectiveEvidenceTrxRows
             var className = definition?.Descendants().FirstOrDefault(element =>
                 element.Name.LocalName == "TestMethod")?.Attribute("className")?.Value.Trim();
             if (string.IsNullOrWhiteSpace(className)) className = null;
+            var method = definition?.Descendants().FirstOrDefault(element => element.Name.LocalName == "TestMethod");
+            if (method?.Attribute("adapterTypeName")?.Value == GoTestJsonGateReceipt.AdapterTypeName)
+            {
+                var codeBase = method.Attribute("codeBase")?.Value;
+                var alias = string.IsNullOrEmpty(codeBase) ? null : $"{codeBase}.{method.Attribute("name")?.Value}";
+                yield return new(full, definition?.Attribute("name")?.Value ?? full, className,
+                    result.Attribute("outcome")?.Value, path, alias);
+                continue;
+            }
             var namespaceEnd = className?.LastIndexOf('.') ?? -1;
             var shortIdentity = namespaceEnd >= 0 && full.StartsWith(className!, StringComparison.Ordinal)
                 ? full[(namespaceEnd + 1)..] : full;
@@ -35,7 +45,8 @@ internal static class ProspectiveEvidenceTrxRows
 
     internal static Row[] Match(string selector, IEnumerable<Row> rows) =>
         rows.Where(row => ProspectiveEvidenceGateResolver.Matches(selector, row.FullIdentity) ||
-            ProspectiveEvidenceGateResolver.Matches(selector, row.ShortIdentity)).ToArray();
+            ProspectiveEvidenceGateResolver.Matches(selector, row.ShortIdentity) ||
+            (row.AliasIdentity is not null && ProspectiveEvidenceGateResolver.Matches(selector, row.AliasIdentity))).ToArray();
 
     internal static IReadOnlyList<string>? AmbiguousClassNames(IEnumerable<Row> matches)
     {
