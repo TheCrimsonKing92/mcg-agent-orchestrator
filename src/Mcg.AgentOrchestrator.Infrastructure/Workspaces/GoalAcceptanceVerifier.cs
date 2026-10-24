@@ -1504,8 +1504,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             FailureClassification = fresh.Result.FailureClassification ?? completionDecision.FailedPredicate
         }, fresh.Retried);
 
-        // A failed infrastructure partition may run once more as a classification probe. The first run
-        // remains the verdict; the probe only records whether the failure was confirmed as intermittent.
+        // A probe can replace the first-run verdict only under the cache's evidence policy.
         fresh = (cacheContext?.ObserveSharedApparatusEvidence(check, fresh.Result) ?? fresh.Result, fresh.Retried);
         if (cacheContext?.ShouldRerunWithinAttempt(check, fresh.Result.CompletionDecision) == true)
         {
@@ -1562,26 +1561,14 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 FailureClassification = rerun.Result.FailureClassification ?? rerunDecision.FailedPredicate
             };
             fresh = (DecorateVerdictWithGateChildReap(
-                cacheContext.SelectPartitionVerdict(check, original, rerunResult), rerunResult), true);
+                await cacheContext.SelectPartitionVerdictAsync(check, original, rerunResult, RunNarrowedCheckAsync, cancellationToken).ConfigureAwait(false), rerunResult), true);
         }
 
         if (cacheContext is not null && _testOverrides.PartitionVerdictWithinAttemptRerunEnabled &&
             fresh.Result.CompletionDecision?.FailedPredicate == AcceptanceShardCompletionPredicates.FailingTrx)
         {
             var finalResult = await AcceptanceLaneTestFailureRerun.ForAttempt(cacheContext, worktreePath).RunAsync(
-                check, fresh.Result, async rerunCheck =>
-                {
-                    var invocation = AllocateTestTelemetryInvocation(check);
-                    var rerun = await RunCheckWithCancellationProbeAsync(rerunCheck, worktreePath, goalId,
-                        stableSlotIndex, stableSlotLease, dotnetTestBuildPhase, cancellationToken,
-                        testResultsDirectoryOverride, invocation).ConfigureAwait(false);
-                    var decision = rerun.Result.CompletionDecision ?? InferPartitionCompletionDecision(rerun.Result);
-                    return cacheContext.ObserveSharedApparatusEvidence(check, rerun.Result with
-                    {
-                        TestResultAttemptId = currentAttemptId, CompletionDecision = decision,
-                        FailureClassification = rerun.Result.FailureClassification ?? decision.FailedPredicate
-                    });
-                }, result => BuildInvocationIdentity(check, result.TestResultRunOrdinal, currentAttemptId),
+                check, fresh.Result, RunNarrowedCheckAsync, result => BuildInvocationIdentity(check, result.TestResultRunOrdinal, currentAttemptId),
                 cacheContext.SharedApparatusInvalidation is not null, cancellationToken).ConfigureAwait(false);
             fresh = (finalResult, fresh.Retried || finalResult.LaneRerun is not null);
         }
@@ -1597,6 +1584,19 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         AcceptanceGateLaneProgress.CheckCompleted(goalId, fresh.Result, EmitGateProgress);
 
         return fresh;
+        async Task<AcceptanceCheckResult> RunNarrowedCheckAsync(AcceptanceManifestCheck rerunCheck)
+        {
+            var invocation = AllocateTestTelemetryInvocation(check);
+            var rerun = await RunCheckWithCancellationProbeAsync(rerunCheck, worktreePath, goalId,
+                stableSlotIndex, stableSlotLease, dotnetTestBuildPhase, cancellationToken,
+                testResultsDirectoryOverride, invocation).ConfigureAwait(false);
+            var decision = rerun.Result.CompletionDecision ?? InferPartitionCompletionDecision(rerun.Result);
+            return cacheContext!.ObserveSharedApparatusEvidence(check, rerun.Result with
+            {
+                TestResultAttemptId = currentAttemptId, CompletionDecision = decision,
+                FailureClassification = rerun.Result.FailureClassification ?? decision.FailedPredicate
+            });
+        }
     }
 
     private async Task<(AcceptanceCheckResult Result, bool Retried)> RunCheckWithCancellationProbeAsync(
@@ -1638,7 +1638,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             check, worktreePath, null, null, null, null, cancellationToken,
             invocationOverride: invocation);
 
-    private static string BuildInvocationIdentity(
+    internal static string BuildInvocationIdentity(
         AcceptanceManifestCheck check,
         int ordinal,
         string? attemptId) =>
@@ -4654,9 +4654,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 profileRoot[profileRootPath.Length..].TrimStart(Path.DirectorySeparatorChar);
             environment["APPDATA"] = appData;
             environment["LOCALAPPDATA"] = localAppData;
-            var powershellDirectory = Path.Combine(profileRoot, "powershell");
-            Directory.CreateDirectory(powershellDirectory);
-            environment["PSModuleAnalysisCachePath"] = Path.Combine(powershellDirectory, "ModuleAnalysisCache");
+            HermeticToolCacheEnvironment.Apply(environment, profileRoot);
         }
 
         environment["MCG_ORCHESTRATOR_REPOSITORY_ROOT"] = Path.GetFullPath(repositoryRoot);
@@ -4702,7 +4700,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         name.Equals(AcceptanceAttemptTrxPrefixVariable, StringComparison.OrdinalIgnoreCase) || name.Equals(DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable, StringComparison.OrdinalIgnoreCase) ||
         name.Equals(TempRootApparatusLossReceiptStore.GateInvocationIdVariable, StringComparison.OrdinalIgnoreCase) ||
         name.Equals(TempRootApparatusLossReceiptStore.ReceiptPathVariable, StringComparison.OrdinalIgnoreCase) ||
-        name.Equals("MCG_ORCHESTRATOR_REPOSITORY_ROOT", StringComparison.OrdinalIgnoreCase);
+        name.Equals("MCG_ORCHESTRATOR_REPOSITORY_ROOT", StringComparison.OrdinalIgnoreCase) || GoToolCacheEnvironment.IsVariable(name);
 
     private static bool IsInheritedHermeticVerificationEnvironmentVariable(string name) =>
         IsHermeticSystemLocationVariable(name) ||
