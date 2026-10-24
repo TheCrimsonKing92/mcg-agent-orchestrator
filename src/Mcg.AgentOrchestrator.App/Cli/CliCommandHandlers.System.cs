@@ -1164,7 +1164,6 @@ internal static partial class CliCommandHandlers
                 Console.WriteLine($"  forumChannelId: {catalog.ForumChannelId ?? "(none)"}");
                 Console.WriteLine($"  progressThreadId: {catalog.ProgressThreadId ?? "(none)"}");
                 Console.WriteLine($"  progressStatusMessageId: {catalog.ProgressStatusMessageId ?? "(none)"}");
-                Console.WriteLine($"  controlPlaneMutedUntil: {catalog.ControlPlaneMutedUntil?.ToString("O") ?? "(none)"}");
                 Console.WriteLine($"  deadManHeartbeat: {(catalog.DeadManHeartbeatEnabled ? "enabled" : "disabled")}");
                 Console.WriteLine($"  bot token: {(string.IsNullOrWhiteSpace(botToken) ? "not set" : "set (MCGO_DISCORD_BOT_TOKEN)")}");
                 Console.WriteLine($"  active channel: {context.Channel.ChannelType}");

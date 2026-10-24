@@ -9,7 +9,6 @@ public sealed record OperatorChannelCatalog(
     string? ProgressThreadId = null,
     string? ProgressStatusMessageId = null,
     string? ProgressStatusContentHash = null,
-    DateTimeOffset? ControlPlaneMutedUntil = null,
     bool DeadManHeartbeatEnabled = false,
     string? DeadManHeartbeatUrl = null)
 {
