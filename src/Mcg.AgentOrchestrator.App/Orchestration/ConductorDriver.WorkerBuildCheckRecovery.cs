@@ -10,6 +10,11 @@ internal sealed partial class ConductorDriver
     private Func<GoalId, TaskId, string, TaskSpec>? _workerBuildRecoveryRetry;
     private Func<GoalId, string> _workerBuildArtifactsPath =
         goalId => DotnetBuildEnvironmentManager.GoalArtifactsPath(goalId);
+    private Func<WorkerBuildCapacitySnapshot> _workerBuildCapacityReader = () => WorkerBuildCapacityGate.ReadHostSnapshot(
+        DotnetBuildEnvironmentManager.CaptureStorageRoot(), TimeProvider.System, WorkerBuildCapacityGate.IsExecutionLockHeld);
+
+    internal void UseWorkerBuildCapacityReader(Func<WorkerBuildCapacitySnapshot> reader) =>
+        _workerBuildCapacityReader = reader;
 
     private ConductorAdvanceResult? TryRecoverFailedWorkerBuildCheck(
         Goal goal, string goalPrefix, ConductorAutonomyPolicy policy, GoalLifecycleState state,
@@ -27,11 +32,14 @@ internal sealed partial class ConductorDriver
             (string.Equals(rule, DispatchFailureDiagnosticMarker.WorkerBuildCheckFailed, StringComparison.Ordinal) ||
              (string.Equals(rule, DispatchFailureDiagnosticMarker.WorkerBuildEvidenceMissing,
                  StringComparison.Ordinal) && WorkerBuildCheckRecoveryText.NoBuildCause(
-                     verification.StandardError + Environment.NewLine + verification.StandardOutput) != WorkerBuildNoBuildCause.None)));
+                     verification.StandardError + Environment.NewLine + verification.StandardOutput) != WorkerBuildNoBuildCause.None) ||
+             (string.Equals(rule, DispatchFailureDiagnosticMarker.WorkerBuildEvidenceMissing, StringComparison.Ordinal) &&
+              WorkerBuildCapacityEvidence.LastDispatchEndedOnCapacity(candidate))));
         if (task is null) return null;
-        var cause = WorkerBuildCheckRecoveryText.NoBuildCause(
+        var capacity = WorkerBuildCapacityEvidence.LastDispatchEndedOnCapacity(task);
+        var cause = capacity ? WorkerBuildNoBuildCause.SlotCapacity : WorkerBuildCheckRecoveryText.NoBuildCause(
             task.LastVerification!.StandardError + Environment.NewLine + task.LastVerification.StandardOutput);
-        if (cause == WorkerBuildNoBuildCause.SlotCapacity &&
+        if (!capacity && cause == WorkerBuildNoBuildCause.SlotCapacity &&
             TaskOutcomeClassifier.TryExtractRule(DispatchFailureClassifier.Classify(task, task.LastVerification!).ClassifierReceipt) !=
                 DispatchFailureDiagnosticMarker.WorkerBuildEvidenceMissing)
             cause = WorkerBuildNoBuildCause.None;
@@ -53,6 +61,19 @@ internal sealed partial class ConductorDriver
                     Decision = FailedGoalRecoveryDecisionRecords.StaleRecoveryFacts(decision.Identity, staleReason) });
         }
         ApplyPendingFailedGoalNotes(goal, pendingNotes);
+        var capacityRounds = capacity ? WorkerBuildCapacityEvidence.CapacityDispatchCount(task) : 0;
+        var capacityVerdict = WorkerBuildCapacityVerdict.Retry;
+        if (capacity)
+        {
+            var snapshot = _workerBuildCapacityReader();
+            capacityVerdict = WorkerBuildCapacityGate.Decide(snapshot, capacityRounds);
+            if (capacityVerdict == WorkerBuildCapacityVerdict.Hold)
+            {
+                var reason = WorkerBuildCheckRecoveryText.CapacityHeldReason(snapshot, capacityRounds);
+                return MakeResult(goal.Id.Value, goalPrefix, policy, new ConductorAdvanceOutcome.Held(state, reason) {
+                    Decision = FailedGoalRecoveryDecisionRecords.BuildCapacityHeld(decision.Identity, reason) });
+            }
+        }
         var errorBlock = WorkerBuildCheckRecoveryText.ErrorBlock(errors?.Format(20), cause);
         var worktreePath = _executionDirectory is null ? null : GoalWorktrees.TryResolve(_executionDirectory, goal.Id);
         if (worktreePath is null)
@@ -71,8 +92,9 @@ internal sealed partial class ConductorDriver
             return escalated with { Outcome = ((ConductorAdvanceOutcome.Escalated)escalated.Outcome) with {
                 Decision = FailedGoalRecoveryDecisionRecords.WorktreeInspectionUnavailable(decision.Identity, reason) } };
         }
-        var exhausted = task.WorkerBuildCheckRecoveryCount >= MaxWorkerBuildCheckRecoveries;
-        var subject = WorkerBuildCheckRecoveryText.CheckpointSubject(exhausted, task.WorkerBuildCheckRecoveryCount, task.Id.Value);
+        var exhausted = capacity ? capacityVerdict == WorkerBuildCapacityVerdict.Exhausted : task.WorkerBuildCheckRecoveryCount >= MaxWorkerBuildCheckRecoveries;
+        var subject = capacity ? WorkerBuildCheckRecoveryText.CapacityCheckpointSubject(exhausted, capacityRounds, task.Id.Value) :
+            WorkerBuildCheckRecoveryText.CheckpointSubject(exhausted, task.WorkerBuildCheckRecoveryCount, task.Id.Value);
         var checkpoint = worktree.Head;
         var committed = false;
         if (!worktree.IsClean)
@@ -101,9 +123,11 @@ internal sealed partial class ConductorDriver
             var reason = WorkerBuildCheckRecoveryText.EscalationReason(decision.Reason, $"checkpoint commit: {checkpoint}", errorBlock);
             var escalated = Escalate(goal, goalPrefix, policy, state, reason);
             return escalated with { Outcome = ((ConductorAdvanceOutcome.Escalated)escalated.Outcome) with {
-                Decision = FailedGoalRecoveryDecisionRecords.BuildCheckRecoveryExhausted(decision.Identity, reason) } };
+                Decision = capacity ? FailedGoalRecoveryDecisionRecords.BuildCapacityRetriesExhausted(decision.Identity, reason) :
+                    FailedGoalRecoveryDecisionRecords.BuildCheckRecoveryExhausted(decision.Identity, reason) } };
         }
-        var feedback = WorkerBuildCheckRecoveryText.RetryFeedback(task.WorkerBuildCheckRecoveryCount, committed, checkpoint, noBuild ? null : errors!.Format(50), cause);
+        var feedback = capacity ? WorkerBuildCheckRecoveryText.CapacityRetryFeedback(capacityRounds, committed, checkpoint) :
+            WorkerBuildCheckRecoveryText.RetryFeedback(task.WorkerBuildCheckRecoveryCount, committed, checkpoint, noBuild ? null : errors!.Format(50), cause);
         try { _workerBuildRecoveryRetry(goal.Id, task.Id, feedback); }
         catch (InvalidOperationException ex)
         {
