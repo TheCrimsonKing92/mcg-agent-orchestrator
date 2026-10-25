@@ -51,8 +51,9 @@ public sealed class CliProcessLogsReadOnlyWriterHeldTests : CliTaskQueryTestSupp
                 var result = await RunQueryAsync(root, args);
                 Xunit.Assert.Equal(0, result.ExitCode);
                 Xunit.Assert.Equal(string.Empty, result.StandardError);
-                Xunit.Assert.Contains("Goal " + prefix, result.StandardOutput);
-                Xunit.Assert.Contains("Tasks: 1", result.StandardOutput);
+                Xunit.Assert.Contains(marker, result.StandardOutput);
+                if (verb == "tenant")
+                    Xunit.Assert.Contains(workspace.SqliteStatePath, result.StandardOutput);
                 var after = await ReadStateRowsAsync(workspace.SqliteStatePath);
                 Xunit.Assert.Equal(before.Goals, after.Goals);
                 Xunit.Assert.Equal(before.Outbox, after.Outbox);
