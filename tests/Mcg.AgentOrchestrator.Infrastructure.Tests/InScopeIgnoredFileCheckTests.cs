@@ -211,8 +211,7 @@ public sealed class InScopeIgnoredFileCheckTests
         }
 
         internal InScopeIgnoredFileCheckResult Evaluate() => InScopeIgnoredFileCheck.Evaluate(
-            Root, [Objective], DispatchTime, (root, args) => GitCli.Run(root, args),
-            path => File.Exists(path) ? File.GetLastWriteTimeUtc(path) : null);
+            Root, [Objective], DispatchTime);
 
         internal string Git(params string[] args)
         {

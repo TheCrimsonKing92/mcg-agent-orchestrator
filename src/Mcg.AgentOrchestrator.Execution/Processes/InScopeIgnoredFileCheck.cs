@@ -8,17 +8,17 @@ internal static class InScopeIgnoredFileCheck
 {
     internal static InScopeIgnoredFileCheckResult Evaluate(string worktreePath, Goal goal, TaskSpec task) =>
         task.LastDispatch is not { } dispatch ? new(false, string.Empty) :
-        Evaluate(worktreePath, [goal.Objective, task.Description], dispatch.DispatchedAt,
-            (root, args) => GitCli.Run(root, args),
-            path => File.Exists(path) ? File.GetLastWriteTimeUtc(path) : null);
+        Evaluate(worktreePath, [goal.Objective, task.Description], dispatch.DispatchedAt);
 
     internal static InScopeIgnoredFileCheckResult Evaluate(
         string worktreePath,
         IReadOnlyList<string> scopeTexts,
         DateTimeOffset dispatchedAt,
-        Func<string, string[], GitCli.GitResult> runGit,
-        Func<string, DateTimeOffset?> readLastWriteUtc)
+        Func<string, string[], GitCli.GitResult>? runGit = null,
+        Func<string, DateTimeOffset?>? readLastWriteUtc = null)
     {
+        runGit ??= RunGit;
+        readLastWriteUtc ??= path => File.Exists(path) ? File.GetLastWriteTimeUtc(path) : null;
         if (!Directory.Exists(worktreePath)) return new(false, string.Empty);
         var paths = scopeTexts.SelectMany(ExtractPaths)
             .Where(path => !Directory.Exists(Path.Combine(worktreePath, path)))
@@ -52,6 +52,14 @@ internal static class InScopeIgnoredFileCheck
             string.Join("; ", entries) + remainder +
             ". Change the ignore rule if it is in scope, otherwise report it; the orchestrator does not force-add." +
             Environment.NewLine + DispatchFailureDiagnosticMarker.Format(DispatchFailureDiagnosticMarker.InScopeFileIgnored));
+    }
+
+    private static GitCli.GitResult RunGit(string worktreePath, string[] args)
+    {
+        if (args[0] != "check-ignore") return GitCli.Run(worktreePath, args);
+        // check-ignore accepts -z only with --stdin; the injectable request carries paths after --.
+        return GitCli.RunWithStandardInput(worktreePath, GitCli.DefaultTimeoutMilliseconds,
+            string.Join('\0', args.Skip(4)) + '\0', "check-ignore", "-v", "-z", "--stdin");
     }
 
     private static bool Completed(GitCli.GitResult result) =>
