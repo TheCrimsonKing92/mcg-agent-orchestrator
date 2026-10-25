@@ -43,10 +43,10 @@ public sealed class AcceptanceExecutionCacheIsolatedBuildTests(ITestOutputHelper
         File.WriteAllText(Path.Combine(tree, Path.GetDirectoryName(ExecutionProject)!, "Value.cs"),
             "public static class ExecutionValue { public static int Read() => CoreValue.Read() * 4; }");
         WriteTest(tree, 84);
-        var changed = await Build(tree, "changed", cache);
+        var changed = await Build(tree, "changed", cache, expectedRestoredHash: Hash(Assembly(cold.Environment, CoreProject)), restoredProject: CoreProject);
         Assert.Contains("Execution=miss", changed.Summary);
         Assert.Contains("Execution=not-found[Mcg.AgentOrchestrator.Execution:items+Mcg.AgentOrchestrator.Execution:project-tree]", changed.Summary);
-        Assert.Contains("Core=not-found[Mcg.AgentOrchestrator.Execution:items+Mcg.AgentOrchestrator.Execution:project-tree]", changed.Summary);
+        Assert.Contains("Core=hit", changed.Summary);
         Assert.NotEqual(coldHash, Hash(Assembly(changed.Environment, ExecutionProject)));
         ValidateReceiptAndTests(tree, changed.Environment, "changed");
 
@@ -137,7 +137,7 @@ public sealed class AcceptanceExecutionCacheIsolatedBuildTests(ITestOutputHelper
     }
 
     private async Task<(DotnetBuildEnvironment Environment, string Summary)> Build(
-        string tree, string slot, DotnetBaseBuildCache cache, string? expectedRestoredHash = null, string? importOrder = null)
+        string tree, string slot, DotnetBaseBuildCache cache, string? expectedRestoredHash = null, string? importOrder = null, string restoredProject = ExecutionProject)
     {
         var environment = EnvironmentFor(slot);
         var plan = new DotnetBaseBuildCachePlan(new string('a', 40), [CoreProject, ExecutionProject],
@@ -170,7 +170,7 @@ public sealed class AcceptanceExecutionCacheIsolatedBuildTests(ITestOutputHelper
             if (prepare is not null)
             {
                 Assert.NotNull(expectedRestoredHash);
-                Assert.Equal(expectedRestoredHash, Hash(Assembly(environment, ExecutionProject)));
+                Assert.Equal(expectedRestoredHash, Hash(Assembly(environment, restoredProject))); Assert.True(restoredProject == ExecutionProject || restored || !Directory.Exists(Path.Combine(environment.ArtifactsPath, "bin", Path.GetFileNameWithoutExtension(ExecutionProject))));
                 restored = true;
             }
             var result = MeasureCommand([.. arguments, .. environment.Arguments], "build");

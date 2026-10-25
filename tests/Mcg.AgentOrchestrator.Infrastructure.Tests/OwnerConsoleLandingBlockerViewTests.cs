@@ -101,7 +101,7 @@ public sealed class OwnerConsoleLandingBlockerViewTests
         var query = new OwnerGoalDetailQuery(harness.State, harness.Tail, gate is null ? null : () => gate);
         var withRecord = await query.LoadAsync(Id, CancellationToken.None);
         Assert.NotNull(withRecord);
-        Assert.Equal(Typed, withRecord.Goal.LandingBlocker);
+        Assert.Equal(scenario is "completed" or "failed" ? null : Typed, withRecord.Goal.LandingBlocker);
         Assert.Equal(status, withRecord.Goal.Status);
         if (scenario == "live") Assert.NotNull(withRecord.Gate);
         if (scenario == "unobserved") Assert.False(withRecord.GateObserved);

@@ -109,7 +109,7 @@ public sealed class OwnerQuestionResolutionDialogTests
             Goal = Harness.AddGoal("11111111-resolution", title ?? "Resolved console question", AgentRole.Planner);
             Directory.CreateDirectory(DirectoryPath);
             Reader = new(Harness.State, Tail, DirectoryPath, DirectoryPath, Harness.Clock);
-            Controller = new(Harness.Questions, Harness.Answers, Dialogs, Harness.State, Tail, Harness.Conductor,
+            Controller = OwnerConsoleControllerFactory.Create(Harness.Questions, Harness.Answers, Dialogs, Harness.State, Tail, Harness.Conductor,
                 Harness.DigestReport, Harness.Digest, Harness.Clock, resolutions: Reader);
         }
 

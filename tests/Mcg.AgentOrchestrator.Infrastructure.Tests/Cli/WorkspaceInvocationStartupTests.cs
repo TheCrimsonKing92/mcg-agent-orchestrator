@@ -264,14 +264,30 @@ public sealed class WorkspaceInvocationStartupTests
         Directory.CreateDirectory(fixture.State);
         StateDbMigrations.EnsureUpToDate(Path.Combine(fixture.State, "state.db"));
 
-        // No earlier route in ExecuteCommand claims agents, so it reaches TransactWithOutboxAsync.
-        var result = fixture.Run(fixture.Bound("agents"),
+        // epic-suggest needs the kernel, is absent from SkipsKernelState and reaches TransactWithOutboxAsync.
+        var result = fixture.Run(fixture.Bound("epic-suggest"),
             new() { ["MCG_STATE_WRITE_WARNING_MS"] = "0" });
 
         Assert.Equal(0, result.ExitCode);
         var receipt = Path.Combine(fixture.State, SqliteWriteTelemetry.DiagnosticsDirectoryName, SqliteWriteTelemetry.DiagnosticsFileName);
         Assert.True(File.Exists(receipt));
         Assert.True(new FileInfo(receipt).Length > 0);
+    }
+
+    [Fact]
+    public void BareAgentsWithZeroThresholdServesReadRouteWithoutDiagnostics()
+    {
+        using var fixture = new Fixture();
+        Directory.CreateDirectory(fixture.State);
+        StateDbMigrations.EnsureUpToDate(Path.Combine(fixture.State, "state.db"));
+
+        var result = fixture.Run(fixture.Bound("agents"),
+            new() { ["MCG_STATE_WRITE_WARNING_MS"] = "0" });
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Contains("Agents:", result.StandardOutput);
+        var receipt = Path.Combine(fixture.State, SqliteWriteTelemetry.DiagnosticsDirectoryName, SqliteWriteTelemetry.DiagnosticsFileName);
+        Assert.False(File.Exists(receipt));
     }
 
     private sealed class Fixture : IDisposable

@@ -20,8 +20,12 @@ internal static class CliTaskQueryCommand
 
     internal static bool IsTaskQueryCommand(IReadOnlyList<string> args) =>
         args.Count >= 1 &&
-        (args[0].Equals("task", StringComparison.OrdinalIgnoreCase) ||
+        (UsesTaskTargetGrammar(args[0]) ||
          args[0].Equals("tasks", StringComparison.OrdinalIgnoreCase));
+
+    private static bool UsesTaskTargetGrammar(string verb) =>
+        verb.Equals("task", StringComparison.OrdinalIgnoreCase) ||
+        verb.Equals("verifications", StringComparison.OrdinalIgnoreCase);
 
     internal static void Execute(
         IReadOnlyList<string> args,
@@ -71,7 +75,7 @@ internal static class CliTaskQueryCommand
         IReadOnlyList<GoalSummary> metadata,
         Goal? currentGoal)
     {
-        if (!args[0].Equals("task", StringComparison.OrdinalIgnoreCase))
+        if (!UsesTaskTargetGrammar(args[0]))
             return ResolveImplicitTarget(args, stateQueries, metadata, currentGoal);
 
         if (args.Count > 1 && args[1].Equals("--goal", StringComparison.OrdinalIgnoreCase))

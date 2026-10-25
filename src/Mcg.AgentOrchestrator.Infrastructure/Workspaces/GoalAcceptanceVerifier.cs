@@ -683,7 +683,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             c.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase) &&
             (string.IsNullOrWhiteSpace(c.Project) || c.Project.EndsWith(".sln", StringComparison.OrdinalIgnoreCase)));
 
-        var scopedChecks = BuildChangeScopedChecks(worktreePath, solutionCheck, effectiveChecks, changedFiles, policyShardPlan, infrastructureTestLanes);
+        var scopedChecks = GoalAcceptanceVerifierHomeImpactScope.Applies(executionOwner.ProjectHomeDirectory) ? BuildChangeScopedChecks(worktreePath, solutionCheck, effectiveChecks, changedFiles, policyShardPlan, infrastructureTestLanes) : null;
         var runSolutionCheck = solutionCheck is not null && scopedChecks is null;
         var deferredChecks = runSolutionCheck
             ? BuildDeferredChecks(solutionCheck, effectiveChecks, worktreePath)
@@ -1867,7 +1867,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
         // This is the single owner of the environment- and scope-expanded gate plan. Cohort
         // identity, partition-cache identity, and execution all hash or consume this exact plan.
-        var policyRequiredChecks = BuildRequiredPolicyChecks(worktreePath, changedFiles);
+        var policyRequiredChecks = GoalAcceptanceVerifierHomeImpactScope.GetRequiredChecks(projectHomeDirectory, () => BuildRequiredPolicyChecks(worktreePath, changedFiles));
         var policyEffectiveChecks = BuildPolicyEffectiveChecks(
             worktreePath,
             manifest.Checks,

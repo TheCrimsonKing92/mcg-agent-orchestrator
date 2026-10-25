@@ -93,10 +93,15 @@ internal sealed class WorkerBuildRequestHost : IWorkerBuildRequestService
             Advance(WorkerBuildPhase.CustodyAcquired);
             Advance(WorkerBuildPhase.WaitingForBuildSlot);
             var environment = DotnetBuildEnvironmentManager.CreateAttempt(new GoalId(invocation.GoalId),
-                "worker-host-" + invocation.Id, storageRoot: _storageRoot, repositoryRoot: root);
+                "worker-host-" + invocation.Id, storageRoot: _storageRoot, repositoryRoot: root) with
+            {
+                HolderLabel = $"worker-build:goal-{invocation.GoalId[..8]}:role-{task.RequiredRole}:task-{invocation.TaskId[..8]}"
+            };
             var acquisition = DotnetBuildEnvironmentManager.TryAcquireFirstAvailableBuildPermit(environment,
                 invocation.Deadline - _time.GetUtcNow(), stop.Token,
-                onWait: () => Advance(WorkerBuildPhase.WaitingForBuildSlot), timeProvider: _time);
+                onWait: () => Advance(WorkerBuildPhase.WaitingForBuildSlot), timeProvider: _time,
+                claimant: new BuildPermitClaimant($"worker-build:goal-{invocation.GoalId}:invocation-{invocation.Id}",
+                    BuildPermitClaimantKind.WorkerBuild, Environment.ProcessId, OwnerBound: true));
             if (acquisition is not DotnetBuildLeaseAcquisition.Acquired) CheckCurrent();
             if (acquisition is DotnetBuildLeaseAcquisition.SlotsBusy)
             {

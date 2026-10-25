@@ -359,7 +359,7 @@ public sealed class OwnerConsoleDialogOverflowScenarioTests
         internal GateFixture()
         {
             var harness = new OwnerConsoleHarness();
-            var controller = new OwnerConsoleScreenController(harness.Questions, harness.Answers, new Dialogs(), harness.State,
+            var controller = OwnerConsoleControllerFactory.Create(harness.Questions, harness.Answers, new Dialogs(), harness.State,
                 harness.Tail, harness.Conductor, harness.DigestReport, harness.Digest, harness.Clock);
             View = new(_app, controller, () => Task.CompletedTask);
         }

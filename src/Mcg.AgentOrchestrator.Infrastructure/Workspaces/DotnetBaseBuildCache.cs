@@ -97,18 +97,23 @@ internal sealed class DotnetBaseBuildCache
         foreach (var project in projects)
         {
             var projectKey = ProjectKey(project);
-            var entryPath = EntryPath(mainSha, projectKey, identity);
+            if (!TryFingerprint(identity, project, out var fingerprint))
+            {
+                receipts.Add(new(project, projectKey, "miss", "not-found", null));
+                continue;
+            }
+            var entryPath = EntryPath(mainSha, projectKey, fingerprint, identity);
             var manifest = TryReadManifest(entryPath);
             if (manifest is null)
             {
                 receipts.Add(new DotnetBaseBuildCacheProjectReceipt(project, projectKey, "miss", "not-found", null,
-                    DotnetBaseBuildCacheMissDetail.Describe(ReadSiblingComponents(entryPath, projectKey, identity), identity.Components)));
+                    DotnetBaseBuildCacheMissDetail.Describe(ReadSiblingComponents(entryPath, projectKey, fingerprint), identity.Components)));
                 continue;
             }
 
             if (manifest.SchemaVersion != ManifestSchemaVersion ||
-                !string.Equals(manifest.CompatibilityFingerprint, identity.Fingerprint, StringComparison.Ordinal) ||
-                !string.Equals(manifest.MainSha, mainSha, StringComparison.Ordinal) ||
+                !string.Equals(manifest.CompatibilityFingerprint, fingerprint, StringComparison.Ordinal) ||
+                (identity.ProjectKeys.Length == 0 && !string.Equals(manifest.MainSha, mainSha, StringComparison.Ordinal)) ||
                 !string.Equals(manifest.Project, project, StringComparison.OrdinalIgnoreCase) ||
                 !string.Equals(manifest.ProjectKey, projectKey, StringComparison.Ordinal))
             {
@@ -151,6 +156,7 @@ internal sealed class DotnetBaseBuildCache
                 }
             }
 
+            Touch(entryPath);
             receipts.Add(new DotnetBaseBuildCacheProjectReceipt(project, projectKey, "hit", null, currentHash));
         }
 
@@ -158,7 +164,7 @@ internal sealed class DotnetBaseBuildCache
     }
 
     private IReadOnlyList<(string EntryName, string? Components)> ReadSiblingComponents(
-        string entryPath, string projectKey, DotnetBaseBuildCacheIdentity identity)
+        string entryPath, string projectKey, string fingerprint)
     {
         var siblings = new List<(string EntryName, string? Components)>();
         var parent = Path.GetDirectoryName(entryPath)!;
@@ -170,7 +176,7 @@ internal sealed class DotnetBaseBuildCache
                 if (directory.Equals(entryPath, StringComparison.OrdinalIgnoreCase)) continue;
                 var manifest = TryReadManifest(directory);
                 if (manifest is not null && string.Equals(manifest.ProjectKey, projectKey, StringComparison.Ordinal) &&
-                    !string.Equals(manifest.CompatibilityFingerprint, identity.Fingerprint, StringComparison.Ordinal))
+                    !string.Equals(manifest.CompatibilityFingerprint, fingerprint, StringComparison.Ordinal))
                     siblings.Add((Path.GetFileName(directory), manifest.CompatibilityComponents));
             }
         }
@@ -194,6 +200,7 @@ internal sealed class DotnetBaseBuildCache
         foreach (var project in projects)
         {
             var projectKey = ProjectKey(project);
+            if (!TryFingerprint(identity, project, out var fingerprint)) continue;
             var sourceRoots = ProjectArtifactRoots(artifactsPath, project)
                 .Where(Directory.Exists)
                 .ToArray();
@@ -221,17 +228,17 @@ internal sealed class DotnetBaseBuildCache
                     Path.Combine(stagingPath, ManifestFileName),
                     JsonSerializer.Serialize(
                         new CacheEntryManifest(mainSha, project, projectKey, hash, DateTimeOffset.UtcNow, files, ManifestSchemaVersion,
-                            identity.Fingerprint, string.IsNullOrEmpty(identity.Components) ? null : identity.Components),
+                            fingerprint, string.IsNullOrEmpty(identity.Components) ? null : identity.Components),
                         new JsonSerializerOptions { WriteIndented = true }));
 
-                var finalPath = EntryPath(mainSha, projectKey, identity);
+                var finalPath = EntryPath(mainSha, projectKey, fingerprint, identity);
                 Directory.CreateDirectory(Path.GetDirectoryName(finalPath)!);
                 if (Directory.Exists(finalPath))
                 {
                     var existing = TryReadManifest(finalPath);
                     if (existing is null || existing.SchemaVersion != ManifestSchemaVersion ||
-                        !string.Equals(existing.CompatibilityFingerprint, identity.Fingerprint, StringComparison.Ordinal) ||
-                        !string.Equals(existing.MainSha, mainSha, StringComparison.Ordinal) ||
+                        !string.Equals(existing.CompatibilityFingerprint, fingerprint, StringComparison.Ordinal) ||
+                        (identity.ProjectKeys.Length == 0 && !string.Equals(existing.MainSha, mainSha, StringComparison.Ordinal)) ||
                         !string.Equals(existing.Project, project, StringComparison.OrdinalIgnoreCase) ||
                         !string.Equals(existing.ProjectKey, projectKey, StringComparison.Ordinal) ||
                         !string.Equals(ResolveEntryHash(finalPath, existing, verifyContent: true), existing.ContentHash, StringComparison.Ordinal))
@@ -250,6 +257,7 @@ internal sealed class DotnetBaseBuildCache
                 }
                 else
                 {
+                    Touch(finalPath);
                     receipts.Add(new DotnetBaseBuildCacheProjectReceipt(project, projectKey, "hit", "already-published", hash));
                 }
             }
@@ -334,6 +342,16 @@ internal sealed class DotnetBaseBuildCache
         foreach (var shaDirectory in Directory.EnumerateDirectories(_rootPath)
             .Where(path => !Path.GetFileName(path).Equals(StagingDirectoryName, StringComparison.OrdinalIgnoreCase)))
         {
+            var name = Path.GetFileName(shaDirectory);
+            var suffix = name[(name.LastIndexOf('-') + 1)..];
+            if (File.Exists(Path.Combine(shaDirectory, ManifestFileName)) ||
+                (suffix.Length == 64 && suffix.All(char.IsAsciiHexDigit) && suffix.Length < name.Length))
+            {
+                var manifest = TryReadManifest(shaDirectory);
+                yield return new CacheEntry(manifest?.MainSha ?? "unknown", Path.GetFileName(shaDirectory),
+                    shaDirectory, Directory.GetLastWriteTimeUtc(shaDirectory));
+                continue;
+            }
             foreach (var projectDirectory in Directory.EnumerateDirectories(shaDirectory))
             {
                 yield return new CacheEntry(
@@ -360,8 +378,22 @@ internal sealed class DotnetBaseBuildCache
         }
     }
 
-    private string EntryPath(string mainSha, string projectKey, DotnetBaseBuildCacheIdentity identity) =>
-        Path.Combine(_rootPath, SanitizeSegment(mainSha), $"{projectKey}-{SanitizeSegment(identity.Fingerprint)}");
+    private string EntryPath(string mainSha, string projectKey, string fingerprint, DotnetBaseBuildCacheIdentity identity) =>
+        identity.ProjectKeys.Length == 0
+            ? Path.Combine(_rootPath, SanitizeSegment(mainSha), $"{projectKey}-{SanitizeSegment(fingerprint)}")
+            : Path.Combine(_rootPath, $"{projectKey}-{SanitizeSegment(fingerprint)}");
+
+    private static bool TryFingerprint(DotnetBaseBuildCacheIdentity identity, string project, out string fingerprint)
+    {
+        fingerprint = identity.Fingerprint;
+        return identity.ProjectKeys.Length == 0 || DotnetBaseBuildCacheProjectKeys.TryGet(identity.ProjectKeys, project, out fingerprint);
+    }
+
+    private static void Touch(string entryPath)
+    {
+        try { Directory.SetLastWriteTimeUtc(entryPath, DateTime.UtcNow); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+    }
 
     private static IEnumerable<string> ProjectArtifactRoots(string artifactsPath, string project)
     {

@@ -68,7 +68,7 @@ public sealed class OwnerConsoleStatusFreshnessTests
 
     private static OwnerConsoleFullScreenView View(IApplication app, OwnerConsoleHarness harness,
         TimeProvider clock, OwnerConsoleLoopOptions? options = null) =>
-        new(app, new(harness.Questions, harness.Answers, new Dialogs(), harness.State, harness.Tail,
+        new(app, OwnerConsoleControllerFactory.Create(harness.Questions, harness.Answers, new Dialogs(), harness.State, harness.Tail,
             harness.Conductor, harness.DigestReport, harness.Digest, clock), () => Task.CompletedTask, clock: clock, options: options);
 
     private sealed class Questions(OwnerQuestionSnapshot snapshot) : IOwnerQuestionSource

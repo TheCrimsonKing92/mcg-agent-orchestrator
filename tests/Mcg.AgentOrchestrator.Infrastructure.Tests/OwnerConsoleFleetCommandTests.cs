@@ -58,7 +58,7 @@ public sealed class OwnerConsoleFleetCommandTests
         var harness = new OwnerConsoleHarness();
         var dialogs = new Dialogs();
         var loads = 0;
-        using var controller = new OwnerConsoleScreenController(harness.Questions, harness.Answers, dialogs,
+        using var controller = OwnerConsoleControllerFactory.Create(harness.Questions, harness.Answers, dialogs,
             harness.State, harness.Tail, harness.Conductor, harness.DigestReport, harness.Digest, harness.Clock,
             fleet: () =>
             {

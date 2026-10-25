@@ -162,7 +162,7 @@ public sealed class OwnerConsoleCommandCompletionScenarioTests
         {
             Harness.AddGoal("11111111-first", "First", AgentRole.Developer);
             Harness.Questions.Items.Add(new("q1", "11111111-first", OwnerQuestionKind.HumanInput, "Ship?", ProposedDefault: "ship"));
-            _controller = new(Harness.Questions, Harness.Answers, Dialogs, Harness.State, Harness.Tail,
+            _controller = OwnerConsoleControllerFactory.Create(Harness.Questions, Harness.Answers, Dialogs, Harness.State, Harness.Tail,
                 Harness.Conductor, Harness.DigestReport, Harness.Digest, Harness.Clock);
             View = new(_app, _controller, () => Task.CompletedTask, clock: Harness.Clock);
         }

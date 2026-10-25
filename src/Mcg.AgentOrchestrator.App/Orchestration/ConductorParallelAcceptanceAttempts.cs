@@ -620,7 +620,9 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
             cancellationToken: cancellationToken,
             slotCount: DotnetBuildEnvironmentManager.StableSlotCount,
             storageRoot: _buildStorageRoot,
-            holderLabel: holderLabel);
+            holderLabel: holderLabel,
+            claimant: new BuildPermitClaimant("gate:" + (holderLabel ?? cohortId),
+                BuildPermitClaimantKind.Gate, Environment.ProcessId, OwnerBound: false));
         Console.WriteLine(
             $"ACCEPTANCE_LEASE_ACQUIRE cohort={cohortId} permit=acceptance-{lease.Environment.BuildPermitIndex?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown"} holderPid={Environment.ProcessId}");
         return lease;
@@ -1602,7 +1604,11 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
                 permitName: AllBuildPermitNames(),
                 waitReason: AcceptanceBuildPermitWaitReason.AllPermitsBusy),
             timeProvider: _timeProvider,
-            sleep: _buildPermitSleep);
+            sleep: _buildPermitSleep,
+            claimant: new BuildPermitClaimant(
+                $"{(purpose == "pre-review-evidence" ? "focused-evidence" : "gate")}:goal-{candidate.Goal.Id.Value}",
+                purpose == "pre-review-evidence" ? BuildPermitClaimantKind.FocusedEvidence : BuildPermitClaimantKind.Gate,
+                Environment.ProcessId, OwnerBound: false));
         if (acquisition is DotnetBuildLeaseAcquisition.Acquired acquired)
         {
             var acquiredAt = _timeProvider.GetTimestamp();

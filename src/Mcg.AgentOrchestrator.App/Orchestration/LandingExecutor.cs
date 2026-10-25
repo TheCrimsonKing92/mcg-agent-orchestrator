@@ -403,8 +403,13 @@ internal static partial class LandingExecutor
             BuildLandingAdmission(executionDirectory, boundMainRevision!, candidateRevision!, changedFiles));
         OperatorInbox.ClearOwnershipHoldsAfterLanding(workspace, goal, $"land {goalPrefix}");
         StateEffectProposalApplier.ApplyLandedProposals(kernel, goal, workspace, changedFiles, Console.WriteLine);
+        var openChecks = PostLandingOperatorCheck.DescribeOpen(kernel.GetPendingHumanInput(goal.Id));
+        var postLandingMessage = openChecks is null ? string.Empty : "Landed with " + openChecks;
+        if (openChecks is not null)
+            kernel.RecordGoalPolicyDecision(goal.Id, postLandingMessage);
         return new LandingResult(goal.Id.Value, goalPrefix, new LandingDecision.Promote { Decision = proceedDecision.ToRecord() }, IntegrationBranchName,
-            true, $"Promoted: {goalBranch} prepared from bound main via {IntegrationBranchName} into main.",
+            true, $"Promoted: {goalBranch} prepared from bound main via {IntegrationBranchName} into main." +
+                (openChecks is null ? string.Empty : " " + postLandingMessage),
             candidateRevision,
             changedFiles);
     }

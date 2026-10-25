@@ -22,7 +22,7 @@ public sealed class OwnerConsoleStartupActivityTests
             ]);
             var harness = new OwnerConsoleHarness();
             var dialogs = new Dialogs();
-            var controller = new OwnerConsoleScreenController(harness.Questions, harness.Answers, dialogs,
+            var controller = OwnerConsoleControllerFactory.Create(harness.Questions, harness.Answers, dialogs,
                 harness.State, harness.Tail, harness.Conductor, harness.DigestReport, harness.Digest, harness.Clock);
             var builder = new OwnerConsoleViewModelBuilder(harness.State, harness.Questions, harness.Liveness, new Epics(), harness.Clock);
             using IApplication app = Terminal.Gui.App.Application.Create();

@@ -187,7 +187,7 @@ public sealed class OwnerConsoleBoardAttentionTests
             null, [view.BoardPane.Table!, row], null)!;
 
     private static OwnerConsoleFullScreenView View(IApplication app, OwnerConsoleHarness harness, TimeProvider clock) =>
-        new(app, new(harness.Questions, harness.Answers, new Dialogs(), harness.State, harness.Tail,
+        new(app, OwnerConsoleControllerFactory.Create(harness.Questions, harness.Answers, new Dialogs(), harness.State, harness.Tail,
             harness.Conductor, harness.DigestReport, harness.Digest, clock), () => Task.CompletedTask, clock: clock);
 
     private sealed class Epics : IOwnerGoalEpicLookup

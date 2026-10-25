@@ -813,7 +813,7 @@ public sealed class OwnerConsoleEpicViewTests
             var parked = Harness.AddGoal("b-parked", "Parked beta", AgentRole.Developer);
             Harness.Kernel.ParkGoal(parked.Id, "waiting on vendor");
             Source.State = Harness.State;
-            Controller = new(Harness.Questions, Harness.Answers, Dialogs, Harness.State, Harness.Tail,
+            Controller = OwnerConsoleControllerFactory.Create(Harness.Questions, Harness.Answers, Dialogs, Harness.State, Harness.Tail,
                 Harness.Conductor, Harness.DigestReport, Harness.Digest, Time, wired ? Source : null);
             View = new(App, Controller, () => Task.CompletedTask);
             View.Render(Model);
