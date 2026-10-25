@@ -2,6 +2,11 @@ namespace Mcg.AgentOrchestrator.Core;
 
 public sealed partial class AgentOrchestratorKernel
 {
+    public IReadOnlyDictionary<HumanInputRequestId, string> CloseRoleReportEvidence(
+        GoalId goalId, string landingCandidateSha, Func<string, string?> passedGateSourceForClass) =>
+        new RoleReportEvidenceClosure(_humanInputRequestLock, _clock, (g, t, k, m) => Append(g, t, k, m))
+            .Close(GetGoal(goalId), HumanInputRequests, landingCandidateSha, passedGateSourceForClass);
+
     public GoalVerificationGate BuildVerificationGate(GoalId goalId)
     {
         var goal = GetGoal(goalId);
