@@ -909,7 +909,7 @@ public sealed class RepositoryChangeClassifierTests
 
         Assert.True(plan.RequiresBuild);
         Assert.True(plan.RequiresBroadVerification);
-        Assert.Equal(5, plan.Checks.Count);
+        Assert.Equal(6, plan.Checks.Count);
         Assert.All(plan.Checks, check =>
         {
             Assert.Equal("dotnet", check.Command[0]);
@@ -924,7 +924,8 @@ public sealed class RepositoryChangeClassifierTests
                 "infrastructure tests",
                 "acceptance execution owner tests",
                 "provider environment tests",
-                "cli tests"
+                "cli tests",
+                "storage retention tests"
             ],
             plan.Checks.Select(check => check.Name));
         Assert.Equal(
@@ -933,7 +934,8 @@ public sealed class RepositoryChangeClassifierTests
                 "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
                 "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Acceptance/Mcg.AgentOrchestrator.Infrastructure.Acceptance.Tests.csproj",
                 "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProviderEnvironment/Mcg.AgentOrchestrator.Infrastructure.ProviderEnvironment.Tests.csproj",
-                "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Cli/Mcg.AgentOrchestrator.Infrastructure.Cli.Tests.csproj"
+                "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Cli/Mcg.AgentOrchestrator.Infrastructure.Cli.Tests.csproj",
+                "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/StorageRetention/Mcg.AgentOrchestrator.Infrastructure.StorageRetention.Tests.csproj"
             ],
             plan.Checks.Select(check => check.Command[3]));
     }

@@ -81,7 +81,7 @@ Start with the [operator runbook](docs/operator-runbook.md) for setup, operation
 ## Projects
 
 The current project inventory is derived from `src/**/*.csproj` (6 production projects) and
-`tests/**/*.csproj` (11 test/support projects). See the
+`tests/**/*.csproj` (12 test/support projects). See the
 [architecture map](docs/architecture.md) for the dependency graph, state ownership, current seams,
 and the separately labelled modular-monolith target.
 
@@ -98,6 +98,7 @@ and the separately labelled modular-monolith target.
 | `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj` | Broad infrastructure, orchestration, worker, workspace, and acceptance tests. | The separately scoped CLI and provider-environment suites. |
 | `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Acceptance/Mcg.AgentOrchestrator.Infrastructure.Acceptance.Tests.csproj` | Focused acceptance execution-owner and invocation-pipeline tests. | Broad infrastructure, CLI, or provider-environment coverage. |
 | `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Execution/Mcg.AgentOrchestrator.Infrastructure.Execution.Tests.csproj` | Execution persistence, process identity, sandbox boundary, and build-log tests. | App, broad infrastructure, CLI, or provider-environment coverage. |
+| `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/StorageRetention/Mcg.AgentOrchestrator.Infrastructure.StorageRetention.Tests.csproj` | Storage retention maintenance, journal compression, resume cursor, attempt, and operator-log tests. | Broad infrastructure, CLI, execution, or provider-environment coverage. |
 | `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Cli/Mcg.AgentOrchestrator.Infrastructure.Cli.Tests.csproj` | CLI parsing, command, and console-contract tests. | Executable hosting or non-CLI infrastructure coverage. |
 | `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProviderEnvironment/Mcg.AgentOrchestrator.Infrastructure.ProviderEnvironment.Tests.csproj` | Process-isolated provider environment and configuration tests. | General provider implementation ownership. |
 | `tests/Mcg.AgentOrchestrator.TestSupport/Mcg.AgentOrchestrator.TestSupport.csproj` | Shared test fixtures and helpers. | A runnable test suite or production behavior. |

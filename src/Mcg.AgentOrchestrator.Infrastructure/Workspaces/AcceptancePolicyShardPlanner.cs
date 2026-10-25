@@ -19,6 +19,8 @@ internal static partial class AcceptancePolicyShardPlanner
     internal const string CliTestsProject = "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Cli/Mcg.AgentOrchestrator.Infrastructure.Cli.Tests.csproj";
     internal const string ExecutionTestsProject = "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Execution/Mcg.AgentOrchestrator.Infrastructure.Execution.Tests.csproj";
 
+    internal const string StorageRetentionTestsProject = "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/StorageRetention/Mcg.AgentOrchestrator.Infrastructure.StorageRetention.Tests.csproj";
+
     internal enum BaseCacheEligibility { Ineligible, Always, WhenTargeted }
 
     internal sealed record ProjectTopologyEntry(BaseCacheEligibility CacheEligibility, string[] ReferencingProjects);
@@ -26,19 +28,20 @@ internal static partial class AcceptancePolicyShardPlanner
     // This graph owns impact propagation and cache eligibility. Edges point to consumers.
     internal static readonly IReadOnlyDictionary<string, ProjectTopologyEntry> ProjectTopology = new Dictionary<string, ProjectTopologyEntry>(StringComparer.OrdinalIgnoreCase)
     {
-        [CoreProject] = new(BaseCacheEligibility.Always, [ExecutionProject, ProvidersProject, OperatorCommsProject, InfrastructureProject, AppProject, CoreTestsProject, InfrastructureTestsProject, AcceptanceTestsProject, TestSupportProject, ProviderEnvironmentTestsProject, CliTestsProject, ExecutionTestsProject]),
+        [CoreProject] = new(BaseCacheEligibility.Always, [ExecutionProject, ProvidersProject, OperatorCommsProject, InfrastructureProject, AppProject, CoreTestsProject, InfrastructureTestsProject, AcceptanceTestsProject, TestSupportProject, ProviderEnvironmentTestsProject, CliTestsProject, ExecutionTestsProject, StorageRetentionTestsProject]),
         [ProvidersProject] = new(BaseCacheEligibility.Always, [ExecutionProject, InfrastructureProject, AppProject, InfrastructureTestsProject, ProviderEnvironmentTestsProject]),
         [OperatorCommsProject] = new(BaseCacheEligibility.Always, [AppProject, InfrastructureTestsProject, TestSupportProject, ProviderEnvironmentTestsProject, CliTestsProject]),
         [ExecutionProject] = new(BaseCacheEligibility.Always, [InfrastructureProject, AppProject, InfrastructureTestsProject, AcceptanceTestsProject, TestSupportProject, ProviderEnvironmentTestsProject, CliTestsProject, ExecutionTestsProject]),
-        [InfrastructureProject] = new(BaseCacheEligibility.Always, [AppProject, InfrastructureTestsProject, AcceptanceTestsProject, TestSupportProject, ProviderEnvironmentTestsProject, CliTestsProject]),
-        [AppProject] = new(BaseCacheEligibility.Always, [InfrastructureTestsProject, AcceptanceTestsProject, TestSupportProject, ProviderEnvironmentTestsProject, CliTestsProject]),
+        [InfrastructureProject] = new(BaseCacheEligibility.Always, [AppProject, InfrastructureTestsProject, AcceptanceTestsProject, TestSupportProject, ProviderEnvironmentTestsProject, CliTestsProject, StorageRetentionTestsProject]),
+        [AppProject] = new(BaseCacheEligibility.Always, [InfrastructureTestsProject, AcceptanceTestsProject, TestSupportProject, ProviderEnvironmentTestsProject, CliTestsProject, StorageRetentionTestsProject]),
         [CoreTestsProject] = new(BaseCacheEligibility.Always, []),
         [InfrastructureTestsProject] = new(BaseCacheEligibility.Always, []),
         [AcceptanceTestsProject] = new(BaseCacheEligibility.WhenTargeted, []),
-        [TestSupportProject] = new(BaseCacheEligibility.Always, [InfrastructureTestsProject]),
+        [TestSupportProject] = new(BaseCacheEligibility.Always, [InfrastructureTestsProject, StorageRetentionTestsProject]),
         [ProviderEnvironmentTestsProject] = new(BaseCacheEligibility.Always, []),
         [CliTestsProject] = new(BaseCacheEligibility.Always, []),
-        [ExecutionTestsProject] = new(BaseCacheEligibility.WhenTargeted, [])
+        [ExecutionTestsProject] = new(BaseCacheEligibility.WhenTargeted, []),
+        [StorageRetentionTestsProject] = new(BaseCacheEligibility.WhenTargeted, [])
     };
 
     internal static IReadOnlyList<string> CacheEligibleProjects(
@@ -211,6 +214,7 @@ internal static partial class AcceptancePolicyShardPlanner
         var changedProjects = normalizedFiles
             .Select(TryMapPathToProject)
             .OfType<string>()
+            .Concat(normalizedFiles.SelectMany(AcceptancePolicyShardPlannerLinkedSources.Consumers))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
         var closure = BuildProjectDependencyClosure(changedProjects);
@@ -323,6 +327,7 @@ internal static partial class AcceptancePolicyShardPlanner
             return CliTestsProject;
         if (normalized.StartsWith("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Acceptance/", StringComparison.OrdinalIgnoreCase)) return AcceptanceTestsProject;
         if (normalized.StartsWith("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Execution/", StringComparison.OrdinalIgnoreCase)) return ExecutionTestsProject;
+        if (normalized.StartsWith("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/StorageRetention/", StringComparison.OrdinalIgnoreCase)) return StorageRetentionTestsProject;
         if (normalized.StartsWith("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/", StringComparison.OrdinalIgnoreCase))
             return InfrastructureTestsProject;
         return null;

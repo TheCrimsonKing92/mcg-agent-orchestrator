@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <OutputType>Exe</OutputType>
+    <UseMicrosoftTestingPlatformRunner>true</UseMicrosoftTestingPlatformRunner>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="..\AssemblyTempRedirect.cs" Link="AssemblyTempRedirect.cs" />
+    <Compile Include="..\AssemblyTempRootCleanupFixture.cs" Link="AssemblyTempRootCleanupFixture.cs" />
+    <Compile Include="..\AssemblyTempRootCleanupHolderDiagnostics.cs" Link="AssemblyTempRootCleanupHolderDiagnostics.cs" />
+    <Compile Include="..\InfrastructureTestSupport.cs" Link="InfrastructureTestSupport.cs" />
+    <Compile Include="..\InfrastructureTestSupportGitCommit.cs" Link="InfrastructureTestSupportGitCommit.cs" />
+    <Compile Include="..\InfrastructureTestSupportGitProbeSeam.cs" Link="InfrastructureTestSupportGitProbeSeam.cs" />
+    <Compile Include="..\ConsoleCapture.cs" Link="ConsoleCapture.cs" />
+    <Compile Include="..\WorkerDispatchTestsSeededRepositoryFactory.cs" Link="WorkerDispatchTestsSeededRepositoryFactory.cs" />
+    <Compile Include="..\WorkerDispatchTestsSeededRepositoryFactory.TemplateCache.cs" Link="WorkerDispatchTestsSeededRepositoryFactory.TemplateCache.cs" />
+    <Compile Include="..\RetentionReclaimFixture.cs" Link="RetentionReclaimFixture.cs" />
+    <ProjectReference Include="..\..\..\src\Mcg.AgentOrchestrator.Core\Mcg.AgentOrchestrator.Core.csproj" />
+    <ProjectReference Include="..\..\..\src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj" />
+    <ProjectReference Include="..\..\..\src\Mcg.AgentOrchestrator.Infrastructure\Mcg.AgentOrchestrator.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\Mcg.AgentOrchestrator.TestSupport\Mcg.AgentOrchestrator.TestSupport.csproj" />
+    <PackageReference Include="Microsoft.Testing.Extensions.TrxReport" Version="2.3.2" />
+    <PackageReference Include="xunit.v3.mtp-v2" Version="3.2.2" />
+  </ItemGroup>
+</Project>
