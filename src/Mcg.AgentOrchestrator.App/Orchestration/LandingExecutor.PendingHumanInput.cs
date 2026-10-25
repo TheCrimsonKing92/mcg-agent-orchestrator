@@ -25,7 +25,7 @@ internal static partial class LandingExecutor
                 return $"gate test obligation {result.Obligation.Id[..Math.Min(8, result.Obligation.Id.Length)]} " +
                     $"(brief v{result.Obligation.BriefVersion}) {outcome}: {selectors}; source {result.SourceId ?? "none"}";
             }).ToArray();
-        var pending = kernel.GetPendingHumanInput(goal.Id);
+        var pending = PostLandingOperatorCheck.HoldingLanding(kernel.GetPendingHumanInput(goal.Id));
         if (pending.Count == 0)
             return (resolution, obligationLines.Length == 0 ? null : string.Join("; ", obligationLines), obligationLines);
 

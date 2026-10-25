@@ -78,7 +78,7 @@ public static class ConductorOperatorDispositionSnapshots
         return kernel.Goals
             .Select(goal => surface.Evaluate(
                 goal,
-                kernel.BuildMonitor(goal.Id).PendingHumanInputCount,
+                kernel.GetPendingHumanInput(goal.Id).Count(wait => !PostLandingOperatorCheck.IsPostLandingCheck(wait)),
                 kernel.BuildVerificationGate(goal.Id).IsSatisfied,
                 executionDirectory,
                 commandLineSnapshot,

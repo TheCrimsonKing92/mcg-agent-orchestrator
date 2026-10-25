@@ -54,7 +54,7 @@ public sealed partial class AgentOrchestratorKernel
     {
         var goal = GetGoal(goalId);
         var gate = BuildVerificationGate(goalId);
-        var pendingInput = GetPendingHumanInput(goalId);
+        var pendingInput = PostLandingOperatorCheck.HoldingLanding(GetPendingHumanInput(goalId));
         var blockers = new List<GoalAcceptanceBlocker>();
 
         foreach (var request in pendingInput)
