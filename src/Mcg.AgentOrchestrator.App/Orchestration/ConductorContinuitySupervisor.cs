@@ -131,7 +131,7 @@ internal sealed partial class ConductorContinuitySupervisor(
     public static bool ShouldSupervise(
         IReadOnlyList<string> args,
         bool authorityTransferRequested) =>
-        CliPersistentStateRunner.IsConductLoop(args) &&
+        ConductCommandArguments.IsLoop(args) &&
         args.Any(arg => arg.Equals("--loop", StringComparison.OrdinalIgnoreCase)) &&
         !args.Any(arg => arg.Equals(ChildFlag, StringComparison.OrdinalIgnoreCase)) &&
         !authorityTransferRequested;

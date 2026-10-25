@@ -5,14 +5,20 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 internal static partial class LandingExecutor
 {
     private static (ProspectiveEvidenceGateResolution Resolution, string? HoldDescription, IReadOnlyList<string> ObligationLines) EvaluatePendingHumanInput(
-        AgentOrchestratorKernel kernel, Goal goal, string orchestratorDirectory, string? candidateRevision)
+        AgentOrchestratorKernel kernel, Goal goal, OrchestratorWorkspace workspace, string? candidateRevision)
     {
+        var orchestratorDirectory = workspace.OrchestratorDirectory;
         // Resolve candidate-bound gate and role reports before projecting pending input.
         var resolution = ProspectiveEvidenceGateResolver.Resolve(kernel, goal, orchestratorDirectory, candidateRevision);
         if (!string.IsNullOrWhiteSpace(candidateRevision))
             kernel.CloseRoleReportEvidence(goal.Id, candidateRevision,
                 RoleReportGateClassEvidence.For(orchestratorDirectory, goal.Id, candidateRevision));
-        var obligationLines = GateTestObligationEvaluator.Evaluate(goal, orchestratorDirectory, candidateRevision)
+        var obligations = GateTestObligationEvaluator.Evaluate(goal, orchestratorDirectory, candidateRevision,
+            new(workspace.ExecutionDirectory, workspace.IntegrationBranch));
+        foreach (var result in obligations.Where(result => result.Outcome == GateTestObligationEvaluator.Outcome.Satisfied &&
+            result.RenameProvenance.Length > 0))
+            Console.WriteLine(result.RenameProvenance);
+        var obligationLines = obligations
             .Where(result => result.Outcome is not (GateTestObligationEvaluator.Outcome.Satisfied or GateTestObligationEvaluator.Outcome.Waived))
             .Select(result =>
             {
@@ -47,11 +53,11 @@ internal static partial class LandingExecutor
     }
 
     private static string? DescribeGroupedPendingHumanInput(
-        AgentOrchestratorKernel kernel, IReadOnlyList<Goal> goals, string orchestratorDirectory,
+        AgentOrchestratorKernel kernel, IReadOnlyList<Goal> goals, OrchestratorWorkspace workspace,
         Func<GoalId, string> candidateRevision)
     {
         var holds = goals.Select(goal => EvaluatePendingHumanInput(
-                kernel, goal, orchestratorDirectory, candidateRevision(goal.Id)).HoldDescription)
+                kernel, goal, workspace, candidateRevision(goal.Id)).HoldDescription)
             .Where(description => description is not null).ToArray();
         return holds.Length == 0 ? null : string.Join("; ", holds);
     }

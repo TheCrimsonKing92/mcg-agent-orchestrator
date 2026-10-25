@@ -72,7 +72,7 @@ internal static partial class LandingExecutor
             }
         }
 
-        var pendingInput = DescribeGroupedPendingHumanInput(kernel, goals, workspace.OrchestratorDirectory,
+        var pendingInput = DescribeGroupedPendingHumanInput(kernel, goals, workspace,
             goalId => receipt.Identity.Members.Single(member => member.GoalId == goalId).CandidateRevision);
         if (pendingInput is not null)
         {
@@ -181,7 +181,7 @@ internal static partial class LandingExecutor
 
         blockReason = mutationBlocker?.Invoke();
         if (string.IsNullOrWhiteSpace(blockReason))
-            blockReason = DescribeGroupedPendingHumanInput(kernel, goals, workspace.OrchestratorDirectory,
+            blockReason = DescribeGroupedPendingHumanInput(kernel, goals, workspace,
                 goalId => receipt.Identity.Members.Single(member => member.GoalId == goalId).CandidateRevision);
         if (!string.IsNullOrWhiteSpace(blockReason))
         {

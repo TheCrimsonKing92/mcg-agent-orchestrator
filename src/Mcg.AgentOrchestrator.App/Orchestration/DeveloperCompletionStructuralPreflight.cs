@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
@@ -5,7 +6,12 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 internal static class DeveloperCompletionStructuralPreflight
 {
     internal static DeveloperCompletionStructuralFindings Evaluate(string worktreePath,
-        string? projectHomeDirectory = null)
+        string? projectHomeDirectory = null, string? integrationBranch = null) =>
+        Evaluate(worktreePath, projectHomeDirectory, readBase: integrationBranch is null ? null
+            : path => LaneSubstringCollisionBase.Read(path, integrationBranch));
+
+    internal static DeveloperCompletionStructuralFindings Evaluate(string worktreePath,
+        string? projectHomeDirectory, Func<string, LaneSubstringCollisionBase?>? readBase)
     {
         var ratchet = SourceSizeRatchetPreflight.Evaluate(worktreePath);
         if (ratchet.HasBlockingViolation)
@@ -27,7 +33,8 @@ internal static class DeveloperCompletionStructuralPreflight
 
         try
         {
-            var violations = EvaluateTestCollectionGuards(worktreePath, settings.InfrastructureTestLanes);
+            var violations = EvaluateTestCollectionGuards(worktreePath, settings.InfrastructureTestLanes,
+                projectHomeDirectory, readBase);
             if (violations is not null)
                 return new DeveloperCompletionStructuralFindings(true, violations);
         }
@@ -41,7 +48,8 @@ internal static class DeveloperCompletionStructuralPreflight
             "source size ratchet and acceptance manifest lane consistency checks passed");
     }
 
-    private static string? EvaluateTestCollectionGuards(string worktreePath, IReadOnlyList<AcceptanceTestLane> lanes)
+    private static string? EvaluateTestCollectionGuards(string worktreePath, IReadOnlyList<AcceptanceTestLane> lanes,
+        string? projectHomeDirectory, Func<string, LaneSubstringCollisionBase?>? readBase)
     {
         if (!Directory.Exists(Path.Combine(worktreePath, "tests", "Mcg.AgentOrchestrator.Infrastructure.Tests")) ||
             !lanes.Any(lane => lane.Name == TestCollectionGuardRules.DotnetBuildSlotsLaneName))
@@ -61,6 +69,25 @@ internal static class DeveloperCompletionStructuralPreflight
 
         var descriptors = AcceptanceTestClassSourceScanner.Scan(worktreePath);
         violations.AddRange(TestCollectionGuardRules.FindLaneViolations(lanes, descriptors));
+        if (readBase is not null && string.Equals(
+                Path.GetFullPath(AcceptanceManifestLocator.Resolve(worktreePath, projectHomeDirectory)),
+                Path.GetFullPath(Path.Combine(worktreePath, "config", "acceptance-manifest.json")),
+                OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal) &&
+            readBase(worktreePath) is { } baseline)
+        {
+            AcceptanceGateEngineSettings? baseSettings = null;
+            try
+            {
+                baseSettings = AcceptanceGateEngineSettings.Parse(baseline.BaseManifestJson);
+            }
+            catch (Exception exception) when (exception is JsonException or InvalidDataException)
+            {
+                // Unavailable base evidence must not suppress the existing structural guards.
+            }
+            if (baseSettings is not null)
+                violations.AddRange(LaneSubstringCollisionCheck.Find(baseSettings.InfrastructureTestLanes,
+                    lanes, descriptors, baseline.DiffText));
+        }
         if (exemptions is not null)
             violations.AddRange(TestCollectionGuardRules.FindUnisolatedLaneClasses(lanes, descriptors,
                 TestCollectionGuardRules.DotnetBuildSlotsLaneName, TestCollectionGuardRules.DotnetBuildSlotsCollection,
