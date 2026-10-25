@@ -154,7 +154,7 @@ internal static class OwnerConsoleFullScreenHost
                 var notifications = OwnerConsoleNotificationSettings.Load(
                     Path.Combine(workspace.OrchestratorDirectory, "owner-console-settings.json"));
                 var controller = new OwnerConsoleScreenController(questions, new AttentionAnswerHandlerAdapter(workspace),
-                    new TerminalGuiOwnerConsoleDialogs(app, token), state, new GoalEventFileTail(workspace.GoalLifecycleEventsDirectory),
+                    new TerminalGuiOwnerConsoleDialogs(app, token), new OwnerGoalDetailQuery(state, new GoalEventFileTail(workspace.GoalLifecycleEventsDirectory)),
                     new CliConductorConsoleAdapter(workspace), new CliOwnerDigestConsoleAdapter(workspace),
                     new OwnerDigestSummaryAdapter(workspace), clock, new WorkspaceEpicProgressSource(workspace),
                     resolutions: new OwnerQuestionResolutionReader(state, new GoalEventFileTail(workspace.GoalLifecycleEventsDirectory),
@@ -162,8 +162,7 @@ internal static class OwnerConsoleFullScreenHost
                     notifier: new SystemOwnerConsoleNotifier(new WindowsOwnerConsoleSoundOutput(), notifications, File.Exists),
                     notifications: notifications,
                     fleet: () => OwnerFleetViewModelBuilder.Load(workspace, new ConductorLeaseLiveness(workspace.OrchestratorDirectory)),
-                    landings: argument => OwnerLandingsPage.Load(state, workspace.OrchestratorDirectory, clock, argument),
-                    goalDetail: new OwnerGoalDetailQuery(state, new GoalEventFileTail(workspace.GoalLifecycleEventsDirectory)));
+                    landings: argument => OwnerLandingsPage.Load(state, workspace.OrchestratorDirectory, clock, argument));
                 view = new(app, controller, () => RefreshAsync(), token, clock, OwnerConsoleLoopOptions.Default, diagnostics);
                 boardIds = board.Board.Select(row => row.GoalId).ToArray();
                 view.Render(board);
