@@ -20,7 +20,9 @@ internal static class CliConductLoopStartup
         string orchestratorDirectory,
         string? policyName,
         TextWriter error,
-        Func<string, IReadOnlyList<StoreSetupResult>>? storeSetup = null)
+        Func<string, IReadOnlyList<StoreSetupResult>>? storeSetup = null,
+        string? projectPolicyTemplatePath = null,
+        TextWriter? seedOutput = null)
     {
         try
         {
@@ -34,6 +36,24 @@ internal static class CliConductLoopStartup
         catch (Exception ex) when (ex is SqliteException or IOException or UnauthorizedAccessException)
         {
             error.WriteLine($"Warning: store setup deferred: {ex.Message}");
+        }
+
+        if (projectPolicyTemplatePath is not null)
+        {
+            var seeded = ProjectConductorPolicySeeder.Seed(projectPolicyTemplatePath, orchestratorDirectory);
+            var dropped = seeded.DroppedKeys.Count == 0 ? "none" : string.Join(",", seeded.DroppedKeys);
+            var line = seeded.Outcome switch
+            {
+                ProjectConductorPolicySeeder.Outcome.Seeded =>
+                    $"[conduct] POLICY_SEEDED policy={seeded.PolicyName} template={projectPolicyTemplatePath} path={seeded.WrittenPath} dropped={dropped}",
+                ProjectConductorPolicySeeder.Outcome.TemplateMissing =>
+                    $"[conduct] POLICY_SEED_SKIPPED reason=template-missing template={projectPolicyTemplatePath} detail={seeded.Detail.ReplaceLineEndings(" ")}",
+                ProjectConductorPolicySeeder.Outcome.TemplateInvalid =>
+                    $"[conduct] POLICY_SEED_SKIPPED reason=template-invalid template={projectPolicyTemplatePath} detail={seeded.Detail.ReplaceLineEndings(" ")}",
+                _ => null
+            };
+            if (line is not null)
+                (seedOutput ?? Console.Out).WriteLine(line);
         }
 
         return ResolveConductorPolicy(policyName, orchestratorDirectory);
