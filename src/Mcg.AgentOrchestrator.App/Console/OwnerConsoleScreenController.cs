@@ -136,13 +136,12 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
     internal async Task ShowGoalDetailAsync(string goalId, OwnerConsoleScreenOperation? operation = null,
         CancellationToken cancellationToken = default)
     {
-        OwnerConsoleGoalDialog.Content? content = null;
-        if (!await RunDependencyAsync("goal detail", async stepToken =>
-            content = await ComposeGoalAsync(goalId, stepToken), operation, cancellationToken)) return;
         cancellationToken.ThrowIfCancellationRequested();
-        if (content is null) { await dialogs.ShowTextAsync("Goal", "goal state unavailable"); return; }
-        using var dialog = new OwnerConsoleGoalDialog(this, content, token => ComposeGoalAsync(goalId, token),
-            decision => ShowDecisionAsync(decision, operation, cancellationToken), dialogs.ShowTextAsync, cancellationToken);
+        var row = Model?.Board.FirstOrDefault(item => item.GoalId == goalId);
+        using var dialog = new OwnerConsoleGoalDialog(this, OwnerConsoleGoalDetailLoading.Placeholder(goalId, row),
+            token => ComposeGoalAsync(goalId, token),
+            decision => ShowDecisionAsync(decision, operation, cancellationToken), dialogs.ShowTextAsync, cancellationToken,
+            loadOnStart: true);
         await dialogs.ShowGoalAsync(dialog);
         _requestedEpicId = dialog.RequestedEpicId;
         _requestedGateGoalId = dialog.RequestedGateGoalId;

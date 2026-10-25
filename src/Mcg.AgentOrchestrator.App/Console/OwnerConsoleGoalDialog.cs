@@ -15,6 +15,8 @@ internal sealed class OwnerConsoleGoalDialog : IDisposable
     private readonly Func<string, string, Task> _text;
     private readonly CancellationTokenSource _session;
     private readonly object _gate = new();
+    private readonly bool _loadOnStart;
+    private bool _contentLoaded;
     private Action<Action> _invoke = action => action();
     private TaskCompletionSource? _loading;
     private bool _dirty;
@@ -43,10 +45,11 @@ internal sealed class OwnerConsoleGoalDialog : IDisposable
 
     internal OwnerConsoleGoalDialog(OwnerConsoleScreenController controller, Content initial,
         Func<CancellationToken, Task<Content?>> load, Func<OwnerConsoleDecision, Task> question,
-        Func<string, string, Task> text, CancellationToken token)
+        Func<string, string, Task> text, CancellationToken token, bool loadOnStart = false)
     {
         _controller = controller; Current = initial; _load = load; _question = question; _text = text;
         _session = CancellationTokenSource.CreateLinkedTokenSource(token);
+        _loadOnStart = loadOnStart; _contentLoaded = !loadOnStart;
         Page = new(initial.Text, 60, 15, initial.ChoiceLines);
     }
 
@@ -55,6 +58,7 @@ internal sealed class OwnerConsoleGoalDialog : IDisposable
         if (_started || _disposed) return;
         _invoke = invoke; _started = true;
         _controller.ModelApplied += ModelApplied;
+        if (_loadOnStart) ModelApplied();
     }
 
     private void ModelApplied()
@@ -94,7 +98,9 @@ internal sealed class OwnerConsoleGoalDialog : IDisposable
                 var content = await _load(token).WaitAsync(token).ConfigureAwait(false);
                 await ApplyAsync(() =>
                 {
-                    if (content is null) return; // The goal disappeared; retain the last known page.
+                    if (content is null && _contentLoaded) return; // The goal disappeared; retain the last known page.
+                    if (content is not null) _contentLoaded = true;
+                    content ??= OwnerConsoleGoalDetailLoading.Unavailable(null);
                     Current = content;
                     Page.Replace(content.Text, content.ChoiceLines);
                     Changed?.Invoke();
@@ -105,7 +111,13 @@ internal sealed class OwnerConsoleGoalDialog : IDisposable
             {
                 await ApplyAsync(() =>
                 {
-                    Page.Replace(Current.Text + Environment.NewLine + "Refresh failed: " + ex.Message, Current.ChoiceLines);
+                    if (_contentLoaded)
+                        Page.Replace(Current.Text + Environment.NewLine + "Refresh failed: " + ex.Message, Current.ChoiceLines);
+                    else
+                    {
+                        Current = OwnerConsoleGoalDetailLoading.Unavailable(ex);
+                        Page.Replace(Current.Text, Current.ChoiceLines);
+                    }
                     Changed?.Invoke();
                 }, revision, token).ConfigureAwait(false);
             }

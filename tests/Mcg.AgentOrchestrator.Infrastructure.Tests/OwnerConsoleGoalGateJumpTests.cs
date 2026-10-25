@@ -200,6 +200,7 @@ public sealed class OwnerConsoleGoalGateJumpTests
         {
             Assert.NotNull(OnGoal);
             dialog.Start(action => action());
+            await dialog.LastLoad;
             await OnGoal(dialog);
         }
     }

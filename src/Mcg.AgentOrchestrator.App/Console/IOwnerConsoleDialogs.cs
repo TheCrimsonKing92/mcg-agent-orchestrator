@@ -14,6 +14,7 @@ internal interface IOwnerConsoleDialogs
     async Task ShowGoalAsync(OwnerConsoleGoalDialog dialog)
     {
         dialog.Start(action => action());
+        await dialog.LastLoad;
         var selected = await ShowPageAsync(dialog.Title, dialog.Current.Text, dialog.Current.ChoiceLines);
         if (selected is { } index) await dialog.OpenResolutionAsync(index);
     }
