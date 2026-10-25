@@ -1,3 +1,5 @@
+using System.Globalization;
+using System.Text.Json.Nodes;
 using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
@@ -24,11 +26,27 @@ public sealed class CliReadRouteQueryCapabilityTests : CliTaskQueryTestSupport
             var directOutput = ExecuteAndCapture(probe);
 
             Xunit.Assert.NotEmpty(viewOutput);
-            Xunit.Assert.Equal(directOutput, viewOutput);
+            Xunit.Assert.Equal(NormalizeOutput(directOutput), NormalizeOutput(viewOutput));
             Xunit.Assert.Equal(0, probe.SaveAttempts);
             Xunit.Assert.Equal(0, probe.MergeSaveAttempts);
             Xunit.Assert.Equal(0, probe.MutationAttempts);
             Xunit.Assert.Equal(0, probe.OutboxClaimAttempts);
+
+            string NormalizeOutput(string output)
+            {
+                if (!args.SequenceEqual(new[] { "goals", "--json" }))
+                    return output;
+
+                // The route generates a timestamp per invocation without an injectable clock.
+                // Validate that field independently, then compare every other envelope value.
+                var envelope = JsonNode.Parse(output)!.AsObject();
+                var generatedAt = envelope["generatedAt"]!.GetValue<string>();
+                var timestamp = DateTime.ParseExact(generatedAt, "O", CultureInfo.InvariantCulture,
+                    DateTimeStyles.RoundtripKind);
+                Xunit.Assert.Equal(DateTimeKind.Utc, timestamp.Kind);
+                envelope["generatedAt"] = "2026-10-25T00:00:00.0000000Z";
+                return envelope.ToJsonString();
+            }
 
             string ExecuteAndCapture(IOrchestratorStateQueries queries)
             {
