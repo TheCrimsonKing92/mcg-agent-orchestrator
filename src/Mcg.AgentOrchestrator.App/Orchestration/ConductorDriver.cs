@@ -264,7 +264,7 @@ internal sealed partial class ConductorDriver
         ConfigureCandidateIdentity(kernel, workspace.ConductEventsLogPath);
         _cohortWorkspace = workspace;
         _runDeveloperCompletionStructuralPreflight = path =>
-            DeveloperCompletionStructuralPreflight.Evaluate(path, workspace.ProjectHomeDirectoryOrNull);
+            DeveloperCompletionStructuralPreflight.Evaluate(path, workspace.ProjectHomeDirectoryOrNull, workspace.IntegrationBranch);
         _cohortAcceptanceVerifier = acceptanceVerifier;
         _cohortEventWriter = eventWriter;
         var dispatchRunner = OperatorCancelAwareDispatchRunner.ForWorkspace(workspace);
