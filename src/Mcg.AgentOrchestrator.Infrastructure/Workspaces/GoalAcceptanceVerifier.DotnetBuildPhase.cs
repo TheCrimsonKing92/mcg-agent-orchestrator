@@ -211,23 +211,45 @@ internal sealed class AcceptanceDotnetBuildPhase
             return null;
         }
         var cache = hooks.ResolveBaseBuildCache();
-        var restore = cache.Probe(plan.MainSha, plan.RestoreProjects, identity);
+        var projectMode = identity.ProjectKeys.Length > 0;
+        string[] orderedProjects;
+        try
+        {
+            orderedProjects = projectMode
+                ? DotnetBaseBuildCacheProjectKeys.BuildOrder(identity.ProjectReferences, plan.CacheableProjects)
+                : [.. plan.CacheableProjects];
+        }
+        catch (InvalidOperationException)
+        {
+            // An invalid evaluated graph cannot authorize builds with references disabled.
+            return null;
+        }
+        var restoreProjects = projectMode
+            ? plan.RestoreProjects.Concat(orderedProjects.Where(project => !plan.CacheableProjects.Contains(project, StringComparer.OrdinalIgnoreCase))).ToArray()
+            : plan.RestoreProjects.ToArray();
+        var restore = cache.Probe(plan.MainSha, restoreProjects, identity);
+        var hitProjects = restore.Projects.Where(project => project.Status == "hit").Select(project => project.Project).ToArray();
+        var focused = projectMode ? hitProjects.Length > 0 : restore.AllHit;
         var retried = false;
         var lockRemediationApplied = false;
         (AcceptanceCheckResult Result, bool Retried)? lastRun = null;
         IReadOnlyList<string> builtProjects = plan.BuildProjects;
         DotnetBaseBuildCachePublishResult? publish = null;
 
-        if (restore.AllHit)
+        if (focused)
         {
-            builtProjects = plan.BuildProjects;
+            builtProjects = projectMode
+                ? orderedProjects.Where(project => !hitProjects.Contains(project, StringComparer.OrdinalIgnoreCase)).ToArray()
+                : plan.BuildProjects;
             var restoredIntoPreparedSlot = false;
             try
             {
-                foreach (var project in plan.BuildProjects)
+                foreach (var project in builtProjects)
                 {
+                    var arguments = BuildDotnetProjectBuildArguments(project, phase.BuildArguments);
+                    if (projectMode) arguments = [.. arguments, "-p:BuildProjectReferences=false"];
                     var projectRun = await hooks.RunManagedCheckAsync(
-                        BuildDotnetProjectBuildArguments(project, phase.BuildArguments),
+                        arguments,
                         $"{attemptName}-build-{hooks.AttemptSlug(ProjectLabel(project))}",
                         preparedEnvironment =>
                         {
@@ -236,10 +258,15 @@ internal sealed class AcceptanceDotnetBuildPhase
                                 return;
                             }
 
-                            restore = cache.Restore(plan.MainSha, preparedEnvironment.ArtifactsPath, plan.RestoreProjects, identity);
-                            if (!restore.AllHit)
+                            var restored = cache.Restore(plan.MainSha, preparedEnvironment.ArtifactsPath,
+                                projectMode ? hitProjects : restoreProjects, identity);
+                            restore = projectMode
+                                ? new(plan.MainSha, restore.Projects.Where(receipt => !hitProjects.Contains(receipt.Project, StringComparer.OrdinalIgnoreCase))
+                                    .Concat(restored.Projects).ToArray(), restore.Evictions.Concat(restored.Evictions).ToArray())
+                                : restored;
+                            if (!restored.AllHit)
                             {
-                                cache.ClearRestoredProjects(preparedEnvironment.ArtifactsPath, plan.RestoreProjects);
+                                cache.ClearRestoredProjects(preparedEnvironment.ArtifactsPath, restoreProjects);
                                 throw new BaseBuildCacheRestoreMissException();
                             }
                             restoredIntoPreparedSlot = true;
@@ -257,11 +284,12 @@ internal sealed class AcceptanceDotnetBuildPhase
             {
                 // Probe is provisional; no focused build may run on a partial restore.
                 lastRun = null;
+                focused = false;
             }
         }
-        if (!restore.AllHit)
+        if (!focused)
         {
-            builtProjects = plan.CacheableProjects;
+            builtProjects = projectMode ? orderedProjects : plan.CacheableProjects;
             lastRun = await hooks.RunManagedCheckAsync(
                 phase.BuildArguments,
                 $"{attemptName}-build",
@@ -269,13 +297,19 @@ internal sealed class AcceptanceDotnetBuildPhase
                 environment).ConfigureAwait(false);
             retried |= lastRun.Value.Retried;
             lockRemediationApplied |= lastRun.Value.Result.LockRemediationApplied;
-            if (lastRun.Value.Result.Passed)
+        }
+        if (lastRun?.Result.Passed == true && (!focused || projectMode))
+        {
+            var missedProjects = projectMode
+                ? restoreProjects.Where(project => restore.Projects.Any(receipt => receipt.Project.Equals(project, StringComparison.OrdinalIgnoreCase) && receipt.Status != "hit")).ToArray()
+                : restoreProjects;
+            if (missedProjects.Length > 0)
             {
                 // Build targets may change inputs. Re-resolve before publication rather than
                 // labeling new outputs with a pre-build identity that is no longer current.
                 var afterBuildIdentity = await hooks.ResolveCacheIdentityAsync(phase, environment).ConfigureAwait(false);
                 if (afterBuildIdentity == identity)
-                    publish = cache.Publish(plan.MainSha, environment.ArtifactsPath, plan.RestoreProjects, identity);
+                    publish = cache.Publish(plan.MainSha, environment.ArtifactsPath, missedProjects, identity);
             }
         }
 
