@@ -24,9 +24,10 @@ internal static class PlannerTargetCitation
 
             if (TryGetRepositoryPath(citation, out var path))
             {
-                // Operator-approved compatibility boundary: documentation text stays
-                // under the existing, case-sensitive repository prefixes.
-                if (IsDocumentationText(path) && !HasLegacyDocumentationPrefix(path))
+                // Preserve source/test paths as well as the operator-approved,
+                // case-sensitive documentation prefixes.
+                if (IsDocumentationText(path) &&
+                    !HasLegacySourcePrefix(path) && !HasLegacyDocumentationPrefix(path))
                 {
                     continue;
                 }

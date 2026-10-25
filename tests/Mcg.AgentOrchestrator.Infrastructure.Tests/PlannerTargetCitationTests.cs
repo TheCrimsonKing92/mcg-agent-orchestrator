@@ -53,6 +53,8 @@ public sealed class PlannerTargetCitationTests : WorkerDispatchTestSupport
     [Xunit.Theory]
     [Xunit.InlineData("`src/NoExtension`")]
     [Xunit.InlineData("`TESTS\\NoExtension`")]
+    [Xunit.InlineData("`src/CreatedDocument.md`")]
+    [Xunit.InlineData("`TESTS\\CreatedDocument.md`")]
     [Xunit.InlineData("`*.cs`")]
     [Xunit.InlineData("`Program.cs:12`")]
     [Xunit.InlineData("`Program.cs::Some Method`")]
@@ -132,7 +134,10 @@ public sealed class PlannerTargetCitationTests : WorkerDispatchTestSupport
         WithGoRepository(root =>
         {
             var citation = "internal/color/Color.go" + suffix;
-            var result = PlannerOutputContract.Resolve(PlanWithTargetBody($"- Inspect `{citation}`."), string.Empty, root);
+            var plan = PlanWithTargetBody($"- Inspect `{citation}` and preserve the existing color detection behavior.");
+            // Reach file resolution rather than failing the required section's minimum length.
+            Xunit.Assert.True(PlannerOutputContract.TryValidate(plan, out _, out var diagnostic), diagnostic);
+            var result = PlannerOutputContract.Resolve(plan, string.Empty, root);
 
             Xunit.Assert.False(result.Succeeded);
             Xunit.Assert.Contains($"target citation '{citation}' does not exist and is not marked as a new file", result.Diagnostic, StringComparison.Ordinal);
