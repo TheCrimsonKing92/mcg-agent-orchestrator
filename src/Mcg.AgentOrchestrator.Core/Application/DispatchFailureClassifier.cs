@@ -123,6 +123,7 @@ public static class DispatchFailureDiagnosticMarker
     public const string WorkerBuildEvidenceMissing = "worker-build-evidence-missing";
     public const string WrapperProcessExitFailure = "wrapper-process-exit-failure";
     public const string RequiredFileChangeEvidenceMissing = "required-file-change-evidence-missing";
+    public const string InScopeFileIgnored = "in-scope-file-ignored";
     public const string WorktreeInspectionFailed = "worktree-inspection-failed";
     public const string ConductorGenerationInterrupted = "conductor-generation-interrupted";
 
@@ -223,7 +224,8 @@ public static partial class DispatchFailureClassifier
             ["error"] = ProviderTurnRecordKind.Failed
         };
 
-    private sealed record OrchestratorAuthoredFailure(TaskOutcomeRule Rule, string Description);
+    private sealed record OrchestratorAuthoredFailure(TaskOutcomeRule Rule, string Description,
+        RecoveryRecommendation Recommendation = RecoveryRecommendation.OperatorNeeded);
 
     private static readonly IReadOnlyDictionary<string, OrchestratorAuthoredFailure> OrchestratorAuthoredFailures =
         new Dictionary<string, OrchestratorAuthoredFailure>(StringComparer.Ordinal)
@@ -252,6 +254,10 @@ public static partial class DispatchFailureClassifier
             [DispatchFailureDiagnosticMarker.RequiredFileChangeEvidenceMissing] = new(
                 TaskOutcomeRules.RequiredFileChangeEvidenceMissing,
                 "Developer/Tester dispatch did not produce required relevant file-change evidence."),
+            [DispatchFailureDiagnosticMarker.InScopeFileIgnored] = new(
+                TaskOutcomeRules.InScopeFileIgnored,
+                "Candidate snapshot left out in-scope files that ignore rules exclude.",
+                RecoveryRecommendation.AutoRetry),
             [DispatchFailureDiagnosticMarker.WorktreeInspectionFailed] = new(
                 TaskOutcomeRules.WorktreeInspectionFailed,
                 "Completed dispatch worktree inspection failed.")
@@ -1217,7 +1223,7 @@ public static partial class DispatchFailureClassifier
                 hasZeroByteOutput,
                 null,
                 null,
-                verifiedNoChange ? RecoveryRecommendation.None : RecoveryRecommendation.OperatorNeeded,
+                verifiedNoChange ? RecoveryRecommendation.None : authoredFailure.Recommendation,
                 verifiedNoChange
                     ? BuildVerifiedNoChangeRoundEvidenceSummary(task, verification)
                     : BuildOrchestratorAuthoredFailureEvidenceSummary(authoredFailure.Description, verification)));

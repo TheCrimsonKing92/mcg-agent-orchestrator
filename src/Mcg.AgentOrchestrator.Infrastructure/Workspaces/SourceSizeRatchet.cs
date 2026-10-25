@@ -265,7 +265,8 @@ internal static class SourceSizeRatchet
             // Goal ffa0471e extracts historical/current completion-build policy to its owning collaborator.
             // Integrated build-scope extraction and task-intent admission: measured 2736, no headroom.
             // Goal e7c4bc06 adds Tester submission ingestion: measured 2743, no headroom.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Execution/Processes/BackgroundDispatchRunner.cs", 2707),
+            // Goal 4ad7cdef adds the Developer ignored-file call site; evaluation lives in InScopeIgnoredFileCheck.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Execution/Processes/BackgroundDispatchRunner.cs", 2713),
             // Goal 5a75fed0 extracted typed projection parsing and literal restoration into
             // WorkerContextProjectionResidual, leaving the dispatcher to sequence package assembly.
             // Goal fd252fe4 adds retry fingerprints for the resolved provider, model, paid route, and

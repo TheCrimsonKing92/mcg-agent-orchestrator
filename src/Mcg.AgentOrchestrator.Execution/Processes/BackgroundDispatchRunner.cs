@@ -1630,6 +1630,12 @@ public sealed partial class BackgroundDispatchRunner
                 }
             }
 
+            if (task.RequiredRole == AgentRole.Developer && exitCode == 0 &&
+                InScopeIgnoredFileCheck.Evaluate(processRecord.WorkingDirectory, goal, task) is { Diagnostic.Length: > 0 } inScopeIgnored)
+            {
+                standardErrorDiagnostic = AppendDiagnostic(standardErrorDiagnostic ?? string.Empty, inScopeIgnored.Diagnostic);
+                if (inScopeIgnored.FailsRound) exitCode = 1;
+            }
             if (!orchestratorCommitted && !worktreeEvidence.IsClean && (exitCode == 0 || reconcileWrapperExit))
             {
                 // Exited 0 but left uncommitted edits the orchestrator could not land (no verification

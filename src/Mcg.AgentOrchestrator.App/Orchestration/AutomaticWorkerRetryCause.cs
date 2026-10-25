@@ -36,6 +36,10 @@ internal static class AutomaticWorkerRetryCause
             return RetryCause.ContractClarification;
         }
 
+        if (string.Equals(TaskOutcomeClassifier.TryExtractRule(outcome.ClassifierReceipt),
+                DispatchFailureDiagnosticMarker.InScopeFileIgnored, StringComparison.OrdinalIgnoreCase))
+            return RetryCause.NewSourceFinding;
+
         if (outcome.Kind == DispatchOutcomeKind.ProviderInterruption)
             return RetryCause.ProviderInterruption;
 
