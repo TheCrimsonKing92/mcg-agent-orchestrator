@@ -41,6 +41,14 @@ public interface IOrchestratorStateQueries
 
     Task<IReadOnlyList<GoalSummary>> ListGoalIdStatusesAsync(CancellationToken cancellationToken = default) =>
         ListGoalMetadataAsync(cancellationToken);
+
+    Task<IReadOnlyList<GoalSummary>> ListConductLoopGoalMetadataAsync(CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException("This repository does not support conduct-loop goal metadata queries.");
+
+    Task<IReadOnlyList<ModelOutcomeRecord>> BuildModelOutcomeScorecardAsync(
+        int windowSize = ModelOutcomeScorecard.DefaultWindowSize,
+        CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException("This repository does not support model-outcome scorecard queries.");
 }
 
 public sealed record TerminalOwnerQuestionHold(
@@ -58,8 +66,6 @@ public interface IOrchestratorStateRepository : IOrchestratorStateQueries
         CancellationToken cancellationToken = default) =>
         SaveAsync(kernel, cancellationToken);
 
-    Task<IReadOnlyList<GoalSummary>> ListConductLoopGoalMetadataAsync(CancellationToken cancellationToken = default);
-
     async Task<IReadOnlyList<GoalId>> ListTerminalGoalIdsWithNonTerminalTasksAsync(CancellationToken cancellationToken = default)
     {
         var summaries = await ListConductLoopGoalMetadataAsync(cancellationToken);
@@ -75,10 +81,6 @@ public interface IOrchestratorStateRepository : IOrchestratorStateQueries
         CancellationToken cancellationToken = default);
 
     Task<IReadOnlyList<ModelFitHistoryRow>> ListModelFitHistoryAsync(CancellationToken cancellationToken = default);
-
-    Task<IReadOnlyList<ModelOutcomeRecord>> BuildModelOutcomeScorecardAsync(
-        int windowSize = ModelOutcomeScorecard.DefaultWindowSize,
-        CancellationToken cancellationToken = default);
 
     Task<ModelFitBestFit?> QueryBestFitForRoleAsync(AgentRole role, CancellationToken cancellationToken = default);
 }

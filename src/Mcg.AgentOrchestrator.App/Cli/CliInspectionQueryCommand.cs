@@ -24,7 +24,7 @@ internal static class CliInspectionQueryCommand
 
     internal static void Execute(
         IReadOnlyList<string> args,
-        IOrchestratorStateRepository stateRepository,
+        IOrchestratorStateQueries stateRepository,
         OrchestratorWorkspace workspace,
         IModelProviderRegistry providers,
         IOperatorChannel? channel,

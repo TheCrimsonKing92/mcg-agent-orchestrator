@@ -40,7 +40,7 @@ internal static class CliReadOnlyCommandRunner
 
     internal static bool TryExecute(
         IReadOnlyList<string> args,
-        ITransactionalOrchestratorStateRepository stateRepository,
+        IOrchestratorStateQueries stateRepository,
         OrchestratorWorkspace workspace,
         IModelProviderRegistry providers,
         IOperatorChannel? channel,
@@ -251,7 +251,7 @@ internal static class CliReadOnlyCommandRunner
 
     internal static bool ExecuteHistoricalTrialCompare(
         IReadOnlyList<string> args,
-        IOrchestratorStateRepository stateRepository,
+        IOrchestratorStateQueries stateRepository,
         OrchestratorWorkspace workspace,
         ref IReadOnlyList<AgentDefinition> agents,
         IModelProviderRegistry providers,
