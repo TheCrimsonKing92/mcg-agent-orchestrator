@@ -21,7 +21,20 @@ public sealed class FaultRecordedAcceptanceFailureRouteTests : ConductorBatchLoo
 
         var first = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
 
-        Assert.Equal(GoalLifecycleState.Verified, Assert.IsType<ConductorAdvanceOutcome.Held>(first.Outcome).State);
+        var hold = Assert.IsType<ConductorAdvanceOutcome.Held>(first.Outcome);
+        Assert.Equal(GoalLifecycleState.Verified, hold.State);
+        var decision = Assert.IsType<PolicyDecisionRecord>(hold.Decision);
+        Assert.Equal("fault-recorded-acceptance-failure", decision.Stage);
+        Assert.Equal("Hold", decision.Action);
+        Assert.Equal(1, decision.Rung);
+        Assert.Equal("workspace-probe-timeout-first-regate", decision.DiscriminatingEvidence);
+        Assert.Equal(hold.Reason, decision.Reason);
+        Assert.Contains(new PolicyDecisionFact("branchHeadSha", CandidateSha), decision.Facts);
+        Assert.Contains(new PolicyDecisionFact("recordedFault",
+            "background acceptance fault recorded at AcceptanceFailed: " + WorkspaceProbeFaultClassifierTests.F2), decision.Facts);
+        Assert.Contains(new PolicyDecisionFact("workspaceProbeFaultKind", "HostContentionTimeout"), decision.Facts);
+        Assert.Contains(new PolicyDecisionFact("alreadyRegated", "False"), decision.Facts);
+        Assert.Contains(new PolicyDecisionFact("regateCap", "1"), decision.Facts);
         Assert.Equal(GoalStatus.Verified, goal.Status);
         Assert.Null(goal.LatestAcceptanceFailure);
         Assert.Single(goal.Timeline.Where(evt => evt.Message.StartsWith(
@@ -35,6 +48,15 @@ public sealed class FaultRecordedAcceptanceFailureRouteTests : ConductorBatchLoo
 
         var escalation = Assert.IsType<ConductorAdvanceOutcome.Escalated>(second.Outcome);
         Assert.Equal(ConductorEscalationKind.BackgroundAcceptanceFailed, escalation.Kind);
+        var escalationDecision = Assert.IsType<PolicyDecisionRecord>(escalation.Decision);
+        Assert.Equal("fault-recorded-acceptance-failure", escalationDecision.Stage);
+        Assert.Equal("Escalate", escalationDecision.Action);
+        Assert.Equal(2, escalationDecision.Rung);
+        Assert.Equal("fault-recorded-regate-unavailable", escalationDecision.DiscriminatingEvidence);
+        Assert.Equal(escalation.Reason, escalationDecision.Reason);
+        Assert.Contains(new PolicyDecisionFact("branchHeadSha", CandidateSha), escalationDecision.Facts);
+        Assert.Contains(new PolicyDecisionFact("workspaceProbeFaultKind", "HostContentionTimeout"), escalationDecision.Facts);
+        Assert.Contains(new PolicyDecisionFact("alreadyRegated", "True"), escalationDecision.Facts);
         Assert.StartsWith("background acceptance fault recorded at AcceptanceFailed:", escalation.Reason);
         Assert.DoesNotContain("Unhandled lifecycle state", escalation.Reason, StringComparison.Ordinal);
         Assert.Equal(GoalStatus.AcceptanceFailed, goal.Status);
@@ -71,6 +93,10 @@ public sealed class FaultRecordedAcceptanceFailureRouteTests : ConductorBatchLoo
 
         var escalation = Assert.IsType<ConductorAdvanceOutcome.Escalated>(result.Outcome);
         Assert.Equal(ConductorEscalationKind.BackgroundAcceptanceFailed, escalation.Kind);
+        var decision = Assert.IsType<PolicyDecisionRecord>(escalation.Decision);
+        Assert.Equal("Escalate", decision.Action);
+        Assert.Contains(new PolicyDecisionFact("workspaceProbeFaultKind", "Definitive"), decision.Facts);
+        Assert.Contains(new PolicyDecisionFact("alreadyRegated", "False"), decision.Facts);
         Assert.StartsWith("background acceptance fault recorded at AcceptanceFailed:", escalation.Reason);
         Assert.Equal(GoalStatus.AcceptanceFailed, goal.Status);
         Assert.Empty(RegateMarkers(goal));

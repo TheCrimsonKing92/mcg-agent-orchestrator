@@ -183,14 +183,19 @@ internal sealed partial class ConductorDriver
         Goal goal, string goalPrefix, ConductorAutonomyPolicy policy, FaultRecordedAcceptanceFailureDecision decision)
     {
         if (!decision.IsRegate)
-            return Escalate(goal, goalPrefix, policy, GoalLifecycleState.AcceptanceFailed, decision.Reason,
+        {
+            var result = Escalate(goal, goalPrefix, policy, GoalLifecycleState.AcceptanceFailed, decision.Reason,
                 ConductorEscalationKind.BackgroundAcceptanceFailed);
+            var escalation = (ConductorAdvanceOutcome.Escalated)result.Outcome;
+            return result with { Outcome = escalation with { Decision = decision.ToRecord(escalation.Reason) } };
+        }
 
         RestoreVerifiedAfterAcceptanceClassification(goal,
             $"FAULT_RECORDED_REGATE candidate_sha={decision.BranchHeadSha} ordinal=1/1");
+        var reason = $"Recorded workspace-probe timeout restored Verified for re-gate; candidate_sha={decision.BranchHeadSha} ordinal=1/1.";
         return MakeResult(goal.Id.Value, goalPrefix, policy,
-            new ConductorAdvanceOutcome.Held(GoalLifecycleState.Verified,
-                $"Recorded workspace-probe timeout restored Verified for re-gate; candidate_sha={decision.BranchHeadSha} ordinal=1/1."));
+            new ConductorAdvanceOutcome.Held(GoalLifecycleState.Verified, reason)
+            { Decision = decision.ToRecord(reason) });
     }
 
     private void RestoreVerifiedAfterAcceptanceClassification(Goal goal, string reason)

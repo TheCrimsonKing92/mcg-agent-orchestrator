@@ -17,9 +17,10 @@ internal static class FaultRecordedAcceptanceFailureRoute
                 evt.Message.StartsWith("FAULT_RECORDED_REGATE ", StringComparison.Ordinal))
             .Select(evt => evt.Message.Split('\n')[0].TrimEnd('\r').Split(' ', StringSplitOptions.RemoveEmptyEntries))
             .Any(tokens => tokens.Contains("candidate_sha=" + failure.BranchHeadSha, StringComparer.Ordinal));
+        var faultKind = WorkspaceProbeFaultClassifier.Classify(check);
         var regate = !string.IsNullOrWhiteSpace(failure.BranchHeadSha) && !alreadyRegated &&
-            WorkspaceProbeFaultClassifier.Classify(check) == WorkspaceProbeFaultKind.HostContentionTimeout;
+            faultKind == WorkspaceProbeFaultKind.HostContentionTimeout;
         return new(regate, failure.BranchHeadSha,
-            $"background acceptance fault recorded at AcceptanceFailed: {check}");
+            $"background acceptance fault recorded at AcceptanceFailed: {check}", faultKind, alreadyRegated);
     }
 }
