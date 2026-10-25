@@ -621,7 +621,7 @@ internal static class SourceSizeRatchet
             // goals at the existing tick and batch boundaries, without changing attempt custody.
             // Its tick-context reset before the goal walk adds two lines after batch reconciliation;
             // merged-tree measurement is recorded below, with no additional headroom.
-            new SourceClassCeiling("ConductorBatchLoop", 9257, 56),
+            new SourceClassCeiling("ConductorBatchLoop", 9209, 56),
             // Goal ec8903af moved the goal-prefix parser to CliGoalPrefixArguments.
             // Goal cd1f6380 adds four lines at the owning transaction boundary, forwarding both
             // registrars and invoking actions after commit; list behavior lives in PostCommitActions.
