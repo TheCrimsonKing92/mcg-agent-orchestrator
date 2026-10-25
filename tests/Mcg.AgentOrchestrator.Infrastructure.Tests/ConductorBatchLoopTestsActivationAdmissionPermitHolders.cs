@@ -72,7 +72,8 @@ public sealed class ConductorBatchLoopTestsActivationAdmissionPermitHolders(ITes
         using var holderProbe = ActivationAdmissionPermitHolders.PushHolderLabelProbe(() => { probes++; return []; });
         var text = AsyncLocalConsoleRouter.Capture(() => new ConductorBatchLoop(utcNow: () => DateTimeOffset.UnixEpoch).Run(
             new AgentOrchestratorKernel(new FixedClock()), MakeDriver(), ConductorAutonomyPolicy.Conservative,
-            NoStopPath(), maxIterations: 1, emitActivationHeartbeat: true));
+            NoStopPath(), maxIterations: 1, emitActivationHeartbeat: true, keepAliveWhenIdle: true,
+            watchInterval: TimeSpan.FromSeconds(1), sleepFunc: _ => true));
         Assert.Equal(0, probes);
         var line = Assert.Single(text.Split('\n', StringSplitOptions.TrimEntries).Where(
             line => line.StartsWith(ActivationAdmissionSample.Prefix, StringComparison.Ordinal)));
