@@ -7,7 +7,7 @@ internal static class ProspectiveEvidenceTrxRows
 {
     internal sealed record Row(
         string FullIdentity, string ShortIdentity, string? ClassName, string? Outcome, string Path,
-        string? AliasIdentity = null)
+        string? AliasIdentity = null, string? BareIdentity = null)
     {
         internal bool Passed => Outcome == "Passed";
     }
@@ -32,21 +32,28 @@ internal static class ProspectiveEvidenceTrxRows
             {
                 var codeBase = method.Attribute("codeBase")?.Value;
                 var alias = string.IsNullOrEmpty(codeBase) ? null : $"{codeBase}.{method.Attribute("name")?.Value}";
+                var bareName = method.Attribute("name")?.Value;
                 yield return new(full, definition?.Attribute("name")?.Value ?? full, className,
-                    result.Attribute("outcome")?.Value, path, alias);
+                    result.Attribute("outcome")?.Value, path, alias, string.IsNullOrEmpty(bareName) ? null : bareName);
                 continue;
             }
             var namespaceEnd = className?.LastIndexOf('.') ?? -1;
             var shortIdentity = namespaceEnd >= 0 && full.StartsWith(className!, StringComparison.Ordinal)
                 ? full[(namespaceEnd + 1)..] : full;
-            yield return new(full, shortIdentity, className, result.Attribute("outcome")?.Value, path);
+            var nestedBoundary = className?.LastIndexOf('+') ?? -1;
+            var bareIdentity = nestedBoundary >= 0 && nestedBoundary < className!.Length - 1 &&
+                full.StartsWith(className, StringComparison.Ordinal)
+                ? className[(nestedBoundary + 1)..] + full[className.Length..] : null;
+            yield return new(full, shortIdentity, className, result.Attribute("outcome")?.Value, path,
+                BareIdentity: bareIdentity);
         }
     }
 
     internal static Row[] Match(string selector, IEnumerable<Row> rows) =>
         rows.Where(row => ProspectiveEvidenceGateResolver.Matches(selector, row.FullIdentity) ||
             ProspectiveEvidenceGateResolver.Matches(selector, row.ShortIdentity) ||
-            (row.AliasIdentity is not null && ProspectiveEvidenceGateResolver.Matches(selector, row.AliasIdentity))).ToArray();
+            (row.AliasIdentity is not null && ProspectiveEvidenceGateResolver.Matches(selector, row.AliasIdentity)) ||
+            (row.BareIdentity is not null && ProspectiveEvidenceGateResolver.Matches(selector, row.BareIdentity))).ToArray();
 
     internal static IReadOnlyList<string>? AmbiguousClassNames(IEnumerable<Row> matches)
     {
