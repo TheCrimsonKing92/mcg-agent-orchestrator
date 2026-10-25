@@ -2,6 +2,7 @@ using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
+using Xunit;
 
 // Parallel-safe: each case owns its workspace and probe; console capture is async-local.
 public sealed class CliEnvironmentQueryReadOnlyRouteTests : CliTaskQueryTestSupport
