@@ -97,7 +97,7 @@ public sealed class OwnerExperimentReadingQuestionTests
         var probe = new OwnerConsoleHarness();
         var reader = new OwnerQuestionResolutionReader(probe.State, probe.Tail,
             scene.Root, scene.Root, probe.Clock);
-        using var controller = new OwnerConsoleScreenController(scene.Harness.Questions,
+        using var controller = OwnerConsoleControllerFactory.Create(scene.Harness.Questions,
             scene.Harness.Answers, decisionPrompt, scene.Harness.State, scene.Harness.Tail,
             scene.Harness.Conductor, scene.Harness.DigestReport, scene.Harness.Digest,
             scene.Harness.Clock, resolutions: reader);

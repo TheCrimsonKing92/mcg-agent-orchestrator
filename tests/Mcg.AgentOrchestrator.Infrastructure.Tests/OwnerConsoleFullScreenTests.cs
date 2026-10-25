@@ -247,7 +247,7 @@ public sealed class OwnerConsoleFullScreenTests
             Zone = TimeZoneInfo.CreateCustomTimeZone("metrics-test", TimeSpan.FromHours(offsetHours),
                 "Metrics test", "Metrics test")
         };
-        var controller = new OwnerConsoleScreenController(harness.Questions, harness.Answers, dialogs,
+        var controller = OwnerConsoleControllerFactory.Create(harness.Questions, harness.Answers, dialogs,
             harness.State, harness.Tail, harness.Conductor, harness.DigestReport, harness.Digest, clock);
 
         await controller.RunCommandAsync("digest");
@@ -289,7 +289,7 @@ public sealed class OwnerConsoleFullScreenTests
     public async Task UnsupportedCommandDependencyShowsPersistentFailure()
     {
         var harness = Harness();
-        var controller = new OwnerConsoleScreenController(harness.Questions, harness.Answers, new Dialogs(),
+        var controller = OwnerConsoleControllerFactory.Create(harness.Questions, harness.Answers, new Dialogs(),
             harness.State, harness.Tail, new FailingConductor(), harness.DigestReport, harness.Digest, harness.Clock);
         using IApplication app = Terminal.Gui.App.Application.Create();
         using var view = new OwnerConsoleFullScreenView(app, controller, () => Task.CompletedTask);
@@ -398,7 +398,7 @@ public sealed class OwnerConsoleFullScreenTests
     }
 
     private static OwnerConsoleScreenController Controller(OwnerConsoleHarness harness, Dialogs dialogs) =>
-        new(harness.Questions, harness.Answers, dialogs, harness.State, harness.Tail, harness.Conductor,
+        OwnerConsoleControllerFactory.Create(harness.Questions, harness.Answers, dialogs, harness.State, harness.Tail, harness.Conductor,
             harness.DigestReport, harness.Digest, harness.Clock);
 
     private static Task<OwnerConsoleViewModel> Model(OwnerConsoleHarness harness) =>

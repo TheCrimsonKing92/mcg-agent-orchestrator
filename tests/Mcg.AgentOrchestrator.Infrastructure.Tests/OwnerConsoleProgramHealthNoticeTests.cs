@@ -70,7 +70,7 @@ public sealed class OwnerConsoleProgramHealthNoticeTests
     public async Task HeadlessRenderKeepsProgramHealthFailure()
     {
         var harness = new OwnerConsoleHarness();
-        var controller = new OwnerConsoleScreenController(harness.Questions, harness.Answers, new Dialogs(),
+        var controller = OwnerConsoleControllerFactory.Create(harness.Questions, harness.Answers, new Dialogs(),
             harness.State, harness.Tail, harness.Conductor, harness.DigestReport, harness.Digest, harness.Clock);
         var builder = new OwnerConsoleViewModelBuilder(harness.State, harness.Questions, harness.Liveness, new Epics(), harness.Clock);
         using IApplication app = Terminal.Gui.App.Application.Create();

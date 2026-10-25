@@ -164,7 +164,7 @@ public sealed class OwnerConsoleBoardFirstStartupTests
     private static OwnerConsoleViewModelBuilder Builder(OwnerConsoleHarness harness, IOwnerQuestionSource questions) =>
         new(harness.State, questions, harness.Liveness, new Epics(), harness.Clock);
     private static OwnerConsoleFullScreenView View(IApplication app, OwnerConsoleHarness harness) => new(app,
-        new(harness.Questions, harness.Answers, new Dialogs(), harness.State, harness.Tail,
+        OwnerConsoleControllerFactory.Create(harness.Questions, harness.Answers, new Dialogs(), harness.State, harness.Tail,
             harness.Conductor, harness.DigestReport, harness.Digest, harness.Clock), () => Task.CompletedTask);
     private sealed class GatedQuestions : IOwnerQuestionSource
     {

@@ -213,7 +213,7 @@ public sealed class OwnerConsoleActivityOutcomeTests
             Harness = new(clock ?? new OwnerConsoleTestClock());
             var source = questions?.Invoke(Harness) ?? Harness.Questions;
             Builder = new(Harness.State, source, Harness.Liveness, new Epics(), Harness.Clock, evidence);
-            Controller = new(source, Harness.Answers, Dialogs, Harness.State, tail ?? Harness.Tail,
+            Controller = OwnerConsoleControllerFactory.Create(source, Harness.Answers, Dialogs, Harness.State, tail ?? Harness.Tail,
                 Harness.Conductor, Harness.DigestReport, Harness.Digest, Harness.Clock);
             View = OwnerConsoleActivitySceneView.Create(App, Controller, Harness.Clock, diagnostics);
         }

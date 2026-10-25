@@ -249,7 +249,7 @@ public sealed class OwnerConsoleGoalDialogTests
         harness.Kernel.ReplaceWithSnapshot(snapshot with { Goals = snapshot.Goals.Select(change).ToArray() });
     }
     private static OwnerConsoleScreenController Controller(OwnerConsoleHarness harness, Dialogs dialogs, IOwnerConsoleEpicSource? epics = null) =>
-        new(harness.Questions, harness.Answers, dialogs, harness.State, harness.Tail, harness.Conductor,
+        OwnerConsoleControllerFactory.Create(harness.Questions, harness.Answers, dialogs, harness.State, harness.Tail, harness.Conductor,
             harness.DigestReport, harness.Digest, harness.Clock, epics);
     private static Task<OwnerConsoleViewModel> Model(OwnerConsoleHarness harness) =>
         new OwnerConsoleViewModelBuilder(harness.State, harness.Questions, harness.Liveness, new Lookup(), harness.Clock)

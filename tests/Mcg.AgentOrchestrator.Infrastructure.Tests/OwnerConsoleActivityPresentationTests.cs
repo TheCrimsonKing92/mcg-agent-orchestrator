@@ -154,7 +154,7 @@ public sealed class OwnerConsoleActivityPresentationTests
             File.WriteAllLines(path, new[] { escalation, passed, diagnostic }.Select(LogLine));
             var builder = Builder(harness);
             var dialogs = new Dialogs();
-            var controller = new OwnerConsoleScreenController(harness.Questions, harness.Answers, dialogs,
+            var controller = OwnerConsoleControllerFactory.Create(harness.Questions, harness.Answers, dialogs,
                 harness.State, new Tail(escalation.Detail), harness.Conductor, harness.DigestReport, harness.Digest, harness.Clock);
             using IApplication app = Terminal.Gui.App.Application.Create();
             using var view = new OwnerConsoleFullScreenView(app, controller, () => Task.CompletedTask);
@@ -232,7 +232,7 @@ public sealed class OwnerConsoleActivityPresentationTests
         harness.AddGoal("11111111-goal", "# Improve the owner console", Mcg.AgentOrchestrator.Core.AgentRole.Developer);
         var item = new OwnerConductEvent(DateTimeOffset.UnixEpoch, "goal-escalation", "11111111-goal", detail);
         var dialogs = new Dialogs();
-        var controller = new OwnerConsoleScreenController(harness.Questions, harness.Answers, dialogs,
+        var controller = OwnerConsoleControllerFactory.Create(harness.Questions, harness.Answers, dialogs,
             harness.State, new Tail(detail), harness.Conductor, harness.DigestReport, harness.Digest, harness.Clock);
         using IApplication app = Terminal.Gui.App.Application.Create();
         using var view = new OwnerConsoleFullScreenView(app, controller, () => Task.CompletedTask);
@@ -255,7 +255,7 @@ public sealed class OwnerConsoleActivityPresentationTests
         var title = "Improve the owner console " + new string('x', 100);
         harness.AddGoal("11111111-goal", "# " + title, Mcg.AgentOrchestrator.Core.AgentRole.Developer);
         var item = new OwnerConductEvent(DateTimeOffset.UnixEpoch, kind, "11111111-goal", detail);
-        var controller = new OwnerConsoleScreenController(harness.Questions, harness.Answers, new Dialogs(),
+        var controller = OwnerConsoleControllerFactory.Create(harness.Questions, harness.Answers, new Dialogs(),
             harness.State, harness.Tail, harness.Conductor, harness.DigestReport, harness.Digest, harness.Clock);
         using IApplication app = Terminal.Gui.App.Application.Create();
         using var view = new OwnerConsoleFullScreenView(app, controller, () => Task.CompletedTask);
@@ -274,7 +274,7 @@ public sealed class OwnerConsoleActivityPresentationTests
         var first = new OwnerConductEvent(DateTimeOffset.UnixEpoch, "acceptance", "11111111", "result=passed");
         var second = first with { Timestamp = first.Timestamp.AddSeconds(1) };
         var builder = Builder(harness);
-        var controller = new OwnerConsoleScreenController(harness.Questions, harness.Answers, new Dialogs(),
+        var controller = OwnerConsoleControllerFactory.Create(harness.Questions, harness.Answers, new Dialogs(),
             harness.State, harness.Tail, harness.Conductor, harness.DigestReport, harness.Digest, harness.Clock);
         using IApplication app = Terminal.Gui.App.Application.Create();
         using var view = new OwnerConsoleFullScreenView(app, controller, () => Task.CompletedTask);

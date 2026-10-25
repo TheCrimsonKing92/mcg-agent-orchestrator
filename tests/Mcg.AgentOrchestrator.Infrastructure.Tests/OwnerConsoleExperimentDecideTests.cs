@@ -144,7 +144,7 @@ public sealed class OwnerConsoleExperimentDecideTests
             var reading = Reading();
             Harness.Questions.Items.Add(malformed ? reading with { Text = "malformed" } : reading);
             Tracker = new(Answers.ReadStatusAsync, Harness.Clock);
-            _controller = new(Harness.Questions, Answers, Dialogs, Harness.State, Harness.Tail,
+            _controller = OwnerConsoleControllerFactory.Create(Harness.Questions, Answers, Dialogs, Harness.State, Harness.Tail,
                 Harness.Conductor, Harness.DigestReport, Harness.Digest, Harness.Clock, answerTracking: Tracker);
             _app = Application.Create();
             View = new(_app, _controller, () => Task.CompletedTask, clock: Harness.Clock);

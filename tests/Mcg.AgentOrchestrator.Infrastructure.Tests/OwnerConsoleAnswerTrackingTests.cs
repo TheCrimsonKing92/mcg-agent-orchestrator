@@ -23,7 +23,7 @@ public sealed class OwnerConsoleAnswerTrackingTests
         var answers = new ScriptedAnswers(scenario);
         using var tracker = Tracker(answers, clock);
         var dialogs = new Dialogs();
-        using var controller = new OwnerConsoleScreenController(harness.Questions, answers, dialogs,
+        using var controller = OwnerConsoleControllerFactory.Create(harness.Questions, answers, dialogs,
             harness.State, harness.Tail, harness.Conductor, harness.DigestReport, harness.Digest,
             clock, answerTracking: tracker);
         using IApplication app = Application.Create();

@@ -138,7 +138,7 @@ public sealed class OwnerLandingsGoalDetailTests
 
     private static OwnerConsoleScreenController Controller(OwnerConsoleHarness harness,
         Dialogs dialogs, Func<string, OwnerLandingsPage> landings) =>
-        new(harness.Questions, harness.Answers, dialogs, harness.State, harness.Tail,
+        OwnerConsoleControllerFactory.Create(harness.Questions, harness.Answers, dialogs, harness.State, harness.Tail,
             harness.Conductor, harness.DigestReport, harness.Digest, harness.Clock, landings: landings);
 
     private sealed class Lookup : IOwnerGoalEpicLookup
