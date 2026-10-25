@@ -172,7 +172,10 @@ public sealed class BaseBuildCacheProjectReuseTests(ITestOutputHelper output) : 
                     return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, ""));
                 var items = args.Single(arg => arg.StartsWith("-getItem:", StringComparison.Ordinal))[9..].Split(',')
                     .ToDictionary(name => name, _ => (object)Array.Empty<object>());
-                items["Compile"] = new[] { new { FullPath = Path.Combine(Path.GetDirectoryName(project)!, "Value.cs") } };
+                var directory = Path.GetDirectoryName(project)! + Path.DirectorySeparatorChar;
+                // Match real MSBuild metadata: Directory omits RootDir, unlike FullPath.
+                items["Compile"] = new[] { new { FullPath = Path.Combine(directory, "Value.cs"),
+                    RootDir = Path.GetPathRoot(project), Directory = directory[Path.GetPathRoot(project)!.Length..] } };
                 return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, JsonSerializer.Serialize(new
                 {
                     Properties = new { TargetFramework = "net10.0", TargetFrameworks = "", NETCoreSdkVersion = "10.0",

@@ -44,11 +44,20 @@ internal static class DotnetBaseBuildCacheProjectKeys
         return key.Length == 64 && key.All(char.IsAsciiHexDigit);
     }
 
-    internal static string NormalizeRoot(string value, string root) => value
-        .Replace(root.Replace("\\", "\\\\\\\\", StringComparison.Ordinal), "<root>", StringComparison.OrdinalIgnoreCase)
-        .Replace(root.Replace("\\", "\\\\", StringComparison.Ordinal), "<root>", StringComparison.OrdinalIgnoreCase)
-        .Replace(root.Replace('\\', '/'), "<root>", StringComparison.OrdinalIgnoreCase)
-        .Replace(root, "<root>", StringComparison.OrdinalIgnoreCase);
+    internal static string NormalizeRoot(string value, string root)
+    {
+        value = ReplaceRootForms(root);
+        // MSBuild's Directory item metadata is absolute except for the volume/root prefix.
+        // It names the same worktree as FullPath and must not retain that worktree's spelling.
+        var volume = Path.GetPathRoot(root);
+        return volume is not null && root.Length > volume.Length ? ReplaceRootForms(root[volume.Length..]) : value;
+
+        string ReplaceRootForms(string path) => value
+            .Replace(path.Replace("\\", "\\\\\\\\", StringComparison.Ordinal), "<root>", StringComparison.OrdinalIgnoreCase)
+            .Replace(path.Replace("\\", "\\\\", StringComparison.Ordinal), "<root>", StringComparison.OrdinalIgnoreCase)
+            .Replace(path.Replace('\\', '/'), "<root>", StringComparison.OrdinalIgnoreCase)
+            .Replace(path, "<root>", StringComparison.OrdinalIgnoreCase);
+    }
 
     internal static bool ValidId(string project) => !Path.IsPathRooted(project) &&
         !project.StartsWith("../", StringComparison.Ordinal) && project.IndexOfAny(['=', ';']) < 0;
