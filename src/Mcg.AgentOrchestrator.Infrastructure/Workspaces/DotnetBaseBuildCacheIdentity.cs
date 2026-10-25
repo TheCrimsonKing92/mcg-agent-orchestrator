@@ -6,7 +6,11 @@ using System.Text.Json;
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
 // Compatibility is invocation scoped. A base SHA is provenance, not a build-input identity.
-internal sealed record DotnetBaseBuildCacheIdentity(string Fingerprint, string Components = "");
+internal sealed record DotnetBaseBuildCacheIdentity(string Fingerprint, string Components = "", string ProjectKeys = "")
+{
+    // Canonical evaluated reference graph, including non-plan prerequisites of build projects.
+    public string ProjectReferences { get; init; } = "";
+}
 
 internal static class DotnetBaseBuildCacheIdentityResolver
 {
@@ -24,7 +28,8 @@ internal static class DotnetBaseBuildCacheIdentityResolver
         configureEnvironment(processEnvironment, worktreePath, environment.RootPath);
         return await ResolveAsync(
             worktreePath, phase.CachePlan!.RestoreProjects, phase.BuildArguments, environment, run,
-            processEnvironment.ToDictionary(entry => entry.Key, entry => entry.Value ?? "")).ConfigureAwait(false);
+            processEnvironment.ToDictionary(entry => entry.Key, entry => entry.Value ?? ""),
+            phase.CachePlan.BuildProjects).ConfigureAwait(false);
     }
 
     // MSBuildAllProjects heads with the newest-write-time import; preprocessed text already binds the import set.
@@ -35,7 +40,8 @@ internal static class DotnetBaseBuildCacheIdentityResolver
         string worktreePath, IReadOnlyList<string> projects, string[] buildArguments,
         DotnetBuildEnvironment environment,
         Func<string[], Task<GoalAcceptanceVerifier.CommandResult>> run,
-        IReadOnlyDictionary<string, string>? processEnvironment = null)
+        IReadOnlyDictionary<string, string>? processEnvironment = null,
+        IReadOnlyList<string>? buildProjects = null)
     {
         try
         {
@@ -51,12 +57,20 @@ internal static class DotnetBaseBuildCacheIdentityResolver
             // hand-maintained allow-list of possible build-affecting variables. Never log their values.
             var variables = processEnvironment ?? Environment.GetEnvironmentVariables().Cast<DictionaryEntry>()
                 .ToDictionary(entry => (string)entry.Key, entry => (string)entry.Value!, StringComparer.Ordinal);
+            List<string>? ownInputs = null;
+            var aggregate = true;
             Add("environment", JsonSerializer.Serialize(variables.OrderBy(entry => entry.Key, StringComparer.Ordinal)));
-            foreach (var project in projects)
+            var pending = projects.Concat(buildProjects ?? []).Select(Id).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            var projectInputSets = new Dictionary<string, DotnetBaseBuildCacheProjectKeys.Inputs>(StringComparer.OrdinalIgnoreCase);
+            for (var projectIndex = 0; projectIndex < pending.Count; projectIndex++)
             {
+                var project = pending[projectIndex];
+                if (!DotnetBaseBuildCacheProjectKeys.ValidId(project)) return null;
+                aggregate = projects.Any(input => Id(input).Equals(project, StringComparison.OrdinalIgnoreCase));
+                ownInputs = [];
                 var name = Path.GetFileNameWithoutExtension(project);
                 foreach (var component in new[] { "evaluation", "sdk", "packs", "assets", "packages", "imports", "items", "project-tree", "shared-inputs" })
-                    buckets.TryAdd($"{name}:{component}", []);
+                    if (aggregate) buckets.TryAdd($"{name}:{component}", []);
                 var projectPath = Path.GetFullPath(project, root);
                 if (!File.Exists(projectPath)) return null;
                 var restore = await run(["dotnet", "msbuild", projectPath, .. properties, "-t:Restore", "-nologo", "-v:q"]).ConfigureAwait(false);
@@ -123,6 +137,11 @@ internal static class DotnetBaseBuildCacheIdentityResolver
                     // existing files to the compiler. Bind absence so creating one invalidates reuse.
                     if (!File.Exists(input))
                     {
+                        if (itemGroup.Name == "ProjectReference")
+                        {
+                            Add($"{name}:items", "absent-project-reference");
+                            continue;
+                        }
                         if (itemGroup.Name != "GlobalAnalyzerConfigFiles") return null;
                         Add($"{name}:items", "absent-global-analyzer-config");
                         continue;
@@ -140,12 +159,31 @@ internal static class DotnetBaseBuildCacheIdentityResolver
                     }
                     if (ancestor.Equals(root, StringComparison.OrdinalIgnoreCase)) break;
                 }
+                var references = evaluatedItems.GetProperty("ProjectReference").EnumerateArray()
+                    .Select(item => Id(item.GetProperty("FullPath").GetString()!)).Distinct(StringComparer.OrdinalIgnoreCase)
+                    .Order(StringComparer.Ordinal).ToArray();
+                projectInputSets[project] = new(ownInputs, references);
+                foreach (var reference in references)
+                    if (DotnetBaseBuildCacheProjectKeys.ValidId(reference) && File.Exists(Path.GetFullPath(reference, root)) &&
+                        !pending.Contains(reference, StringComparer.OrdinalIgnoreCase)) pending.Add(reference);
             }
             var components = string.Join(";", buckets.Select(bucket => $"{bucket.Key}={HashText(JsonSerializer.Serialize(bucket.Value))[..16]}"));
-            return new DotnetBaseBuildCacheIdentity(HashText(JsonSerializer.Serialize(parts)), components);
+            var projectKeys = DotnetBaseBuildCacheProjectKeys.Compute(root, buckets["invocation"], buckets["environment"].Select(Normalize).ToArray(), projectInputSets);
+            // An empty key set must not masquerade as an aggregate legacy identity.
+            if (projectKeys.Length == 0) return null;
+            return new DotnetBaseBuildCacheIdentity(HashText(JsonSerializer.Serialize(parts)), components, projectKeys)
+            {
+                ProjectReferences = JsonSerializer.Serialize(projectInputSets.OrderBy(pair => pair.Key, StringComparer.Ordinal)
+                    .ToDictionary(pair => pair.Key, pair => pair.Value.References))
+            };
+
+            string Id(string project) => Path.GetRelativePath(root, Path.GetFullPath(project, root)).Replace('\\', '/');
 
             void Add(string component, string part)
             {
+                ownInputs?.Add(component[(component.IndexOf(':') + 1)..]);
+                ownInputs?.Add(part);
+                if (!aggregate) return;
                 parts.Add(part);
                 if (!buckets.TryGetValue(component, out var bucket)) buckets[component] = bucket = [];
                 bucket.Add(part);
