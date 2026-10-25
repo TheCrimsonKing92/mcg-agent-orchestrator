@@ -1398,7 +1398,7 @@ public static class DotnetBuildEnvironmentManager
 
     internal static string ResolveIsolatedRootBase(string? overridden, string? localAppDataVariable, string? localAppDataKnownFolder, string tempPath, bool isWindows) => DotnetBuildStorageLayout.ResolveIsolatedRootBase(overridden, localAppDataVariable, localAppDataKnownFolder, tempPath, isWindows);
 
-    private static string BuildSlotExecutionLockPath(int slotIndex, DotnetBuildStorageRoot storageRoot)
+    internal static string BuildSlotExecutionLockPath(int slotIndex, DotnetBuildStorageRoot storageRoot)
     {
         return Path.Combine(storageRoot.RootPath, "build-slots", $"build-{slotIndex}.lock");
     }
