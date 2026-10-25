@@ -1515,7 +1515,7 @@ internal static partial class CliPersistentStateRunner
         value.Replace(' ', '_').Replace('\t', '_').Replace('\n', '_').Replace('\r', '_');
 
     internal static AgentOrchestratorKernel LoadConductLoopKernel(
-        ITransactionalOrchestratorStateRepository stateRepository,
+        IOrchestratorStateQueries stateRepository,
         IReadOnlyCollection<string>? additionalHydratedGoalIds = null,
         string? executionDirectory = null)
     {

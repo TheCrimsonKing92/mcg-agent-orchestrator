@@ -133,7 +133,8 @@ internal static class SourceSizeRatchet
             // OwnedChildAttemptCoordinatorFactory; measured 1783 lines, no extra headroom.
             // Goal 568eb0fe holds parked goals at AdvanceOnce before any admission operation;
             // this guard belongs at the existing lifecycle decision boundary.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs", 1713),
+            // b596bd5a: one fault-recorded AcceptanceFailed routing arm; measured 1714 lines, no headroom.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs", 1714),
             // Goal 0e30d5e9 extracted impact-plan mapping to PreReviewEvidenceContextBuilder.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.PreReviewEvidence.cs", 467),
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.ReviewRecovery.cs", 437),
@@ -203,7 +204,8 @@ internal static class SourceSizeRatchet
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.DependencyReadmission.cs", 370),
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.ParallelAcceptanceFairness.cs", 150),
             // Goal 33b9b7a6 extracts reconciled-pass application to PassedAcceptanceReceiptReplay.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.ParallelAcceptanceCompletion.cs", 462),
+            // b596bd5a: probe timeout reconcile/hold/cap handling adds 18 lines, no headroom.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.ParallelAcceptanceCompletion.cs", 480),
             // Goal 6e664238 conduct-event partial measured at 260 lines. Goal 587ba8d2 adds one
             // train-revalidation event mapping; permit exactly its measured 251-line total.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.ConductEvents.cs", 251),
@@ -212,7 +214,8 @@ internal static class SourceSizeRatchet
             // Goal 33b9b7a6 extracts receipt replay admission and progress to PassedAcceptanceReceiptReplay.
             // Goal 568eb0fe includes parked goals only in owned-attempt reconciliation, keeping
             // them outside admission candidates at the existing batch selection boundary.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.ParallelAcceptanceAdmission.cs", 809), // def5cd48: conflict escalation before width admission.
+            // b596bd5a: grouped workspace-probe backoff exclusion adds 5 lines, no headroom.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.ParallelAcceptanceAdmission.cs", 814), // def5cd48: conflict escalation before width admission.
             // Raised for goal 18afe5f2: missing-build-evidence rejection and commit suppression
             // must run where parsed worker results and authoritative changed paths meet. Raised again
             // for goal 0d39b5a3, which adds the narrow Planner sample launch and completion-selection
@@ -265,7 +268,8 @@ internal static class SourceSizeRatchet
             // Goal ffa0471e extracts historical/current completion-build policy to its owning collaborator.
             // Integrated build-scope extraction and task-intent admission: measured 2736, no headroom.
             // Goal e7c4bc06 adds Tester submission ingestion: measured 2743, no headroom.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Execution/Processes/BackgroundDispatchRunner.cs", 2707),
+            // Goal 4ad7cdef adds the Developer ignored-file call site; evaluation lives in InScopeIgnoredFileCheck.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Execution/Processes/BackgroundDispatchRunner.cs", 2713),
             // Goal 5a75fed0 extracted typed projection parsing and literal restoration into
             // WorkerContextProjectionResidual, leaving the dispatcher to sequence package assembly.
             // Goal fd252fe4 adds retry fingerprints for the resolved provider, model, paid route, and
@@ -516,8 +520,9 @@ internal static class SourceSizeRatchet
             // Goal 568eb0fe adds admission guards and idempotent terminal RED routing at their
             // existing conductor boundaries; lifecycle/disposition authority stays in Goal and the store.
             // Goal 0c806a8e: typed capacity admission, hold/retry decisions and reader seam add 24 lines; no new partial.
+            // b596bd5a: fault-recorded route arm/executor and typed outcome evidence add 20 lines; no new partial or headroom.
             // Goal a5412d04: bound deferred no-change interruptions and retain their durable escalation (+15 lines).
-            new SourceClassCeiling("ConductorDriver", 14706, 70),
+            new SourceClassCeiling("ConductorDriver", 14726, 70),
             // Goal b7c2f833: epic-at-creation validation and post-commit inheritance call sites
             // require handler glue; resolution/assignment remain in the separate EpicAtCreation type.
             // Measured 12223 total lines across the existing 30 partial files after integrating main; no extra headroom.
@@ -550,7 +555,7 @@ internal static class SourceSizeRatchet
             // Goal 6cf5a8ce routes the backlog-premise-check/close verbs to their separately owned command type.
             // Goal 568eb0fe reports the retained lifecycle outcome after committed unpark instead
             // of promising Active; this belongs with the existing command outcome rendering.
-            new SourceClassCeiling("CliCommandHandlers", 12024, 30),
+            new SourceClassCeiling("CliCommandHandlers", 12003, 30),
             // Goal ae77554f extracts bounded remote offer history parsing into RemoteLaneOfferHistoryReader.
             // Measured 9053 total lines across the existing 32 partial files; no extra headroom.
             // Goal 03580ad1 extracts source-mutation edits to AcceptanceSourceMutation; measured 8938 lines in 31 partials.
@@ -594,7 +599,8 @@ internal static class SourceSizeRatchet
             // Goal 568eb0fe preserves retained outcomes on explicit unpark and restores ordinary
             // readmission for an escalated acceptance episode. This uses the existing lifecycle
             // transaction and recorded typed outcome; measured 9323 lines in 28 partials, no headroom.
-            new SourceClassCeiling("AgentOrchestratorKernel", 9323, 28),
+            // Raised by 5 lines for goal e4c3d077: expose locked role-report evidence closure at landing.
+            new SourceClassCeiling("AgentOrchestratorKernel", 9328, 28),
             // Goal d6033045 extracted the pre-admission receipt pass to PassedMergeTrainReceiptAdmission; goal 1d0f2317
             // adds one admission predicate to exclude stream-complete children before slot reservation. Measured 9255.
             // Goal 679eee57 added a one-line tick call to the separately owned ConductorExperimentWatch (+1); goal 80de5cb2 extracted
@@ -622,7 +628,8 @@ internal static class SourceSizeRatchet
             // goals at the existing tick and batch boundaries, without changing attempt custody.
             // Its tick-context reset before the goal walk adds two lines after batch reconciliation;
             // merged-tree measurement is recorded below, with no additional headroom.
-            new SourceClassCeiling("ConductorBatchLoop", 9257, 56),
+            // b596bd5a: probe completion/admission/backoff adds 32 lines; partial count unchanged, no headroom.
+            new SourceClassCeiling("ConductorBatchLoop", 9241, 56),
             // Goal ec8903af moved the goal-prefix parser to CliGoalPrefixArguments.
             // Goal cd1f6380 adds four lines at the owning transaction boundary, forwarding both
             // registrars and invoking actions after commit; list behavior lives in PostCommitActions.

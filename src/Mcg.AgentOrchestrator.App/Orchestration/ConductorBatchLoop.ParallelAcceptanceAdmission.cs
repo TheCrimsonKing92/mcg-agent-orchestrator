@@ -343,10 +343,15 @@ internal sealed partial class ConductorBatchLoop
                 interactionOnlyKeys.Contains(ConductorAcceptanceCohortAttributedMembers.Key(
                     candidate.GoalId, ready.Projection.CandidateRevision)))
             .Select(candidate => candidate.GoalId.Value).ToHashSet(StringComparer.Ordinal);
+        var workspaceProbeBackoffGoalIds = speculativeCandidates
+            .Where(candidate => candidate.ProjectionResult is GateReadyCandidateProjectionResult.Ready ready &&
+            driver.ParallelAcceptanceAttemptCoordinator.TryReadWorkspaceProbeBackoff(ConductorParallelAcceptanceCandidate.Create(
+                kernel.GetGoal(candidate.GoalId), 0, ready.Projection.LandingPaths, ready.Projection.BranchRevision, ready.Projection.MainRevision), out _))
+            .Select(candidate => candidate.GoalId.Value).ToHashSet(StringComparer.Ordinal);
         state.CohortEligible = state.CohortEligible
-            .Where(goal => !interactionOnlyGoalIds.Contains(goal.Id.Value)).ToArray();
+            .Where(goal => !interactionOnlyGoalIds.Contains(goal.Id.Value) && !workspaceProbeBackoffGoalIds.Contains(goal.Id.Value)).ToArray();
         state.ProductionCandidates = state.ProductionCandidates
-            .Where(candidate => !interactionOnlyGoalIds.Contains(candidate.GoalId.Value)).ToArray();
+            .Where(candidate => !interactionOnlyGoalIds.Contains(candidate.GoalId.Value) && !workspaceProbeBackoffGoalIds.Contains(candidate.GoalId.Value)).ToArray();
         state.InteractionOnlyPriorityGoal = SelectInteractionOnlyPriorityGoal(state, interactionOnlyGoalIds, kernel, driver, policy,
             tick, changedGoalLines, suppressNewAcceptanceAdmission);
         state.GroupedAdmissionOpen = !suppressNewAcceptanceAdmission() &&

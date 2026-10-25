@@ -1375,6 +1375,7 @@ internal sealed partial class ConductorDriver
             GoalLifecycleState.AcceptanceFailed when AttributedFailureDeveloperRoute.Decide(goal,
                 AttributedFailureDeveloperRoute.ReadAcceptanceFailure(goal.LatestAcceptanceFailure),
                 ReadCurrentCohortAttributionRevisions(goal)?.BranchRevision) is { IsRoute: true } route => RouteAttributedFailure(goal, goalPrefix, policy, route),
+            GoalLifecycleState.AcceptanceFailed when FaultRecordedAcceptanceFailureRoute.Decide(goal) is { } faultRecorded => ExecuteFaultRecordedAcceptanceFailure(goal, goalPrefix, policy, faultRecorded),
             _ => Escalate(goal, goalPrefix, policy, state, $"Unhandled lifecycle state {state}")
         };
     }

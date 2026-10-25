@@ -38,6 +38,16 @@ internal static class CompletionBuildPlacement
         return result with { Diagnostic = "build_evidence_host=local; remote_fallback=" + outcome.FallbackReason + "; " + result.Diagnostic };
     }
 
+    internal static CompletionBuildPlacementResult RunLocalWithExecutionQos(CompletionBuildEvidenceOperation operation,
+        string statePath, string receiptPath, TimeSpan remaining, Func<WorkerProcessRunResult> runBuild,
+        Func<int, IReadOnlyList<int>?>? members = null, Func<int, uint, uint, bool>? setter = null,
+        TimeSpan? interval = null)
+    {
+        using var qos = BuildLaunchQosSweep.Begin("completion-build", statePath, operation.GoalId,
+            Environment.ProcessId, members ?? BuildLaunchQosSweep.RootAndDescendants, setter, interval);
+        return RunLocal(operation, receiptPath, remaining, runBuild);
+    }
+
     internal static CompletionBuildPlacementResult RunLocal(CompletionBuildEvidenceOperation operation,
         string receiptPath, TimeSpan remaining, Func<WorkerProcessRunResult> runBuild)
     {

@@ -14,7 +14,7 @@ internal static class GoalBoardCommand
 
     internal static void Run(
         IReadOnlyList<string> args,
-        IOrchestratorStateRepository stateRepository,
+        IOrchestratorStateQueries stateRepository,
         OrchestratorWorkspace workspace,
         Func<DateTimeOffset>? utcNow = null,
         Func<ProcessCommandLineSnapshot>? processSnapshotFactory = null,

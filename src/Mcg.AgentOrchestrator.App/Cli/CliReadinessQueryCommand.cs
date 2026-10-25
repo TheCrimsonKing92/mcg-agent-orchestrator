@@ -48,7 +48,7 @@ internal static class CliReadinessQueryCommand
 
     internal static void Execute(
         IReadOnlyList<string> args,
-        ITransactionalOrchestratorStateRepository stateRepository,
+        IOrchestratorStateQueries stateRepository,
         OrchestratorWorkspace workspace,
         IModelProviderRegistry providers,
         IOperatorChannel? channel,
