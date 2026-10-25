@@ -9,7 +9,7 @@ internal sealed partial class ConductorContinuitySupervisor
         int pollSeconds;
         try
         {
-            pollSeconds = CliCommandHandlers.ResolveConductPollSeconds(args);
+            pollSeconds = ConductCommandArguments.ResolvePollSeconds(args);
         }
         catch (ArgumentException)
         {

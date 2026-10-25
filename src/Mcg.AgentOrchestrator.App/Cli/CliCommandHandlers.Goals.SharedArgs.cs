@@ -169,30 +169,8 @@ private static TimeSpan? ResolveWatchStallWarningThreshold(IReadOnlyList<string>
     return null;
 }
 
-internal static int ResolveConductPollSeconds(IReadOnlyList<string> parts)
-{
-    if (GetFlagValue(parts, "--poll-seconds") is { } pollSeconds)
-    {
-        return ParsePositiveInteger(pollSeconds, "--poll-seconds");
-    }
-
-    if (HasCliConfirmation(parts, "--poll-seconds"))
-    {
-        throw new ArgumentException("--poll-seconds requires a positive integer value.");
-    }
-
-    if (GetFlagValue(parts, "--watch-interval") is { } watchInterval)
-    {
-        return ParsePositiveInteger(watchInterval, "--poll-seconds");
-    }
-
-    if (HasCliConfirmation(parts, "--watch-interval"))
-    {
-        throw new ArgumentException("--poll-seconds requires a positive integer value.");
-    }
-
-    return ConductorBatchLoop.DefaultWatchIntervalSeconds;
-}
+internal static int ResolveConductPollSeconds(IReadOnlyList<string> parts) =>
+    ConductCommandArguments.ResolvePollSeconds(parts);
 
 private static int ResolveUnscopedStallTickThreshold(IReadOnlyList<string> parts)
 {
