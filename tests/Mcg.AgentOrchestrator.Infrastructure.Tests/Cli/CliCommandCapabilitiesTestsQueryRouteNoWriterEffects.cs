@@ -20,13 +20,18 @@ public sealed class CliCommandCapabilitiesTestsQueryRouteNoWriterEffects : CliTa
             ["status"] = [["status", "abc10000"], ["status"],
                 ["status", "abc10000", "--tasks-only"], ["status", "--tasks-only", "abc10000"], ["status", "--tasks-only"]],
             ["readiness"] = [["readiness", "abc10000"], ["readiness"]],
-            ["goals"] = [["goals"], ["goals", "--epic", "Board"], ["goals", "--epic=Board"]],
+            ["goals"] = [["goals"], ["goals", "--epic", "Board"], ["goals", "--epic=Board"],
+                ["goals", "subscribe", "abc10000", "--once"], ["goals", "subscribe", "--goal-prefix", "abc10000", "--once"]],
+            ["monitor-goal"] = [["monitor-goal", "abc10000", "--once"], ["monitor-goal", "abc10000", "--once", "--format", "ndjson"]],
             ["failure-clusters"] = [["failure-clusters"]],
             ["storage-health"] = [["storage-health"], ["storage-health", "--json"]],
             ["build-attribution"] = [["build-attribution"]],
             ["intent-coverage"] = [["intent-coverage"]],
             ["remote-executors"] = [["remote-executors"]],
             ["round-value"] = [["round-value"]],
+            ["logs"] = [["logs", "abc10000", "1"], ["logs", "--goal", "abc10000", "1"], ["logs", "1", "--goal", "abc10000"], ["logs", "abc10000", "1", "stdout"]],
+            ["doctor"] = [["doctor"]],
+            ["tenant"] = [["tenant"]],
             ["board-simulate"] = [["board-simulate", "--day", "2026-10-15"]],
             ["epic-outcome-proposals"] = [["epic-outcome-proposals"], ["epic-outcome-proposals", "--json"]],
             ["epic-plan"] = [["epic-plan", "Board"], ["epic-plan", "Board", "--json"]],
@@ -68,7 +73,7 @@ public sealed class CliCommandCapabilitiesTestsQueryRouteNoWriterEffects : CliTa
     public void QueryOnlyVerbs_TableAndFiveExemptions_CoverEveryVerb()
     {
         string[] exemptions =
-            ["monitor-goal", "owner-digest", "context-usage"];
+            ["owner-digest", "context-usage"];
         foreach (var verb in CliCommandCapabilities.QueryOnlyVerbs)
             Assert.True(ServedForms.ContainsKey(verb) ||
                 exemptions.Contains(verb, StringComparer.OrdinalIgnoreCase),
@@ -218,7 +223,16 @@ public sealed class CliCommandCapabilitiesTestsQueryRouteNoWriterEffects : CliTa
                 new ReviewFindingLocation("sample.cs", "Query"), "Query route finding")]);
         return AgentOrchestratorKernel.FromSnapshot(snapshot with
         {
-            Goals = [goal with { Tasks = [goal.Tasks.Single() with { VerificationHistory = [verification] }] }]
+            Goals = [goal with { Tasks = [goal.Tasks.Single() with
+            {
+                VerificationHistory = [verification],
+                LastProcess = new TaskProcessSnapshot(777, "worker", workspace.RootDirectory,
+                    Path.Combine(workspace.RootDirectory, "worker.out.log"),
+                    Path.Combine(workspace.RootDirectory, "worker.err.log"),
+                    Path.Combine(workspace.RootDirectory, "worker.exit.txt"),
+                    DateTimeOffset.Parse("2026-10-07T00:00:00Z"),
+                    DateTimeOffset.Parse("2026-10-07T00:01:00Z"), 0)
+            }] }]
         });
     }
 }

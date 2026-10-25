@@ -309,7 +309,7 @@ internal sealed class AcceptanceDotnetBuildPhase
                 // labeling new outputs with a pre-build identity that is no longer current.
                 var afterBuildIdentity = await hooks.ResolveCacheIdentityAsync(phase, environment).ConfigureAwait(false);
                 if (afterBuildIdentity == identity)
-                    publish = cache.Publish(plan.MainSha, environment.ArtifactsPath, missedProjects, identity);
+                    publish = cache.Publish(plan.MainSha, environment.ArtifactsPath, missedProjects, identity, hitProjects);
             }
         }
 
