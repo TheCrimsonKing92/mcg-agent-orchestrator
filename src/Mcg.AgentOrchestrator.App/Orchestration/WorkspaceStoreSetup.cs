@@ -60,7 +60,7 @@ internal static class WorkspaceStoreSetup
             if (!snapshot.ReadJournalMode().Equals("wal", StringComparison.OrdinalIgnoreCase)) return false;
 
         // Backlog creation can also assign an epic in portfolio; intent verbs only append to the inbox.
-        var usesBacklog = CliPersistentStateRunner.RequiresKernelBacklogState(args);
+        var usesBacklog = StoreSetupCommandKinds.RequiresBacklogState(args);
         if (plan.Any(entry => entry.RequiresMigration && (usesBacklog
                 ? entry.StoreName == StoreSchemaRegistry.Backlog.StoreName || entry.StoreName == StoreSchemaRegistry.Portfolio.StoreName
                 : entry.StoreName == StoreSchemaRegistry.OperatorIntents.StoreName)))
