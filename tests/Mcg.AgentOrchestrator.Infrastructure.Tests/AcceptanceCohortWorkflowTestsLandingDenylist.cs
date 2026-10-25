@@ -37,6 +37,8 @@ public sealed class AcceptanceCohortWorkflowTestsLandingDenylist : AcceptanceCoh
                     "test", CriterionEvidenceScopes.FullAcceptanceGate, expectedCandidateSha: candidate.Revision);
             }
             var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            if (!recover) Mcg.AgentOrchestrator.Infrastructure.Tests.LandingExecutorTestsDenylistOwnerHold.Approve(
+                workspace, goals[0], candidates[0].Revision);
             var writer = new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory);
             string commit;
             if (train)
@@ -102,7 +104,7 @@ public sealed class AcceptanceCohortWorkflowTestsLandingDenylist : AcceptanceCoh
             {
                 using var line = ReadLanded(workspace, goals[index].Id);
                 Assert.Equal(candidates[index].Revision, line.RootElement.GetProperty("admissionCandidateSha").GetString());
-                Assert.Equal(recover ? "recovered-landing" : index == 0 ? "denylist-match-recorded" : "green-gate-auto",
+                Assert.Equal(recover ? "recovered-landing" : index == 0 ? "denylist-match-owner-approved" : "green-gate-auto",
                     line.RootElement.GetProperty("admissionRule").GetString());
                 Assert.Equal(recover ? "not-evaluated" : "built-in-default", line.RootElement.GetProperty("landingDenylistSource").GetString());
                 if (!recover && index == 0) Assert.Equal([$"git-mutation={Watched}"], ReadMatches(line));

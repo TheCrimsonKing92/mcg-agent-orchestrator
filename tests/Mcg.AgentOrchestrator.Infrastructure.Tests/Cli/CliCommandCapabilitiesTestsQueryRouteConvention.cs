@@ -40,7 +40,12 @@ public sealed class CliCommandCapabilitiesTestsQueryRouteConvention
             ["timeline"] = [["timeline", "abc10000"]],
             ["next"] = [["next", "--full", "abc10000"], ["next", "abc10000"], ["next"],
                 ["next", "abc10000", "--autonomy", "observe"], ["next", "abc10000", "--autonomy-policy", "observe"],
-                ["next", "--autonomy", "observe"], ["next", "--autonomy-policy", "observe"]]
+                ["next", "--autonomy", "observe"], ["next", "--autonomy-policy", "observe"]],
+            ["loop-health"] = [["loop-health"], ["loop-health", "--last", "5"]],
+            ["operator-inbox"] = [["operator-inbox"], ["operator-inbox", "abc10000"], ["operator-inbox", "abc10000", "--show-acknowledged"]],
+            ["durations"] = [["durations"], ["durations", "--by-model", "--since", "2026-10-01"]],
+            ["dispatch-value"] = [["dispatch-value"], ["dispatch-value", "--since", "2026-10-01"]],
+            ["brief"] = [["brief", "abc10000", "1"], ["brief", "--goal", "abc10000", "1"]]
         };
 
     private static readonly IReadOnlyDictionary<string, string> Exemptions =
