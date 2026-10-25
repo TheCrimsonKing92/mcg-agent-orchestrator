@@ -170,6 +170,7 @@ public sealed class OwnerLandingsGoalDetailTests
         public async Task ShowGoalAsync(OwnerConsoleGoalDialog dialog)
         {
             dialog.Start(action => action());
+            await dialog.LastLoad;
             Goals.Add(dialog.Current.Text);
             if (OnGoal is not null) await OnGoal(dialog);
         }

@@ -112,10 +112,18 @@ public sealed class IsolatedProcessSpawningRemainderChainTests
     // Sum of all seven passing scenario cases; a single gate sample, not a five-gate mean.
     private const double PermitReleaseScenarioGateSeconds = 10.3534388;
 
+    // Native Remainder gate on candidate df82c71faab4ffdc49c3a9c515c7bce69c2c84a7:
+    // attempt a5412d04-0-20261025190505535-c3847e1809814c6daf56dcf29dd54012,
+    // infrastructure-tests-remainder.trx SHA256
+    // 99B648ECA7B376AD5311AA4F3CA8D507FDEB6A4EAFE38897E050938473DA993F.
+    // Sum of all nine passing classifier cases; a single gate sample, not a five-gate mean.
+    private const double FocusedEvidenceInterruptionGateSeconds = 0.0111781;
+
     private static readonly IReadOnlyDictionary<string, double> PlanningSeconds = MeanSeconds
         .Concat(DeferredContextSamples.Select(sample => new KeyValuePair<string, double>(
             sample.Key, Math.Max(sample.Value.Focused, sample.Value.NativeGate))))
         .Append(new(nameof(RemoteFirstFocusedEvidencePermitReleaseScenarioTests), PermitReleaseScenarioGateSeconds))
+        .Append(new(nameof(FocusedEvidenceInterruptionTests), FocusedEvidenceInterruptionGateSeconds))
         .ToDictionary(row => row.Key, row => row.Value, StringComparer.Ordinal);
 
     [Xunit.Fact]
@@ -195,7 +203,8 @@ public sealed class IsolatedProcessSpawningRemainderChainTests
         Xunit.Assert.Empty(unlisted);
         Xunit.Assert.InRange(sums[SplitCollection], 223.9 - 0.05, 223.9 + 0.05);
         Xunit.Assert.InRange(sums[OriginalCollection],
-            229.4 + PermitReleaseScenarioGateSeconds - 0.05, 229.4 + PermitReleaseScenarioGateSeconds + 0.05);
+            229.4 + PermitReleaseScenarioGateSeconds + FocusedEvidenceInterruptionGateSeconds - 0.05,
+            229.4 + PermitReleaseScenarioGateSeconds + FocusedEvidenceInterruptionGateSeconds + 0.05);
         Xunit.Assert.InRange(sums[DeferredContextCollection], 129.5138644 - 1e-7, 129.5138644 + 1e-7);
         foreach (var (collection, seconds) in sums)
             Xunit.Assert.True(seconds <= BudgetSeconds, $"{collection}: {seconds} exceeds {BudgetSeconds} seconds.");
