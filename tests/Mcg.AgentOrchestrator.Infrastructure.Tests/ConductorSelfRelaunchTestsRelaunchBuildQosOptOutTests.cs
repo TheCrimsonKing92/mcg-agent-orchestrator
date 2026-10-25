@@ -5,7 +5,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 // Runs real dotnet builds with isolated source, cache, store and policy directories.
 [Xunit.Collection("ProcessSpawningHostBound")]
-public sealed class RelaunchBuildQosOptOutTests
+public sealed class ConductorSelfRelaunchTestsRelaunchBuildQosOptOutTests
 {
     [Theory]
     [InlineData(true, true)]

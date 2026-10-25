@@ -8,7 +8,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 // Owns real worker/job members, held until the observation or launch event releases them.
 [Xunit.Collection("ProcessSpawning")]
-public sealed class DispatchJobQosOptOutTests : WorkerDispatchTestSupport
+public sealed class DispatchProcessHostTestsDispatchJobQosOptOutTests : WorkerDispatchTestSupport
 {
     [Fact]
     public async Task Enabled_SweepsWorkerAndJobMemberOnce()
