@@ -1247,6 +1247,7 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
         IReadOnlyDictionary<string, TextWriter>? attemptLogWriters = null;
         try
         {
+            AcceptanceAttemptOwnedPhaseTrail.Mark(metadataPath, "process-started");
             attempt = JsonSerializer.Deserialize<ConductorParallelAcceptanceAttempt>(
                 ReadAllTextSharedWithRetry(metadataPath),
                 JsonOptions);
@@ -1254,27 +1255,34 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
             {
                 throw new InvalidOperationException("acceptance attempt metadata was empty");
             }
+            AcceptanceAttemptOwnedPhaseTrail.Mark(metadataPath, "metadata-read");
 
             ApplyOwnedProcessPriority(
                 attempt,
                 lowerCurrentProcessPriority ?? ProcessTreeGuiSuppression.TryLowerCurrentProcessToBelowNormal);
+            AcceptanceAttemptOwnedPhaseTrail.Mark(metadataPath, "priority-applied");
 
             artifactLease = StorageRetentionMaintenance.AcquireAttemptWriterLease(
                 Path.GetDirectoryName(metadataPath) ?? throw new InvalidOperationException(
                     "acceptance attempt metadata path has no parent directory"),
                 attemptWriterLeaseTimeout);
+            AcceptanceAttemptOwnedPhaseTrail.Mark(metadataPath, "writer-lease-acquired");
             var workspace = OwnedChildWorkspaceResolver.ForParallelAcceptanceAttempt(attempt);
+            AcceptanceAttemptOwnedPhaseTrail.Mark(metadataPath, "workspace-resolved");
             using var heartbeatOwner = GateHeartbeatOwner.Push(workspace.OrchestratorDirectory);
             using var holderContainment = attempt.HolderContractVersion == 1
                 ? new AcceptanceHolderLease().Claim(AcceptanceHolderBinding.For(attempt),
                     AcceptanceHolderLease.CurrentGeneration(), workspace) : null;
             attemptLogWriters = RedirectConsole(attempt);
+            AcceptanceAttemptOwnedPhaseTrail.Mark(metadataPath, "console-redirected");
             var stateRepository = SqliteOrchestratorStateRepository.OpenReadOnly(workspace.SqliteStatePath);
             var kernel = stateRepository.LoadGoalsAsync([new GoalId(attempt.GoalId)]).GetAwaiter().GetResult();
             var goal = kernel.Goals.FirstOrDefault(g => g.Id.Value == attempt.GoalId)
                 ?? throw new InvalidOperationException($"goal {attempt.GoalPrefix} was not found for acceptance attempt");
+            AcceptanceAttemptOwnedPhaseTrail.Mark(metadataPath, "state-loaded");
             var providers = ProviderRegistryFactory.CreateDefaultProviders();
             var agentFallback = ProviderRegistryFactory.IsLlamaCppReachable() ? AgentCatalog.LlamaCppDefault() : null;
+            AcceptanceAttemptOwnedPhaseTrail.Mark(metadataPath, "providers-created");
             var agents = AgentCatalogStore.Load(workspace.AgentCatalogPath, agentFallback).Agents;
             var profiles = WorkerProfileStore.Load(workspace.WorkerProfilePath);
             var driver = new ConductorDriver(
@@ -1287,6 +1295,7 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
                 providers,
                 cleanupHooks: WorktreeCleanupContext.Load(
                     attentionStoreDirectory: workspace.OrchestratorDirectory).Hooks);
+            AcceptanceAttemptOwnedPhaseTrail.Mark(metadataPath, "driver-created");
             var policy = ResolveAttemptPolicy(attempt);
             var candidate = ConductorParallelAcceptanceCandidate.Create(
                 goal,
@@ -1303,11 +1312,13 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
                     : new ConductEventLogWriter(attempt.ConductEventLogPath),
                 attemptLogWriters: attemptLogWriters);
             var activeAttempt = coordinator.TryPersistOwnerProcess(attempt, Environment.ProcessId);
+            AcceptanceAttemptOwnedPhaseTrail.Mark(metadataPath, "owner-persisted");
             if (activeAttempt.Outcome != ConductorParallelAcceptanceAttemptOutcome.Running)
             {
                 return 0;
             }
 
+            AcceptanceAttemptOwnedPhaseTrail.Mark(metadataPath, "run-attempt-started");
             if (string.Equals(activeAttempt.Kind, PreReviewEvidenceDispatchKind, StringComparison.Ordinal))
             {
                 if (string.IsNullOrWhiteSpace(activeAttempt.FocusedEvidenceRequest))
@@ -1340,10 +1351,12 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
                             executionOptions,
                             omitStableSlotIndexWithoutLease));
             }
+            AcceptanceAttemptOwnedPhaseTrail.Mark(metadataPath, "run-attempt-returned");
             return 0;
         }
         catch (Exception ex)
         {
+            AcceptanceAttemptOwnedPhaseTrail.Mark(metadataPath, "failed", $"exception={ex.GetType().Name}");
             if (attempt is not null && !string.IsNullOrWhiteSpace(attempt.IntegrationBranch))
             {
                 var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
