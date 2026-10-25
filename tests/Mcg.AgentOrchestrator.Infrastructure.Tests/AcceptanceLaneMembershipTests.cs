@@ -348,11 +348,11 @@ public sealed class AcceptanceLaneMembershipTests
     }
 
     [Xunit.Fact]
-    public void CarvedRemainderLaneDeclaresNoExclusiveResourcesOrOwnedCollections()
+    public void CarvedRemainderLaneDeclaresOnlyTheGitHeavyKeyAndNoOwnedCollections()
     {
         var lanes = AcceptanceGateEngineSettings.Load(InfrastructureTestSupport.FindRepositoryRoot()).InfrastructureTestLanes;
         var lane = Xunit.Assert.Single(lanes, lane => lane.Name == "Remainder merge train and ratchet");
-        Xunit.Assert.Empty(lane.ExclusiveResourceKeys);
+        Xunit.Assert.Equal(new[] { "machine:GitHeavyLanes" }, lane.ExclusiveResourceKeys);
         Xunit.Assert.Empty(lane.OwnedCollections);
         Xunit.Assert.False(lane.RequiresBuildSystemChange);
     }
