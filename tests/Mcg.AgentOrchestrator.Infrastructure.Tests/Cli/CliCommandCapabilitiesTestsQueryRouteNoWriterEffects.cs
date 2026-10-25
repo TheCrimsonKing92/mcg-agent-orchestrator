@@ -20,7 +20,9 @@ public sealed class CliCommandCapabilitiesTestsQueryRouteNoWriterEffects : CliTa
             ["status"] = [["status", "abc10000"], ["status"],
                 ["status", "abc10000", "--tasks-only"], ["status", "--tasks-only", "abc10000"], ["status", "--tasks-only"]],
             ["readiness"] = [["readiness", "abc10000"], ["readiness"]],
-            ["goals"] = [["goals"], ["goals", "--epic", "Board"], ["goals", "--epic=Board"]],
+            ["goals"] = [["goals"], ["goals", "--epic", "Board"], ["goals", "--epic=Board"],
+                ["goals", "subscribe", "abc10000", "--once"], ["goals", "subscribe", "--goal-prefix", "abc10000", "--once"]],
+            ["monitor-goal"] = [["monitor-goal", "abc10000", "--once"], ["monitor-goal", "abc10000", "--once", "--format", "ndjson"]],
             ["failure-clusters"] = [["failure-clusters"]],
             ["storage-health"] = [["storage-health"], ["storage-health", "--json"]],
             ["build-attribution"] = [["build-attribution"]],
@@ -68,7 +70,7 @@ public sealed class CliCommandCapabilitiesTestsQueryRouteNoWriterEffects : CliTa
     public void QueryOnlyVerbs_TableAndFiveExemptions_CoverEveryVerb()
     {
         string[] exemptions =
-            ["monitor-goal", "owner-digest", "context-usage"];
+            ["owner-digest", "context-usage"];
         foreach (var verb in CliCommandCapabilities.QueryOnlyVerbs)
             Assert.True(ServedForms.ContainsKey(verb) ||
                 exemptions.Contains(verb, StringComparer.OrdinalIgnoreCase),

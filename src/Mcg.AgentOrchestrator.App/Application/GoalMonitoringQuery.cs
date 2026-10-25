@@ -11,7 +11,8 @@ internal static class GoalMonitoringQuery
         long sinceEventId,
         IReadOnlyList<AgentDefinition> agents,
         WorkerProfileCatalog workerProfiles,
-        OrchestratorWorkspace workspace)
+        OrchestratorWorkspace workspace,
+        DateTimeOffset? observedAt = null)
     {
         var events = BuildTimelineEvents(goal);
         var monitor = kernel.BuildMonitor(goal.Id);
@@ -35,7 +36,7 @@ internal static class GoalMonitoringQuery
             skipInactiveDispatchEvaluation: true);
         var snapshot = new GoalMonitoringSnapshot(
             goal.Id.Value,
-            DateTimeOffset.UtcNow,
+            observedAt ?? DateTimeOffset.UtcNow,
             events.Count,
             new QueryMonitorSnapshot(
                 ApplicationGoalStatusText.Resolve(monitor.Status, lifecycle),
