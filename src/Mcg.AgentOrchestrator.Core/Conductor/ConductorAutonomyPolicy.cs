@@ -50,7 +50,8 @@ public sealed record ConductorAutonomyPolicy(
     bool CascadeTesterCheapFirst = true,
     string CascadeCheapModelAlias = ConductorAutonomyPolicy.DefaultCascadeCheapModelAlias,
     bool CascadeMechanicalReworkCheap = true,
-    bool FollowerGatesEnabled = false)
+    bool FollowerGatesEnabled = false,
+    bool AcceptanceChildrenOptOutExecutionThrottling = false)
 {
     public const string DefaultCascadeCheapModelAlias = "gpt-6-luna";
     public const int DefaultAcceptanceCohortGatherWindowSeconds = 480;
@@ -226,6 +227,7 @@ public sealed record ConductorAutonomyPolicy(
         sb.AppendLine($"  \"acceptanceWidth\": {AcceptanceWidth},");
         sb.AppendLine($"  \"acceptanceCohortGatherWindowSeconds\": {AcceptanceCohortGatherWindowSeconds},");
         sb.AppendLine($"  \"acceptanceAttemptBelowNormalPriority\": {AcceptanceAttemptBelowNormalPriority.ToString().ToLowerInvariant()},");
+        sb.AppendLine($"  \"acceptanceChildrenOptOutExecutionThrottling\": {AcceptanceChildrenOptOutExecutionThrottling.ToString().ToLowerInvariant()},");
         sb.AppendLine($"  \"boardFillMode\": {JsonStr(BoardFillMode.ToString())},");
         sb.AppendLine($"  \"boardFillTargetActiveGoals\": {BoardFillTargetActiveGoals},");
         sb.AppendLine($"  \"boardFillMaxDraftsPerDay\": {BoardFillMaxDraftsPerDay},");
@@ -326,6 +328,15 @@ public sealed record ConductorAutonomyPolicy(
                     throw new FormatException(
                         $"conductor-policy.json{src}: acceptanceAttemptBelowNormalPriority must be a boolean.");
                 belowNormalPriority = priorityElement.GetBoolean();
+            }
+            var childrenOptOutExecutionThrottling = false;
+            if (root.TryGetProperty("acceptanceChildrenOptOutExecutionThrottling", out var throttlingElement) &&
+                throttlingElement.ValueKind != JsonValueKind.Null)
+            {
+                if (throttlingElement.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+                    throw new FormatException(
+                        $"conductor-policy.json{src}: acceptanceChildrenOptOutExecutionThrottling must be a boolean.");
+                childrenOptOutExecutionThrottling = throttlingElement.GetBoolean();
             }
             var cascadeTesterCheapFirst = true;
             if (root.TryGetProperty("cascadeTesterCheapFirst", out var cascadeSwitch) &&
@@ -432,7 +443,8 @@ public sealed record ConductorAutonomyPolicy(
                 cascadeTesterCheapFirst,
                 cascadeCheapModelAlias,
                 cascadeMechanicalReworkCheap,
-                followerGatesEnabled);
+                followerGatesEnabled,
+                childrenOptOutExecutionThrottling);
 
             var errors = policy.Validate();
             if (errors.Count > 0)

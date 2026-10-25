@@ -254,6 +254,7 @@ internal static class ProjectCliCommand
             parentDirectory,
             $".{project.Name}.bootstrap-{Guid.NewGuid():N}");
 
+        ProjectConductorPolicySeeder.Result policySeed;
         try
         {
             RunCreateStep("configuration staging", () =>
@@ -280,6 +281,9 @@ internal static class ProjectCliCommand
                 _ = new BacklogStore(
                     Path.Combine(stagingDirectory, Path.GetFileName(workspace.BacklogStorePath)));
             });
+            policySeed = RunCreateStep("conductor policy seeding", () =>
+                ProjectConductorPolicySeeder.Seed(
+                    ProjectConductorPolicySeeder.TemplatePath(defaultRootDirectory), stagingDirectory));
             RunCreateStep("project workspace commit", () =>
             {
                 if (Directory.Exists(workspace.OrchestratorDirectory))
@@ -311,6 +315,9 @@ internal static class ProjectCliCommand
         Console.WriteLine($"Root: {project.RootDirectory}");
         Console.WriteLine($"Workspace: {workspace.OrchestratorDirectory}");
         Console.WriteLine($"State: {workspace.SqliteStatePath}");
+        Console.WriteLine(policySeed.Outcome == ProjectConductorPolicySeeder.Outcome.Seeded
+            ? $"Conductor policy: seeded {policySeed.PolicyName} from {ProjectConductorPolicySeeder.TemplatePath(defaultRootDirectory)}"
+            : $"Conductor policy: not seeded ({policySeed.Outcome}: {policySeed.Detail}); built-in Conservative applies");
     }
 
     private static void RelocateLegacyState(string source, string destination, string projectName)

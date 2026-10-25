@@ -3,16 +3,15 @@ using Mcg.AgentOrchestrator.Infrastructure;
 namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 
 internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource questions, IOwnerAnswerSubmitter answers,
-    IOwnerConsoleDialogs dialogs, IOrchestratorStateQueries state, IGoalEventTail tail,
+    IOwnerConsoleDialogs dialogs, OwnerGoalDetailQuery goalDetail,
     IOwnerConsoleConductor conductor, IOwnerConsoleDigestReport digest,
     IOwnerDigestSummary summary, TimeProvider clock, IOwnerConsoleEpicSource? epics = null,
     AnswerIntentStatusTracker? answerTracking = null, OwnerQuestionResolutionReader? resolutions = null,
     IOwnerConsoleNotifier? notifier = null, OwnerConsoleNotificationSettings? notifications = null,
-    Func<OwnerFleetViewModel>? fleet = null, Func<string, OwnerLandingsPage>? landings = null,
-    OwnerGoalDetailQuery? goalDetail = null) : IDisposable
+    Func<OwnerFleetViewModel>? fleet = null, Func<string, OwnerLandingsPage>? landings = null) : IDisposable
 {
     private readonly OwnerEpicDetailQuery _epicDetail = new(epics, clock);
-    private readonly OwnerGoalDetailQuery _goalDetail = goalDetail ?? new OwnerGoalDetailQuery(state, tail);
+    private readonly OwnerGoalDetailQuery _goalDetail = goalDetail;
     private readonly object _notificationGate = new();
     private readonly IOwnerConsoleNotifier _notifier = notifier ?? new NullOwnerConsoleNotifier();
     private readonly OwnerConsoleNotificationDetector _notifications = new(notifications ?? new());

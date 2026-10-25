@@ -15,13 +15,18 @@ public sealed class CliCommandCapabilitiesTestsQueryRouteConvention
             ["status"] = [["status", "abc10000"], ["status"],
                 ["status", "abc10000", "--tasks-only"], ["status", "--tasks-only", "abc10000"], ["status", "--tasks-only"]],
             ["readiness"] = [["readiness", "abc10000"], ["readiness"]],
-            ["goals"] = [["goals"], ["goals", "--epic", "Board"], ["goals", "--epic=Board"]],
+            ["goals"] = [["goals"], ["goals", "--epic", "Board"], ["goals", "--epic=Board"],
+                ["goals", "subscribe", "abc10000", "--once"], ["goals", "subscribe", "--goal-prefix", "abc10000", "--once"]],
+            ["monitor-goal"] = [["monitor-goal", "abc10000", "--once"], ["monitor-goal", "abc10000", "--once", "--format", "ndjson"]],
             ["failure-clusters"] = [["failure-clusters"]],
             ["storage-health"] = [["storage-health"], ["storage-health", "--json"]],
             ["build-attribution"] = [["build-attribution"]],
             ["intent-coverage"] = [["intent-coverage"]],
             ["remote-executors"] = [["remote-executors"]],
             ["round-value"] = [["round-value"]],
+            ["logs"] = [["logs", "abc10000", "1"], ["logs", "--goal", "abc10000", "1"], ["logs", "1", "--goal", "abc10000"], ["logs", "abc10000", "1", "stdout"]],
+            ["doctor"] = [["doctor"]],
+            ["tenant"] = [["tenant"]],
             ["board-simulate"] = [["board-simulate", "--day", "2026-10-15"]],
             ["epic-outcome-proposals"] = [["epic-outcome-proposals"], ["epic-outcome-proposals", "--json"]],
             ["epic-plan"] = [["epic-plan", "Board"], ["epic-plan", "Board", "--json"]],
@@ -41,7 +46,6 @@ public sealed class CliCommandCapabilitiesTestsQueryRouteConvention
     private static readonly IReadOnlyDictionary<string, string> Exemptions =
         new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
-            ["monitor-goal"] = "Polling loop deferred until its reload and clock seam is decided.",
             ["owner-digest"] = "Served at startup before the persistent runner.",
             ["context-usage"] = "Served at startup before the persistent runner."
         };
@@ -98,7 +102,7 @@ public sealed class CliCommandCapabilitiesTestsQueryRouteConvention
     [Fact]
     public void Exemptions_BareForms_PinFiveReasonedQueryOnlyExceptions()
     {
-        string[] expected = ["monitor-goal", "owner-digest", "context-usage"];
+        string[] expected = ["owner-digest", "context-usage"];
         var failures = new List<string>();
         foreach (var verb in expected)
         {

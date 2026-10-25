@@ -63,8 +63,34 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsLaneReceipt : Goal
         });
     }
 
+    [Theory]
+    [InlineData(0)]
+    [InlineData(7)]
+    public async Task RunOwned_AlphaScheduling_ReachesReceiptWithoutChangingVerdicts(int exitCode)
+    {
+        var control = await RunScenarioAsync(accountingAvailable: true, laneExitCode: exitCode);
+        var scheduled = await RunScenarioAsync(accountingAvailable: true, laneExitCode: exitCode, withScheduling: true);
+        Assert.Equal(control.Result.Passed, scheduled.Result.Passed);
+        Assert.Equal(control.Result.ExitCode, scheduled.Result.ExitCode);
+        Assert.Equal(2, control.Rows.Length);
+        Assert.Equal(2, scheduled.Rows.Length);
+        var alpha = Assert.Single(scheduled.Rows, row => row.GetProperty("lane").GetString()!.EndsWith("Alpha", StringComparison.Ordinal));
+        var remainder = Assert.Single(scheduled.Rows, row => row.GetProperty("lane").GetString()!.EndsWith("Remainder", StringComparison.Ordinal));
+        Assert.Equal("1/0", alpha.GetProperty("sched_root_throttle_masks").GetString());
+        Assert.Equal("not-sampled", remainder.GetProperty("sched_unavailable_reason").GetString());
+        Assert.Equal(JsonValueKind.Null, remainder.GetProperty("sched_root_throttle_masks").ValueKind);
+        Assert.All(control.Rows, row => Assert.Equal("not-sampled", row.GetProperty("sched_unavailable_reason").GetString()));
+        var controlLanes = control.Result.Checks!.Where(check => check.Name.StartsWith("infrastructure tests:", StringComparison.Ordinal)).OrderBy(check => check.Name).ToArray();
+        var scheduledLanes = scheduled.Result.Checks!.Where(check => check.Name.StartsWith("infrastructure tests:", StringComparison.Ordinal)).OrderBy(check => check.Name).ToArray();
+        Assert.Equal(2, controlLanes.Length);
+        Assert.Equal(2, scheduledLanes.Length);
+        Assert.All(controlLanes, check => { Assert.Equal(exitCode, check.ExitCode); Assert.Equal(exitCode == 0, check.Passed); });
+        Assert.Equal(controlLanes.Select(check => (check.Name, check.Passed, check.ExitCode)),
+            scheduledLanes.Select(check => (check.Name, check.Passed, check.ExitCode)));
+    }
+
     private async Task<(AcceptanceVerificationResult Result, JsonElement[] Rows, AcceptanceGateProgress[] Progress)> RunScenarioAsync(
-        bool accountingAvailable, int laneExitCode)
+        bool accountingAvailable, int laneExitCode, bool withScheduling = false)
     {
         TestOverrides.ResolveShardCoreBudgetForTests = () => 2;
         TestOverrides.PartitionVerdictWithinAttemptRerunEnabled = false;
@@ -137,7 +163,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsLaneReceipt : Goal
                 recordedAt[lane] = time.GetUtcNow();
                 return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(laneExitCode, "deterministic lane verdict",
                     ResourceAccounting: accountingAvailable ? new TaskProcessResourceAccounting(cpu, 1288490188, 0) : null,
-                    ResourceAccountingExpected: true));
+                    ResourceAccountingExpected: true,
+                    LaneScheduling: withScheduling && alpha ? new(2, 4, "Normal", "1/0", 0, 0, 4, 0, null) : null));
             }
 
             using var memory = GateHostHealthProbe.PushPhysicalAvailableMbProbe(() => GateLoadSample.Available(8192));

@@ -1433,7 +1433,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 using var loopSetup = ConductorStartupHeartbeat.Shipped.Begin(ConductorStartupHeartbeat.Phases.LoopSetup);
                 var loopPolicyName = GetFlagValue(parts, "--policy");
                 var loopPolicyResolution = CliConductLoopStartup.PrepareConductLoopPolicy(
-                    context.Workspace.OrchestratorDirectory, loopPolicyName, Console.Error);
+                    context.Workspace.OrchestratorDirectory, loopPolicyName, Console.Error, projectPolicyTemplatePath: ProjectConductorPolicySeeder.TemplatePathFor(context.Workspace, OrchestratorHome.ResolveForProcess()));
                 if (loopPolicyResolution is null)
                     return false;
 

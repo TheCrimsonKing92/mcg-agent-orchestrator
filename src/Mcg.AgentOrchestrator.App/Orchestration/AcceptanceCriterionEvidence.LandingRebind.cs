@@ -28,6 +28,12 @@ internal static partial class AcceptanceCriterionEvidence
                     executionDirectory ?? string.Empty, oldHead, candidateSha, integrationBranch,
                     out var evidence, out var reason))
             {
+                if (IntegrationOnlyCandidateDrift.TryProve(executionDirectory ?? string.Empty,
+                        oldHead, candidateSha, integrationBranch, GoalWorktrees.BranchName(goal.Id), out var drift))
+                {
+                    evidenceByHead.Add(oldHead, drift);
+                    continue;
+                }
                 return FormatStaleBindingsDiagnostic(
                     candidateSha, obligation, boundElsewhere, $"reason={reason}; head={oldHead}");
             }
@@ -45,7 +51,8 @@ internal static partial class AcceptanceCriterionEvidence
                 CriterionEvidenceOwner.Acceptance,
                 string.IsNullOrWhiteSpace(obligation.ExpectedCandidateSha)
                     ? "conductor deterministic full acceptance"
-                    : "conductor patch-equivalent landing carry",
+                    : IsIntegrationOnly(evidenceByHead[obligation.ExpectedCandidateSha])
+                        ? IntegrationOnlyRebindActor : "conductor patch-equivalent landing carry",
                 obligation.RequiredScope,
                 obligation.FindingStableId,
                 candidateSha);
@@ -53,6 +60,7 @@ internal static partial class AcceptanceCriterionEvidence
 
         if (boundElsewhere.Length > 0)
         {
+            RecordIntegrationOnlyRebinds(executionDirectory, goal, candidateSha, evidenceByHead);
             GoalOperationJournal.Completed(
                 executionDirectory,
                 goal,

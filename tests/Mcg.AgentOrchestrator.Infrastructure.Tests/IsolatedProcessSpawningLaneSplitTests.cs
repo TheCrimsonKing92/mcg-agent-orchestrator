@@ -23,6 +23,7 @@ public sealed class IsolatedProcessSpawningLaneSplitTests
         typeof(WorkerBuildProjectScopeProcessSpawningTests),
         typeof(FocusedEvidenceUnionManagedTests),
         typeof(PatchEquivalenceIntegrationMergeTests),
+        typeof(PatchEquivalenceIntegrationMergeTestsAutoRebind),
         typeof(RemoteFirstFocusedEvidenceTests),
         typeof(CriterionEvidencePatchCarryTests),
         typeof(WorkerBuildCheckRecoveryTests),
