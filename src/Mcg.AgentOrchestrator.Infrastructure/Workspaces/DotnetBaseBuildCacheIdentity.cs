@@ -192,7 +192,10 @@ internal static class DotnetBaseBuildCacheIdentityResolver
             string Normalize(string value) => value
                 .Replace(environment.ArtifactsPath.Replace('\\', '/'), "<artifacts>", StringComparison.OrdinalIgnoreCase)
                 .Replace(environment.ArtifactsPath, "<artifacts>", StringComparison.OrdinalIgnoreCase)
-                .Replace(environment.ArtifactsPath.Replace("\\", "\\\\", StringComparison.Ordinal), "<artifacts>", StringComparison.OrdinalIgnoreCase);
+                .Replace(environment.ArtifactsPath.Replace("\\", "\\\\", StringComparison.Ordinal), "<artifacts>", StringComparison.OrdinalIgnoreCase)
+                .Replace(environment.RootPath.Replace('\\', '/'), "<build-root>", StringComparison.OrdinalIgnoreCase)
+                .Replace(environment.RootPath, "<build-root>", StringComparison.OrdinalIgnoreCase)
+                .Replace(environment.RootPath.Replace("\\", "\\\\", StringComparison.Ordinal), "<build-root>", StringComparison.OrdinalIgnoreCase);
 
             string HashTree(string directory, bool projectInputs = false)
             {
