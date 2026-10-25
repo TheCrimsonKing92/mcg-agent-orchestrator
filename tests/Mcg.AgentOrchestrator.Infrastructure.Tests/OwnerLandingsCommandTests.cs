@@ -79,7 +79,7 @@ public sealed class OwnerLandingsCommandTests
     }
 
     private static OwnerConsoleScreenController Controller(OwnerConsoleHarness harness,
-        Dialogs dialogs, Func<string, OwnerLandingsPage>? seam = null) => new(harness.Questions, harness.Answers, dialogs,
+        Dialogs dialogs, Func<string, OwnerLandingsPage>? seam = null) => OwnerConsoleControllerFactory.Create(harness.Questions, harness.Answers, dialogs,
         harness.State, harness.Tail, harness.Conductor, harness.DigestReport, harness.Digest, harness.Clock, landings: seam);
 
     private sealed class Dialogs : IOwnerConsoleDialogs

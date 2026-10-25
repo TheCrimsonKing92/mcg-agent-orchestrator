@@ -64,7 +64,7 @@ public sealed class OwnerConsoleGoalDetailResolutionTests
         var tail = new OwnerQuestionResolutionDialogTests.TailSource();
         tail.Lines.Add(OwnerQuestionResolutionDialogTests.Scene.Lifecycle(time, "TaskFailed", goal.Tasks[0].Id.Value));
         var dialogs = new OwnerQuestionResolutionDialogTests.CapturingDialogs();
-        using var controller = new OwnerConsoleScreenController(harness.Questions, harness.Answers, dialogs,
+        using var controller = OwnerConsoleControllerFactory.Create(harness.Questions, harness.Answers, dialogs,
             harness.State, tail, harness.Conductor, harness.DigestReport, harness.Digest, harness.Clock);
         await controller.ShowGoalDetailAsync(goal.Id.Value);
         var text = Assert.Single(dialogs.Texts).Text;

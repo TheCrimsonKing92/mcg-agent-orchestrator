@@ -266,7 +266,7 @@ public sealed class OwnerConsoleDecisionDetailTests
         {
             answers ??= Harness.Answers;
             Tracker = new(answers.ReadStatusAsync, Harness.Clock);
-            Controller = new(Harness.Questions, answers, Dialogs, Harness.State, Scene.Tail,
+            Controller = OwnerConsoleControllerFactory.Create(Harness.Questions, answers, Dialogs, Harness.State, Scene.Tail,
                 Harness.Conductor, Harness.DigestReport, Harness.Digest, Harness.Clock, answerTracking: Tracker, resolutions: Scene.Reader);
             View = new(App, Controller, () => Task.CompletedTask, clock: new OwnerConsoleTestClock());
         }

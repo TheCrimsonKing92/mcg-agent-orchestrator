@@ -16,7 +16,7 @@ public sealed class OwnerFleetFullScreenWidthScenarioTests
         var harness = new OwnerConsoleHarness();
         var dialogs = new Dialogs(available);
         var loads = 0;
-        using var controller = new OwnerConsoleScreenController(harness.Questions, harness.Answers, dialogs,
+        using var controller = OwnerConsoleControllerFactory.Create(harness.Questions, harness.Answers, dialogs,
             harness.State, harness.Tail, harness.Conductor, harness.DigestReport, harness.Digest, harness.Clock,
             fleet: () => { loads++; return OwnerFleetViewModelBuilder.Load(fixture.Workspace, harness.Liveness, new FleetFixture.Clock()); });
 

@@ -413,7 +413,7 @@ public sealed class OwnerConsoleFullScreenPaneTests
     }
 
     private static OwnerConsoleScreenController Controller(OwnerConsoleHarness harness, Dialogs dialogs, IGoalEventTail? tail = null) =>
-        new(harness.Questions, harness.Answers, dialogs, harness.State, tail ?? harness.Tail, harness.Conductor,
+        OwnerConsoleControllerFactory.Create(harness.Questions, harness.Answers, dialogs, harness.State, tail ?? harness.Tail, harness.Conductor,
             harness.DigestReport, harness.Digest, harness.Clock);
 
     private static Task<OwnerConsoleViewModel> Model(OwnerConsoleHarness harness) =>

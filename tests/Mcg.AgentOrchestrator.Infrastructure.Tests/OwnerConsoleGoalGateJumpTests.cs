@@ -177,7 +177,7 @@ public sealed class OwnerConsoleGoalGateJumpTests
     private static OwnerConsoleGateProgress OtherGate() => MemberGate() with
         { Kind = "solo", Members = [new("11111111", "Other")] };
     private static OwnerConsoleScreenController Controller(OwnerConsoleHarness harness, Dialogs dialogs) =>
-        new(harness.Questions, harness.Answers, dialogs, harness.State, harness.Tail, harness.Conductor,
+        OwnerConsoleControllerFactory.Create(harness.Questions, harness.Answers, dialogs, harness.State, harness.Tail, harness.Conductor,
             harness.DigestReport, harness.Digest, harness.Clock);
     private static Task<OwnerConsoleViewModel> Model(OwnerConsoleHarness harness, OwnerConsoleGateProgress gate) =>
         new OwnerConsoleViewModelBuilder(harness.State, harness.Questions, harness.Liveness, new Lookup(),

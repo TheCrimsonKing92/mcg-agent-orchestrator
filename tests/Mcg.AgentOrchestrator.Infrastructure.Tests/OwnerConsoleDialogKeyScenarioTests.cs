@@ -246,7 +246,7 @@ public sealed class OwnerConsoleDialogKeyScenarioTests
             }).ToArray() });
             if (question) Harness.Questions.Items.Add(new("question", Id, OwnerQuestionKind.HumanInput, "Choose the export format?"));
             Source = new(Harness.State);
-            Controller = new(Harness.Questions, Harness.Answers, Dialogs, Harness.State, Harness.Tail,
+            Controller = OwnerConsoleControllerFactory.Create(Harness.Questions, Harness.Answers, Dialogs, Harness.State, Harness.Tail,
                 Harness.Conductor, Harness.DigestReport, Harness.Digest, Harness.Clock, Source);
             View = new(App, Controller, () => Task.CompletedTask);
         }

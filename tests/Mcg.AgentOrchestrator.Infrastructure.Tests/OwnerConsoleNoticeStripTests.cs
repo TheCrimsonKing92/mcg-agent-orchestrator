@@ -48,7 +48,7 @@ public sealed class OwnerConsoleNoticeStripTests
         var harness = new OwnerConsoleHarness();
         harness.Questions.Items.Add(new("q1", "11111111", OwnerQuestionKind.HumanInput, "Ship?"));
         using IApplication app = Application.Create();
-        using var controller = new OwnerConsoleScreenController(harness.Questions, harness.Answers,
+        using var controller = OwnerConsoleControllerFactory.Create(harness.Questions, harness.Answers,
             new OnHelp(() => { }), harness.State, harness.Tail, harness.Conductor,
             harness.DigestReport, harness.Digest, clock);
         using var view = new OwnerConsoleFullScreenView(app, controller, () => Task.CompletedTask, clock: clock);
@@ -145,7 +145,7 @@ public sealed class OwnerConsoleNoticeStripTests
             Assert.Empty(view!.NoticeStrip.Visible);
             Assert.Empty(view.NoticeText);
         });
-        var controller = new OwnerConsoleScreenController(harness.Questions, harness.Answers, dialogs,
+        var controller = OwnerConsoleControllerFactory.Create(harness.Questions, harness.Answers, dialogs,
             harness.State, harness.Tail, harness.Conductor, harness.DigestReport, harness.Digest, clock);
         using var ownedView = view = new(app, controller, () => Task.CompletedTask, clock: clock);
         var model = await new OwnerConsoleViewModelBuilder(harness.State, harness.Questions,

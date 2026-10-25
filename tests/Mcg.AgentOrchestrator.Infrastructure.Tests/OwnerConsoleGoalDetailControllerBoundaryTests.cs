@@ -30,7 +30,7 @@ public sealed class OwnerConsoleGoalDetailControllerBoundaryTests
         var throwingState = new ThrowingState();
         var throwingTail = new ThrowingTail();
         var dialogs = new Dialogs();
-        using var controller = new OwnerConsoleScreenController(harness.Questions, harness.Answers, dialogs,
+        using var controller = OwnerConsoleControllerFactory.Create(harness.Questions, harness.Answers, dialogs,
             throwingState, throwingTail, harness.Conductor, harness.DigestReport, harness.Digest, harness.Clock,
             goalDetail: new OwnerGoalDetailQuery(harness.State, recordedTail));
 
@@ -58,7 +58,7 @@ public sealed class OwnerConsoleGoalDetailControllerBoundaryTests
         var throwingState = new ThrowingState();
         var throwingTail = new ThrowingTail();
         var dialogs = new Dialogs();
-        using var controller = new OwnerConsoleScreenController(harness.Questions, harness.Answers, dialogs,
+        using var controller = OwnerConsoleControllerFactory.Create(harness.Questions, harness.Answers, dialogs,
             throwingState, throwingTail, harness.Conductor, harness.DigestReport, harness.Digest, harness.Clock,
             goalDetail: new OwnerGoalDetailQuery(harness.State, new RecordedTail([])));
 
@@ -100,7 +100,7 @@ public sealed class OwnerConsoleGoalDetailControllerBoundaryTests
         var throwingTail = new ThrowingTail();
         var recordedTail = new RecordedTail([]);
         var dialogs = new Dialogs();
-        using var controller = new OwnerConsoleScreenController(harness.Questions, harness.Answers, dialogs,
+        using var controller = OwnerConsoleControllerFactory.Create(harness.Questions, harness.Answers, dialogs,
             throwingState, throwingTail, harness.Conductor, harness.DigestReport, harness.Digest, harness.Clock,
             goalDetail: new OwnerGoalDetailQuery(harness.State, recordedTail));
 
@@ -137,7 +137,7 @@ public sealed class OwnerConsoleGoalDetailControllerBoundaryTests
         var throwingState = new ThrowingState();
         var throwingTail = new ThrowingTail();
         var dialogs = new Dialogs();
-        using var controller = new OwnerConsoleScreenController(harness.Questions, harness.Answers, dialogs,
+        using var controller = OwnerConsoleControllerFactory.Create(harness.Questions, harness.Answers, dialogs,
             throwingState, throwingTail, harness.Conductor, harness.DigestReport, harness.Digest, harness.Clock,
             goalDetail: new OwnerGoalDetailQuery(harness.State, recordedTail));
 
