@@ -10,7 +10,7 @@ internal static class GroupedAdmissionLandingHold
         wait.TestNames is { Count: > 0 };
 
     internal static HumanInputRequest? FindBlockingWait(IReadOnlyList<HumanInputRequest> pending) =>
-        pending.FirstOrDefault(wait => !wait.IsCompleted && !IsGateSatisfiable(wait));
+        pending.FirstOrDefault(wait => !wait.IsCompleted && !PostLandingOperatorCheck.IsPostLandingCheck(wait) && !IsGateSatisfiable(wait));
 
     internal static GateReadyCandidateProjectionResult Apply(
         GateReadyCandidateProjectionResult projection, IReadOnlyList<HumanInputRequest> pending) =>
