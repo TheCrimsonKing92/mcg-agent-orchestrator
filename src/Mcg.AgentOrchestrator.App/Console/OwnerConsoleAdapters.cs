@@ -70,26 +70,7 @@ internal sealed class AttentionAnswerHandlerAdapter(OrchestratorWorkspace worksp
         if (OwnerQuestionViewOnly.IsViewOnly(question.Kind))
             throw new InvalidOperationException(question.Kind == OwnerQuestionKind.StewardHold ?
                 "Steward holds have no attention answer handler." : OwnerQuestionViewOnly.Notice(question.Kind, question.GoalId));
-        var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
-        IReadOnlyList<AgentDefinition> agents = AgentCatalogStore.Load(workspace.AgentCatalogPath).Agents;
-        var profiles = WorkerProfileStore.Load(workspace.WorkerProfilePath);
-        Goal? currentGoal = null;
-        var key = Guid.NewGuid().ToString("N");
-        CliPersistentStateRunner.ExecuteCommand(
-            ["attention", "answer", question.ItemId, answer, "--idempotency-key", key],
-            repository, workspace, ref agents,
-            new InMemoryModelProviderRegistry([]), ref profiles, ref currentGoal,
-            NullOperatorChannel.Instance);
-        // Submission has succeeded even if the subsequent read cannot resolve its receipt.
-        try
-        {
-            var store = SqliteOperatorIntentStore.OpenExisting(workspace.OrchestratorDirectory, workspace.LogDirectory);
-            var intent = store.ListForGoalAsync(question.GoalId).GetAwaiter().GetResult()
-                .FirstOrDefault(item => item.IdempotencyKey == key);
-            return new(intent?.Id);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or Microsoft.Data.Sqlite.SqliteException)
-        { return new(null); }
+        return new OwnerAnswerIntentSubmitter(workspace).Submit(question, answer, Guid.NewGuid().ToString("N"));
     }
 
     public OwnerAnswerSubmission SubmitExperimentDecision(string experimentReference, OwnerExperimentDecisionForm form) =>

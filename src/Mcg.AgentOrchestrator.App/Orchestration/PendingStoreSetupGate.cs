@@ -17,7 +17,7 @@ internal static class PendingStoreSetupGate
     }
 
     internal static bool AllowsWhilePending(IReadOnlyList<string> args) =>
-        CliPersistentStateRunner.IsInboxBackedGoalScopedTaskMutationCommand(args) ||
-        CliPersistentStateRunner.IsCriterionEvidenceMutationCommand(args) ||
-        CliPersistentStateRunner.RequiresKernelBacklogState(args);
+        StoreSetupCommandKinds.IsInboxBackedTaskMutation(args) ||
+        StoreSetupCommandKinds.IsCriterionEvidenceMutation(args) ||
+        StoreSetupCommandKinds.RequiresBacklogState(args);
 }
