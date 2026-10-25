@@ -47,8 +47,10 @@ internal static class GateTestObligationEvaluator
             newest = failed.Length > 0
                 ? new(obligation, Outcome.Failed, failed, source.Id)
                 : new(obligation, Outcome.SelectorNotFound,
-                    evidence.Where(item => item.Passed + item.Failed + item.Superseded == 0)
-                        .Select(item => item.Selector).ToArray(), source.Id);
+                    evidence.Where(item => !item.Satisfied && item.Failed == 0 &&
+                            (item.AmbiguousClassNames is not null || item.Passed + item.Failed + item.Superseded == 0))
+                        .Select(item => item.AmbiguousClassNames is not null ? item.ReportedEntry : item.Selector)
+                        .ToArray(), source.Id);
         }
         return newest ?? new(obligation, Outcome.Pending, obligation.Selectors, null);
     }
