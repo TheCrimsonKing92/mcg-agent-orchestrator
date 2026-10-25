@@ -12,7 +12,8 @@ internal static class RemoteFirstFocusedEvidence
     internal static async Task<Outcome> RunAsync(GoalAcceptanceVerifierTestOverrides overrides,
         TimeProvider fallbackClock, string worktreePath, IReadOnlyList<Check> checks, GoalId? goalId,
         IAcceptanceRunExecutionContext? owner, bool continueAfterFailure,
-        Func<IReadOnlyList<Check>, Task<IReadOnlyList<AcceptanceCheckResult>>> runLocal, CancellationToken token)
+        Func<IReadOnlyList<Check>, Task<IReadOnlyList<AcceptanceCheckResult>>> runLocal, CancellationToken token,
+        Action? releaseLocalPermit = null)
     {
         RemoteLaneExecutorConfiguration configuration;
         try
@@ -29,6 +30,7 @@ internal static class RemoteFirstFocusedEvidence
         var clock = overrides.RemoteLaneTimeProviderForTests ?? fallbackClock;
         var runs = checks.Select(check => Candidate(check, owner.RunId, goalId.Value, clock)).ToArray();
         RemoteLaneCoordinator? coordinator = null;
+        var releasingLocalPermit = false;
         try
         {
             var status = GitCli.Run(worktreePath, GitCli.DefaultTimeoutMilliseconds,
@@ -71,6 +73,12 @@ internal static class RemoteFirstFocusedEvidence
                         run.Request = run.Request with { ExecutorId = entry.Id };
                         claimed.Add((run, entry));
                     }
+                }
+                if (claimed.Count > 0)
+                {
+                    releasingLocalPermit = true;
+                    releaseLocalPermit?.Invoke();
+                    releasingLocalPermit = false;
                 }
                 await Task.WhenAll(claimed.Select(pair => ExecuteAsync(pair.Run, pair.Entry))).ConfigureAwait(false);
 
@@ -145,7 +153,7 @@ internal static class RemoteFirstFocusedEvidence
             }
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
-        catch (Exception ex)
+        catch (Exception ex) when (!releasingLocalPermit)
         {
             foreach (var run in runs.OfType<Run>())
                 Finish(run, RemoteLaneOutcomeCode.Unreachable, ex.GetType().Name + ": " + ex.Message);
