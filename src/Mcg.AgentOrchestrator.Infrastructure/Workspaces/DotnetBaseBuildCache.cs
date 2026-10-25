@@ -192,11 +192,19 @@ internal sealed class DotnetBaseBuildCache
         string mainSha,
         string artifactsPath,
         IReadOnlyList<string> projects,
-        DotnetBaseBuildCacheIdentity identity)
+        DotnetBaseBuildCacheIdentity identity,
+        IReadOnlyList<string>? reusedProjects = null)
     {
         Directory.CreateDirectory(_rootPath);
         var evictions = EvictExpiredAndOverflow();
         var receipts = new List<DotnetBaseBuildCacheProjectReceipt>();
+        var protectedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var project in reusedProjects ?? [])
+        {
+            if (!TryFingerprint(identity, project, out var fingerprint)) continue;
+            var path = EntryPath(mainSha, ProjectKey(project), fingerprint, identity);
+            if (Directory.Exists(path)) protectedPaths.Add(path);
+        }
         foreach (var project in projects)
         {
             var projectKey = ProjectKey(project);
@@ -253,6 +261,9 @@ internal sealed class DotnetBaseBuildCache
                 if (!Directory.Exists(finalPath))
                 {
                     Directory.Move(stagingPath, finalPath);
+                    protectedPaths.Add(finalPath);
+                    Console.WriteLine($"BASE_BUILD_CACHE_STORE entry={Quote(Path.GetFileName(finalPath))} project={Quote(project)} main_sha={Quote(mainSha)} files={files.Count} bytes={files.Sum(file => file.Length)}");
+                    Console.Out.Flush();
                     receipts.Add(new DotnetBaseBuildCacheProjectReceipt(project, projectKey, "published", null, hash));
                 }
                 else
@@ -272,7 +283,7 @@ internal sealed class DotnetBaseBuildCache
             }
         }
 
-        evictions.AddRange(EvictExpiredAndOverflow());
+        evictions.AddRange(EvictExpiredAndOverflow(protectedPaths));
         return new DotnetBaseBuildCachePublishResult(mainSha, receipts, evictions);
     }
 
@@ -295,7 +306,7 @@ internal sealed class DotnetBaseBuildCache
         }
     }
 
-    private List<string> EvictExpiredAndOverflow()
+    private List<string> EvictExpiredAndOverflow(IReadOnlySet<string>? protectedPaths = null)
     {
         var evicted = new List<string>();
         if (!Directory.Exists(_rootPath))
@@ -305,7 +316,7 @@ internal sealed class DotnetBaseBuildCache
 
         var now = DateTimeOffset.UtcNow;
         foreach (var entry in EnumerateEntries()
-            .Where(entry => now - entry.LastWriteUtc > _maxAge))
+            .Where(entry => now - entry.LastWriteUtc > _maxAge && protectedPaths?.Contains(entry.Path) != true))
         {
             if (TryDeleteDirectory(entry.Path))
             {
@@ -316,7 +327,9 @@ internal sealed class DotnetBaseBuildCache
         var remaining = EnumerateEntries()
             .OrderByDescending(entry => entry.LastWriteUtc)
             .ToArray();
-        foreach (var entry in remaining.Skip(_maxEntries))
+        var victims = remaining.Where(entry => protectedPaths?.Contains(entry.Path) != true)
+            .Reverse().Take(Math.Max(0, remaining.Length - _maxEntries)).Reverse();
+        foreach (var entry in victims)
         {
             if (TryDeleteDirectory(entry.Path))
             {
