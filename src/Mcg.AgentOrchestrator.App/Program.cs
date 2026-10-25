@@ -175,6 +175,7 @@ try
 {
     workspace = ResolveSelectedWorkspace(activeProject);
     invocationBinding.Verify(workspace);
+    GateHeartbeatOwner.Bind(workspace.OrchestratorDirectory);
     HostLedgerStateDirectory.InstallRoute(host => HostLedgerStateDirectoryLocator.Resolve(host, projectRegistry));
 }
 catch (Exception ex)

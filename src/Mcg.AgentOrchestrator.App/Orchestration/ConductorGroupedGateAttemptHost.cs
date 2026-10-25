@@ -89,6 +89,7 @@ internal static class ConductorGroupedGateAttemptHost
     private static ConductorGroupedGateOutcome? RunGateBody(ConductorGroupedGateAttempt attempt)
     {
         var workspace = OwnedChildWorkspaceResolver.ForGroupedGateAttempt(attempt);
+        using var heartbeatOwner = GateHeartbeatOwner.Push(workspace.OrchestratorDirectory);
         var state = SqliteOrchestratorStateRepository.OpenReadOnly(workspace.SqliteStatePath);
         var kernel = state.LoadGoalsAsync(attempt.Members
             .Select(member => new GoalId(member.GoalId)).ToArray()).GetAwaiter().GetResult();

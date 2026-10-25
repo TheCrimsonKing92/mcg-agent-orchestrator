@@ -55,6 +55,24 @@ public sealed class OperatorChannelTests : CliCommandTestBase
     }
 
     [Xunit.Fact]
+    public void OperatorChannelStoreLoadsLegacyMuteKeyAndKeepsSupportedFields()
+    {
+        var path = Path.Combine(CreateTempDirectory(), "operator-channel.json");
+        File.WriteAllText(path, """
+            { "channelType": "discord", "forumChannelId": "41",
+              "progressThreadId": "progress-thread", "deadManHeartbeatEnabled": true,
+              "controlPlaneMutedUntil": "2026-07-26T05:00:00+00:00" }
+            """);
+
+        var catalog = OperatorChannelStore.Load(path);
+
+        Assert.Equal("discord", catalog.ChannelType);
+        Assert.Equal("41", catalog.ForumChannelId);
+        Assert.Equal("progress-thread", catalog.ProgressThreadId);
+        Assert.True(catalog.DeadManHeartbeatEnabled);
+    }
+
+    [Xunit.Fact]
     public async Task DiscordOperatorChannelRendersNoDashboardLine()
     {
         var store = CollaborationItemStore.ForDirectory(CreateTempDirectory());
@@ -106,7 +124,6 @@ public sealed class OperatorChannelTests : CliCommandTestBase
             ProgressThreadId: "progress-thread",
             ProgressStatusMessageId: "progress-message",
             ProgressStatusContentHash: "progress-hash",
-            ControlPlaneMutedUntil: mutedUntil,
             DeadManHeartbeatEnabled: true,
             DeadManHeartbeatUrl: "https://heartbeat.example");
         OperatorChannelStore.Save(workspace.OperatorChannelPath, existing);
@@ -125,7 +142,6 @@ public sealed class OperatorChannelTests : CliCommandTestBase
         Assert.Equal("progress-thread", merged.ProgressThreadId);
         Assert.Equal("progress-message", merged.ProgressStatusMessageId);
         Assert.Equal("progress-hash", merged.ProgressStatusContentHash);
-        Assert.Equal(mutedUntil, merged.ControlPlaneMutedUntil);
         Assert.True(merged.DeadManHeartbeatEnabled);
         Assert.Equal("https://heartbeat.example", merged.DeadManHeartbeatUrl);
     }
@@ -676,6 +692,32 @@ public sealed class OperatorChannelTests : CliCommandTestBase
         Assert.Equal("discord", channel.ChannelType);
     }
 
+    [Xunit.Fact(DisplayName = "DeadManHeartbeatClient_default_options_do_not_send")]
+    public async Task DeadManHeartbeatClientDefaultOptionsDoNotSend()
+    {
+        var client = new DeadManHeartbeatClient(new HttpClient(new ThrowingHandler()));
+
+        var sent = await client.SendAsync();
+
+        Assert.False(sent);
+    }
+
+    [Xunit.Fact(DisplayName = "OperatorChannelFactory_wires_dead_man_heartbeat_only_when_catalog_enables_valid_url")]
+    public void OperatorChannelFactoryWiresDeadManHeartbeatOnlyWhenCatalogEnablesValidUrl()
+    {
+        var disabled = OperatorChannelFactory.BuildDeadManHeartbeatOptions(OperatorChannelCatalog.Default());
+        var enabled = OperatorChannelFactory.BuildDeadManHeartbeatOptions(
+            new OperatorChannelCatalog(
+                "discord",
+                ForumChannelId: "42",
+                DeadManHeartbeatEnabled: true,
+                DeadManHeartbeatUrl: "https://example.test/deadman"));
+
+        Assert.False(disabled.Enabled);
+        Assert.True(enabled.Enabled);
+        Assert.Equal(new Uri("https://example.test/deadman"), enabled.Endpoint);
+    }
+
     // ---- OperatorChannelCatalog ForumChannelId / OperatorUserIds roundtrip ----
 
     [Xunit.Fact(DisplayName = "OperatorChannelStore_roundtrips_discord_catalog_with_forum_channel_id")]
@@ -1125,6 +1167,12 @@ public sealed class OperatorChannelTests : CliCommandTestBase
             OperatorInboxKind.HoldClearanceFailure => "recover abc123def <note>",
             _ => "next abc123def"
         };
+
+    private sealed class ThrowingHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
+            throw new InvalidOperationException("Heartbeat should be disabled by default.");
+    }
 
     private sealed class ThrowingFakeChannel : IOperatorChannel
     {

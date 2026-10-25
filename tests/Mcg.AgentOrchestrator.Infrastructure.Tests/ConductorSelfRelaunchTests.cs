@@ -78,13 +78,16 @@ public sealed class ConductorSelfRelaunchTests
     [Xunit.Fact(DisplayName = "ConductorSelfRelaunch_real_binary_build_self_check_and_handoff")]
     public void RealBinaryBuildSelfCheckAndHandoff()
     {
-        using var fixture = RealRelaunchFixture.Create();
+        using var fixture = RealRelaunchFixture.Create(usePrebuiltPayload: true);
+        var expectedHead = Git(fixture.Options.RepositoryRoot, "rev-parse", "HEAD").Trim();
 
         var result = ConductorSelfRelaunch.Create(fixture.OptionsWithCapturedSuccessorIdentity)(
             new ConductorSelfRelaunchRequest("goal-real-success", 7));
 
         Assert.True(result.HandedOff, result.Reason);
         Assert.NotNull(result.Successor);
+        Assert.Equal(expectedHead, result.Successor!.RepositoryHead);
+        Assert.Equal(expectedHead, result.Successor.StagedSourceCommit);
         Assert.False(Directory.Exists(Path.GetDirectoryName(fixture.Options.AppDllPath)));
         Assert.Contains("schemaVersion=", result.Successor!.SelfCheckDetail, StringComparison.Ordinal);
         Assert.Contains("manifestChecks=", result.Successor.SelfCheckDetail, StringComparison.Ordinal);
@@ -139,6 +142,26 @@ public sealed class ConductorSelfRelaunchTests
 
         Assert.False(result.HandedOff);
         Assert.Equal("self-check", result.FailedPhase);
+        Assert.False(Directory.Exists(Path.GetDirectoryName(fixture.Options.AppDllPath)));
+    }
+
+    [Xunit.Fact]
+    public void RealPrebuiltSuccessorThatCannotSelfCheckDoesNotHandOff()
+    {
+        using var fixture = RealRelaunchFixture.Create(usePrebuiltPayload: true);
+        File.WriteAllBytes(
+            Path.Combine(fixture.Options.PrebuiltAppOutputDirectory!, Path.GetFileName(fixture.Options.AppDllPath)),
+            new byte[16]);
+
+        var result = ConductorSelfRelaunch.Create(fixture.OptionsWithCapturedSuccessorIdentity)(
+            new ConductorSelfRelaunchRequest("goal-real-corrupt-successor", 13));
+
+        Assert.False(result.HandedOff, result.Reason);
+        Assert.Equal("self-check", result.FailedPhase);
+        Assert.Null(result.Successor);
+        Assert.Null(result.Handoff);
+        Assert.True(fixture.Lease.IsHeld);
+        Assert.Null(fixture.SuccessorIdentity);
         Assert.False(Directory.Exists(Path.GetDirectoryName(fixture.Options.AppDllPath)));
     }
 
@@ -362,6 +385,14 @@ public sealed class ConductorSelfRelaunchTests
         {
             TryDeleteDirectory(root);
         }
+    }
+
+    private static string Git(string repository, params string[] arguments)
+    {
+        var result = InfrastructureTestSupport.RunGitProbe(repository, ["-C", repository, .. arguments]);
+        InfrastructureTestSupport.RequireCompleteGitOutput(result);
+        Assert.True(result.Succeeded, $"git probe failed: {result}");
+        return result.StandardOutput;
     }
 
     private static ConductorSelfRelaunchOptions Options(string root) =>

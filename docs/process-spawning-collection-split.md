@@ -22,7 +22,7 @@ The `ProcessSpawning` collection remains parallel-disabled for seven classes wit
 
 | Class | Required hazard | Evidence |
 | --- | --- | --- |
-| `ConductorSelfRelaunchTests` | Host build-slot contention | `RealBinaryBuildSelfCheckAndHandoff` performs a production app build. |
+| `ConductorSelfRelaunchTests` | Host build-slot contention | `RealBinaryBuildSelfCheckAndHandoff` copies the gate's App build for the same head; `Build_failure_removes_partial_successor_output` still runs `dotnet build` on a failing sample project. |
 | `ConductorSuccessorSelfCheckTests` | Process-wide state observable by another test | Overwrites the fixed app-output git-head marker under `AppContext.BaseDirectory`. |
 | `DispatchProcessHostTests` | Process-wide state observable by another test | Enumerates machine PowerShell processes, kills matches, and uses a shared fallback measurement path. |
 | `GoalWorktreeIsolatedDotnetTests` | Host build-slot contention | Invokes isolated `dotnet test`, acquires build permits, and contains environment override scopes. |

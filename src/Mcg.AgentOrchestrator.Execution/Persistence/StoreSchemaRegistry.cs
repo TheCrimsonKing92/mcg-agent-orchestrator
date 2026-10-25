@@ -112,7 +112,6 @@ public static class StoreSchemaRegistry
         ProgressiveReviewGlanceCircuit,
         ProgressiveReviewSteering,
         new("reconcile-sweep-remediation", Persistence + "ReconcileSweepRemediationStore.cs", "state.db", "review", null),
-        new("control-plane-delivery", Comms + "DiscordControlPlaneDeliveryStore.cs", "control-plane-delivery.db", "review", null),
         new("orchestrator-state", Persistence + "SqliteOrchestratorStateRepository.cs", "state.db", "review", null),
         new("state-history", Persistence + "StateDbMigrations.cs", "state.db", "state-history", null),
         new("schema-registry", Persistence + "StoreSchemaRegistry.cs", "per-database", "schema-registry", null)
