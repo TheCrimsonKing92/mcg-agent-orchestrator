@@ -5,7 +5,8 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal sealed record ConductorAuthorResult(
     string Kind, string? Text, IReadOnlyList<string>? EvidenceReferences,
-    string? Precedent, string? Question, string? Recommendation, FrozenFactRuling? Ruling = null);
+    string? Precedent, string? Question, string? Recommendation, FrozenFactRuling? Ruling = null,
+    IReadOnlyList<string>? BriefCitations = null);
 
 internal static class ConductorAuthorResultParser
 {
@@ -37,8 +38,14 @@ internal static class ConductorAuthorResultParser
                     if (refs.EnumerateArray().Any(value => value.ValueKind != JsonValueKind.String)) return null;
                     references = refs.EnumerateArray().Select(value => value.GetString()!).ToArray();
                 }
+                IReadOnlyList<string>? citations = null;
+                if (root.TryGetProperty("briefCitations", out var spans) && spans.ValueKind == JsonValueKind.Array)
+                {
+                    if (spans.EnumerateArray().Any(value => value.ValueKind != JsonValueKind.String)) return null;
+                    citations = spans.EnumerateArray().Select(value => value.GetString()!).ToArray();
+                }
                 TryText(root, "precedent", out var precedent);
-                return new ConductorAuthorResult(kind, text, references, precedent, null, null);
+                return new ConductorAuthorResult(kind, text, references, precedent, null, null, BriefCitations: citations);
             }
             if (kind == "ask-owner" && TryText(root, "question", out var question) &&
                 TryText(root, "recommendation", out var recommendation) &&

@@ -280,6 +280,6 @@ public sealed class OwnerConsoleGoalDialogTests
         public Task<string?> PromptTextAsync(string title, string text) => throw new InvalidOperationException("Read-only goal action asked for input");
         public Task ShowTextAsync(string title, string text) { Texts.Add((title, text)); return Task.CompletedTask; }
         public async Task ShowGoalAsync(OwnerConsoleGoalDialog dialog)
-        { Goals.Add(dialog); dialog.Start(action => action()); if (OnGoal is not null) await OnGoal(dialog); }
+        { Goals.Add(dialog); dialog.Start(action => action()); await dialog.LastLoad; if (OnGoal is not null) await OnGoal(dialog); }
     }
 }
