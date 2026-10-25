@@ -8,6 +8,7 @@ public sealed record LandingAdmissionReceipt(
 {
     public const string GreenGateAuto = "green-gate-auto";
     public const string DenylistMatchRecorded = "denylist-match-recorded";
+    public const string DenylistMatchOwnerApproved = "denylist-match-owner-approved";
     public const string RecoveredLanding = "recovered-landing";
     public const string BuiltInDefaultSource = "built-in-default";
     public const string NotEvaluatedSource = "not-evaluated";
@@ -17,4 +18,7 @@ public sealed record LandingAdmissionReceipt(
 
     public static LandingAdmissionReceipt Evaluated(string candidateSha, string source, IReadOnlyList<string> matches) =>
         new(matches.Count == 0 ? GreenGateAuto : DenylistMatchRecorded, candidateSha, source, matches);
+
+    public static LandingAdmissionReceipt OwnerApproved(string candidateSha, string source, IReadOnlyList<string> matches) =>
+        new(DenylistMatchOwnerApproved, candidateSha, source, matches);
 }
