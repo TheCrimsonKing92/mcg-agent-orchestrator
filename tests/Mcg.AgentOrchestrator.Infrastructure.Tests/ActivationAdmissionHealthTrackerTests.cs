@@ -4,6 +4,71 @@ using Mcg.AgentOrchestrator.App.Orchestration;
 public sealed class ActivationAdmissionHealthTrackerTests
 {
     [Xunit.Fact]
+    public void EvidenceHeldPermits_RoundTrips()
+    {
+        var sample = new ActivationAdmissionSample(1, false, 5, 1, 0, 2);
+        Assert.True(ActivationAdmissionSample.TryParse(sample.Format(), out var parsed));
+        Assert.Equal(sample, parsed);
+        Assert.Equal(2, parsed.EvidenceHeldPermits);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("")]
+    [Xunit.InlineData(" ts=2026-10-25T00:00:00Z evidenceHeld=2")]
+    public void OlderHealthLines_DefaultEvidenceHeldToZero(string suffix)
+    {
+        Assert.True(ActivationAdmissionSample.TryParse(
+            "ACTIVATION_ADMISSION_HEALTH tick=1 census=ok waiting=5 occupied=1 live=0" + suffix, out var sample));
+        Assert.Equal(0, sample.EvidenceHeldPermits);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("x")]
+    [Xunit.InlineData("")]
+    [Xunit.InlineData("2147483648")]
+    public void MalformedEvidenceHeld_IsRejected(string value) => Assert.False(ActivationAdmissionSample.TryParse(
+        "ACTIVATION_ADMISSION_HEALTH tick=1 census=ok waiting=5 occupied=1 live=0 evidenceHeld=" + value, out _));
+
+    [Xunit.Fact]
+    public void AllPermitsEvidenceHeld_StayHealthyAndResetStreak()
+    {
+        var tracker = new ActivationAdmissionHealthTracker();
+        for (var tick = 1; tick <= 11; tick++)
+            tracker.Observe(new(tick, false, 5, 1, 0), DateTimeOffset.UnixEpoch);
+        for (var tick = 12; tick <= 24; tick++)
+            Assert.Equal(ActivationAdmissionHealthState.Healthy,
+                tracker.Observe(new(tick, false, 5, 1, 0, 2), DateTimeOffset.UnixEpoch).State);
+        Assert.Equal(ActivationAdmissionHealthState.StreakOpen,
+            tracker.Observe(new(25, false, 5, 1, 0), DateTimeOffset.UnixEpoch).State);
+    }
+
+    [Xunit.Fact]
+    public void OneEvidenceHeldPermit_TripsExactlyLikeZero()
+    {
+        ActivationAdmissionHealthVerdict Replay(int held)
+        {
+            var tracker = new ActivationAdmissionHealthTracker();
+            for (var tick = 1; tick <= 12; tick++)
+                tracker.Observe(new(tick, false, 5, 1, 0, held), DateTimeOffset.UnixEpoch);
+            return tracker.Verdict;
+        }
+        var verdict = Replay(1);
+        Assert.Equal(Replay(0), verdict);
+        Assert.Equal(ActivationAdmissionHealthState.Tripped, verdict.State);
+        Assert.Equal(ConductorActivationRevertReason.AdmissionStalled, verdict.Reason);
+        Assert.Equal("occupiedNoLiveGateTicks=12 waiting=5 occupied=1 live=0", verdict.Detail);
+    }
+
+    [Xunit.Fact]
+    public void EvidenceHeldPermits_DoNotExemptCensusFailure()
+    {
+        var tracker = new ActivationAdmissionHealthTracker();
+        for (var tick = 1; tick <= ActivationAdmissionHealthPolicy.CensusFailureTicks; tick++)
+            tracker.Observe(new(tick, true, 5, 1, 0, 2), DateTimeOffset.UnixEpoch);
+        Assert.Equal(ConductorActivationRevertReason.AdmissionCensusFailing, tracker.Verdict.Reason);
+    }
+
+    [Xunit.Fact]
     public void CensusFailures_AtPolicyLimit_TripAndLatch()
     {
         var tracker = new ActivationAdmissionHealthTracker();

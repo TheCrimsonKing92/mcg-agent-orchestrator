@@ -597,7 +597,8 @@ internal static class SourceSizeRatchet
             // Goal 568eb0fe preserves retained outcomes on explicit unpark and restores ordinary
             // readmission for an escalated acceptance episode. This uses the existing lifecycle
             // transaction and recorded typed outcome; measured 9323 lines in 28 partials, no headroom.
-            new SourceClassCeiling("AgentOrchestratorKernel", 9323, 28),
+            // Raised by 5 lines for goal e4c3d077: expose locked role-report evidence closure at landing.
+            new SourceClassCeiling("AgentOrchestratorKernel", 9328, 28),
             // Goal d6033045 extracted the pre-admission receipt pass to PassedMergeTrainReceiptAdmission; goal 1d0f2317
             // adds one admission predicate to exclude stream-complete children before slot reservation. Measured 9255.
             // Goal 679eee57 added a one-line tick call to the separately owned ConductorExperimentWatch (+1); goal 80de5cb2 extracted
@@ -626,7 +627,7 @@ internal static class SourceSizeRatchet
             // Its tick-context reset before the goal walk adds two lines after batch reconciliation;
             // merged-tree measurement is recorded below, with no additional headroom.
             // b596bd5a: probe completion/admission/backoff adds 32 lines; partial count unchanged, no headroom.
-            new SourceClassCeiling("ConductorBatchLoop", 9289, 56),
+            new SourceClassCeiling("ConductorBatchLoop", 9241, 56),
             // Goal ec8903af moved the goal-prefix parser to CliGoalPrefixArguments.
             // Goal cd1f6380 adds four lines at the owning transaction boundary, forwarding both
             // registrars and invoking actions after commit; list behavior lives in PostCommitActions.

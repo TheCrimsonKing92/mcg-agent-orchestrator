@@ -1,14 +1,15 @@
 using System.Globalization;
+using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal sealed record ActivationAdmissionSample(
-    int Tick, bool CensusFailed, int WaitingVerified, int Occupied, int LiveGates)
+    int Tick, bool CensusFailed, int WaitingVerified, int Occupied, int LiveGates, int EvidenceHeldPermits = 0)
 {
     internal const string Prefix = "ACTIVATION_ADMISSION_HEALTH ";
 
     internal string Format() => FormattableString.Invariant(
-        $"{Prefix}tick={Tick} census={(CensusFailed ? "failed" : "ok")} waiting={WaitingVerified} occupied={Occupied} live={LiveGates}");
+        $"{Prefix}tick={Tick} census={(CensusFailed ? "failed" : "ok")} waiting={WaitingVerified} occupied={Occupied} live={LiveGates} evidenceHeld={EvidenceHeldPermits}");
 
     internal static bool TryParse(string line, out ActivationAdmissionSample sample)
     {
@@ -20,7 +21,10 @@ internal sealed record ActivationAdmissionSample(
             !ReadCount(parts[2], "waiting=", out var waiting) ||
             !ReadCount(parts[3], "occupied=", out var occupied) ||
             !ReadCount(parts[4], "live=", out var live)) return false;
-        sample = new(tick, parts[1] == "census=failed", waiting, occupied, live);
+        var evidenceHeld = 0;
+        if (parts.Length > 5 && parts[5].StartsWith("evidenceHeld=", StringComparison.Ordinal) &&
+            !ReadCount(parts[5], "evidenceHeld=", out evidenceHeld)) return false;
+        sample = new(tick, parts[1] == "census=failed", waiting, occupied, live, evidenceHeld);
         return true;
     }
 
@@ -53,7 +57,8 @@ internal sealed class ActivationAdmissionHealthTracker
     {
         if (Verdict.State == ActivationAdmissionHealthState.Tripped) return Verdict;
         var failure = sample.CensusFailed;
-        var occupied = !failure && sample.WaitingVerified >= 1 && sample.Occupied >= 1 && sample.LiveGates == 0;
+        var occupied = !failure && sample.WaitingVerified >= 1 && sample.Occupied >= 1 && sample.LiveGates == 0 &&
+            sample.EvidenceHeldPermits < DotnetBuildEnvironmentManager.BuildConcurrencySlotCount;
         if (!failure && !occupied)
         {
             _count = 0;
