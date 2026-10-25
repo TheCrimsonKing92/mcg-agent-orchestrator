@@ -101,6 +101,12 @@ internal static partial class AcceptanceCriterionEvidence
             if (!GoalWorktrees.TryComputePatchEquivalence(
                     executionDirectory, oldHead, candidateSha, integrationBranch, out var evidence, out var reason))
             {
+                if (IntegrationOnlyCandidateDrift.TryProve(executionDirectory, oldHead, candidateSha,
+                        integrationBranch, GoalWorktrees.BranchName(goal.Id), out var drift))
+                {
+                    evidenceByHead.Add(oldHead, drift);
+                    continue;
+                }
                 refusal = eligible.Any(item => item.Owner == CriterionEvidenceOwner.Acceptance &&
                     item.State == CriterionEvidenceState.Satisfied &&
                     string.Equals(item.ExpectedCandidateSha, oldHead, StringComparison.OrdinalIgnoreCase))
