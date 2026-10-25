@@ -268,7 +268,8 @@ internal static partial class AcceptanceCriterionEvidence
                 obligation.CriterionIndex,
                 obligation.CriterionVersion,
                 obligation.Owner,
-                "conductor patch-equivalent rebase carry",
+                IsIntegrationOnly(evidenceByHead[obligation.ExpectedCandidateSha!])
+                    ? IntegrationOnlyRebindActor : "conductor patch-equivalent rebase carry",
                 obligation.RequiredScope,
                 obligation.FindingStableId,
                 candidateSha);
@@ -294,12 +295,27 @@ internal static partial class AcceptanceCriterionEvidence
             }
         }
 
+        RecordIntegrationOnlyRebinds(executionDirectory, goal, candidateSha, evidenceByHead);
         GoalOperationJournal.Completed(
             executionDirectory,
             goal,
             "conductor:criterion-evidence-patch-carry",
             $"oldHeads={string.Join(',', oldHeads)}; newHead={candidateSha}; equivalence={string.Join(" | ", evidenceByHead.Values)}");
         return true;
+    }
+
+    private const string IntegrationOnlyRebindActor = "conductor integration-only auto rebind";
+
+    private static bool IsIntegrationOnly(string evidence) =>
+        evidence.StartsWith("integration-only:", StringComparison.Ordinal);
+
+    private static void RecordIntegrationOnlyRebinds(
+        string? executionDirectory, Goal goal, string candidateSha, Dictionary<string, string> evidenceByHead)
+    {
+        foreach (var (head, evidence) in evidenceByHead)
+            if (IsIntegrationOnly(evidence))
+                GoalOperationJournal.Completed(executionDirectory, goal, "conductor:obligation-auto-rebind",
+                    $"OBLIGATION_AUTO_REBIND goal={goal.Id.Value} from={head} to={candidateSha} reason=integration-only");
     }
 
     private static bool IsBoundOrNonAcceptanceObligation(CriterionEvidenceObligation obligation) =>
