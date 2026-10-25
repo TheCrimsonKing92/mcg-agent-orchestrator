@@ -51,6 +51,9 @@ internal sealed partial class ConductorBatchLoop
             return;
         }
 
+        if (run.Acceptance is null && WorkspaceProbeFaultClassifier.Classify(run.Exception?.Message) == WorkspaceProbeFaultKind.HostContentionTimeout)
+            return;
+
         kernel.ReconcileGoalAcceptanceFailed(
             goal.Id,
             BuildFailedAcceptanceChecks(run, attempt),
@@ -396,6 +399,21 @@ internal sealed partial class ConductorBatchLoop
                 candidate,
                 policy,
                 $"background acceptance worker-process registration fault: {registrationFault}",
+                ConductorEscalationKind.BackgroundAcceptanceFailed);
+        }
+
+        if (WorkspaceProbeFaultClassifier.Classify(exception.Message) == WorkspaceProbeFaultKind.HostContentionTimeout)
+        {
+            if (attempt.TransientFailureCount < ParallelAcceptanceTransientFailureCap)
+            {
+                var notBefore = WorkspaceProbeFaultClassifier.NotBefore(
+                    attempt.CompletedAt ?? throw new InvalidOperationException("Terminal workspace-probe fault requires CompletedAt."),
+                    attempt.TransientFailureCount).ToUniversalTime().ToString("O", System.Globalization.CultureInfo.InvariantCulture);
+                return ParallelAcceptanceHeld(candidate, policy,
+                    $"Transient workspace-probe timeout ({attempt.TransientFailureCount}/{ParallelAcceptanceTransientFailureCap}); not_before={notBefore} attempt={attempt.AttemptId}: {BoundSingleLine(exception.Message)}");
+            }
+            return driver.EscalateParallelLandingAcceptance(candidate, policy,
+                $"background acceptance workspace-probe timeout: {BoundSingleLine(exception.Message)}",
                 ConductorEscalationKind.BackgroundAcceptanceFailed);
         }
 

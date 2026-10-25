@@ -3234,6 +3234,22 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
         return latest is not null && IsReconciled(latest) ? TransientFailureCount(latest) : 0;
     }
 
+    internal bool TryReadWorkspaceProbeBackoff(
+        ConductorParallelAcceptanceCandidate candidate, out DateTimeOffset notBefore)
+    {
+        notBefore = default;
+        var latest = ReadNewestCandidateAttempt(
+            Path.Combine(_rootDirectory, candidate.Goal.Id.Value), candidate.CandidateKey);
+        if (latest is null || !IsReconciled(latest) ||
+            latest.Outcome != ConductorParallelAcceptanceAttemptOutcome.Failed ||
+            latest.TransientFailureCount is not (1 or 2) || latest.CompletedAt is not { } completedAt ||
+            WorkspaceProbeFaultClassifier.Classify(latest.Detail) != WorkspaceProbeFaultKind.HostContentionTimeout)
+            return false;
+
+        notBefore = WorkspaceProbeFaultClassifier.NotBefore(completedAt, latest.TransientFailureCount);
+        return _utcNow() < notBefore;
+    }
+
     private static int TransientFailureCount(ConductorParallelAcceptanceAttempt? attempt) =>
         attempt is not null && IsTransientTerminalFailure(attempt)
             ? Math.Max(1, attempt.TransientFailureCount) : 0;
@@ -3331,7 +3347,8 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
         string? detail) =>
         IsBoundedInfrastructureOutcome(outcome) ||
         outcome == ConductorParallelAcceptanceAttemptOutcome.Failed &&
-            ClassifyWorkerRegistrationFault(detail) == WorkerRegistrationFaultDisposition.BoundedRetry;
+            (ClassifyWorkerRegistrationFault(detail) == WorkerRegistrationFaultDisposition.BoundedRetry ||
+             WorkspaceProbeFaultClassifier.Classify(detail) == WorkspaceProbeFaultKind.HostContentionTimeout);
 
     private bool IsHeartbeatStale(ConductorParallelAcceptanceAttempt attempt)
     {

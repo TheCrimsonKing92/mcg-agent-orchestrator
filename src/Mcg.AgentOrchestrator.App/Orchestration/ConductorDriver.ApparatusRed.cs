@@ -179,6 +179,20 @@ internal sealed partial class ConductorDriver
             });
     }
 
+    private ConductorAdvanceResult ExecuteFaultRecordedAcceptanceFailure(
+        Goal goal, string goalPrefix, ConductorAutonomyPolicy policy, FaultRecordedAcceptanceFailureDecision decision)
+    {
+        if (!decision.IsRegate)
+            return Escalate(goal, goalPrefix, policy, GoalLifecycleState.AcceptanceFailed, decision.Reason,
+                ConductorEscalationKind.BackgroundAcceptanceFailed);
+
+        RestoreVerifiedAfterAcceptanceClassification(goal,
+            $"FAULT_RECORDED_REGATE candidate_sha={decision.BranchHeadSha} ordinal=1/1");
+        return MakeResult(goal.Id.Value, goalPrefix, policy,
+            new ConductorAdvanceOutcome.Held(GoalLifecycleState.Verified,
+                $"Recorded workspace-probe timeout restored Verified for re-gate; candidate_sha={decision.BranchHeadSha} ordinal=1/1."));
+    }
+
     private void RestoreVerifiedAfterAcceptanceClassification(Goal goal, string reason)
     {
         var kernel = _cohortKernel ?? _conductorTickKernel;

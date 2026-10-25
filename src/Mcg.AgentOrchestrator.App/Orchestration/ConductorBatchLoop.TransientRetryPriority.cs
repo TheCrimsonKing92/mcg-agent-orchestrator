@@ -8,7 +8,7 @@ internal sealed partial class ConductorBatchLoop
     internal enum SoloAcceptanceAdmissionKind
     {
         Admissible, Completed, VerificationGate, EngineCircuit, SlotSettings,
-        Capacity, Fairness, CandidateUnavailable, ResourceConflict
+        Capacity, Fairness, CandidateUnavailable, ResourceConflict, WorkspaceProbeBackoff
     }
 
     internal sealed record SoloAcceptanceAdmission(
@@ -94,6 +94,13 @@ internal sealed partial class ConductorBatchLoop
                     Reason: FormatParallelAcceptanceCandidateUnavailable(buildException),
                     ProgressLine: $"ADMISSION tick={tick} result=held reason=parallel-acceptance-candidate goal={goal.Id.Value[..8]} detail={FormatParallelAcceptanceCandidateUnavailableDetail(buildException)}");
         }
+        if (driver.ParallelAcceptanceAttemptCoordinator.TryReadWorkspaceProbeBackoff(candidate, out var notBefore))
+        {
+            var deadline = notBefore.ToUniversalTime().ToString("O", System.Globalization.CultureInfo.InvariantCulture);
+            return new(SoloAcceptanceAdmissionKind.WorkspaceProbeBackoff, candidate,
+                $"workspace-probe-backoff not_before={deadline}",
+                $"ADMISSION tick={tick} result=held reason=workspace-probe-backoff goal={goal.Id.Value[..8]} not_before={deadline}");
+        }
         if (fairnessApplies && !oldestObservation.IsStalled)
         {
             return new(SoloAcceptanceAdmissionKind.Fairness, candidate,
@@ -129,6 +136,8 @@ internal sealed partial class ConductorBatchLoop
                 driver.EscalateParallelLandingAcceptance(goal, policy, admission.Reason!),
             SoloAcceptanceAdmissionKind.Capacity =>
                 AdmissionDeniedHeld(goal, policy, admission.CapacityDecision!),
+            SoloAcceptanceAdmissionKind.WorkspaceProbeBackoff =>
+                ParallelAcceptanceHeld(admission.Candidate!, policy, admission.Reason!),
             SoloAcceptanceAdmissionKind.Fairness or SoloAcceptanceAdmissionKind.ResourceConflict =>
                 ParallelAcceptanceHeld(admission.Candidate!, policy, admission.Reason!, ConductorHoldOwner.AcceptanceQueue),
             SoloAcceptanceAdmissionKind.Completed or SoloAcceptanceAdmissionKind.EngineCircuit =>
