@@ -1,5 +1,6 @@
 using System.Globalization;
-using System.Text.Json.Nodes;
+using System.Text.Json;
+using System.Text.RegularExpressions;
 using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
@@ -26,27 +27,11 @@ public sealed class CliReadRouteQueryCapabilityTests : CliTaskQueryTestSupport
             var directOutput = ExecuteAndCapture(probe);
 
             Xunit.Assert.NotEmpty(viewOutput);
-            Xunit.Assert.Equal(NormalizeOutput(directOutput), NormalizeOutput(viewOutput));
+            Xunit.Assert.Equal(NormalizeOutput(directOutput, args), NormalizeOutput(viewOutput, args));
             Xunit.Assert.Equal(0, probe.SaveAttempts);
             Xunit.Assert.Equal(0, probe.MergeSaveAttempts);
             Xunit.Assert.Equal(0, probe.MutationAttempts);
             Xunit.Assert.Equal(0, probe.OutboxClaimAttempts);
-
-            string NormalizeOutput(string output)
-            {
-                if (!args.SequenceEqual(new[] { "goals", "--json" }))
-                    return output;
-
-                // The route generates a timestamp per invocation without an injectable clock.
-                // Validate that field independently, then compare every other envelope value.
-                var envelope = JsonNode.Parse(output)!.AsObject();
-                var generatedAt = envelope["generatedAt"]!.GetValue<string>();
-                var timestamp = DateTime.ParseExact(generatedAt, "O", CultureInfo.InvariantCulture,
-                    DateTimeStyles.RoundtripKind);
-                Xunit.Assert.Equal(DateTimeKind.Utc, timestamp.Kind);
-                envelope["generatedAt"] = "2026-10-25T00:00:00.0000000Z";
-                return envelope.ToJsonString();
-            }
 
             string ExecuteAndCapture(IOrchestratorStateQueries queries)
             {
@@ -66,6 +51,42 @@ public sealed class CliReadRouteQueryCapabilityTests : CliTaskQueryTestSupport
         {
             Directory.Delete(root, recursive: true);
         }
+    }
+
+    [Xunit.Fact]
+    public void Normalizer_PreservesFormattingAndNonTimestampFields()
+    {
+        const string output = "{\r\n  \"generatedAt\" : \"2026-10-25T12:34:56.1234567Z\",\r\n"
+            + "  \"payload\": { \"objective\": \"2026-10-25T12:34:56.1234567Z\", \"age\": 42 }\r\n}\r\n";
+        const string expected = "{\r\n  \"generatedAt\" : \"2026-10-25T00:00:00.0000000Z\",\r\n"
+            + "  \"payload\": { \"objective\": \"2026-10-25T12:34:56.1234567Z\", \"age\": 42 }\r\n}\r\n";
+
+        Xunit.Assert.Equal(expected, NormalizeOutput(output, ["goals", "--json"]));
+        Xunit.Assert.Equal(output, NormalizeOutput(output, ["goals"]));
+    }
+
+    private static string NormalizeOutput(string output, IReadOnlyList<string> args)
+    {
+        if (!args.SequenceEqual(new[] { "goals", "--json" }))
+            return output;
+
+        // Explicit exception list: goals --json's top-level generatedAt (UTC ISO-8601).
+        // This envelope has no ages derived from now. Preserve all other bytes, including whitespace.
+        using var envelope = JsonDocument.Parse(output);
+        var match = Xunit.Assert.Single(Regex.Matches(output,
+            "\"generatedAt\"\\s*:\\s*\"(?<timestamp>[^\"]+)\""));
+        var span = match.Groups["timestamp"];
+        Xunit.Assert.Equal(envelope.RootElement.GetProperty("generatedAt").GetString(), span.Value);
+        var timestamp = DateTime.ParseExact(span.Value, "O", CultureInfo.InvariantCulture,
+            DateTimeStyles.RoundtripKind);
+        Xunit.Assert.Equal(DateTimeKind.Utc, timestamp.Kind);
+
+        const string replacement = "2026-10-25T00:00:00.0000000Z";
+        var normalized = output[..span.Index] + replacement + output[(span.Index + span.Length)..];
+        // Restoring only the listed timestamp span must recover the complete original output.
+        Xunit.Assert.Equal(output,
+            normalized[..span.Index] + span.Value + normalized[(span.Index + replacement.Length)..]);
+        return normalized;
     }
 
     [Xunit.Fact]
