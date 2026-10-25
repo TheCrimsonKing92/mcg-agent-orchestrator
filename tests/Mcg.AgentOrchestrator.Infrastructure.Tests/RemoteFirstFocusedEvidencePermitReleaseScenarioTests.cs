@@ -115,6 +115,23 @@ public sealed class RemoteFirstFocusedEvidencePermitReleaseScenarioTests : Remot
         Assert.Equal("local-passed", Assert.Single(result.Results).OutputTail);
     }
 
+    [Xunit.Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
+    public async Task ReleaseThrows_PropagatesBeforeSubmitAndCleansUpClaim()
+    {
+        using var scenario = CreateScenario();
+        var fake = scenario.CompletedExecutor();
+        var failure = new InvalidOperationException("release failed");
+        var calls = 0;
+        var thrown = await Assert.ThrowsAsync<InvalidOperationException>(() => DirectAsync(
+            scenario, [FocusedCheck()], () => { calls++; throw failure; }));
+        Assert.Same(failure, thrown);
+        Assert.Equal(1, calls);
+        Assert.Empty(fake.Requests);
+        using var claim = RemoteExecutorOccupancy.TryClaimExclusive(
+            AcceptancePartitionVerdictCache.ResolveHostStateRoot(scenario.Root), "fixture-executor");
+        Assert.NotNull(claim);
+    }
+
     private static async Task<RemoteFirstFocusedEvidence.Outcome> DirectAsync(
         Scenario scenario, IReadOnlyList<Check> checks, Action release)
     {

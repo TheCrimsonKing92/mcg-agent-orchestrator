@@ -30,6 +30,7 @@ internal static class RemoteFirstFocusedEvidence
         var clock = overrides.RemoteLaneTimeProviderForTests ?? fallbackClock;
         var runs = checks.Select(check => Candidate(check, owner.RunId, goalId.Value, clock)).ToArray();
         RemoteLaneCoordinator? coordinator = null;
+        var releasingLocalPermit = false;
         try
         {
             var status = GitCli.Run(worktreePath, GitCli.DefaultTimeoutMilliseconds,
@@ -73,7 +74,12 @@ internal static class RemoteFirstFocusedEvidence
                         claimed.Add((run, entry));
                     }
                 }
-                if (claimed.Count > 0) releaseLocalPermit?.Invoke();
+                if (claimed.Count > 0)
+                {
+                    releasingLocalPermit = true;
+                    releaseLocalPermit?.Invoke();
+                    releasingLocalPermit = false;
+                }
                 await Task.WhenAll(claimed.Select(pair => ExecuteAsync(pair.Run, pair.Entry))).ConfigureAwait(false);
 
                 async Task ExecuteAsync(Run run, RemoteLaneExecutorEntry entry)
@@ -147,7 +153,7 @@ internal static class RemoteFirstFocusedEvidence
             }
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
-        catch (Exception ex)
+        catch (Exception ex) when (!releasingLocalPermit)
         {
             foreach (var run in runs.OfType<Run>())
                 Finish(run, RemoteLaneOutcomeCode.Unreachable, ex.GetType().Name + ": " + ex.Message);
