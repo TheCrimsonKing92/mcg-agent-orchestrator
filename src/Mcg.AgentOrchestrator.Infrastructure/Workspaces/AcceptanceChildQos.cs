@@ -1,6 +1,6 @@
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
-// One command's best-effort job sweep. Only owned acceptance attempt processes enable it.
+// One command's best-effort process sweep, enabled by its owning launch policy.
 internal sealed class AcceptanceChildQos : IDisposable
 {
     private static volatile bool enabled;
@@ -12,9 +12,12 @@ internal sealed class AcceptanceChildQos : IDisposable
     private readonly HashSet<int> tried = [];
     private readonly CancellationTokenSource cancellation = new();
     private readonly Task? loop;
+    private int optedOutCount;
     private bool disposed;
 
     internal static bool Enabled => Override.Value ?? enabled;
+    internal int OptedOutCount { get { lock (sync) return optedOutCount; } }
+    internal int TriedCount { get { lock (sync) return tried.Count; } }
 
     internal static void Enable()
     {
@@ -33,8 +36,12 @@ internal sealed class AcceptanceChildQos : IDisposable
         Func<int, IReadOnlyList<int>?>? members = null, Func<int, uint, uint, bool>? setter = null) =>
         Enabled ? new(rootPid, ownLoop, members ?? EnumerateMembers, setter ?? ProcessExecutionThrottlingOptOut.TrySet) : null;
 
+    internal static AcceptanceChildQos? StartSweep(bool enabled, int rootPid, TimeSpan interval,
+        Func<int, IReadOnlyList<int>?> members, Func<int, uint, uint, bool>? setter = null) =>
+        enabled ? new(rootPid, true, members, setter ?? ProcessExecutionThrottlingOptOut.TrySet, interval) : null;
+
     private AcceptanceChildQos(int rootPid, bool ownLoop, Func<int, IReadOnlyList<int>?> members,
-        Func<int, uint, uint, bool> setter)
+        Func<int, uint, uint, bool> setter, TimeSpan? interval = null)
     {
         this.rootPid = rootPid;
         this.members = members;
@@ -42,7 +49,7 @@ internal sealed class AcceptanceChildQos : IDisposable
         TryOnce(rootPid);
         if (ownLoop)
             loop = Task.Run(() => GateLaneHeartbeatLoop.RunAsync(_ => { }, RunPass,
-                cancellation.Token, TimeSpan.FromSeconds(5)));
+                cancellation.Token, interval ?? TimeSpan.FromSeconds(5)));
     }
 
     internal static IReadOnlyList<int>? EnumerateMembers(int rootPid) =>
@@ -66,7 +73,7 @@ internal sealed class AcceptanceChildQos : IDisposable
     private void TryOnce(int pid)
     {
         if (pid <= 0 || !tried.Add(pid)) return;
-        try { _ = setter(pid, 1, 0); }
+        try { if (setter(pid, 1, 0)) optedOutCount++; }
         catch (Exception) { /* Failures count as tried, including exited members. */ }
     }
 
