@@ -5,7 +5,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 // Serialized with JobAccounting: the gate fact owns stable slot 0; focused roots are private.
 [Xunit.Collection(TestCollections.JobAccounting)]
-public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsAnalyzerAuthority
+public sealed class AcceptanceAnalyzerAuthorityTests
     : GoalAcceptanceVerifierDotnetBuildSlotTests
 {
     [Xunit.Fact]
