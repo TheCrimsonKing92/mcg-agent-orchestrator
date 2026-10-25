@@ -229,7 +229,8 @@ function Get-WorkerBuildInvocationPlan {
         [System.IO.File]::WriteAllText($target, $xml, [System.Text.UTF8Encoding]::new($false))
     }
     $arguments = [string[]]@('build', $target, '--nologo', '--configuration', $Configuration, '--verbosity', 'minimal',
-        '--artifacts-path', $ArtifactsPath, "-maxcpucount:$maxCpuCount", '-p:BuildInParallel=false', '-clp:ErrorsOnly', '-tl:off')
+        '--artifacts-path', $ArtifactsPath, "-maxcpucount:$maxCpuCount", '-p:BuildInParallel=false', '-clp:ErrorsOnly', '-tl:off',
+        '-p:RunAnalyzers=false', '-p:EnforceCodeStyleInBuild=false')
     # The temp traversal entry cannot inherit the repository's Directory.Build.rsp.
     if ($mode -eq 'traversal') { $arguments += '-nodeReuse:false' }
     $invocations = [System.Collections.Generic.List[string[]]]::new()

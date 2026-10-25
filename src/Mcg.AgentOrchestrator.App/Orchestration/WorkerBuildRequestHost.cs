@@ -295,7 +295,7 @@ internal sealed class WorkerBuildRequestHost : IWorkerBuildRequestService
         info.Environment["MSBUILDDISABLENODEREUSE"] = "1";
         info.Environment["MCG_ORCHESTRATOR_REPOSITORY_ROOT"] = root;
         foreach (var argument in new[] { "build", Path.Combine(root, project), "--nologo", "--configuration", configuration,
-            "--verbosity", "minimal", "-maxcpucount:1", "-p:BuildInParallel=false", "-p:UseSharedCompilation=false", "-tl:off" }.Concat(isolatedArguments))
+            "--verbosity", "minimal", "-maxcpucount:1", "-p:BuildInParallel=false", "-p:UseSharedCompilation=false", "-tl:off" }.Concat(AcceptanceCheckCommandBuilder.AnalyzersOffBuildProperties).Concat(isolatedArguments))
             info.ArgumentList.Add(argument);
         return info;
     }
