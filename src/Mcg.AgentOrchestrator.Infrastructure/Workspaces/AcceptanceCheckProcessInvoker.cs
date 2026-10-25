@@ -203,6 +203,8 @@ internal static class AcceptanceCheckProcessInvoker
                 commandIdentityObserver?.Invoke(identity);
             }
             startedProcessId = process.Id;
+            using var qosSweep = AcceptanceChildQos.StartSweep(process.Id, ownLoop: heartbeatContext is null);
+            var sampler = heartbeatContext is null ? null : new LaneSchedulingSampler(process.Id);
             completedProcessId = process.Id;
             completedProcessStartedAt = process.Identity?.StartedAt;
             ObserveProcessCleanup(cleanupObserver, process.Id, process, "started");
@@ -250,7 +252,7 @@ internal static class AcceptanceCheckProcessInvoker
                     progressInterval ?? DefaultProgressInterval,
                     runningObserver: laneStall is null ? null : laneStall.Observe);
                 heartbeatTask = WriteGateHeartbeatLoopAsync(
-                    heartbeat, heartbeatCts.Token, heartbeatInterval ?? DefaultHeartbeatInterval);
+                    heartbeat, heartbeatCts.Token, heartbeatInterval ?? DefaultHeartbeatInterval, () => { qosSweep?.RunPass(); sampler?.Tick(); });
             }
 
             using var timeoutCts = timeoutSignal.CanBeCanceled
@@ -392,7 +394,7 @@ internal static class AcceptanceCheckProcessInvoker
                 captureLimited,
                 captureLimited ? engineSettings.OutputCaptureLimitBytes : null,
                 LaneStallSilence: timedOut && laneStall is { Stopped: true } ? laneStall.Silent : null,
-                LaneStallLimit: timedOut && laneStall is { Stopped: true } ? laneStall.Limit : null);
+                LaneStallLimit: timedOut && laneStall is { Stopped: true } ? laneStall.Limit : null, LaneScheduling: sampler?.Summary());
         }
         finally
         {
@@ -468,17 +470,8 @@ internal static class AcceptanceCheckProcessInvoker
     }
 
     private static async Task WriteGateHeartbeatLoopAsync(
-        GateHeartbeatRuntime heartbeat, CancellationToken cancellationToken, TimeSpan heartbeatInterval)
-    {
-        heartbeat.WriteRunning(emitProgress: true);
-        while (!cancellationToken.IsCancellationRequested)
-        {
-            try { await Task.Delay(heartbeatInterval, cancellationToken).ConfigureAwait(false); }
-            catch (OperationCanceledException) { break; }
-
-            heartbeat.WriteRunning(emitProgress: false);
-        }
-    }
+        GateHeartbeatRuntime heartbeat, CancellationToken cancellationToken, TimeSpan heartbeatInterval, Action? onTick = null) =>
+        await GateLaneHeartbeatLoop.RunAsync(heartbeat.WriteRunning, onTick, cancellationToken, heartbeatInterval).ConfigureAwait(false);
 
     private static void ObserveProcessCleanup(
         Action<AcceptanceProcessCleanupObservation>? observer,

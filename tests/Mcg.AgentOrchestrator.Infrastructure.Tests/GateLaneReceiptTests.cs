@@ -117,6 +117,50 @@ public sealed class GateLaneReceiptTests
         finally { Directory.Delete(root, true); }
     }
 
+    [Fact]
+    public void Record_SchedulingSummary_WritesFieldsWithoutChangingEarlierValues()
+    {
+        var root = Directory.CreateTempSubdirectory("lane-scheduling-").FullName;
+        using var memory = GateHostHealthProbe.PushPhysicalAvailableMbProbe(() => GateLoadSample.Available(8192));
+        var now = DateTimeOffset.UnixEpoch;
+        var summary = new LaneSchedulingSummary(2, 4, "Normal", "1/0", 1, 2, 3, 4, "child:BelowNormal", "fixture");
+        var control = new AcceptanceCheckResult("Alpha", true, 0, null, ResultSummary: Resource, TestResultRunOrdinal: 1);
+        var scheduled = control with { LaneScheduling = summary };
+        var rows = new List<string>();
+        try
+        {
+            GateLaneReceiptLedger.Record(root, "goal", "Alpha", control, TimeSpan.FromMilliseconds(100), now,
+                (_, line) => rows.Add(line));
+            GateLaneReceiptLedger.Record(root, "goal", "Alpha", scheduled, TimeSpan.FromMilliseconds(100), now,
+                (_, line) => rows.Add(line));
+            Assert.Equal(2, rows.Count);
+            using var first = JsonDocument.Parse(rows[0]);
+            using var second = JsonDocument.Parse(rows[1]);
+            AssertRow(first.RootElement, "Alpha", 1, 100, "live", now);
+            AssertRow(second.RootElement, "Alpha", 1, 100, "live", now);
+            var expected = new Dictionary<string, object?>
+            {
+                ["sched_samples"] = 2, ["sched_processes"] = 4, ["sched_root_priority"] = "Normal",
+                ["sched_root_throttle_masks"] = "1/0", ["sched_below_normal_processes"] = 1,
+                ["sched_eco_processes"] = 2, ["sched_opted_out_processes"] = 3,
+                ["sched_background_memory_processes"] = 4, ["sched_lowest"] = "child:BelowNormal",
+                ["sched_unavailable_reason"] = "fixture"
+            };
+            Assert.Equal(10, second.RootElement.EnumerateObject().Count(property => property.Name.StartsWith("sched_", StringComparison.Ordinal)));
+            foreach (var (name, value) in expected)
+            {
+                Assert.Equal(JsonSerializer.Serialize(value), second.RootElement.GetProperty(name).GetRawText());
+                if (name == "sched_unavailable_reason")
+                    Assert.Equal("not-sampled", first.RootElement.GetProperty(name).GetString());
+                else Assert.Equal(JsonValueKind.Null, first.RootElement.GetProperty(name).ValueKind);
+            }
+            foreach (var property in first.RootElement.EnumerateObject().Where(property => !property.Name.StartsWith("sched_", StringComparison.Ordinal)))
+                Assert.Equal(property.Value.GetRawText(), second.RootElement.GetProperty(property.Name).GetRawText());
+            Assert.DoesNotContain("LaneScheduling", JsonSerializer.Serialize(scheduled), StringComparison.OrdinalIgnoreCase);
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
     private static GateLaneReceipt Parse(string? summary) => GateLaneReceipt.FromSummary(
         "Alpha", 1, TimeSpan.FromMilliseconds(123456), summary, GateLoadSample.Available(4096));
 
@@ -136,7 +180,7 @@ public sealed class GateLaneReceiptTests
 
     private static void AssertRow(JsonElement row, string lane, int run, double wall, string source, DateTimeOffset now)
     {
-        Assert.Equal(16, row.EnumerateObject().Count());
+        Assert.Equal(26, row.EnumerateObject().Count());
         Assert.True(row.TryGetProperty("slowdown_status", out var slowdownStatus));
         Assert.True(row.TryGetProperty("slowdown_ratio", out var slowdownRatio));
         if (slowdownStatus.GetString() != "slow") Assert.Equal(JsonValueKind.Null, slowdownRatio.ValueKind);

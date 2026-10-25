@@ -70,6 +70,33 @@ internal static class GateLaneReceiptLedger
             Add("host_available_memory_mb", receipt.HostAvailableMemoryMb);
             row["slowdown_status"] = slowdown.Status;
             row["slowdown_ratio"] = slowdown.Status == "slow" && slowdown.Ratio is { } ratio ? Math.Round(ratio, 2) : null;
+            row["sched_samples"] = null;
+            row["sched_processes"] = null;
+            row["sched_root_priority"] = null;
+            row["sched_root_throttle_masks"] = null;
+            row["sched_below_normal_processes"] = null;
+            row["sched_eco_processes"] = null;
+            row["sched_opted_out_processes"] = null;
+            row["sched_background_memory_processes"] = null;
+            row["sched_lowest"] = null;
+            row["sched_unavailable_reason"] = "not-sampled";
+            try
+            {
+                if (result.LaneScheduling is { } scheduling)
+                {
+                    row["sched_samples"] = scheduling.Samples;
+                    row["sched_processes"] = scheduling.Processes;
+                    row["sched_root_priority"] = scheduling.RootPriority;
+                    row["sched_root_throttle_masks"] = scheduling.RootThrottleMasks;
+                    row["sched_below_normal_processes"] = scheduling.BelowNormalProcesses;
+                    row["sched_eco_processes"] = scheduling.EcoProcesses;
+                    row["sched_opted_out_processes"] = scheduling.OptedOutProcesses;
+                    row["sched_background_memory_processes"] = scheduling.BackgroundMemoryProcesses;
+                    row["sched_lowest"] = scheduling.Lowest;
+                    row["sched_unavailable_reason"] = scheduling.UnavailableReason;
+                }
+            }
+            catch (Exception error) { row["sched_unavailable_reason"] = "sched-error:" + error.GetType().Name; }
             var path = ResolveStorePath(worktreePath);
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             (appender ?? SharedJsonlFile.AppendLine)(path, JsonSerializer.Serialize(row));
