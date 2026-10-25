@@ -23,7 +23,7 @@ public static class AgentDefinitionFactory
 {
     public static AgentDefinition Create(AgentDefinitionInput input)
     {
-        var role = CliArgumentParser.ParseAgentRole(input.Role);
+        var role = AgentRoleParser.Parse(input.Role);
         var providerName = input.ProviderName.Trim();
         var modelName = input.ModelName.Trim();
         var executionPolicy = ParseExecutionPolicy(input.ExecutionPolicy, providerName);

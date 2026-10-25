@@ -117,28 +117,7 @@ private static void PrintNextFullDetail(CliExecutionContext context, AutonomyPol
     ConsoleViews.PrintOperatorInbox(OperatorInbox.Build(context.Kernel, context.Agents, context.WorkerProfiles, context.Workspace, goal.Id.Value[..8], includeAcknowledged: false));
 }
 
-internal static string? ResolveGoalFriendlyLabel(Goal goal, string backlogStorePath)
-{
-    if (string.IsNullOrWhiteSpace(goal.SourceBacklogItemId) ||
-        string.IsNullOrWhiteSpace(backlogStorePath) ||
-        !File.Exists(backlogStorePath))
-    {
-        return null;
-    }
-
-    try
-    {
-        var item = BacklogStore.OpenReadOnly(backlogStorePath)
-            .GetByExactIdAsync(goal.SourceBacklogItemId)
-            .GetAwaiter()
-            .GetResult();
-        return string.IsNullOrWhiteSpace(item?.Title) ? null : item.Title;
-    }
-    catch
-    {
-        return null;
-    }
-}
+internal static string? ResolveGoalFriendlyLabel(Goal goal, string backlogStorePath) => GoalFriendlyLabel.Resolve(goal, backlogStorePath);
 
 private static IReadOnlyDictionary<GoalId, GoalTimingReportContext> BuildGoalTimingContexts(CliExecutionContext context)
 {
