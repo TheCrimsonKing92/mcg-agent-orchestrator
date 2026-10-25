@@ -378,16 +378,22 @@ internal static partial class StorageRetentionMaintenance
         var artifacts = Directory.EnumerateFiles(logDirectory, "*", SearchOption.TopDirectoryOnly)
             .Select(path => (Path: path, Match: DispatchArtifactNameRegex().Match(Path.GetFileName(path))))
             .ToArray();
-        var dispatchFailures = artifacts
+        var dispatchArtifacts = artifacts
             .Where(artifact =>
                 artifact.Match.Success &&
                 byPrefix.TryGetValue(artifact.Match.Groups["goal"].Value, out var goal) &&
                 goal.IsTerminal)
-            .Select(artifact => artifact.Match.Groups["dispatch"].Value)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .GroupBy(artifact => artifact.Match.Groups["dispatch"].Value, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var residueDispatches = dispatchArtifacts
+            .Where(group => WorkerDispatchReclaimResidue.IsResidue(
+                group.Select(artifact => Path.GetFileName(artifact.Path)).ToArray()))
+            .Select(group => group.Key)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var dispatchFailures = dispatchArtifacts
             .ToDictionary(
-                dispatchPrefix => dispatchPrefix,
-                dispatchPrefix => DispatchFailed(logDirectory, dispatchPrefix),
+                group => group.Key,
+                group => !residueDispatches.Contains(group.Key) && DispatchFailed(logDirectory, group.Key),
                 StringComparer.OrdinalIgnoreCase);
         var lastFailedDispatches = artifacts
             .Where(artifact =>
@@ -496,7 +502,9 @@ internal static partial class StorageRetentionMaintenance
                     path,
                     goal.GoalId,
                     EvidenceOwnerResolution.UniqueTerminal,
-                    deletion.Success ? "past-deletion-age" : "exclusive-delete-failed",
+                    residueDispatches.Contains(match.Groups["dispatch"].Value)
+                        ? deletion.Success ? "dispatch-residue-past-deletion-age" : "dispatch-residue-locked"
+                        : deletion.Success ? "past-deletion-age" : "exclusive-delete-failed",
                     BytesAttempted: length,
                     BytesReclaimed: deletion.Success ? length : 0,
                     FailureExceptionType: deletion.ExceptionType));

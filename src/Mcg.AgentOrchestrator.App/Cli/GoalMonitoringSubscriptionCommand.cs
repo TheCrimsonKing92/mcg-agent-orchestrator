@@ -199,10 +199,17 @@ internal static class GoalMonitoringSubscriptionCommand
         IReadOnlyList<AgentDefinition> agents,
         WorkerProfileCatalog workerProfiles,
         Func<AgentOrchestratorKernel>? reloadKernel = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        IClock? clock = null,
+        Func<TimeSpan, CancellationToken, Task>? delay = null,
+        Func<IRunEventStore?>? openRunEvents = null)
     {
         var options = Parse(parts);
-        var runEvents = new SqliteRunEventStore(workspace.RunEventStorePath);
+        clock ??= new SystemClock();
+        delay ??= Task.Delay;
+        var runEvents = openRunEvents is null
+            ? new SqliteRunEventStore(workspace.RunEventStorePath)
+            : openRunEvents();
         var outcome = await RunHeadlessLocalAsync(
             options,
             output,
@@ -212,7 +219,9 @@ internal static class GoalMonitoringSubscriptionCommand
             workerProfiles,
             reloadKernel,
             runEvents,
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken,
+            clock,
+            delay).ConfigureAwait(false);
         if (outcome.IsHandledError)
         {
             return;
@@ -317,8 +326,10 @@ internal static class GoalMonitoringSubscriptionCommand
         IReadOnlyList<AgentDefinition> agents,
         WorkerProfileCatalog workerProfiles,
         Func<AgentOrchestratorKernel>? reloadKernel,
-        IRunEventStore runEvents,
-        CancellationToken cancellationToken)
+        IRunEventStore? runEvents,
+        CancellationToken cancellationToken,
+        IClock clock,
+        Func<TimeSpan, CancellationToken, Task> delay)
     {
         var resumeCursor = options.ResumeCursor;
         var timelineCursor = resumeCursor.TimelineCursor;
@@ -326,7 +337,7 @@ internal static class GoalMonitoringSubscriptionCommand
         var processCursor = resumeCursor.ProcessCursor;
         var snapshotWritten = false;
         var deadline = options.Timeout is { } timeout
-            ? DateTimeOffset.UtcNow.Add(timeout)
+            ? clock.UtcNow.Add(timeout)
             : (DateTimeOffset?)null;
         while (true)
         {
@@ -351,8 +362,10 @@ internal static class GoalMonitoringSubscriptionCommand
             }
             var facts = ReadLifecycleFacts(workspace, goal);
             var state = GoalLifecycle.ResolveState(goal, facts);
-            var batch = GoalMonitoringQuery.BuildBatch(current, goal, timelineCursor, agents, workerProfiles, workspace);
-            var runRecords = await runEvents.ReadSinceAsync(runEventCursor, maxCount: 500, cancellationToken: cancellationToken).ConfigureAwait(false);
+            var batch = GoalMonitoringQuery.BuildBatch(current, goal, timelineCursor, agents, workerProfiles, workspace, observedAt: clock.UtcNow);
+            var runRecords = runEvents is null
+                ? []
+                : await runEvents.ReadSinceAsync(runEventCursor, maxCount: 500, cancellationToken: cancellationToken).ConfigureAwait(false);
             var envelopes = BuildSubscriptionEvents(batch, goal, state, workspace, runRecords);
             if (!snapshotWritten && !resumeCursor.IsEmpty && envelopes.Count == 0)
             {
@@ -398,12 +411,12 @@ internal static class GoalMonitoringSubscriptionCommand
                 }
             }
 
-            if (deadline is { } dueAt && DateTimeOffset.UtcNow >= dueAt)
+            if (deadline is { } dueAt && clock.UtcNow >= dueAt)
             {
                 var timeoutEvent = new GoalStateSubscriptionEvent(
                     1,
                     Math.Max(timelineCursor, 0),
-                    DateTimeOffset.UtcNow,
+                    clock.UtcNow,
                     "monitor.timeout",
                     goal.Id.Value,
                     null,
@@ -419,15 +432,15 @@ internal static class GoalMonitoringSubscriptionCommand
                 return LocalMonitoringOutcome.Timeout;
             }
 
-            var delay = TimeSpan.FromSeconds(1);
+            var pollDelay = TimeSpan.FromSeconds(1);
             if (deadline is { } nextDueAt)
             {
-                delay = Min(delay, nextDueAt - DateTimeOffset.UtcNow);
+                pollDelay = Min(pollDelay, nextDueAt - clock.UtcNow);
             }
 
-            if (delay > TimeSpan.Zero)
+            if (pollDelay > TimeSpan.Zero)
             {
-                await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
+                await delay(pollDelay, cancellationToken).ConfigureAwait(false);
             }
         }
     }
