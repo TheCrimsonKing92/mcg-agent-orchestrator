@@ -911,9 +911,10 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
 
     internal void MarkReconciled(ConductorParallelAcceptanceAttempt attempt)
     {
+        ConductorParallelAcceptanceAttempt current;
         lock (MetadataWriteGate)
         {
-            var current = ReadCanonicalAttempt(attempt.MetadataPath, attempt.GoalId);
+            current = ReadCanonicalAttempt(attempt.MetadataPath, attempt.GoalId);
             if (!string.Equals(current.AttemptId, attempt.AttemptId, StringComparison.Ordinal))
             {
                 throw new InvalidDataException(
@@ -930,7 +931,18 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
                 LastHeartbeatAt = _utcNow()
             });
         }
+        if (current.Kind == PreReviewEvidenceDispatchKind && OwnsEvidencePermitTicket &&
+            current.Outcome != ConductorParallelAcceptanceAttemptOutcome.BlockedBuildSlot)
+        {
+            FocusedEvidencePermitTicket.Remove(
+                _buildStorageRoot ?? DotnetBuildEnvironmentManager.CaptureStorageRoot(),
+                _timeProvider, new GoalId(current.GoalId));
+        }
     }
+
+    private bool OwnsEvidencePermitTicket =>
+        _acquireStableSlotLease == (Func<ConductorParallelAcceptanceAttempt, ConductorParallelAcceptanceCandidate, DotnetBuildEnvironmentLease?>)AcquireAttemptStableSlotLease &&
+        (_runInline || _launchOwnedProcess == (Func<ConductorParallelAcceptanceOwnedProcessLaunch, ConductorParallelAcceptanceOwnedProcessLaunchResult>)LaunchExternalOwnedProcess);
 
     internal bool RecordFocusedEvidenceRequestDispositions(
         ConductorParallelAcceptanceAttempt attempt,
@@ -1160,6 +1172,12 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
                 HolderLease.Reserve(AcceptanceHolderBinding.For(attempt), _generationIdentity);
             if (attempt.Kind == GateDispatchKind)
                 ConductorBatchLoop.NoteActivationProbeAdmission(AcceptanceHolderBinding.For(attempt), attempt.ResultPath);
+            if (attempt.Kind == PreReviewEvidenceDispatchKind && OwnsEvidencePermitTicket)
+            {
+                FocusedEvidencePermitTicket.Adopt(
+                    _buildStorageRoot ?? DotnetBuildEnvironmentManager.CaptureStorageRoot(),
+                    _timeProvider, candidate.Goal.Id, Environment.ProcessId);
+            }
             EmitEvidenceStart(attempt);
             WriteHeartbeat(attempt, "starting");
             File.AppendAllText(attempt.StdoutPath, $"{attempt.Kind} attempt {attempt.AttemptId} started for {attempt.GoalPrefix} slot-{attempt.SlotIndex}{Environment.NewLine}");
@@ -1608,7 +1626,9 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
             timeProvider: _timeProvider,
             sleep: _buildPermitSleep,
             claimant: new BuildPermitClaimant(
-                $"{(purpose == "pre-review-evidence" ? "focused-evidence" : "gate")}:goal-{candidate.Goal.Id.Value}",
+                purpose == "pre-review-evidence"
+                    ? FocusedEvidencePermitTicket.Key(candidate.Goal.Id)
+                    : $"gate:goal-{candidate.Goal.Id.Value}",
                 purpose == "pre-review-evidence" ? BuildPermitClaimantKind.FocusedEvidence : BuildPermitClaimantKind.Gate,
                 Environment.ProcessId, OwnerBound: false));
         if (acquisition is DotnetBuildLeaseAcquisition.Acquired acquired)

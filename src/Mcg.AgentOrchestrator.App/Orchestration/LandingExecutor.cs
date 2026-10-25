@@ -252,6 +252,16 @@ internal static partial class LandingExecutor
         }
         var proceedDecision = EvaluateLanding(0);
 
+        var landingDenylist = LoadLandingDenylist(executionDirectory, boundMainRevision);
+        var denylistApproval = LandingDenylistOwnerGate.Evaluate(executionDirectory, landingDenylist.Denylist,
+            CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory), goal.Id.Value,
+            boundMainRevision, evidenceCandidateSha, changedFiles);
+        if (!denylistApproval.Approved)
+        {
+            OperatorInbox.RecordLandingEscalation(workspace, goal, denylistApproval.HoldReason, IntegrationBranchName, channel);
+            return BuildMutationBlockedResult(goal, goalPrefix, denylistApproval.HoldReason);
+        }
+
         var tempPath = Path.Combine(executionDirectory, TempWorktreeDirName);
         if (IsRegisteredWorktree(executionDirectory, tempPath))
         {
@@ -400,7 +410,7 @@ internal static partial class LandingExecutor
         }
 
         eventWriter?.AppendGoalLanded(goal.Id, IntegrationBranchName, goalBranch,
-            BuildLandingAdmission(executionDirectory, boundMainRevision!, candidateRevision!, changedFiles));
+            BuildLandingAdmission(landingDenylist, candidateRevision!, denylistApproval));
         OperatorInbox.ClearOwnershipHoldsAfterLanding(workspace, goal, $"land {goalPrefix}");
         StateEffectProposalApplier.ApplyLandedProposals(kernel, goal, workspace, changedFiles, Console.WriteLine);
         var openChecks = PostLandingOperatorCheck.DescribeOpen(kernel.GetPendingHumanInput(goal.Id));
@@ -778,6 +788,18 @@ internal static partial class LandingExecutor
                 "Cohort landing requires operator approval for ownership-protected paths.");
         }
 
+        var landingDenylist = LoadLandingDenylist(executionDirectory, liveMain);
+        var decisions = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
+        var denylistApprovals = receipt.Identity.Members.ToDictionary(member => member.GoalId,
+            member => LandingDenylistOwnerGate.Evaluate(executionDirectory, landingDenylist.Denylist,
+                decisions, member.GoalId.Value, liveMain, member.CandidateRevision, member.LandingPaths));
+        var denylistHolds = goals.Where(goal => !denylistApprovals[goal.Id].Approved).ToArray();
+        foreach (var goal in denylistHolds)
+            OperatorInbox.RecordLandingEscalation(workspace, goal, denylistApprovals[goal.Id].HoldReason, IntegrationBranchName);
+        if (denylistHolds.Length > 0)
+            return new AcceptanceCohortLandingResult(AcceptanceCohortLandingOutcome.RetryableHold,
+                string.Join("; ", denylistHolds.Select(goal => denylistApprovals[goal.Id].HoldReason)));
+
         var currentIntegration = RunGit(
             executionDirectory,
             "rev-parse", "--verify", "--quiet", $"refs/heads/{IntegrationBranchName}");
@@ -933,7 +955,6 @@ internal static partial class LandingExecutor
         }
 
         var coverage = store.FinalizeLanding(receipt.Identity.Value, receipt.ReceiptId);
-        var landingDenylist = eventWriter is null ? null : LoadLandingDenylist(executionDirectory, liveMain);
         foreach (var goal in goals)
         {
             GoalOperationJournal.Completed(
@@ -944,9 +965,9 @@ internal static partial class LandingExecutor
             eventWriter?.AppendGoalLanded(
                 goal.Id,
                 $"cohort/{receipt.Identity.Value}",
-                GoalWorktrees.BranchName(goal.Id), BuildLandingAdmission(landingDenylist!,
+                GoalWorktrees.BranchName(goal.Id), BuildLandingAdmission(landingDenylist,
                     receipt.Identity.Members.Single(member => member.GoalId == goal.Id).CandidateRevision,
-                    receipt.Identity.Members.Single(member => member.GoalId == goal.Id).LandingPaths));
+                    denylistApprovals[goal.Id]));
             StateEffectProposalApplier.ApplyLandedProposals(kernel, goal, workspace, changedFiles, Console.WriteLine);
         }
         return new AcceptanceCohortLandingResult(

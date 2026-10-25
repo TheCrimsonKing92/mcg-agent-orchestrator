@@ -56,7 +56,8 @@
         "src/Mcg.AgentOrchestrator.App/Orchestration/OperatorIntentPolicyApproval.cs",
         "config/landing-denylist.json",
         "config/acceptance-manifest.json",
-        "**/conductor-policy.json"
+        "**/conductor-policy.json",
+        "src/Mcg.AgentOrchestrator.App/Orchestration/LandingDenylistOwnerGate.cs"
       ]
     }
   ]
