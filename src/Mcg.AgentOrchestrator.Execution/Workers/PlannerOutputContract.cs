@@ -1165,6 +1165,11 @@ internal static partial class PlannerOutputContract
             return null;
         }
 
+        if (PlannerTargetCitation.TryGetRepositoryPath(citation, out var repositoryPath))
+        {
+            return ContainsProsePathCharacters(repositoryPath) ? null : repositoryPath;
+        }
+
         var fileMatch = CitedFilePath().Match(citation);
         if (fileMatch.Success)
         {
@@ -1224,7 +1229,7 @@ internal static partial class PlannerOutputContract
                 HasMinimumLexicalDiversity(body),
             "target seams and symbols" =>
                 body.Contains('`') &&
-                (TargetCitation().IsMatch(body) || HasAdmittedRepositoryPathCitation(body)),
+                (PlannerTargetCitation.HasTargetCitation(body) || HasAdmittedRepositoryPathCitation(body)),
             "ownership and lifecycle" =>
                 HasMinimumLexicalDiversity(body),
             "external and edge contracts" =>
@@ -1582,9 +1587,6 @@ internal static partial class PlannerOutputContract
 
     [GeneratedRegex(@"(?i)(?:\b(?:plan|planning)\b.{0,120}\b(?:written|saved|created|available|located|file|path)\b|\b(?:written|saved|created|available|located|file|path)\b.{0,120}\b(?:plan|planning)\b)")]
     private static partial Regex ExternalPlanReference();
-
-    [GeneratedRegex(@"(?i)(?:src[/\\]|tests[/\\]|\.cs\b|`[A-Za-z_][A-Za-z0-9_.]+`)")]
-    private static partial Regex TargetCitation();
 
     [GeneratedRegex(@"(?m)^[ \t]*(?<number>\d+)[.)][ \t]+(?<content>\S[^\r\n]*)$")]
     private static partial Regex NumberedIntegrationItem();
