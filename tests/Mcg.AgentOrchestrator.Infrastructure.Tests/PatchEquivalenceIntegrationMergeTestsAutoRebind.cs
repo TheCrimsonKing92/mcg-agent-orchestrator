@@ -222,7 +222,11 @@ public sealed class PatchEquivalenceIntegrationMergeTestsAutoRebind : ConductorB
             if (secondMerge == "raise")
             {
                 var before = File.ReadAllText(Path.Combine(worktree, SourceSizeRatchet.SourcePath));
-                WriteAuthority(worktree, 25);
+                // Preserve the checked-out authority's formatting, including line endings.
+                File.WriteAllText(Path.Combine(worktree, SourceSizeRatchet.SourcePath), before.Replace(
+                    $"new SourceSizeCeiling(\"{GuardedPath}\", 18)",
+                    $"new SourceSizeCeiling(\"{GuardedPath}\", 25)", StringComparison.Ordinal));
+                Assert.Equal(25, Assert.Single(SourceSizeRatchetPreflight.TryReadAuthority(worktree)!).MaximumLineCount);
                 Assert.True(SourceSizeRatchetRetightener.IsNumericRetightenOnly(before,
                     File.ReadAllText(Path.Combine(worktree, SourceSizeRatchet.SourcePath))));
                 ReadGit(worktree, "add", SourceSizeRatchet.SourcePath);
