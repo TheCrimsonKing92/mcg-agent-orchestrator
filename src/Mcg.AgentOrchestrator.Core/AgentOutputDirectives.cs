@@ -91,6 +91,7 @@ public static class AgentOutputDirectives
                 "For an orchestrator record, add store_ref as <kind>:<locator>[#<selector>]. " +
                 "Unreadable store: availability=retrievable plus store. Never-recorded: prefer undecidable; operator action requires availability=never-recorded, no store. " +
                 "Prerequisites block now; future obligations: availability=post-implementation plus owner, no store, never claim execution. " +
+                "Evidence only the landed build or live host can show: availability=post-landing, owner=operator, no store or tests; it is a post-landing check and never holds landing. " +
                 "Gate tests: owner=acceptance-gate; non-empty tests array of class, Class.Method or exact theory rows. Selectorless acceptance: authorized explicit answer; Operator checks stay independent. " +
                 "Host alone binds goal/task/dispatch brief version. Invalid batch/identity conflicts or out-of-range criteria reject all; fix diagnostics and replan. " +
                 "backticked verification commands with TEST-VERIFIABLE or REAL-WORLD-DEPENDENT, and explicit stop conditions. " +
@@ -317,10 +318,27 @@ public static class AgentOutputDirectives
                 kind = HumanWaitKind.ProspectiveAcceptanceEvidence;
                 evidenceOwner = owner;
             }
+            else if (availability.Equals(PostLandingOperatorCheck.Availability, StringComparison.OrdinalIgnoreCase))
+            {
+                if (!TryGetRequiredString(root, "owner", out var owner) ||
+                    !owner.Equals("operator", StringComparison.OrdinalIgnoreCase))
+                {
+                    return MalformedEvidenceRequest("post-landing evidence requires owner=operator");
+                }
+
+                if (root.TryGetProperty("store", out _))
+                {
+                    return MalformedEvidenceRequest("post-landing evidence must not name a store");
+                }
+
+                availabilityText = "post-landing; the operator checks it after the goal lands; it never holds landing. Owner: operator";
+                kind = HumanWaitKind.ProspectiveAcceptanceEvidence;
+                evidenceOwner = "operator";
+            }
             else
             {
                 return MalformedEvidenceRequest(
-                    "availability must be retrievable, never-recorded, or post-implementation");
+                    "availability must be retrievable, never-recorded, post-implementation, or post-landing");
             }
 
             evidenceOwner = GateTestObligation.IsAcceptanceGateOwner(evidenceOwner) ? "acceptance-gate" : evidenceOwner;

@@ -212,7 +212,7 @@ public static class GoalAcceptanceStatusProjector
     private static IReadOnlyList<HumanInputRequest> GetOrderedPendingWaits(
         AgentOrchestratorKernel kernel,
         GoalId goalId) =>
-        kernel.GetPendingHumanInput(goalId)
+        PostLandingOperatorCheck.HoldingLanding(kernel.GetPendingHumanInput(goalId))
             .OrderBy(request => request.RequestedAt)
             .ThenBy(request => request.Id.Value, StringComparer.Ordinal)
             .ToArray();
