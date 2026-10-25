@@ -578,6 +578,15 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
         }, cancellationToken);
     }
 
+    public async Task<AgentOrchestratorKernel> LoadBoardSnapshotAsync(CancellationToken cancellationToken = default)
+    {
+        return await WithBusyRetryAsync(async () =>
+        {
+            await using var conn = OpenConnection();
+            return await LoadFromConnectionAsync(conn, goalIds: null, cancellationToken);
+        }, cancellationToken);
+    }
+
     public async Task SaveAsync(AgentOrchestratorKernel kernel, CancellationToken cancellationToken = default)
     {
         await SaveAsync(ResolveOperationTag(nameof(SaveAsync)), kernel, cancellationToken);
