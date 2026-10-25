@@ -12,7 +12,7 @@ public sealed class ConductorDriverTestsDeferredNoChangeInterruption
 {
     private static readonly string Candidate = new('b', 40);
 
-    [Fact(Timeout = 30_000)]
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Trait("Category", "CrossTick")]
     public void InterruptedAttemptRerunsGreenAndDispatchesReviewer()
     {
@@ -47,7 +47,7 @@ public sealed class ConductorDriverTestsDeferredNoChangeInterruption
         Assert.DoesNotContain(scenario.Goal.Timeline, evt => evt.Message.Contains("outcome=interrupted", StringComparison.Ordinal));
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Trait("Category", "CrossTick")]
     public void SecondInterruptionEscalatesDurablyWithoutThirdLaunch()
     {
