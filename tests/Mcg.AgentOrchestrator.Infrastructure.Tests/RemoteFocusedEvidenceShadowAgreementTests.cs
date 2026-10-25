@@ -105,6 +105,7 @@ public sealed class RemoteFocusedEvidenceShadowAgreementTests : GoalAcceptanceVe
             Directory.CreateDirectory(Path.GetDirectoryName(config)!);
             File.WriteAllText(config, """
                 {"executors":[{"id":"fixture-executor"}],"lanes":[],
+                 "machineLocalResourceKeys":["machine:GitHeavyLanes"],
                  "focusedEvidence":{"mode":"shadow","sampleEvery":1,"graceSeconds":300}}
                 """);
             var clock = new ManualRemoteLaneClock();
