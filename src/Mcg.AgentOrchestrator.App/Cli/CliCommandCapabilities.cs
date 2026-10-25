@@ -17,6 +17,7 @@ internal static class CliCommandCapabilities
         "intent-coverage",
         "remote-executors",
         "round-value",
+        "logs", "doctor", "tenant",
         "board-simulate",
         "epic-outcome-proposals",
         "epic-plan",
