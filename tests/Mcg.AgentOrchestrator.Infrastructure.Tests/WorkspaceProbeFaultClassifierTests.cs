@@ -2,7 +2,7 @@ using Mcg.AgentOrchestrator.App.Orchestration;
 
 public sealed class WorkspaceProbeFaultClassifierTests
 {
-    internal const string F1 = """Goal workspaces require 'C:\Users\miles\vcs\schema-drift' to be inside a git work tree. probe='git rev-parse --is-inside-work-tree'; exit=-1; processStarted=True; drainTimedOut=False; stdoutBytes=0; stdout=''; stderr='git rev-parse --is-inside-work-tree timed out after 60000ms'; directoryExists=True""";
+    internal const string F1 = """Goal workspaces require 'C:\repo\project' to be inside a git work tree. probe='git rev-parse --is-inside-work-tree'; exit=-1; processStarted=True; drainTimedOut=False; stdoutBytes=0; stdout=''; stderr='git rev-parse --is-inside-work-tree timed out after 60000ms'; directoryExists=True""";
     internal static string F2 => "background-acceptance-fault: " + F1.Replace(' ', '_');
     internal static string F3 => F1.Replace("exit=-1", "exit=128", StringComparison.Ordinal)
         .Replace("stderr='git rev-parse --is-inside-work-tree timed out after 60000ms'",
