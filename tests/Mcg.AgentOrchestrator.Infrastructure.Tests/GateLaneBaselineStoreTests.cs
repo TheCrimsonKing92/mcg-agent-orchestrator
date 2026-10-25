@@ -121,7 +121,7 @@ public sealed class GateLaneBaselineStoreTests : IDisposable
         Assert.NotNull(receipt);
         using var document = System.Text.Json.JsonDocument.Parse(receipt);
         Assert.Equal("slow", document.RootElement.GetProperty("slowdown_status").GetString());
-        Assert.Equal(16, document.RootElement.EnumerateObject().Count());
+        Assert.Equal(26, document.RootElement.EnumerateObject().Count());
         Assert.Equal(2, document.RootElement.GetProperty("slowdown_ratio").GetDouble());
         Assert.Equal("slowdown-write:IOException", result.UnavailableReason);
         Assert.Equal(4, GateLaneBaselineStore.ReadHistory(_root, "Alpha").Count);

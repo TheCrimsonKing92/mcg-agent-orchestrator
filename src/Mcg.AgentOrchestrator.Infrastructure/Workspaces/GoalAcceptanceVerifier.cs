@@ -45,7 +45,7 @@ public sealed partial record AcceptanceCheckResult(
     IReadOnlyList<AcceptanceTestFailureAttribution>? FailingTestAttributions = null,
     int? ChildProcessId = null,
     DateTimeOffset? ChildProcessStartedAt = null,
-    IReadOnlyList<string>? CoveredBy = null);
+    IReadOnlyList<string>? CoveredBy = null, [property: System.Text.Json.Serialization.JsonIgnore] LaneSchedulingSummary? LaneScheduling = null);
 
 public enum AcceptanceTestFailureOrigin
 {
@@ -302,7 +302,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         bool CaptureLimited = false,
         long? CaptureLimitBytes = null,
         TimeSpan? LaneStallSilence = null,
-        TimeSpan? LaneStallLimit = null);
+        TimeSpan? LaneStallLimit = null, LaneSchedulingSummary? LaneScheduling = null);
 
     internal static readonly Encoding StrictUtf8 = new UTF8Encoding(false, true);
     internal static readonly Encoding StrictUtf16LittleEndian = new UnicodeEncoding(false, true, true);
@@ -2863,7 +2863,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 worktreePath,
                 _invocationContext?.Ordinal ?? 0),
             ChildProcessId: result.ChildProcessId,
-            ChildProcessStartedAt: result.ChildProcessStartedAt), false);
+            ChildProcessStartedAt: result.ChildProcessStartedAt, LaneScheduling: result.LaneScheduling), false);
     }
 
     private async Task<(AcceptanceCheckResult Result, bool Retried)> RunManagedDotnetTestCheckAsync(
@@ -3091,7 +3091,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                     worktreePath,
                     _invocationContext?.Ordinal ?? 0),
                 ChildProcessId: result.ChildProcessId,
-                ChildProcessStartedAt: result.ChildProcessStartedAt), lockRemediationApplied);
+                ChildProcessStartedAt: result.ChildProcessStartedAt, LaneScheduling: result.LaneScheduling), lockRemediationApplied);
         }
         catch (Exception ex) when (IsBuildArtifactIoException(ex) &&
             ex is not DotnetBuildSlotsBusyException and not BuildLockBlockedException)
@@ -3179,7 +3179,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                     worktreePath,
                     _invocationContext?.Ordinal ?? 0),
                 ChildProcessId: result.ChildProcessId,
-                ChildProcessStartedAt: result.ChildProcessStartedAt), true);
+                ChildProcessStartedAt: result.ChildProcessStartedAt, LaneScheduling: result.LaneScheduling), true);
         }
         finally
         {

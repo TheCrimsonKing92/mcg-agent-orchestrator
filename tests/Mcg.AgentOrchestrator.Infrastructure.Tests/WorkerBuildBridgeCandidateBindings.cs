@@ -52,9 +52,7 @@ internal sealed class WorkerBuildBridgeCandidateBindings
             using var seal = JsonDocument.Parse(File.ReadAllText(sealPath));
             Require(seal.RootElement.GetProperty("schemaVersion").GetInt32() == 1 && seal.RootElement.GetProperty("project").GetString() == host.GetName().Name, "Invalid native host closure seal.");
         }
-        Require(Directory.GetFiles(Generation, "*", SearchOption.AllDirectories)
-            .Where(path => path != sealPath && Path.GetFileName(path) is not ".mcg-build-receipt.txt" and not ".mcg-build-receipt.txt.tmp")
-            .Select(path => SafeRelative(Generation, path)).ToHashSet(StringComparer.OrdinalIgnoreCase).SetEquals(closure.Keys), "Host receipt closure file set mismatch.");
+        HostReceiptClosureFileSet.RequireEqual(Generation, sealPath, closure.Keys);
         using var deps = JsonDocument.Parse(File.ReadAllText(Path.ChangeExtension(host.Location, ".deps.json")));
         var libraries = deps.RootElement.GetProperty("libraries");
         foreach (var package in SourceGraph.Packages)
@@ -183,7 +181,7 @@ internal sealed class WorkerBuildBridgeCandidateBindings
     internal void VerifyHostUnchanged()
     {
         var current = Snapshot(Generation);
-        Require(_hostFiles.Count == current.Count && _hostFiles.All(pair => current.TryGetValue(pair.Key, out var state) && state == pair.Value), "Host output changed during bridge execution.");
+        Require(_hostFiles.Count == current.Count && _hostFiles.All(pair => current.TryGetValue(pair.Key, out var state) && state == pair.Value), "Host output changed during bridge execution. " + HostReceiptClosureFileSet.DescribeChanges(_hostFiles, current));
         foreach (var binding in Bindings) Require(ReadIdentity(binding.HostPath) == binding.Assembly, "Source host identity changed.");
         foreach (var input in SourceGraph.Inputs) Require(Hash(input.Key) == input.Value, "Candidate graph changed during bridge execution.");
         RecheckedHostSnapshotSha256 = SnapshotHash(current);

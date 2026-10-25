@@ -107,7 +107,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsLaneSlowdown : Goa
             Assert.Equal(exitCode == 0, result.Passed);
             var receipt = Assert.Single(ReadRows(GateLaneReceiptLedger.ResolveStorePath(root)), row => row.GetProperty("lane").GetString() == lane);
             Assert.Equal(status, receipt.GetProperty("slowdown_status").GetString());
-            Assert.Equal(16, receipt.EnumerateObject().Count());
+            Assert.Equal(26, receipt.EnumerateObject().Count());
             Assert.Equal(wallMs, receipt.GetProperty("wall_ms").GetDouble());
             var slowdownsPath = Path.Combine(HostLedgerStateDirectory.Resolve(root), GateLaneSlowdownDiff.FileName);
             var emitted = progress.Where(item => item.Phase == "lane-slowdown").ToArray();

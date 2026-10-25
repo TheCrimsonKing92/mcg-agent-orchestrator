@@ -44,6 +44,7 @@ public static class ReworkCauseClassifier
         ("Invalidated ", ReworkCauseFamily.DownstreamRerun),
         ("missing-planner-artifact: dependency reroute", ReworkCauseFamily.Routing),
         ("worker-build-check-failed automatic recovery ", ReworkCauseFamily.CandidateRed),
+        ("worker-build-capacity automatic retry ", ReworkCauseFamily.Environment),
         ("Auto-retry real worker/command failure for task ", ReworkCauseFamily.CandidateRed),
         ("developer-completion structural pre-check failed: ", ReworkCauseFamily.CandidateRed)
     ];

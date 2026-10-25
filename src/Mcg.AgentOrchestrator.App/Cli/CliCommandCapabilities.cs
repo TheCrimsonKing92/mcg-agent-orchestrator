@@ -17,10 +17,12 @@ internal static class CliCommandCapabilities
         "intent-coverage",
         "remote-executors",
         "round-value",
+        "logs", "doctor", "tenant",
         "board-simulate",
         "epic-outcome-proposals",
         "epic-plan",
         "architecture", "config", "model-outcomes",
+        "loop-health", "operator-inbox", "durations", "dispatch-value", "brief",
         "backlog-list", "backlog-show", "backlog-similar", "goal-events", "timeline",
         "owner-digest", "context-usage", "next", "readiness"
     };

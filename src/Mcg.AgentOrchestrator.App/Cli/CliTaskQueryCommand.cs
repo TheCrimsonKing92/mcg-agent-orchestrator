@@ -21,7 +21,8 @@ internal static class CliTaskQueryCommand
     internal static bool IsTaskQueryCommand(IReadOnlyList<string> args) =>
         args.Count >= 1 &&
         (UsesTaskTargetGrammar(args[0]) ||
-         args[0].Equals("tasks", StringComparison.OrdinalIgnoreCase));
+         args[0].Equals("tasks", StringComparison.OrdinalIgnoreCase) ||
+         CliProcessLogsQueryCommand.IsCommand(args));
 
     private static bool UsesTaskTargetGrammar(string verb) =>
         verb.Equals("task", StringComparison.OrdinalIgnoreCase) ||
@@ -37,6 +38,13 @@ internal static class CliTaskQueryCommand
         ref WorkerProfileCatalog workerProfiles,
         ref Goal? currentGoal)
     {
+        if (CliProcessLogsQueryCommand.IsCommand(args))
+        {
+            CliProcessLogsQueryCommand.Execute(args, stateQueries, workspace, providers, channel,
+                ref agents, ref workerProfiles, ref currentGoal);
+            return;
+        }
+
         if (CliCommandHelp.IsCommandSpecificHelp(args))
         {
             ExecuteAgainstKernelAndCommitCurrentGoal(

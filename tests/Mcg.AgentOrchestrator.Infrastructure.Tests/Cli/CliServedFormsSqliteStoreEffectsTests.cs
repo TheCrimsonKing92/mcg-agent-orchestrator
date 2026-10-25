@@ -268,7 +268,16 @@ public sealed class CliServedFormsSqliteStoreEffectsTests : CliTaskQueryTestSupp
                     new ReviewFindingLocation("sample.cs", "Query"), "Query route finding")]);
             kernel = AgentOrchestratorKernel.FromSnapshot(snapshot with
             {
-                Goals = [goal with { Tasks = [goal.Tasks.Single() with { VerificationHistory = [verification] }] }]
+                Goals = [goal with { Tasks = [goal.Tasks.Single() with
+                {
+                    VerificationHistory = [verification],
+                    LastProcess = new TaskProcessSnapshot(777, "worker", workspace.RootDirectory,
+                        Path.Combine(workspace.RootDirectory, "worker.out.log"),
+                        Path.Combine(workspace.RootDirectory, "worker.err.log"),
+                        Path.Combine(workspace.RootDirectory, "worker.exit.txt"),
+                        DateTimeOffset.Parse("2026-10-07T00:00:00Z"),
+                        DateTimeOffset.Parse("2026-10-07T00:01:00Z"), 0)
+                }] }]
             });
             action(workspace, kernel);
         }

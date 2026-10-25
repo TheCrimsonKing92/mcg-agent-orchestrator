@@ -34,7 +34,9 @@ internal static class CliReadOnlyCommandRunner
         CliGoalsEpicQueryCommand.IsGoalsEpicQueryCommand(args) ||
         CliEpicPlanQueryCommand.IsEpicPlanQueryCommand(args) ||
         CliInspectionQueryCommand.IsInspectionQueryCommand(args) ||
-        CliBacklogQueryCommand.IsBacklogQueryCommand(args);
+        CliBacklogQueryCommand.IsBacklogQueryCommand(args) ||
+        CliMonitorGoalQueryCommand.IsMonitorGoalQueryCommand(args) ||
+        CliBoardSnapshotQueryCommand.IsBoardSnapshotQueryCommand(args);
 
     internal static bool TryExecute(
         IReadOnlyList<string> args,
@@ -224,6 +226,21 @@ internal static class CliReadOnlyCommandRunner
         {
             CliBacklogQueryCommand.Execute(args, stateRepository, workspace, providers, channel,
                 ref agents, ref workerProfiles);
+            changed = false;
+            return true;
+        }
+
+        if (CliMonitorGoalQueryCommand.IsMonitorGoalQueryCommand(args))
+        {
+            CliMonitorGoalQueryCommand.Execute(args, stateRepository, workspace, agents, workerProfiles, diagnosticsClock);
+            changed = false;
+            return true;
+        }
+
+        if (CliBoardSnapshotQueryCommand.IsBoardSnapshotQueryCommand(args))
+        {
+            CliBoardSnapshotQueryCommand.Execute(args, stateRepository, workspace, providers, channel,
+                ref agents, ref workerProfiles, ref currentGoal);
             changed = false;
             return true;
         }
