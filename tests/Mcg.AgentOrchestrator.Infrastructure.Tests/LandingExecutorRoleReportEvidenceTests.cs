@@ -145,7 +145,15 @@ public sealed class LandingExecutorRoleReportEvidenceTests
         Assert.Equal(GoalStatus.Verified, goal.Status);
         Assert.Empty(goal.CriterionEvidenceObligations);
         if (failed)
+        {
             kernel.ReportWorkerTaskProgress(goal.Id, developer.Id, WorkTaskStatus.Failed, "Latest Developer round failed.");
+            // Model a passed acceptance candidate with an unsatisfied role report. Reporting failure
+            // refreshes goal status; restore Verified so landing reaches the pending-wait hold.
+            kernel.ReplaceGoalWithSnapshot(kernel.ExportGoalSnapshot(goal.Id) with { Status = GoalStatus.Verified });
+            goal = kernel.GetGoal(goal.Id);
+            Assert.Equal(WorkTaskStatus.Failed, goal.FindTask(developer.Id).Status);
+        }
+        Assert.Equal(GoalStatus.Verified, goal.Status);
         GoalWorktrees.Ensure(repo, goal.Id);
         GoalOperationJournal.AcceptancePassed(repo, goal, "conductor:acceptance", candidate, main,
             "Passed candidate gate", DateTimeOffset.UtcNow.AddMinutes(-1));
