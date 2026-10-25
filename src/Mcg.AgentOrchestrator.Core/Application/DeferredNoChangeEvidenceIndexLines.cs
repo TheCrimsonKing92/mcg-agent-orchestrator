@@ -60,7 +60,7 @@ public static class DeferredNoChangeEvidenceIndexLines
             if (!fields.TryGetValue("task_id", out var task) || string.IsNullOrWhiteSpace(task) ||
                 !fields.TryGetValue("candidate_sha", out var sha) || string.IsNullOrWhiteSpace(sha) ||
                 !fields.TryGetValue("outcome", out var outcome) ||
-                outcome is not ("started" or "green" or "red" or "unusable") ||
+                outcome is not ("started" or "green" or "red" or "unusable" or "interrupted") ||
                 !fields.TryGetValue("receipt_id", out var receipt) ||
                 !fields.TryGetValue("result_path", out var path)) return false;
             string[] Values(string key) => fields.TryGetValue(key, out var value) && value.Length > 0

@@ -516,7 +516,8 @@ internal static class SourceSizeRatchet
             // Goal 568eb0fe adds admission guards and idempotent terminal RED routing at their
             // existing conductor boundaries; lifecycle/disposition authority stays in Goal and the store.
             // Goal 0c806a8e: typed capacity admission, hold/retry decisions and reader seam add 24 lines; no new partial.
-            new SourceClassCeiling("ConductorDriver", 14691, 70),
+            // Goal a5412d04: bound deferred no-change interruptions and retain their durable escalation (+15 lines).
+            new SourceClassCeiling("ConductorDriver", 14706, 70),
             // Goal b7c2f833: epic-at-creation validation and post-commit inheritance call sites
             // require handler glue; resolution/assignment remain in the separate EpicAtCreation type.
             // Measured 12223 total lines across the existing 30 partial files after integrating main; no extra headroom.
