@@ -1,0 +1,25 @@
+{
+  "name": "ProjectPermissive",
+  "maxCriterionRetries": 2,
+  "plannerSampleCount": 1,
+  "acceptanceWidth": 1,
+  "cascadeTesterCheapFirst": false,
+  "autoPromoteRiskThreshold": "Broad",
+  "transitionMap": {
+    "Created": "Auto",
+    "AwaitingClarification": "Auto",
+    "WorkspaceReady": "Auto",
+    "Dispatched": "Auto",
+    "Running": "Auto",
+    "AwaitingVerification": "Auto",
+    "Verifying": "Auto",
+    "Verified": "Auto",
+    "AcceptanceFailed": "Auto",
+    "Merged": "Auto",
+    "Recorded": "Auto",
+    "CleanedUp": "Auto",
+    "Failed": "Auto",
+    "Blocked": "Auto",
+    "AwaitingHumanInput": "Auto"
+  }
+}

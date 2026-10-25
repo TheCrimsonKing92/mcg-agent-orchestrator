@@ -42,7 +42,8 @@ internal sealed record OwnerConsoleGateProgress(bool Live, string Kind,
 
     internal static OwnerConsoleGateProgress Build(DateTimeOffset now, IEnumerable<OwnerConductEvent> events,
         IReadOnlyList<OwnerConsoleGateManifestLane> manifest, IEnumerable<OwnerConsoleGateDuration> durations,
-        Func<string, string?>? title = null, IReadOnlyDictionary<string, double>? quietSeconds = null)
+        Func<string, string?>? title = null, IReadOnlyDictionary<string, double>? quietSeconds = null,
+        OwnerConsoleGateLaneResolver? lanes = null)
     {
         var parsed = events.OrderBy(item => item.Timestamp).Select(item => new Observation(item, Tokens(item.Detail))).ToArray();
         var breakdownConcurrency = BreakdownConcurrency(parsed);
@@ -102,10 +103,15 @@ internal sealed record OwnerConsoleGateProgress(bool Live, string Kind,
             gate.Last = item.Event.Timestamp;
         }
         var history = durations.Where(item => double.IsFinite(item.DurationSeconds) && item.DurationSeconds > 0).ToArray();
-        var live = gates.Values.Where(gate => gate.Live && now - gate.Last <= TimeSpan.FromMinutes(15))
-            .OrderBy(gate => gate.Start).Select(Snapshot).ToArray();
-        return live.Length == 0 ? Idle(lastEnd is null ? null : Nonnegative(now - lastEnd.Value)) :
-            live[0] with { OtherLiveGates = live.Skip(1).ToArray() };
+        var liveGates = gates.Values.Where(gate => gate.Live && now - gate.Last <= TimeSpan.FromMinutes(15))
+            .OrderBy(gate => gate.Start).ToArray();
+        if (liveGates.Length == 0) return Idle(lastEnd is null ? null : Nonnegative(now - lastEnd.Value));
+        lanes ??= new OwnerConsoleGateLaneResolver(manifest);
+        var samplesByLane = history.GroupBy(item => lanes.Resolve(item.LaneName), StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.OrderByDescending(item => item.RecordedAt)
+                .Take(10).Select(item => item.DurationSeconds).Order().ToArray(), StringComparer.Ordinal);
+        var live = liveGates.Select(Snapshot).ToArray();
+        return live[0] with { OtherLiveGates = live.Skip(1).ToArray() };
 
         OwnerConsoleGateProgress Snapshot(Gate gate)
         {
@@ -117,28 +123,31 @@ internal sealed record OwnerConsoleGateProgress(bool Live, string Kind,
                     ? attempts.Contains(item.Get("attempt"))
                     : item.Event.Timestamp >= gate.Start &&
                         (string.IsNullOrEmpty(item.Event.GoalId) || gate.Members.Contains(Prefix(item.Event.GoalId))))).ToArray();
+            var laneEvents = gate.Events.Where(item => IsLanePhase(item.Get("phase")))
+                .Select(item => (Item: item, Target: lanes.Resolve(item.Get("target")))).ToArray();
+            var remoteEvents = remote.Select(item => (Item: item, Target: lanes.Resolve(item.Get("lane")))).ToArray();
+            var observationsByLane = laneEvents.ToLookup(item => item.Target, item => item.Item, StringComparer.Ordinal);
+            var remoteByLane = remoteEvents.ToLookup(item => item.Target, item => item.Item, StringComparer.Ordinal);
             var names = manifest.Select(lane => lane.Name).ToList();
-            foreach (var item in gate.Events.Where(item => IsLanePhase(item.Get("phase"))))
+            foreach (var item in laneEvents)
             {
-                var target = MatchLane(item.Get("target"), manifest);
+                var target = item.Target;
                 if (target.Length > 0 && !names.Contains(target)) names.Add(target);
             }
-            foreach (var item in remote.Where(item => item.Get("decision") == "offer"))
+            foreach (var item in remoteEvents.Where(item => item.Item.Get("decision") == "offer"))
             {
-                var target = MatchLane(item.Get("lane"), manifest);
+                var target = item.Target;
                 if (target.Length > 0 && !names.Contains(target)) names.Add(target);
             }
             var rows = names.Select(name =>
             {
                 var lane = manifest.FirstOrDefault(lane => lane.Name == name);
-                var samples = history.Where(item => MatchLane(item.LaneName, manifest) == name)
-                    .OrderByDescending(item => item.RecordedAt).Take(10).Select(item => item.DurationSeconds).Order().ToArray();
+                var samples = samplesByLane.GetValueOrDefault(name) ?? [];
                 double? median = samples.Length == 0 ? lane?.EstimatedSerialSeconds :
                     (samples[(samples.Length - 1) / 2] + samples[samples.Length / 2]) / 2;
-                var observations = gate.Events.Where(item => IsLanePhase(item.Get("phase")) &&
-                    MatchLane(item.Get("target"), manifest) == name).ToArray();
+                var observations = observationsByLane[name].ToArray();
                 var latest = observations.LastOrDefault();
-                var remoteLane = remote.Where(item => MatchLane(item.Get("lane"), manifest) == name).ToArray();
+                var remoteLane = remoteByLane[name].ToArray();
                 var offer = remoteLane.LastOrDefault(item => item.Get("decision") == "offer");
                 if (offer is not null && (latest is null || offer.Event.Timestamp > latest.Event.Timestamp)) latest = offer;
                 var noSlot = remoteLane.LastOrDefault();
@@ -232,12 +241,6 @@ internal sealed record OwnerConsoleGateProgress(bool Live, string Kind,
     private static bool IsDone(OwnerConsoleGateLane row) => row.State is OwnerConsoleGateLaneState.Done or OwnerConsoleGateLaneState.Cached;
     private static TimeSpan Nonnegative(TimeSpan value) => value < TimeSpan.Zero ? TimeSpan.Zero : value;
     private static string Prefix(string id) => id.Trim()[..Math.Min(8, id.Trim().Length)];
-    private static string MatchLane(string target, IReadOnlyList<OwnerConsoleGateManifestLane> manifest) =>
-        manifest.FirstOrDefault(lane => target == lane.Name || target == "infrastructure tests: " + lane.Name)?.Name ??
-        manifest.OrderByDescending(lane => lane.Name.Length).FirstOrDefault(lane =>
-            target.StartsWith(lane.Name + ":", StringComparison.Ordinal) ||
-            target.StartsWith("infrastructure tests: " + lane.Name + ":", StringComparison.Ordinal))?.Name ?? target;
-
     private static int BreakdownConcurrency(Observation[] parsed)
     {
         var newest = parsed.LastOrDefault(item => item.Event.Detail.StartsWith("PHASE_PROGRESS ", StringComparison.Ordinal) &&

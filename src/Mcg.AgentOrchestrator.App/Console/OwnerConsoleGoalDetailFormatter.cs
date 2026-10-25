@@ -50,6 +50,7 @@ internal static class OwnerConsoleGoalDetailFormatter
         foreach (var task in goal.Tasks) output.WriteLine($"  {task.RequiredRole}: {task.Status}");
         if (goal.CurrentHold is { } hold)
             output.WriteLine("Waiting on: " + OwnerActivityNarrator.WaitingOn(hold.Blocker));
+        foreach (var line in OwnerGoalReturnExplanation.Lines(goal, zone)) output.WriteLine(line);
         var lines = new List<(DateTimeOffset Time, string Phrase)>();
         foreach (var item in detail.RecentEvents)
             if (OwnerActivityNarrator.StagePhrase(item, Finding(goal, item)) is { } phrase &&
