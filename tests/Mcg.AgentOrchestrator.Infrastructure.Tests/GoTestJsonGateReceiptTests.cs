@@ -57,6 +57,7 @@ public sealed class GoTestJsonGateReceiptTests
             LiveSelectors,
             ["example.com/schemadrift/cmd/schemadrift.TestStdoutIdempotency"],
             ["cmd/schemadrift.TestStdoutIdempotency"],
+            ["TestStdoutIdempotency"],
             ["drift.TestMissingColumn"],
             ["main"], ["example.com/schemadrift/cmd/schemadrift"], ["cmd/schemadrift"]
         ];
@@ -71,7 +72,7 @@ public sealed class GoTestJsonGateReceiptTests
         Assert.Equal(GateTestObligationEvaluator.Outcome.SelectorNotFound, missing.Outcome);
         Assert.Equal(new[] { "main.TestTypoName", "drift.TestLargeCorpus" }, missing.Selectors);
         Assert.Equal(attemptId, missing.SourceId);
-        foreach (var selector in new[] { "TestStdoutIdempotency", "schemadrift.TestStdoutIdempotency" })
+        foreach (var selector in new[] { "schemadrift.TestStdoutIdempotency" })
         {
             var result = Evaluate(fixture, [selector]);
             Assert.Equal(GateTestObligationEvaluator.Outcome.SelectorNotFound, result.Outcome);
@@ -205,7 +206,7 @@ public sealed class GoTestJsonGateReceiptTests
         Assert.Equal("", definition.Element(Trx + "TestMethod")!.Attribute("codeBase")!.Value);
         var row = Assert.Single(ProspectiveEvidenceTrxRows.Read(path));
         Assert.Null(row.AliasIdentity);
-        Assert.Empty(ProspectiveEvidenceTrxRows.Match("TestOne", [row]));
+        Assert.Single(ProspectiveEvidenceTrxRows.Match("TestOne", [row]));
     }
 
     [Fact]
