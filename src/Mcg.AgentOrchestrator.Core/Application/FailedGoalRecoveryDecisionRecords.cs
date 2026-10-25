@@ -62,6 +62,12 @@ public static class FailedGoalRecoveryDecisionRecords
     public static PolicyDecisionRecord TimedOutRerunEvidencePending(FailedGoalRecoveryIdentity identity, string reason) =>
         FromDriver(identity, FailedGoalRecoveryAction.Hold, DriverRungBlockStart + 15, "timed-out-rerun-evidence-pending", reason);
 
+    public static PolicyDecisionRecord BuildCapacityHeld(FailedGoalRecoveryIdentity identity, string reason) =>
+        FromDriver(identity, FailedGoalRecoveryAction.Hold, DriverRungBlockStart + 16, "build-capacity-held", reason);
+
+    public static PolicyDecisionRecord BuildCapacityRetriesExhausted(FailedGoalRecoveryIdentity identity, string reason) =>
+        FromDriver(identity, FailedGoalRecoveryAction.Escalate, DriverRungBlockStart + 17, "build-capacity-retries-exhausted", reason);
+
     private static PolicyDecisionRecord FromDriver(
         FailedGoalRecoveryIdentity identity, FailedGoalRecoveryAction action, int rung, string evidence, string reason) =>
         new(StageName, action.ToString(), rung, evidence, reason, Facts(identity));

@@ -36,6 +36,21 @@ internal static class WorkerBuildCheckRecoveryText
     internal static string EscalationReason(string policyReason, string detail, string errorBlock) =>
         $"{policyReason}{Environment.NewLine}{detail}{Environment.NewLine}{errorBlock}";
 
+    internal static string CapacityHeldReason(WorkerBuildCapacitySnapshot snapshot, int rounds) =>
+        $"worker build capacity: waiting for a host build permit; unheld={snapshot.UnheldPermits}/{snapshot.TotalPermits}; " +
+        $"waiting={snapshot.WaitingTickets}; capacity rounds={rounds}/{WorkerBuildCapacityGate.MaxCapacityRetries}";
+
+    internal static string CapacityCheckpointSubject(bool exhausted, int rounds, string taskId) => exhausted
+        ? $"checkpoint: worker-build-capacity exhausted 3/3 for task {taskId}"
+        : $"checkpoint: worker-build-capacity retry {rounds}/3 for task {taskId}";
+
+    internal static string CapacityRetryFeedback(int rounds, bool committed, string checkpoint) =>
+        $"worker-build-capacity automatic retry {rounds}/3:" +
+        Environment.NewLine + (committed ? $"checkpoint commit {checkpoint}" :
+            $"no uncommitted changes were found; goal branch HEAD {checkpoint}") +
+        Environment.NewLine + SlotCapacityBlock +
+        Environment.NewLine + "Rerun scripts/Invoke-WorkerBuildCheck.ps1 after the last edit.";
+
     internal static string RetryFeedback(int recoveryCount, bool committed, string checkpoint, string? formattedErrors,
         WorkerBuildNoBuildCause cause = WorkerBuildNoBuildCause.LockTimeout) =>
         $"worker-build-check-failed automatic recovery {recoveryCount + 1}/2:" +

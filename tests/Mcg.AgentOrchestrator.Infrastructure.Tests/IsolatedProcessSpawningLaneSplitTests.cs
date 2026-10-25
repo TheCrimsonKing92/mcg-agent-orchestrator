@@ -28,7 +28,8 @@ public sealed class IsolatedProcessSpawningLaneSplitTests
         typeof(WorkerBuildCheckRecoveryTests),
         typeof(WorkerBuildCheckRecoveryTestsLockTimeout),
         typeof(WorkerBuildCheckRecoveryTestsEvidenceMissingLockTimeout),
-        typeof(WorkerBuildCheckRecoveryTestsCapacityBeforeStart)
+        typeof(WorkerBuildCheckRecoveryTestsCapacityBeforeStart),
+        typeof(WorkerBuildCheckRecoveryTestsCapacityQueue)
     ];
 
     // Copied verbatim from config/acceptance-manifest.json at pre-split merge base df9d0460.
