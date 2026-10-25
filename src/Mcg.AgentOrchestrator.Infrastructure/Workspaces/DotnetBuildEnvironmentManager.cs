@@ -348,9 +348,10 @@ public static class DotnetBuildEnvironmentManager
         CancellationToken cancellationToken = default,
         int slotCount = StableSlotCount,
         DotnetBuildStorageRoot? storageRoot = null,
-        string? holderLabel = null)
+        string? holderLabel = null,
+        BuildPermitClaimant? claimant = null)
     {
-        return TryAcquireFirstAvailableStableSlotExecutionLock(timeout, onWait, cancellationToken, slotCount, storageRoot: storageRoot, holderLabel: holderLabel) switch
+        return TryAcquireFirstAvailableStableSlotExecutionLock(timeout, onWait, cancellationToken, slotCount, storageRoot: storageRoot, holderLabel: holderLabel, claimant: claimant) switch
         {
             DotnetBuildLeaseAcquisition.Acquired acquired => acquired.Lease,
             DotnetBuildLeaseAcquisition.SlotsBusy busy => throw new DotnetBuildSlotsBusyException(busy),
@@ -367,7 +368,8 @@ public static class DotnetBuildEnvironmentManager
         TimeProvider? timeProvider = null,
         Action<TimeSpan>? sleep = null,
         DotnetBuildStorageRoot? storageRoot = null,
-        string? holderLabel = null)
+        string? holderLabel = null,
+        BuildPermitClaimant? claimant = null)
     {
         storageRoot ??= CaptureStorageRoot();
         ValidateRequestedSlotCount(slotCount);
@@ -377,12 +379,16 @@ public static class DotnetBuildEnvironmentManager
         var timeoutAt = clock.GetUtcNow().Add(waitTimeout);
         DateTimeOffset? waitStartedAt = null;
         var waitingReported = false;
+        using var queue = BuildPermitWaitQueue.CreateWaiter(claimant, storageRoot, clock,
+            IsExecutionLockHeld, path => TryReadExecutionLeaseMetadata(path)?.LeaseId);
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            var admitted = queue?.CanScan(() => Enumerable.Range(0, slotCount).Count(slot =>
+                !IsExecutionLockHeld(CreateStableSlotEnvironment(slot, storageRoot, createArtifactsDirectory: false).ExecutionLockPath))) ?? true;
             var processSnapshot = CreateSlotCandidateProcessSnapshot();
             var scanStart = NextStableSlotScanStart(slotCount);
-            for (var offset = 0; offset < slotCount; offset++)
+            for (var offset = 0; admitted && offset < slotCount; offset++)
             {
                 var slot = (scanStart + offset) % slotCount;
                 var environment = CreateStableSlotEnvironment(slot, storageRoot) with { HolderLabel = holderLabel };
@@ -393,11 +399,12 @@ public static class DotnetBuildEnvironmentManager
 
                 if (TryOpenLeaseExecutionLock(environment, out var stream, out var blockedAttribution))
                 {
-                    return new DotnetBuildLeaseAcquisition.Acquired(new DotnetBuildEnvironmentLease(
+                    var result = new DotnetBuildLeaseAcquisition.Acquired(new DotnetBuildEnvironmentLease(
                         environment,
                         stream,
                         waitStartedAt is null ? TimeSpan.Zero : clock.GetUtcNow() - waitStartedAt.Value,
                         cancellationToken));
+                    return queue?.Complete(result) ?? result;
                 }
                 if (blockedAttribution is not null)
                 {
@@ -425,7 +432,7 @@ public static class DotnetBuildEnvironmentManager
             var pollDelay = remaining < SlotBusyPollDelay ? remaining : SlotBusyPollDelay;
 
             var target = CreateStableSlotEnvironment(leastRecentlyLeased.SlotIndex, storageRoot) with { HolderLabel = holderLabel };
-            if (IsSlotArtifactsBusy(target, processSnapshot))
+            if (!admitted || IsSlotArtifactsBusy(target, processSnapshot))
             {
                 delay(pollDelay);
                 continue;
@@ -433,11 +440,12 @@ public static class DotnetBuildEnvironmentManager
 
             if (TryOpenLeaseExecutionLock(target, out var targetStream, out var targetBlockedAttribution))
             {
-                return new DotnetBuildLeaseAcquisition.Acquired(new DotnetBuildEnvironmentLease(
+                var result = new DotnetBuildLeaseAcquisition.Acquired(new DotnetBuildEnvironmentLease(
                     target,
                     targetStream,
                     waitStartedAt is null ? TimeSpan.Zero : clock.GetUtcNow() - waitStartedAt.Value,
                     cancellationToken));
+                return queue?.Complete(result) ?? result;
             }
             if (targetBlockedAttribution is not null)
             {
@@ -939,7 +947,8 @@ public static class DotnetBuildEnvironmentManager
         CancellationToken cancellationToken = default,
         Action? onWait = null,
         TimeProvider? timeProvider = null,
-        Action<TimeSpan>? sleep = null) =>
+        Action<TimeSpan>? sleep = null,
+        BuildPermitClaimant? claimant = null) =>
         TryAcquireFirstAvailableBuildPermitCore(
             environment,
             timeout,
@@ -947,7 +956,8 @@ public static class DotnetBuildEnvironmentManager
             onWait,
             timeProvider,
             sleep,
-            artifactCustody: null);
+            artifactCustody: null,
+            claimant);
 
     internal static DotnetBuildLeaseAcquisition TryAcquireFirstAvailableBuildPermitOwned(
         DotnetBuildEnvironment environment,
@@ -956,7 +966,8 @@ public static class DotnetBuildEnvironmentManager
         CancellationToken cancellationToken = default,
         Action? onWait = null,
         TimeProvider? timeProvider = null,
-        Action<TimeSpan>? sleep = null) =>
+        Action<TimeSpan>? sleep = null,
+        BuildPermitClaimant? claimant = null) =>
         TryAcquireFirstAvailableBuildPermitCore(
             environment,
             timeout,
@@ -964,7 +975,8 @@ public static class DotnetBuildEnvironmentManager
             onWait,
             timeProvider,
             sleep,
-            artifactCustody);
+            artifactCustody,
+            claimant);
 
     private static DotnetBuildLeaseAcquisition TryAcquireFirstAvailableBuildPermitCore(
         DotnetBuildEnvironment environment,
@@ -973,7 +985,8 @@ public static class DotnetBuildEnvironmentManager
         Action? onWait,
         TimeProvider? timeProvider,
         Action<TimeSpan>? sleep,
-        AcceptanceAttemptArtifactCustodyContext? artifactCustody)
+        AcceptanceAttemptArtifactCustodyContext? artifactCustody,
+        BuildPermitClaimant? claimant)
     {
         ArgumentNullException.ThrowIfNull(environment);
         var preferredPermit = environment.BuildPermitIndex ?? BuildSlotIndex(environment.SlotOwnerToken);
@@ -983,12 +996,22 @@ public static class DotnetBuildEnvironmentManager
         var timeoutAt = clock.GetUtcNow().Add(waitTimeout);
         var waitingReported = false;
         var priorityReservations = new FileStream?[BuildConcurrencySlotCount];
+        using var queue = claimant is null ? null : BuildPermitWaitQueue.CreateWaiter(claimant,
+            new DotnetBuildStorageRoot(Path.GetDirectoryName(Path.GetDirectoryName(Path.GetFullPath(environment.ExecutionLockPath)))!),
+            clock, IsExecutionLockHeld, path => TryReadExecutionLeaseMetadata(path)?.LeaseId);
         try
         {
             while (true)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                for (var offset = 0; offset < BuildConcurrencySlotCount; offset++)
+                var admitted = queue?.CanScan(() => Enumerable.Range(0, BuildConcurrencySlotCount).Count(permit =>
+                    !IsExecutionLockHeld(WithBuildPermit(environment, permit).ExecutionLockPath))) ?? true;
+                if (!admitted)
+                {
+                    ReleaseAcceptancePriorityReservations(priorityReservations);
+                    Array.Clear(priorityReservations);
+                }
+                for (var offset = 0; admitted && offset < BuildConcurrencySlotCount; offset++)
                 {
                     var permit = (preferredPermit + offset) % BuildConcurrencySlotCount;
                     var candidate = WithBuildPermit(environment, permit);
@@ -1024,7 +1047,7 @@ public static class DotnetBuildEnvironmentManager
                         artifactCustody: artifactCustody);
                     if (acquisition is not DotnetBuildLeaseAcquisition.SlotsBusy)
                     {
-                        return acquisition;
+                        return queue?.Complete(acquisition) ?? acquisition;
                     }
                 }
 
@@ -1032,6 +1055,12 @@ public static class DotnetBuildEnvironmentManager
                 {
                     onWait?.Invoke();
                     waitingReported = true;
+                }
+
+                if (queue?.EnforcedThisRound == true)
+                {
+                    ReleaseAcceptancePriorityReservations(priorityReservations);
+                    Array.Clear(priorityReservations);
                 }
 
                 if (clock.GetUtcNow() >= timeoutAt)
