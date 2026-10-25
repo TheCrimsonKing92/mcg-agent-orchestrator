@@ -7,9 +7,11 @@ internal static partial class LandingExecutor
     private static (ProspectiveEvidenceGateResolution Resolution, string? HoldDescription, IReadOnlyList<string> ObligationLines) EvaluatePendingHumanInput(
         AgentOrchestratorKernel kernel, Goal goal, string orchestratorDirectory, string? candidateRevision)
     {
-        // Only the existing goal/candidate-bound attempt resolver may submit automatic answers.
-        // A grouped pass alone does not establish named evidence for an individual member.
+        // Resolve candidate-bound gate and role reports before projecting pending input.
         var resolution = ProspectiveEvidenceGateResolver.Resolve(kernel, goal, orchestratorDirectory, candidateRevision);
+        if (!string.IsNullOrWhiteSpace(candidateRevision))
+            kernel.CloseRoleReportEvidence(goal.Id, candidateRevision,
+                RoleReportGateClassEvidence.For(orchestratorDirectory, goal.Id, candidateRevision));
         var obligationLines = GateTestObligationEvaluator.Evaluate(goal, orchestratorDirectory, candidateRevision)
             .Where(result => result.Outcome is not (GateTestObligationEvaluator.Outcome.Satisfied or GateTestObligationEvaluator.Outcome.Waived))
             .Select(result =>
