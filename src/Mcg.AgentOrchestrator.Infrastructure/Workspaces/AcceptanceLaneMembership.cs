@@ -6,6 +6,18 @@ internal static class AcceptanceLaneMembership
         IReadOnlyList<AcceptanceTestLane> lanes, string classFullName) =>
         lanes.Where(lane => Includes(lane, classFullName)).ToArray();
 
+    internal static IReadOnlyList<string> MatchingIncludePatterns(AcceptanceTestLane lane, string classFullName)
+    {
+        var args = AcceptanceCheckCommandBuilder.TranslateResolvedLaneFilter(lane.Filter).ToArray();
+        var patterns = new List<string>();
+        for (var index = 0; index + 1 < args.Length; index += 2)
+        {
+            if (args[index] == "--filter-class" && Matches(classFullName, args[index + 1]))
+                patterns.Add(args[index + 1]);
+        }
+        return patterns;
+    }
+
     internal static IReadOnlyList<AcceptanceTestLane> ResolveOwnedCollections(
         IReadOnlyList<AcceptanceTestLane> lanes, string worktreePath) =>
         lanes.All(lane => lane.OwnedCollections.Count == 0)
