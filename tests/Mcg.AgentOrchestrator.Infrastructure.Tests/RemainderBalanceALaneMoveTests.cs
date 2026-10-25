@@ -122,7 +122,7 @@ public sealed class RemainderBalanceALaneMoveTests
     }
 
     [Fact]
-    public void ManifestShape_PreservesOrderedBlocksAndKeylessEstimates()
+    public void ManifestShape_PreservesOrderedBlocksAndEstimates()
     {
         var lanes = LoadLanes();
         var balanceA = Assert.Single(lanes, lane => lane.Name == BalanceA);
@@ -130,7 +130,7 @@ public sealed class RemainderBalanceALaneMoveTests
         Assert.Equal(40, MovedClassNames.Length);
         Assert.Equal("FullyQualifiedName~RunEventStoreTests" + InclusionBlock(), balanceA.Filter);
         Assert.Equal(371.4, balanceA.EstimatedSerialSeconds);
-        Assert.Empty(balanceA.ExclusiveResourceKeys);
+        Assert.Equal(new[] { "machine:GitHeavyLanes" }, balanceA.ExclusiveResourceKeys);
         Assert.Empty(balanceA.OwnedCollections);
         Assert.Equal(415.6, remainder.EstimatedSerialSeconds);
         var exclusions = ExclusionBlock();
