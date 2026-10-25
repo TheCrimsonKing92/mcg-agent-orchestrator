@@ -4,6 +4,13 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 
 public interface IOrchestratorStateQueries
 {
+    /// <summary>
+    /// Reads every goal row as stored, archived goals as metadata-only summaries, all human-input
+    /// requests and active practices, without a write lock or write tag.
+    /// </summary>
+    Task<AgentOrchestratorKernel> LoadBoardSnapshotAsync(CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException("This repository does not support whole-board snapshot queries.");
+
     Task<AgentOrchestratorKernel> LoadGoalsAsync(
         IReadOnlyCollection<GoalId> goalIds,
         CancellationToken cancellationToken = default);

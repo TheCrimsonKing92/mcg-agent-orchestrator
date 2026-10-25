@@ -105,9 +105,17 @@ public sealed class IsolatedProcessSpawningRemainderChainTests
         [nameof(DeferredNoChangeContextSnapshotTestsIsolatedProcessSpawning)] = (8.5897754, 45.0373822)
     };
 
+    // Native Remainder gate on candidate f61d20bb4c3742c935285f18a6f542ee6f977f57:
+    // attempt 51bc61b5-0-20261025132444961-2f3e478074d44823bd20397513c36679,
+    // infrastructure-tests-remainder.trx SHA256
+    // 82D561D215EB42B7175A8DBF57E8D921F6199ECA276947F89EEE80CED2F42917.
+    // Sum of all seven passing scenario cases; a single gate sample, not a five-gate mean.
+    private const double PermitReleaseScenarioGateSeconds = 10.3534388;
+
     private static readonly IReadOnlyDictionary<string, double> PlanningSeconds = MeanSeconds
         .Concat(DeferredContextSamples.Select(sample => new KeyValuePair<string, double>(
             sample.Key, Math.Max(sample.Value.Focused, sample.Value.NativeGate))))
+        .Append(new(nameof(RemoteFirstFocusedEvidencePermitReleaseScenarioTests), PermitReleaseScenarioGateSeconds))
         .ToDictionary(row => row.Key, row => row.Value, StringComparer.Ordinal);
 
     [Xunit.Fact]
@@ -186,7 +194,8 @@ public sealed class IsolatedProcessSpawningRemainderChainTests
         var (sums, unlisted) = Score(RemainderMembers(), PlanningSeconds);
         Xunit.Assert.Empty(unlisted);
         Xunit.Assert.InRange(sums[SplitCollection], 223.9 - 0.05, 223.9 + 0.05);
-        Xunit.Assert.InRange(sums[OriginalCollection], 229.4 - 0.05, 229.4 + 0.05);
+        Xunit.Assert.InRange(sums[OriginalCollection],
+            229.4 + PermitReleaseScenarioGateSeconds - 0.05, 229.4 + PermitReleaseScenarioGateSeconds + 0.05);
         Xunit.Assert.InRange(sums[DeferredContextCollection], 129.5138644 - 1e-7, 129.5138644 + 1e-7);
         foreach (var (collection, seconds) in sums)
             Xunit.Assert.True(seconds <= BudgetSeconds, $"{collection}: {seconds} exceeds {BudgetSeconds} seconds.");

@@ -10,8 +10,10 @@ public sealed class BuildPermitWaitQueue
 {
     // Four minutes is about 1.8 x the worst observed gate retry gap on 2026-10-24 (2 min 13 s).
     public static readonly TimeSpan TicketStaleAfter = TimeSpan.FromMinutes(4);
-    // Five minutes exceeds two typical retry cycles and is under half the 12 min worker queue
-    // budget, leaving a displaced, earlier worker at least seven minutes.
+    // Ten minutes is about 1.5 x the worst refused evidence retry gap on 2026-10-25 (6 min 26 s).
+    public static readonly TimeSpan EvidenceTicketStaleAfter = TimeSpan.FromMinutes(10);
+    // Gates and focused evidence share five-minute promotion and remain FIFO with each other.
+    // This leaves a displaced, earlier worker at least seven minutes of its 12 min queue budget.
     public static readonly TimeSpan GatePrecedenceAfter = TimeSpan.FromMinutes(5);
     private static readonly TimeSpan SynchronizationRetryBudget = TimeSpan.FromSeconds(1);
     private static readonly TimeSpan RefreshWriteInterval = TimeSpan.FromSeconds(1);
@@ -46,6 +48,18 @@ public sealed class BuildPermitWaitQueue
     {
         using var guard = Synchronize();
         return RegisterCore(claimant, _time.GetUtcNow());
+    }
+
+    public Ticket Adopt(BuildPermitClaimant claimant)
+    {
+        using var guard = Synchronize();
+        var ticket = RegisterCore(claimant, _time.GetUtcNow()) with
+        {
+            OwnerPid = claimant.OwnerPid,
+            OwnerBound = claimant.OwnerBound
+        };
+        Publish(TicketPath(claimant.Key), ticket);
+        return ticket;
     }
 
     public IReadOnlyList<Ticket> Snapshot()
@@ -135,13 +149,14 @@ public sealed class BuildPermitWaitQueue
             if (IsDead(ticket, now)) { DeleteTicket(path); continue; }
             if (!IsSatisfied(path)) tickets.Add(ticket);
         }
-        return tickets.OrderBy(t => t.Kind == BuildPermitClaimantKind.Gate &&
+        return tickets.OrderBy(t => (t.Kind is BuildPermitClaimantKind.Gate or BuildPermitClaimantKind.FocusedEvidence) &&
                 now - t.FirstWaitedAt >= GatePrecedenceAfter ? 0 : 1)
             .ThenBy(t => t.FirstWaitedAt).ThenBy(t => t.Key, StringComparer.Ordinal).ToList();
     }
 
     private bool IsDead(Ticket ticket, DateTimeOffset now) =>
-        now - ticket.LastRefreshedAt >= TicketStaleAfter || (ticket.OwnerBound && !_isAlive(ticket.OwnerPid));
+        now - ticket.LastRefreshedAt >= (ticket.Kind == BuildPermitClaimantKind.FocusedEvidence && ticket.OwnerBound
+            ? EvidenceTicketStaleAfter : TicketStaleAfter) || (ticket.OwnerBound && !_isAlive(ticket.OwnerPid));
 
     private static Ticket? ReadTicket(string path)
     {

@@ -128,6 +128,18 @@ internal static partial class LandingExecutor
                 "Merge train landing requires operator approval for ownership-protected paths.");
         }
 
+        var landingDenylist = LoadLandingDenylist(executionDirectory, liveMain);
+        var decisions = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
+        var denylistApprovals = receipt.Identity.Members.ToDictionary(member => member.GoalId,
+            member => LandingDenylistOwnerGate.Evaluate(executionDirectory, landingDenylist.Denylist,
+                decisions, member.GoalId.Value, liveMain, member.CandidateRevision, member.LandingPaths));
+        var denylistHolds = goals.Where(goal => !denylistApprovals[goal.Id].Approved).ToArray();
+        foreach (var goal in denylistHolds)
+            OperatorInbox.RecordLandingEscalation(workspace, goal, denylistApprovals[goal.Id].HoldReason, IntegrationBranchName);
+        if (denylistHolds.Length > 0)
+            return new AcceptanceCohortLandingResult(AcceptanceCohortLandingOutcome.RetryableHold,
+                string.Join("; ", denylistHolds.Select(goal => denylistApprovals[goal.Id].HoldReason)));
+
         var currentIntegration = RunGit(
             executionDirectory,
             "rev-parse", "--verify", "--quiet", $"refs/heads/{IntegrationBranchName}");
@@ -234,7 +246,6 @@ internal static partial class LandingExecutor
         }
 
         var coverage = store.FinalizeLanding(receipt.Identity.Value, receipt.ReceiptId);
-        var landingDenylist = eventWriter is null ? null : LoadLandingDenylist(executionDirectory, liveMain);
         foreach (var goal in goals)
         {
             GoalOperationJournal.Completed(
@@ -246,9 +257,9 @@ internal static partial class LandingExecutor
                 eventWriter.AppendGoalLanded(
                     goal.Id,
                     $"train/{receipt.Identity.Value}",
-                    GoalWorktrees.BranchName(goal.Id), BuildLandingAdmission(landingDenylist!,
+                    GoalWorktrees.BranchName(goal.Id), BuildLandingAdmission(landingDenylist,
                         receipt.Identity.Members.Single(member => member.GoalId == goal.Id).CandidateRevision,
-                        receipt.Identity.Members.Single(member => member.GoalId == goal.Id).LandingPaths));
+                        denylistApprovals[goal.Id]));
             else
                 kernel.RecordGoalLandedFromMergeEvidence(
                     goal.Id,

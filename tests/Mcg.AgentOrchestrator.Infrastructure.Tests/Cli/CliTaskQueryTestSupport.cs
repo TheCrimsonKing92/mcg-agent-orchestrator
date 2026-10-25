@@ -64,6 +64,15 @@ public abstract class CliTaskQueryTestSupport
 
         public int FullLoadAttempts { get; private set; }
 
+        public int BoardSnapshotLoads { get; private set; }
+
+        public Task<AgentOrchestratorKernel> LoadBoardSnapshotAsync(CancellationToken cancellationToken = default)
+        {
+            ObserveWriteOperationTag();
+            BoardSnapshotLoads++;
+            return Task.FromResult(Clone(_kernel));
+        }
+
         public int LoadGoalsCount { get; private set; }
 
         public int LoadGoalCount { get; private set; }
