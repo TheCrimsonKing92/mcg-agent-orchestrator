@@ -36,9 +36,9 @@ internal static partial class AcceptanceCriterionEvidence
         return true;
     }
 
-    public static ConductorAdvanceOutcome.Held? RecordAndCreateHold(Goal goal, string? candidateSha, AgentOrchestratorKernel? kernel, string integrationBranch, string? executionDirectory = null)
+    public static ConductorAdvanceOutcome.Held? RecordAndCreateHold(Goal goal, string? candidateSha, AgentOrchestratorKernel? kernel, string integrationBranch, string? executionDirectory = null, string? currentHeadSha = null)
     {
-        var diagnostic = RecordAndDescribeOutstanding(goal, candidateSha, kernel, integrationBranch, executionDirectory);
+        var diagnostic = RecordAndDescribeOutstanding(goal, candidateSha, kernel, integrationBranch, executionDirectory, currentHeadSha);
         return diagnostic is null ? null : new ConductorAdvanceOutcome.Held(
             GoalLifecycleState.Verified, diagnostic, StableIdentity: HoldIdentity(goal, candidateSha));
     }
@@ -86,9 +86,9 @@ internal static partial class AcceptanceCriterionEvidence
             $"Acceptance completed but required criterion evidence remains outstanding: {string.Join(", ", missing)}.";
     }
 
-    public static string? RecordAndDescribeOutstanding(Goal goal, string? candidateSha, AgentOrchestratorKernel? kernel, string integrationBranch, string? executionDirectory = null)
+    public static string? RecordAndDescribeOutstanding(Goal goal, string? candidateSha, AgentOrchestratorKernel? kernel, string integrationBranch, string? executionDirectory = null, string? currentHeadSha = null)
     {
-        var diagnostic = RecordFullAcceptanceEvidence(goal, candidateSha, kernel, evidenceSource: null, integrationBranch, executionDirectory);
+        var diagnostic = RecordFullAcceptanceEvidence(goal, candidateSha, kernel, evidenceSource: null, integrationBranch, executionDirectory, currentHeadSha);
         if (diagnostic is not null) return diagnostic;
         var outstanding = goal.GetOutstandingCriterionEvidenceObligations(candidateSha)
             .Where(IsBoundOrNonAcceptanceObligation)
@@ -192,7 +192,7 @@ internal static partial class AcceptanceCriterionEvidence
         string? candidateSha,
         AgentOrchestratorKernel? kernel,
         string? evidenceSource,
-        string integrationBranch, string? executionDirectory)
+        string integrationBranch, string? executionDirectory, string? currentHeadSha = null)
     {
         var outstanding = goal.GetOutstandingCriterionEvidenceObligations(candidateSha);
         if (outstanding.Count == 0) return null;
@@ -201,7 +201,7 @@ internal static partial class AcceptanceCriterionEvidence
             return "Acceptance passed but criterion evidence could not be recorded: the authoritative kernel or candidate SHA is unavailable. No obligation was resolved.";
         }
 
-        TryCarryPatchEquivalentBindings(goal, candidateSha, kernel, integrationBranch, executionDirectory, out var carryRefusal);
+        TryCarryPatchEquivalentBindings(goal, candidateSha, kernel, integrationBranch, executionDirectory, out var carryRefusal, currentHeadSha);
         outstanding = goal.GetOutstandingCriterionEvidenceObligations(candidateSha);
         var matching = outstanding
             .Where(item =>
@@ -254,10 +254,10 @@ internal static partial class AcceptanceCriterionEvidence
         string candidateSha,
         AgentOrchestratorKernel kernel,
         string integrationBranch, string? executionDirectory,
-        out string? refusal)
+        out string? refusal, string? currentHeadSha = null)
     {
         if (!TryPlanPatchEquivalentBindings(goal, candidateSha, integrationBranch, executionDirectory,
-                out var eligible, out var oldHeads, out var evidenceByHead, out refusal))
+                out var eligible, out var oldHeads, out var evidenceByHead, out refusal, currentHeadSha))
             return false;
 
         foreach (var obligation in eligible)
@@ -269,7 +269,8 @@ internal static partial class AcceptanceCriterionEvidence
                 obligation.CriterionVersion,
                 obligation.Owner,
                 IsIntegrationOnly(evidenceByHead[obligation.ExpectedCandidateSha!])
-                    ? IntegrationOnlyRebindActor : "conductor patch-equivalent rebase carry",
+                    ? IntegrationOnlyRebindActor : IsPassedAtHead(evidenceByHead[obligation.ExpectedCandidateSha!])
+                        ? PassedAtHeadRebindActor : "conductor patch-equivalent rebase carry",
                 obligation.RequiredScope,
                 obligation.FindingStableId,
                 candidateSha);
@@ -296,6 +297,7 @@ internal static partial class AcceptanceCriterionEvidence
         }
 
         RecordIntegrationOnlyRebinds(executionDirectory, goal, candidateSha, evidenceByHead);
+        RecordPassedAtHeadRebinds(executionDirectory, goal, candidateSha, evidenceByHead);
         GoalOperationJournal.Completed(
             executionDirectory,
             goal,
@@ -305,6 +307,10 @@ internal static partial class AcceptanceCriterionEvidence
     }
 
     private const string IntegrationOnlyRebindActor = "conductor integration-only auto rebind";
+    private const string PassedAtHeadRebindActor = "conductor passed-at-head auto rebind";
+
+    private static bool IsPassedAtHead(string evidence) =>
+        evidence.StartsWith("passed-at-head:", StringComparison.Ordinal);
 
     private static bool IsIntegrationOnly(string evidence) =>
         evidence.StartsWith("integration-only:", StringComparison.Ordinal);
@@ -316,6 +322,15 @@ internal static partial class AcceptanceCriterionEvidence
             if (IsIntegrationOnly(evidence))
                 GoalOperationJournal.Completed(executionDirectory, goal, "conductor:obligation-auto-rebind",
                     $"OBLIGATION_AUTO_REBIND goal={goal.Id.Value} from={head} to={candidateSha} reason=integration-only");
+    }
+
+    private static void RecordPassedAtHeadRebinds(
+        string? executionDirectory, Goal goal, string candidateSha, Dictionary<string, string> evidenceByHead)
+    {
+        foreach (var (head, evidence) in evidenceByHead)
+            if (IsPassedAtHead(evidence))
+                GoalOperationJournal.Completed(executionDirectory, goal, "conductor:obligation-auto-rebind",
+                    $"OBLIGATION_AUTO_REBIND goal={goal.Id.Value} from={head} to={candidateSha} reason=passed-at-head");
     }
 
     private static bool IsBoundOrNonAcceptanceObligation(CriterionEvidenceObligation obligation) =>

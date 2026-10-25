@@ -97,7 +97,7 @@ internal sealed partial class ConductorDriver
             goal = GetCurrentGoal(goal);
             _clearAcceptanceFailure(goal);
             var evidenceCandidateSha = acceptance.BranchHeadSha ?? _resolveAcceptanceHeads(goal).BranchHeadSha;
-            var evidenceHold = AcceptanceCriterionEvidence.RecordAndCreateHold(goal, evidenceCandidateSha, _cohortKernel ?? _conductorTickKernel, _integrationBranch, _executionDirectory);
+            var evidenceHold = AcceptanceCriterionEvidence.RecordAndCreateHold(goal, evidenceCandidateSha, _cohortKernel ?? _conductorTickKernel, _integrationBranch, _executionDirectory, acceptance.BranchHeadSha is null ? null : _resolveAcceptanceHeads(goal).BranchHeadSha);
             if (evidenceHold is not null)
             {
                 return MakeResult(goal.Id.Value, goalPrefix, policy, AttachCriterionEvidenceCompletionDecision(acceptance, evidenceHold));
