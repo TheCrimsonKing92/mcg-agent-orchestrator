@@ -281,6 +281,7 @@ public sealed class Goal
 
     internal void SetStatus(GoalStatus status)
     {
+        if (IsTerminalMetadataStatus(status)) LandingBlocker = null;
         if (IsExplicitlyParked)
         {
             // Ordinary progress cannot release an explicit operator disposition. Retain the
@@ -1369,7 +1370,7 @@ public sealed class Goal
         goal.PriorityScheduling = snapshot.PriorityScheduling;
         goal.SetIsolation(GoalIsolations.ParseOrDefault(snapshot.Isolation));
         goal.RestoreHold(snapshot.CurrentHold);
-        goal.LandingBlocker = snapshot.LandingBlocker;
+        goal.LandingBlocker = IsTerminalMetadataStatus(snapshot.Status) ? null : snapshot.LandingBlocker;
 
         return goal;
     }
