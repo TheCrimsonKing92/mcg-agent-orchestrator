@@ -97,11 +97,25 @@ internal sealed partial class ConductorDriver
             "deferred-no-change",
             CreateFindingEvidenceBatchId(outcome.CandidateSha, "deferred-no-change", policy.Name, identity),
             []);
+        if (prior is { Outcome: "interrupted" })
+        {
+            var priorAttempt = _focusedEvidenceAttemptCoordinator.ReadLatestFocusedEvidenceAttempt(
+                ConductorParallelAcceptanceCandidate.Create(goal, 0, [], outcome.CandidateSha.Trim(), null), requestContext.BatchId);
+            result = Escalate(goal, goalPrefix, policy, fromState, FocusedEvidenceInterruption.ExhaustedReason(developer.Id, outcome.CandidateSha, priorAttempt?.AttemptId));
+            return true;
+        }
         var completed = TryReconcileFocusedEvidenceAttempt(
             goal, policy, string.Join("; ", selectionNames), outcome.CandidateSha,
             "deferred-no-change", requestContext,
             out var evidence, out var attempt, out var decision, out var kind);
-        var transient = attempt?.Outcome is
+        var interruption = FocusedEvidenceInterruption.Classify(attempt, File.Exists);
+        if (interruption == FocusedEvidenceInterruptionKind.RerunExhausted)
+        {
+            RecordDeferredNoChangeEvidence("interrupted", [], null);
+            result = Escalate(goal, goalPrefix, policy, fromState, FocusedEvidenceInterruption.ExhaustedReason(developer.Id, outcome.CandidateSha, attempt!.AttemptId));
+            return true;
+        }
+        var transient = interruption == FocusedEvidenceInterruptionKind.Interrupted || attempt?.Outcome is
             ConductorParallelAcceptanceAttemptOutcome.BlockedBuildSlot or
             ConductorParallelAcceptanceAttemptOutcome.BlockedBuildLock or
             ConductorParallelAcceptanceAttemptOutcome.Cancelled or
@@ -116,7 +130,8 @@ internal sealed partial class ConductorDriver
              decision.Kind == FailedGoalFindingObservationKind.FindingEvidencePending))
         {
             result = MakeResult(goal.Id.Value, goalPrefix, policy,
-                FocusedEvidencePendingHeld(fromState, decision, kind));
+                FocusedEvidencePendingHeld(fromState,
+                    interruption == FocusedEvidenceInterruptionKind.Interrupted ? decision with { Evidence = FocusedEvidenceInterruption.HoldPrefix(attempt!.AttemptId) + decision.Evidence } : decision, kind));
             return true;
         }
 

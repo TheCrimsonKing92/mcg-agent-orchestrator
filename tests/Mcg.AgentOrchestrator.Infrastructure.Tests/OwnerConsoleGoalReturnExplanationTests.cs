@@ -320,11 +320,11 @@ public sealed class OwnerConsoleGoalReturnExplanationTests
         public Task<bool> ConfirmAsync(string title, string text) => throw new InvalidOperationException("Unexpected confirmation");
         public Task<string?> PromptTextAsync(string title, string text) => throw new InvalidOperationException("Unexpected prompt");
         public Task ShowTextAsync(string title, string text) => throw new InvalidOperationException("Expected goal dialog: " + text);
-        public Task ShowGoalAsync(OwnerConsoleGoalDialog dialog)
+        public async Task ShowGoalAsync(OwnerConsoleGoalDialog dialog)
         {
             Goals.Add(dialog);
             dialog.Start(action => action());
-            return Task.CompletedTask;
+            await dialog.LastLoad;
         }
     }
 }

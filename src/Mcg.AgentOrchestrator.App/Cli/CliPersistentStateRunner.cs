@@ -628,18 +628,8 @@ internal static partial class CliPersistentStateRunner
         };
     }
 
-    internal static bool RequiresKernelBacklogState(IReadOnlyList<string> args)
-    {
-        if (args.Count == 0)
-            return false;
-
-        return args[0].ToLowerInvariant() switch
-        {
-            "backlog-list" or "backlog-show" or "backlog-depends" or "backlog-similar" => true,
-            "backlog-add" => HasFlag(args, "--depends-on") || !HasFlag(args, "--no-similar"),
-            _ => false
-        };
-    }
+    internal static bool RequiresKernelBacklogState(IReadOnlyList<string> args) =>
+        StoreSetupCommandKinds.RequiresBacklogState(args);
 
     private static bool HasFlag(IReadOnlyList<string> args, string flag) =>
         args.Any(arg => arg.Equals(flag, StringComparison.OrdinalIgnoreCase));
@@ -676,33 +666,18 @@ internal static partial class CliPersistentStateRunner
     }
 
     internal static bool IsInboxBackedGoalScopedTaskMutationCommand(IReadOnlyList<string> args) =>
-        args.Count > 0 &&
-        args[0].ToLowerInvariant() is
-            OperatorIntentVerbs.Progress or
-            OperatorIntentVerbs.Retry or
-            OperatorIntentVerbs.VerifyManual or
-            OperatorIntentVerbs.Adjudicate;
+        StoreSetupCommandKinds.IsInboxBackedTaskMutation(args);
 
     internal static bool IsCriterionEvidenceMutationCommand(IReadOnlyList<string> args) =>
-        args.Count > 0 && args[0].ToLowerInvariant() is
-            OperatorIntentVerbs.CriterionEvidenceMap or
-            OperatorIntentVerbs.CriterionEvidenceRecord or
-            OperatorIntentVerbs.CriterionEvidenceRepair;
+        StoreSetupCommandKinds.IsCriterionEvidenceMutation(args);
 
     private static bool IsOperatorIntentStatusCommand(IReadOnlyList<string> args) =>
         args.Count > 0 &&
         args[0].Equals("operator-intent-status", StringComparison.OrdinalIgnoreCase);
 
     // A conduct command running the batch loop (--loop) or single-goal continuous mode (--watch).
-    internal static bool IsConductLoop(IReadOnlyList<string> args)
-    {
-        if (args.Count == 0 || !args[0].Equals("conduct", StringComparison.OrdinalIgnoreCase))
-            return false;
-
-        return args.Any(a =>
-            a.Equals("--loop", StringComparison.OrdinalIgnoreCase) ||
-            a.Equals("--watch", StringComparison.OrdinalIgnoreCase));
-    }
+    internal static bool IsConductLoop(IReadOnlyList<string> args) =>
+        ConductCommandArguments.IsLoop(args);
 
     internal static bool IsSingleGoalConductCommand(IReadOnlyList<string> args)
     {
