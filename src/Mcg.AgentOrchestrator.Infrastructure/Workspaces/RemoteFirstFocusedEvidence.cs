@@ -12,7 +12,8 @@ internal static class RemoteFirstFocusedEvidence
     internal static async Task<Outcome> RunAsync(GoalAcceptanceVerifierTestOverrides overrides,
         TimeProvider fallbackClock, string worktreePath, IReadOnlyList<Check> checks, GoalId? goalId,
         IAcceptanceRunExecutionContext? owner, bool continueAfterFailure,
-        Func<IReadOnlyList<Check>, Task<IReadOnlyList<AcceptanceCheckResult>>> runLocal, CancellationToken token)
+        Func<IReadOnlyList<Check>, Task<IReadOnlyList<AcceptanceCheckResult>>> runLocal, CancellationToken token,
+        Action? releaseLocalPermit = null)
     {
         RemoteLaneExecutorConfiguration configuration;
         try
@@ -72,6 +73,7 @@ internal static class RemoteFirstFocusedEvidence
                         claimed.Add((run, entry));
                     }
                 }
+                if (claimed.Count > 0) releaseLocalPermit?.Invoke();
                 await Task.WhenAll(claimed.Select(pair => ExecuteAsync(pair.Run, pair.Entry))).ConfigureAwait(false);
 
                 async Task ExecuteAsync(Run run, RemoteLaneExecutorEntry entry)

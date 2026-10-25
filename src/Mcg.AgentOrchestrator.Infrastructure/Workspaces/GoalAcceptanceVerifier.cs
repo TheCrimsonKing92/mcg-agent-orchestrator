@@ -1289,7 +1289,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             _testOverrides, _timeProvider, worktreePath, focusedChecks, goalId, executionOwner, cancellationToken);
         var batch = await RemoteFirstFocusedEvidence.RunAsync(_testOverrides, _timeProvider, worktreePath, focusedChecks, goalId, executionOwner,
             continueAfterFailure, async checks => (await RunCheckBatchAsync(checks, cacheContext: null, worktreePath, goalId, stableSlotIndex, stableSlotLease,
-                dotnetTestBuildPhase, shardConcurrencyBudget, cancellationToken, continueAfterFailure, executionOwner).ConfigureAwait(false)).Results, cancellationToken).ConfigureAwait(false);
+                dotnetTestBuildPhase, shardConcurrencyBudget, cancellationToken, continueAfterFailure, executionOwner).ConfigureAwait(false)).Results, cancellationToken, () => ReleaseStableSlotExecutionLockUnlessCoverageHoldActive(stableSlotLease)).ConfigureAwait(false);
         await shadow.CompleteAsync(batch.Results).ConfigureAwait(false);
         return batch.Results;
     }

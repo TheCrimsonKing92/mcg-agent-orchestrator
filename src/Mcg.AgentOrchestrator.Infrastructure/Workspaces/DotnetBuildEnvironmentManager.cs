@@ -1413,6 +1413,18 @@ public static class DotnetBuildEnvironmentManager
             .Distinct(StringComparer.Ordinal)
             .ToArray();
 
+    internal static IReadOnlyList<string> ReadHeldBuildPermitHolderLabels(DotnetBuildStorageRoot storageRoot)
+    {
+        var labels = new List<string>();
+        for (var slot = 0; slot < BuildConcurrencySlotCount; slot++)
+        {
+            var path = BuildSlotExecutionLockPath(slot, storageRoot);
+            if (IsExecutionLockHeld(path) && TryReadExecutionLeaseMetadata(path)?.HolderLabel is { } label &&
+                !string.IsNullOrWhiteSpace(label)) labels.Add(label);
+        }
+        return labels;
+    }
+
     private static DotnetBuildEnvironment WithBuildPermit(DotnetBuildEnvironment environment, int permitIndex)
     {
         var permitDirectory = Path.GetDirectoryName(Path.GetFullPath(environment.ExecutionLockPath))!;
