@@ -128,7 +128,7 @@ internal static partial class LandingExecutor
 
         var changedFiles = changedFilesResult.Files;
         var prospectiveEvidence = EvaluatePendingHumanInput(
-            kernel, goal, workspace.OrchestratorDirectory, ResolveRef(executionDirectory, goalBranch));
+            kernel, goal, workspace, ResolveRef(executionDirectory, goalBranch));
         var acceptance = GoalAcceptanceStatusProjector.Build(kernel, goal, workspace.ExecutionDirectory, workspace.IntegrationBranch);
         var acceptanceAccepted = acceptance.IsAccepted && prospectiveEvidence.Resolution.UnresolvedWaits.Count == 0 &&
             prospectiveEvidence.ObligationLines.Count == 0;
@@ -341,7 +341,7 @@ internal static partial class LandingExecutor
         var publicationBlockReason = mutationBlocker?.Invoke();
         if (string.IsNullOrWhiteSpace(publicationBlockReason))
             publicationBlockReason = EvaluatePendingHumanInput(
-                kernel, goal, workspace.OrchestratorDirectory, evidenceCandidateSha).HoldDescription;
+                kernel, goal, workspace, evidenceCandidateSha).HoldDescription;
         if (!string.IsNullOrWhiteSpace(publicationBlockReason))
         {
             GoalOperationJournal.TombstoneLandingIntent(
@@ -754,7 +754,7 @@ internal static partial class LandingExecutor
             }
         }
 
-        var pendingInput = DescribeGroupedPendingHumanInput(kernel, goals, workspace.OrchestratorDirectory,
+        var pendingInput = DescribeGroupedPendingHumanInput(kernel, goals, workspace,
             goalId => receipt.Identity.Members.Single(member => member.GoalId == goalId).CandidateRevision);
         if (pendingInput is not null)
         {
@@ -844,7 +844,7 @@ internal static partial class LandingExecutor
 
         blockReason = mutationBlocker?.Invoke();
         if (string.IsNullOrWhiteSpace(blockReason))
-            blockReason = DescribeGroupedPendingHumanInput(kernel, goals, workspace.OrchestratorDirectory,
+            blockReason = DescribeGroupedPendingHumanInput(kernel, goals, workspace,
                 goalId => receipt.Identity.Members.Single(member => member.GoalId == goalId).CandidateRevision);
         if (!string.IsNullOrWhiteSpace(blockReason))
         {
