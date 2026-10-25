@@ -141,11 +141,17 @@ public sealed class LaneSubstringCollisionCheckTests
     public void Find_NewLaneOrExactFilter_DoesNotReportCollision()
     {
         var newLane = Manifest.Replace("Remainder balance C", "New dedicated lane", StringComparison.Ordinal);
-        var exactFilter = Manifest.Replace("FullyQualifiedName~WorkerBuildRequest|FullyQualifiedName~ExitReconcileBuild",
-            "FullyQualifiedName=" + IncidentClass, StringComparison.Ordinal);
+        var baseLanes = AcceptanceGateEngineSettings.Parse(Manifest).InfrastructureTestLanes;
+        // Exact selectors are resolved-lane inputs; source manifests intentionally reject them.
+        var exactLanes = baseLanes.Select(lane => lane.Name == "Remainder balance C"
+            ? lane with { Filter = "FullyQualifiedName=" + IncidentClass }
+            : lane).ToArray();
 
         Assert.Empty(Find(IncidentClass, candidateManifest: newLane));
-        Assert.Empty(Find(IncidentClass, candidateManifest: exactFilter));
+        Assert.Equal("Remainder balance C",
+            Assert.Single(AcceptanceLaneMembership.LanesIncluding(exactLanes, IncidentClass)).Name);
+        Assert.Empty(LaneSubstringCollisionCheck.Find(baseLanes, exactLanes,
+            [new AcceptanceTestClassDescriptor(IncidentClass, null)], AddedDiff(IncidentClass)));
     }
 
     [Fact]
