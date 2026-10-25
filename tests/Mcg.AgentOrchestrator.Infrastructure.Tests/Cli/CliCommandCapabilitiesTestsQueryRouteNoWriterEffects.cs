@@ -27,6 +27,9 @@ public sealed class CliCommandCapabilitiesTestsQueryRouteNoWriterEffects : CliTa
             ["intent-coverage"] = [["intent-coverage"]],
             ["remote-executors"] = [["remote-executors"]],
             ["round-value"] = [["round-value"]],
+            ["logs"] = [["logs", "abc10000", "1"], ["logs", "--goal", "abc10000", "1"], ["logs", "1", "--goal", "abc10000"], ["logs", "abc10000", "1", "stdout"]],
+            ["doctor"] = [["doctor"]],
+            ["tenant"] = [["tenant"]],
             ["board-simulate"] = [["board-simulate", "--day", "2026-10-15"]],
             ["epic-outcome-proposals"] = [["epic-outcome-proposals"], ["epic-outcome-proposals", "--json"]],
             ["epic-plan"] = [["epic-plan", "Board"], ["epic-plan", "Board", "--json"]],
@@ -218,7 +221,16 @@ public sealed class CliCommandCapabilitiesTestsQueryRouteNoWriterEffects : CliTa
                 new ReviewFindingLocation("sample.cs", "Query"), "Query route finding")]);
         return AgentOrchestratorKernel.FromSnapshot(snapshot with
         {
-            Goals = [goal with { Tasks = [goal.Tasks.Single() with { VerificationHistory = [verification] }] }]
+            Goals = [goal with { Tasks = [goal.Tasks.Single() with
+            {
+                VerificationHistory = [verification],
+                LastProcess = new TaskProcessSnapshot(777, "worker", workspace.RootDirectory,
+                    Path.Combine(workspace.RootDirectory, "worker.out.log"),
+                    Path.Combine(workspace.RootDirectory, "worker.err.log"),
+                    Path.Combine(workspace.RootDirectory, "worker.exit.txt"),
+                    DateTimeOffset.Parse("2026-10-07T00:00:00Z"),
+                    DateTimeOffset.Parse("2026-10-07T00:01:00Z"), 0)
+            }] }]
         });
     }
 }

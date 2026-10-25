@@ -519,7 +519,7 @@ private static void LaunchLatestDispatch(CliExecutionContext context, Goal goal,
     }
 }
 
-private static bool IsLogStreamKeyword(string value) =>
+internal static bool IsLogStreamKeyword(string value) =>
     value is "all" or "stdout" or "out" or "stderr" or "err" or "exit" or "exitcode" or "code";
 
 private static void AcknowledgeSubscriptionLimitReviewFromCli(CliExecutionContext context, TaskSpec task, IReadOnlyList<string> parts)
