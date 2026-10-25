@@ -141,8 +141,8 @@ public sealed class DispatchProcessHostTestsDispatchJobQosOptOutTests : WorkerDi
                 try { WorkerProcessJobs.TryKillOrFallback(process.Id); }
                 finally { process.Dispose(); }
             }
-            Directory.Delete(root, recursive: true);
-            Directory.Delete(logs, recursive: true);
+            SharedTestSupport.RemoveTempDirectory(root);
+            SharedTestSupport.RemoveTempDirectory(logs);
         }
     }
 
