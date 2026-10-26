@@ -55,7 +55,7 @@ private static bool? TryExecuteBacklogCommand(string command, IReadOnlyList<stri
                         item.CreatedAt, item.UpdatedAt, item.Priority, item.Tags, item.SupersededBy));
                     continue;
                 }
-                Console.WriteLine($"{RenderBacklogListTag(item)}{RenderBacklogTimestampSuffix(item)}{RenderBacklogListSuffix(item)}{RenderBacklogReadinessSuffix(item, context, store)} {item.Id} | status={RenderBacklogListingStatus(item, linkedGoal)} | goal={goalId} | title={item.Title}");
+                Console.WriteLine($"{BacklogTextView.RenderBacklogListTag(item)}{BacklogTextView.RenderBacklogTimestampSuffix(item)}{BacklogTextView.RenderBacklogListSuffix(item)}{RenderBacklogReadinessSuffix(item, context, store)} {item.Id} | status={RenderBacklogListingStatus(item, linkedGoal)} | goal={goalId} | title={item.Title}");
             }
             if (rows is not null)
             {
@@ -121,7 +121,7 @@ private static bool? TryExecuteBacklogCommand(string command, IReadOnlyList<stri
             var staleDays = ParseOptionalNonNegativeInt(parts, "--stale-days") ?? 30;
             var store = new BacklogStore(context.Workspace.BacklogStorePath);
             var items = store.ListAsync(includeAll: true).GetAwaiter().GetResult();
-            Console.Write(RenderBacklogTriage(items, context.Kernel.Goals, limit, staleDays, DateTimeOffset.UtcNow));
+            Console.Write(BacklogTextView.RenderBacklogTriage(items, context.Kernel.Goals, limit, staleDays, DateTimeOffset.UtcNow));
             return false;
         }
 
@@ -362,7 +362,7 @@ private static bool? TryExecuteBacklogCommand(string command, IReadOnlyList<stri
             if (clear)
             {
                 store.ClearDependenciesAsync(item.Id).GetAwaiter().GetResult();
-                Console.WriteLine($"Dependencies cleared: {ShortBacklogId(item.Id)}");
+                Console.WriteLine($"Dependencies cleared: {CliIdentifierText.ShortId(item.Id)}");
                 return false;
             }
 
@@ -376,12 +376,12 @@ private static bool? TryExecuteBacklogCommand(string command, IReadOnlyList<stri
                     goalExists: id => context.Kernel.Goals.Any(goal => goal.Id.Value == id))
                     .GetAwaiter()
                     .GetResult();
-                Console.WriteLine($"Dependency set: {ShortBacklogId(item.Id)} depends on {ShortBacklogId(target.Id)}");
+                Console.WriteLine($"Dependency set: {CliIdentifierText.ShortId(item.Id)} depends on {CliIdentifierText.ShortId(target.Id)}");
             }
             else
             {
                 store.RemoveDependencyAsync(item.Id, target.Id).GetAwaiter().GetResult();
-                Console.WriteLine($"Dependency removed: {ShortBacklogId(item.Id)} no longer depends on {ShortBacklogId(target.Id)}");
+                Console.WriteLine($"Dependency removed: {CliIdentifierText.ShortId(item.Id)} no longer depends on {CliIdentifierText.ShortId(target.Id)}");
             }
             return false;
         }
@@ -402,7 +402,7 @@ private static bool? TryExecuteBacklogCommand(string command, IReadOnlyList<stri
         {
             var store = new BacklogStore(context.Workspace.BacklogStorePath);
             var all = store.ListAsync(includeAll: true).GetAwaiter().GetResult();
-            Console.Write(RenderBacklogMarkdown(all));
+            Console.Write(BacklogTextView.RenderBacklogMarkdown(all));
             return false;
         }
 
@@ -551,32 +551,6 @@ private static BacklogItemUpdate ParseBacklogItemUpdate(IReadOnlyList<string> pa
     return new BacklogItemUpdate(title, description, priority, tags, status);
 }
 
-internal static string RenderBacklogListTag(BacklogItem item)
-{
-    if (item.SupersededBy is not null)
-        return $"[Superseded→{ShortBacklogId(item.SupersededBy)}]";
-
-    var duplicate = item.Links.FirstOrDefault(link =>
-        link.Kind == BacklogLinkKind.Duplicate &&
-        string.Equals(link.DuplicateId, item.Id, StringComparison.Ordinal));
-    if (duplicate?.CanonicalId is not null)
-        return $"[Dup→{ShortBacklogId(duplicate.CanonicalId)}]";
-
-    return $"[{item.Status}]";
-}
-
-internal static string RenderBacklogTimestampSuffix(BacklogItem item) =>
-    FormattableString.Invariant($" [created={item.CreatedAt.UtcDateTime:yyyy-MM-dd}] [updated={item.UpdatedAt.UtcDateTime:yyyy-MM-dd}]");
-
-internal static string RenderBacklogListSuffix(BacklogItem item)
-{
-    var related = item.Links
-        .Where(link => link.Kind == BacklogLinkKind.Related)
-        .Select(link => $"[Related→{ShortBacklogId(link.OtherId(item.Id))}]")
-        .ToArray();
-    return related.Length == 0 ? "" : " " + string.Join(' ', related);
-}
-
 private static bool IsBacklogListingStatus(string? status) =>
     status is not null &&
     (status.Equals("claimed", StringComparison.OrdinalIgnoreCase) ||
@@ -615,66 +589,6 @@ internal static IReadOnlyList<BacklogItem> ApplyBacklogListFilters(
     }
 
     return query.ToArray();
-}
-
-internal static string RenderBacklogTriage(
-    IReadOnlyList<BacklogItem> items,
-    IReadOnlyCollection<Goal> goals,
-    int limit,
-    int staleDays,
-    DateTimeOffset now)
-{
-    if (limit < 0)
-        throw new ArgumentOutOfRangeException(nameof(limit), "Limit must be non-negative.");
-    if (staleDays < 0)
-        throw new ArgumentOutOfRangeException(nameof(staleDays), "Stale days must be non-negative.");
-
-    var openItems = items.Where(item => item.Status == BacklogItemStatus.Open).ToArray();
-    var activeGoalByBacklogId = goals
-        .Where(goal => goal.SourceBacklogItemId is not null && !IsTerminalGoalStatus(goal.Status))
-        .GroupBy(goal => goal.SourceBacklogItemId!, StringComparer.Ordinal)
-        .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
-    var linkedOpenItems = openItems
-        .Where(item => activeGoalByBacklogId.ContainsKey(item.Id))
-        .ToArray();
-    var sb = new System.Text.StringBuilder();
-    sb.AppendLine($"Backlog triage: open={openItems.Length} done={items.Count - openItems.Length} active-linked={linkedOpenItems.Length} limit={limit}");
-    AppendTriageBucket(
-        sb,
-        $"Stale open (>{staleDays}d)",
-        openItems
-            .Where(item => (now - item.UpdatedAt).TotalDays > staleDays)
-            .OrderBy(item => item.UpdatedAt),
-        limit,
-        activeGoalByBacklogId,
-        now);
-    AppendTriageBucket(
-        sb,
-        "Active-linked open",
-        linkedOpenItems.OrderBy(item => item.UpdatedAt),
-        limit,
-        activeGoalByBacklogId,
-        now);
-    AppendTriageBucket(
-        sb,
-        "Blocked-looking open",
-        openItems
-            .Where(IsBlockedLooking)
-            .OrderBy(item => item.UpdatedAt),
-        limit,
-        activeGoalByBacklogId,
-        now);
-    AppendTriageBucket(
-        sb,
-        "High-priority open",
-        openItems
-            .Where(IsHighPriorityLooking)
-            .OrderBy(item => item.UpdatedAt),
-        limit,
-        activeGoalByBacklogId,
-        now);
-    AppendDuplicateBucket(sb, openItems, limit);
-    return sb.ToString();
 }
 
 private static int? ParseOptionalLimit(IReadOnlyList<string> parts)
@@ -767,113 +681,5 @@ private static int? ParseOptionalNonNegativeInt(IReadOnlyList<string> parts, str
     }
 
     return limit;
-}
-
-private static void AppendTriageBucket(
-    System.Text.StringBuilder sb,
-    string heading,
-    IEnumerable<BacklogItem> items,
-    int limit,
-    IReadOnlyDictionary<string, Goal> activeGoalByBacklogId,
-    DateTimeOffset now)
-{
-    var selected = items.Take(limit).ToArray();
-    sb.AppendLine(heading + ":");
-    if (selected.Length == 0)
-    {
-        sb.AppendLine("- none");
-        return;
-    }
-
-    foreach (var item in selected)
-    {
-        var ageDays = Math.Max(0, (int)Math.Floor((now - item.UpdatedAt).TotalDays));
-        var goalText = activeGoalByBacklogId.TryGetValue(item.Id, out var goal)
-            ? $" goal={goal.Id.Value[..Math.Min(8, goal.Id.Value.Length)]}:{goal.Status}"
-            : "";
-        sb.AppendLine($"- {ShortBacklogId(item)} age={ageDays}d{goalText} {item.Title}");
-    }
-}
-
-private static void AppendDuplicateBucket(System.Text.StringBuilder sb, IReadOnlyList<BacklogItem> openItems, int limit)
-{
-    var duplicateGroups = openItems
-        .GroupBy(item => DuplicateKey(item.Title), StringComparer.Ordinal)
-        .Where(group => group.Key.Length > 0 && group.Count() > 1)
-        .OrderByDescending(group => group.Count())
-        .ThenBy(group => group.Key, StringComparer.Ordinal)
-        .Take(limit)
-        .ToArray();
-
-    sb.AppendLine("Duplicate-looking open:");
-    if (duplicateGroups.Length == 0)
-    {
-        sb.AppendLine("- none");
-        return;
-    }
-
-    foreach (var group in duplicateGroups)
-    {
-        var sample = string.Join(" | ", group.Take(3).Select(item => $"{ShortBacklogId(item)} {item.Title}"));
-        sb.AppendLine($"- {group.Count()}x {group.Key}: {sample}");
-    }
-}
-
-private static string ShortBacklogId(BacklogItem item) => ShortBacklogId(item.Id);
-
-private static string ShortBacklogId(string id) => id[..Math.Min(8, id.Length)];
-
-private static bool IsTerminalGoalStatus(GoalStatus status) =>
-    status is GoalStatus.Completed or GoalStatus.Failed or GoalStatus.Cancelled or GoalStatus.Superseded;
-
-private static bool IsBlockedLooking(BacklogItem item) =>
-    ContainsAny(item.Title, "blocked", "blocker", "stuck", "waiting", "human input") ||
-    ContainsAny(item.Body, "blocked", "blocker", "stuck", "waiting", "human input");
-
-private static bool IsHighPriorityLooking(BacklogItem item) =>
-    ContainsAny(item.Title, "p0", "p1", "urgent", "critical", "high-priority", "high priority") ||
-    ContainsAny(item.Body, "p0", "p1", "urgent", "critical", "high-priority", "high priority");
-
-private static bool ContainsAny(string text, params string[] needles) =>
-    needles.Any(needle => text.Contains(needle, StringComparison.OrdinalIgnoreCase));
-
-private static string DuplicateKey(string title)
-{
-    var normalized = new string(title
-        .ToLowerInvariant()
-        .Select(ch => char.IsLetterOrDigit(ch) ? ch : ' ')
-        .ToArray());
-    return string.Join(' ', normalized.Split(' ', StringSplitOptions.RemoveEmptyEntries));
-}
-
-internal static string RenderBacklogMarkdown(IReadOnlyList<BacklogItem> items)
-{
-    var sb = new System.Text.StringBuilder();
-    sb.AppendLine("# Backlog");
-    sb.AppendLine();
-
-    var openItems = items.Where(i => i.Status == BacklogItemStatus.Open).ToList();
-    var doneItems = items.Where(i => i.Status == BacklogItemStatus.Done).ToList();
-
-    foreach (var item in openItems)
-    {
-        sb.AppendLine($"## {item.Title}");
-        sb.AppendLine();
-        if (!string.IsNullOrWhiteSpace(item.Body))
-        {
-            sb.AppendLine(item.Body);
-            sb.AppendLine();
-        }
-    }
-
-    if (doneItems.Count > 0)
-    {
-        sb.AppendLine("## Shipped (closed)");
-        sb.AppendLine();
-        foreach (var item in doneItems)
-            sb.AppendLine($"- **{item.Title}** — {item.UpdatedAt:yyyy-MM-dd}");
-    }
-
-    return sb.ToString();
 }
 }

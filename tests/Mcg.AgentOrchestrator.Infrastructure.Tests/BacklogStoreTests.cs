@@ -515,7 +515,7 @@ public sealed class BacklogStoreTests
         await store.CloseAsync(toClose.Id);
 
         var all = await store.ListAsync(includeAll: true);
-        var md = CliCommandHandlers.RenderBacklogMarkdown(all);
+        var md = BacklogTextView.RenderBacklogMarkdown(all);
 
         Assert.True(md.Contains("# Backlog", StringComparison.Ordinal));
         Assert.True(md.Contains("## Open item", StringComparison.Ordinal));
@@ -531,7 +531,7 @@ public sealed class BacklogStoreTests
         await store.AddAsync("Open only");
 
         var all = await store.ListAsync(includeAll: true);
-        var md = CliCommandHandlers.RenderBacklogMarkdown(all);
+        var md = BacklogTextView.RenderBacklogMarkdown(all);
 
         Assert.True(md.Contains("## Open only", StringComparison.Ordinal));
         Assert.False(md.Contains("## Shipped", StringComparison.Ordinal));
