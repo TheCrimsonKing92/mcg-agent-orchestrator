@@ -1,9 +1,34 @@
 using Mcg.AgentOrchestrator.Core;
+using System.Text.Json;
 
 // Parallel-safe: each test owns its kernel and uses fixed verification timestamps.
 public sealed class VerificationOutputCompactionTests
 {
     private static readonly DateTimeOffset CompletedAt = new(2026, 10, 26, 0, 0, 0, TimeSpan.Zero);
+
+    [Fact]
+    public void RecordVerification_ShortText_DropsCopiesAndPreservesAuthority()
+    {
+        var output = TextWithMarker("recorded-output", 2_000);
+        var error = TextWithMarker("recorded-error", 300);
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Verify", AgentRole.Tester);
+        var goal = kernel.CreateGoal("Record compact verification", [task]);
+        var record = Verification(output, error, CompletedAt) with
+        {
+            FullStandardOutput = new string(output.ToCharArray()),
+            FullStandardError = new string(error.ToCharArray())
+        };
+
+        kernel.RecordTaskVerification(goal.Id, task.Id, record);
+
+        foreach (var retained in task.VerificationHistory.Prepend(task.LastVerification!))
+        {
+            Assert.Null(retained.FullStandardOutput);
+            Assert.Null(retained.FullStandardError);
+            AssertRestored(retained, output, error);
+        }
+    }
 
     [Fact]
     public void TwoRounds_ExportRestoreExport_PreservesTextWithCompactFields()
@@ -29,9 +54,8 @@ public sealed class VerificationOutputCompactionTests
             record => AssertRestored(record, secondOutput, secondError));
 
         var exportedAgain = SnapshotTask(restoredKernel.ExportSnapshot());
-        Assert.Equal(TextFields(task.LastVerification!), TextFields(exportedAgain.LastVerification!));
-        Assert.Equal(task.VerificationHistory.Select(TextFields).ToArray(),
-            exportedAgain.VerificationHistory!.Select(TextFields).ToArray());
+        Assert.Equal(JsonSerializer.Serialize(task.LastVerification), JsonSerializer.Serialize(exportedAgain.LastVerification));
+        Assert.Equal(JsonSerializer.Serialize(task.VerificationHistory), JsonSerializer.Serialize(exportedAgain.VerificationHistory));
     }
 
     [Fact]
@@ -128,10 +152,17 @@ public sealed class VerificationOutputCompactionTests
         Assert.NotSame(legacy.StandardOutput, legacy.AuthoritativeStandardOutput);
         var snapshot = Export(Verification(preview, string.Empty, CompletedAt));
 
-        var restored = Restore(WithVerification(snapshot, legacy));
+        var legacySnapshot = WithVerification(snapshot, legacy);
+        var kernel = AgentOrchestratorKernel.FromSnapshot(legacySnapshot);
+        var restored = Assert.Single(Assert.Single(kernel.Goals).Tasks);
 
         AssertRestored(restored.LastVerification!, preview, string.Empty);
         AssertRestored(Assert.Single(restored.VerificationHistory), preview, string.Empty);
+        var exportedAgain = SnapshotTask(kernel.ExportSnapshot());
+        Assert.Equal(JsonSerializer.Serialize(SnapshotTask(legacySnapshot).LastVerification),
+            JsonSerializer.Serialize(exportedAgain.LastVerification));
+        Assert.Equal(JsonSerializer.Serialize(SnapshotTask(legacySnapshot).VerificationHistory),
+            JsonSerializer.Serialize(exportedAgain.VerificationHistory));
     }
 
     private static TaskVerificationRecord Verification(string output, string error, DateTimeOffset at) =>
@@ -189,11 +220,6 @@ public sealed class VerificationOutputCompactionTests
         Assert.Same(record.StandardOutput, record.AuthoritativeStandardOutput);
         Assert.Same(record.StandardError, record.AuthoritativeStandardError);
     }
-
-    private static (string, string, string?, string?, string?, string?) TextFields(TaskVerificationSnapshot record) =>
-        (record.StandardOutput, record.StandardError, record.AuthoritativeStandardOutput,
-            record.AuthoritativeStandardError, record.AuthoritativeStandardOutputUnavailableReason,
-            record.AuthoritativeStandardErrorUnavailableReason);
 
     private static string TextWithMarker(string marker, int length)
     {

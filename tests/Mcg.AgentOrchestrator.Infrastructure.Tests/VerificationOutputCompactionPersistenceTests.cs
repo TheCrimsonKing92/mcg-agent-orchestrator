@@ -2,11 +2,17 @@ using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Microsoft.Data.Sqlite;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 
 // Parallel-safe: each test owns a temporary workspace and non-pooled database connections.
 public sealed class VerificationOutputCompactionPersistenceTests
 {
     private static readonly DateTimeOffset CompletedAt = new(2026, 10, 26, 0, 0, 0, TimeSpan.Zero);
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        Converters = { new JsonStringEnumConverter() }
+    };
 
     [Fact]
     public async Task TwoRounds_SaveLoad_StoresEachPreviewOnceAndRestoresText()
@@ -76,6 +82,60 @@ public sealed class VerificationOutputCompactionPersistenceTests
             var restored = RestoreTask(loaded);
             Assert.Equal(output, restored.LastVerification!.AuthoritativeStandardOutput);
             Assert.Equal(output, Assert.Single(restored.VerificationHistory).AuthoritativeStandardOutput);
+        });
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task LegacyRow_MergeSave_PreservesBaselineAndNewVerification(bool rejectConflict)
+    {
+        var goal = CreateGoal(Verification("legacy-output", "legacy-error", CompletedAt));
+        var task = Assert.Single(goal.Tasks);
+        var legacy = task.LastVerification! with
+        {
+            AuthoritativeStandardOutput = "legacy-output",
+            AuthoritativeStandardError = "legacy-error",
+            AuthoritativeStandardOutputUnavailableReason = null,
+            AuthoritativeStandardErrorUnavailableReason = null
+        };
+        goal = goal with { Tasks = [task with { LastVerification = legacy, VerificationHistory = [legacy] }] };
+
+        await WithRepository(async (repository, databasePath) =>
+        {
+            await repository.SaveGoalSnapshotsAsync([goal]);
+            var rawJson = await ReadSnapshotJson(databasePath, goal.Id);
+            var loaded = Assert.IsType<GoalSnapshot>(await repository.LoadGoalAsync(new GoalId(goal.Id)));
+            var kernel = AgentOrchestratorKernel.FromSnapshot(new([loaded], []));
+            var baseline = Assert.Single(kernel.ExportSnapshot().Goals);
+            Assert.Equal(rawJson, JsonSerializer.Serialize(baseline, JsonOptions));
+
+            kernel.RecordTaskVerification(new GoalId(goal.Id), new TaskId(task.Id),
+                Verification("new-output", "new-error", CompletedAt.AddMinutes(1)));
+            var current = Assert.Single(kernel.ExportSnapshot().Goals);
+            if (!rejectConflict)
+            {
+                // Force an actual merge with an independent store-owned change.
+                await repository.SaveGoalSnapshotsAsync([loaded with { Objective = "advanced-objective" }]);
+            }
+
+            var result = Assert.Single(await repository.SaveGoalSnapshotsWithMergeAsync(
+                [new GoalSnapshotSaveRequest(baseline, current, RejectConflict: rejectConflict)]));
+            Assert.Equal(rejectConflict ? GoalSnapshotSaveDisposition.Saved : GoalSnapshotSaveDisposition.Merged,
+                result.Disposition);
+            var saved = Assert.IsType<GoalSnapshot>(await repository.LoadGoalAsync(new GoalId(goal.Id)));
+            if (!rejectConflict)
+                Assert.Equal("advanced-objective", saved.Objective);
+            var savedTask = Assert.Single(saved.Tasks);
+            Assert.Equal(2, savedTask.VerificationHistory!.Count);
+            Assert.Equal(JsonSerializer.Serialize(legacy, JsonOptions),
+                JsonSerializer.Serialize(savedTask.VerificationHistory[0], JsonOptions));
+            AssertCompacted(savedTask.LastVerification!);
+            AssertCompacted(savedTask.VerificationHistory[1]);
+            var restored = RestoreTask(saved);
+            Assert.Equal("new-output", restored.LastVerification!.AuthoritativeStandardOutput);
+            Assert.Equal("new-error", restored.LastVerification.AuthoritativeStandardError);
+            Assert.Equal("legacy-output", restored.VerificationHistory[0].AuthoritativeStandardOutput);
         });
     }
 
