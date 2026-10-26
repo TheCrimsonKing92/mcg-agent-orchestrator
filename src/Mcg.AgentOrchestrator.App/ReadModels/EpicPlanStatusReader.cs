@@ -2,7 +2,7 @@ using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
-namespace Mcg.AgentOrchestrator.App.Cli;
+namespace Mcg.AgentOrchestrator.App.ReadModels;
 
 internal enum EpicPlanSliceStatus { Blocked, Ready, InFlight, Verified, Landed, Failed, Parked, Done, Superseded, Missing, RemainingScope, ReconciliationRequired, Unresolved, Claimed }
 
