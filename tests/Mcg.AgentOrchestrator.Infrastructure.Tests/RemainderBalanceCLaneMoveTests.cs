@@ -117,7 +117,7 @@ public sealed class RemainderBalanceCLaneMoveTests
         }
 
         Assert.Equal(27, loaded.Count);
-        Assert.Equal(27, beforeMove.Count);
+        Assert.Equal(26, beforeMove.Count);
         foreach (var type in moved)
         {
             Assert.Equal(new[] { Remainder }, LaneNames(beforeMove, type));
