@@ -7,14 +7,17 @@ namespace Mcg.AgentOrchestrator.Core;
 // Owns only the per-file coherence verdict; receipt content hashes remain uncached.
 internal static class TrxCoherenceCache
 {
-    private const int MaxEntries = 2048;
+    // Covers the 7,799 unique identities and 3,388 live files measured on 2026-10-25.
+    internal const int MaxEntries = 8192;
     private static readonly ConcurrentDictionary<ContentIdentity, bool> Entries = new();
+    private static readonly Queue<ContentIdentity> InsertionOrder = new();
     private static readonly object InsertionLock = new();
     private static long loadCount;
     private static int storeLoadClaimed;
     private static Action<PersistedVerdict>? verdictSink;
 
     internal static long LoadCount => Interlocked.Read(ref loadCount);
+    internal static int Count => Entries.Count;
 
     internal static bool TryClaimStoreLoad() => Interlocked.CompareExchange(ref storeLoadClaimed, 1, 0) == 0;
 
@@ -25,11 +28,7 @@ internal static class TrxCoherenceCache
         var identity = new ContentIdentity(new FileStamp(entry.Path, entry.Length, entry.Ticks), entry.Sha256);
         lock (InsertionLock)
         {
-            // Loading never evicts; duplicate keys still take the last verdict in file order.
-            if (Entries.ContainsKey(identity) || Entries.Count < MaxEntries)
-            {
-                Entries[identity] = entry.Verdict;
-            }
+            Insert(identity, entry.Verdict);
         }
     }
 
@@ -38,6 +37,7 @@ internal static class TrxCoherenceCache
         lock (InsertionLock)
         {
             Entries.Clear();
+            InsertionOrder.Clear();
             Interlocked.Exchange(ref loadCount, 0);
             Interlocked.Exchange(ref storeLoadClaimed, 0);
             SetVerdictSink(null);
@@ -80,12 +80,7 @@ internal static class TrxCoherenceCache
         Action<PersistedVerdict>? sink;
         lock (InsertionLock)
         {
-            // Serialize only insertions, so concurrent misses cannot overrun the ceiling.
-            if (Entries.Count >= MaxEntries)
-            {
-                Entries.Clear();
-            }
-            Entries[identity] = verdict;
+            Insert(identity, verdict);
             sink = Volatile.Read(ref verdictSink);
         }
         try
@@ -97,6 +92,22 @@ internal static class TrxCoherenceCache
         {
         }
         return verdict;
+    }
+
+    // Called only under InsertionLock; the queue mirrors the dictionary's insertion order.
+    private static void Insert(ContentIdentity identity, bool verdict)
+    {
+        if (Entries.ContainsKey(identity))
+        {
+            Entries[identity] = verdict;
+            return;
+        }
+        if (Entries.Count >= MaxEntries)
+        {
+            Entries.TryRemove(InsertionOrder.Dequeue(), out _);
+        }
+        Entries[identity] = verdict;
+        InsertionOrder.Enqueue(identity);
     }
 
     private static bool TryReadStamp(string fullPath, out FileStamp stamp)
