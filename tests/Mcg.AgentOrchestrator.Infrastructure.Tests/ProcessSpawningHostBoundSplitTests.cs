@@ -15,6 +15,7 @@ public sealed class ProcessSpawningHostBoundSplitTests
         typeof(ConductorSelfRelaunchTestsIsolatedArtifacts),
         typeof(ConductorSelfRelaunchTestsLandingBuildStore),
         typeof(ConductorSelfRelaunchTestsRootCheckout),
+        typeof(ConductorSelfRelaunchTestsRelaunchBuildQosOptOutTests),
         typeof(ConductorSuccessorSelfCheckTests),
         typeof(DisposableTrialRootTests),
         typeof(DisposableTrialRootNegativeControlTests),
