@@ -90,7 +90,7 @@ public sealed class RepositoryTestImpactPlannerStorageRetentionRouteTests
             foreach (var project in RepositoryTestImpactPlanner.BuiltInTestProjectPaths)
                 Write(project, "<Project Sdk=\"Microsoft.NET.Sdk\" />");
             Write(MovedPath, "public class StorageRetentionResumeCursorTests { [Xunit.Fact] public void Example() {} }");
-            Write(MainPath, "public class WorkerProfileTests { [Xunit.Fact] public void Example() {} }");
+            Write(MainPath, "public class " + Path.GetFileNameWithoutExtension(MainPath) + " { [Xunit.Fact] public void Example() {} }");
             Write(ExecutionPath, "public class WorkerShellTests { [Xunit.Fact] public void Example() {} }");
         }
 
