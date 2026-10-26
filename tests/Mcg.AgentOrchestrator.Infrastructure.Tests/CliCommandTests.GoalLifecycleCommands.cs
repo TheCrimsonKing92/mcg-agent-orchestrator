@@ -884,6 +884,9 @@ public sealed class CliCommandTestsGoalLifecycleCleanupHooksAcceptance : CliComm
         var kernel = new AgentOrchestratorKernel();
         var task = new TaskSpec(TaskId.New(), "Implement feature", AgentRole.Developer);
         var goal = kernel.CreateGoal("Force-landed feature", [task]);
+        // Keep a real cleanup obligation, matching the WorkspaceExists lifecycle fact below.
+        var worktreePath = GoalWorktrees.WorktreePath(root, goal.Id);
+        Directory.CreateDirectory(worktreePath);
         IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
         var providers = new InMemoryModelProviderRegistry([]);
         var profiles = WorkerProfileCatalog.Default();
@@ -939,8 +942,12 @@ public sealed class CliCommandTestsGoalLifecycleCleanupHooksAcceptance : CliComm
         Xunit.Assert.DoesNotContain("Acceptance passed", dogfoodRecord.RenderedMarkdown, StringComparison.Ordinal);
         var facts = new GoalLifecycleFacts(WorkspaceExists: true, IsMerged: true, IsRecorded: true, IsCleanedUp: false);
         Xunit.Assert.Equal(GoalLifecycleState.Recorded, GoalLifecycle.ResolveState(kernel.GetGoal(goal.Id), facts));
+        Xunit.Assert.True(Directory.Exists(worktreePath));
+        Xunit.Assert.NotNull(GoalWorktrees.TryGetCleanupBackoff(root, goal.Id));
         var sweep = TerminalGoalSweep.Run(kernel, root, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, goal.Id);
         Xunit.Assert.Empty(sweep.Goals);
+        Xunit.Assert.True(Directory.Exists(worktreePath));
+        Xunit.Assert.NotNull(GoalWorktrees.TryGetCleanupBackoff(root, goal.Id));
         Xunit.Assert.Equal(GoalStatus.Completed, kernel.GetGoal(goal.Id).Status);
     }
 

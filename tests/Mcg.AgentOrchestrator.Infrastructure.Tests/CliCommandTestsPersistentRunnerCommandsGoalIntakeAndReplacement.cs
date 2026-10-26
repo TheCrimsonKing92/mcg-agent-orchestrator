@@ -1221,7 +1221,7 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacem
 
         if (claimObservationUnavailable)
         {
-            CliPersistentStateRunner.BeforeGoalReplacementFailureClaimObservation = () =>
+            CliGoalReplacementExecution.BeforeGoalReplacementFailureClaimObservation = () =>
                 throw new IOException("Injected claim observation failure.");
         }
         InvalidOperationException exception;
@@ -1244,7 +1244,7 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacem
         }
         finally
         {
-            CliPersistentStateRunner.BeforeGoalReplacementFailureClaimObservation = null;
+            CliGoalReplacementExecution.BeforeGoalReplacementFailureClaimObservation = null;
         }
 
         Xunit.Assert.Contains("GOAL_REPLACE_PERSISTENCE_FAILED", exception.Message, StringComparison.Ordinal);
@@ -1470,7 +1470,7 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacem
             ThrowOnLoadAsync = true
         };
 
-        var observed = CliPersistentStateRunner.ResolveObservedClaimAfterReplacementFailure(
+        var observed = CliGoalReplacementExecution.ResolveObservedClaimAfterReplacementFailure(
             new SourceBacklogClaimStore(workspace.SqliteStatePath),
             repository,
             "unobservable-backlog-item");
@@ -1597,7 +1597,7 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacem
             DateTimeOffset.Parse("2026-08-12T00:00:00Z"));
         var waitCount = 0;
 
-        var acquisition = CliPersistentStateRunner.AcquireGoalReplacementTransferLease(
+        var acquisition = CliGoalReplacementExecution.AcquireGoalReplacementTransferLease(
             workspace.SqliteStatePath,
             predecessorGoalId,
             () => expectedClaim,
@@ -1609,7 +1609,7 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacem
             });
 
         Xunit.Assert.Equal(
-            CliPersistentStateRunner.GoalReplacementTransferLeaseAcquisitionKind.CompetingReplacementTimedOut,
+            CliGoalReplacementExecution.GoalReplacementTransferLeaseAcquisitionKind.CompetingReplacementTimedOut,
             acquisition.Kind);
         Xunit.Assert.Same(expectedClaim, acquisition.ObservedClaim);
         Xunit.Assert.Equal(1, waitCount);
@@ -1636,13 +1636,13 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacem
             expectedClaim.Version,
             "scout",
             string.Empty);
-        var acquisition = new CliPersistentStateRunner.GoalReplacementTransferLeaseAcquisition(
-            CliPersistentStateRunner.GoalReplacementTransferLeaseAcquisitionKind.CompetingReplacementTimedOut,
+        var acquisition = new CliGoalReplacementExecution.GoalReplacementTransferLeaseAcquisition(
+            CliGoalReplacementExecution.GoalReplacementTransferLeaseAcquisitionKind.CompetingReplacementTimedOut,
             ObservedClaim: expectedClaim);
         var recordedOutcomes = new List<GoalReplacementOutcome>();
 
         var exception = Xunit.Assert.Throws<GoalReplacementRetryableTimeoutException>(() =>
-            CliPersistentStateRunner.ThrowGoalReplacementTransferLeaseTimeout(
+            CliGoalReplacementExecution.ThrowGoalReplacementTransferLeaseTimeout(
                 command,
                 acquisition,
                 (outcome, _, _, _) => recordedOutcomes.Add(outcome)));
@@ -1924,7 +1924,7 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacem
                 TimeSpan.FromMinutes(30));
         Xunit.Assert.NotNull(competingLease);
         using var failedAcquisitionObserved = new ManualResetEventSlim(initialState: false);
-        CliPersistentStateRunner.AfterGoalReplacementLeaseAcquisitionFailed = () =>
+        CliGoalReplacementExecution.AfterGoalReplacementLeaseAcquisitionFailed = () =>
         {
             failedAcquisitionObserved.Set();
             Interlocked.Exchange(ref competingLease, null)?.Dispose();
@@ -1957,7 +1957,7 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacem
         }
         finally
         {
-            CliPersistentStateRunner.AfterGoalReplacementLeaseAcquisitionFailed = null;
+            CliGoalReplacementExecution.AfterGoalReplacementLeaseAcquisitionFailed = null;
             competingLease?.Dispose();
         }
     }

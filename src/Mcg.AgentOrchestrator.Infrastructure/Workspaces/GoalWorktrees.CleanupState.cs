@@ -325,6 +325,18 @@ public static partial class GoalWorktrees
         }
     }
 
+    public static GoalWorktreeCleanupBackoff? ClearSettledGoalCleanupBackoff(
+        string executionDirectory, GoalId goalId, GoalWorktreeCleanupHooks? hooks = null)
+    {
+        hooks ??= new GoalWorktreeCleanupHooks();
+        var path = WorktreePath(executionDirectory, goalId);
+        if (Directory.Exists(path) || TryGetCleanupBackoff(executionDirectory, goalId, hooks) is not { } backoff)
+            return null;
+
+        ClearOrphanCleanupBackoff(path, hooks: hooks);
+        return TryGetCleanupBackoff(executionDirectory, goalId, hooks) is null ? backoff : null;
+    }
+
     private static void ClearOrphanCleanupBackoff(
         string path,
         string? cleanupStateRoot = null,
