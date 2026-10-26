@@ -52,7 +52,7 @@ public sealed class ConductorContinuitySupervisorRenewalProgressTests
         Assert.Equal(1, exitCode);
         Assert.Equal(3, host.Requests);
         Assert.Contains("restart-cap count=3 max=2", events.Events[^1].Detail, StringComparison.Ordinal);
-        Assert.Equal(["SUPERVISOR_ESCALATED reason=restart-cap count=3 max=2"], conductEvents);
+        Assert.Collection(conductEvents, line => { Assert.StartsWith("SUPERVISOR_ESCALATED reason=restart-cap count=3 max=2 windowSeconds=300 starts=[", line); Assert.Contains("attempt=1", line); Assert.Contains("attempt=2", line); Assert.Contains("attempt=3", line); });
     }
 
     private static async Task<(int ExitCode, int Requests, List<RunEventAppend> Events, List<string> ConductEvents)>

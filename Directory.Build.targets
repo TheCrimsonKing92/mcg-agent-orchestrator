@@ -3,12 +3,13 @@
     A build receipt is provenance for the adjacent output, not an authority to run it.
     It detects stale outputs; it is not intended to defend against a maliciously edited receipt.
   -->
-  <Target Name="McgWriteBuildReceipt" AfterTargets="Build"
+  <Target Name="_McgCollectBuildReceiptInputs"
           Condition="'$(McgEmitBuildReceipt)' != 'false' and '$(IsTestProject)' == 'true' and ('$(McgBuildReceiptProject)' == '' or '$(MSBuildProjectFullPath)' == '$(McgBuildReceiptProject)') and Exists('$(TargetPath)') and Exists('$(TargetDir)$(TargetName).pdb')">
     <PropertyGroup>
       <_McgReceiptPath>$(TargetDir).mcg-build-receipt.txt</_McgReceiptPath>
       <_McgReceiptTemporaryPath>$(_McgReceiptPath).tmp</_McgReceiptTemporaryPath>
       <_McgReceiptRepositoryRoot>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)'))</_McgReceiptRepositoryRoot>
+      <_McgReceiptInputsPath>$(IntermediateOutputPath)mcg-build-receipt.inputs</_McgReceiptInputsPath>
     </PropertyGroup>
 
     <ItemGroup>
@@ -23,6 +24,27 @@
       <_McgReceiptClosureFiles Include="$(TargetDir)**\*"
                                Exclude="$(TargetDir).mcg-build-receipt.txt;$(TargetDir).mcg-build-receipt.txt.tmp" />
     </ItemGroup>
+    <ItemGroup>
+      <_McgReceiptInputs Include="K&#x9;project&#x9;$([MSBuild]::Escape('$(MSBuildProjectFullPath)'))" />
+      <_McgReceiptInputs Include="K&#x9;configuration&#x9;$([MSBuild]::Escape('$(Configuration)'))" />
+      <_McgReceiptInputs Include="K&#x9;targetFramework&#x9;$([MSBuild]::Escape('$(TargetFramework)'))" />
+      <_McgReceiptInputs Include="K&#x9;runtimeIdentifier&#x9;$([MSBuild]::Escape('$(RuntimeIdentifier)'))" />
+      <_McgReceiptInputs Include="K&#x9;repositoryRoot&#x9;$([MSBuild]::Escape('$(_McgReceiptRepositoryRoot)'))" />
+      <_McgReceiptInputs Include="K&#x9;outputDirectory&#x9;$([MSBuild]::Escape('$(TargetDir)'))" />
+      <_McgReceiptInputs Include="K&#x9;assemblyLeaf&#x9;$([MSBuild]::Escape('$(TargetFileName)'))" />
+      <_McgReceiptInputs Include="F&#x9;closure&#x9;$([MSBuild]::Escape('%(_McgReceiptClosureFiles.FullPath)'))&#x9;%(_McgReceiptClosureFiles.ModifiedTime)" />
+      <_McgReceiptInputs Include="S&#x9;source&#x9;$([MSBuild]::Escape('%(_McgReceiptSources.FullPath)'))&#x9;%(_McgReceiptSources.ModifiedTime)" />
+      <FileWrites Include="$(_McgReceiptInputsPath)" />
+    </ItemGroup>
+    <WriteLinesToFile File="$(_McgReceiptInputsPath)" Lines="@(_McgReceiptInputs)"
+                      Overwrite="true" WriteOnlyWhenDifferent="true" Encoding="UTF-8" />
+  </Target>
+
+  <Target Name="McgWriteBuildReceipt" AfterTargets="Build"
+          DependsOnTargets="_McgCollectBuildReceiptInputs"
+          Inputs="$(_McgReceiptInputsPath);$(TargetPath);$(TargetDir)$(TargetName).pdb;@(_McgReceiptSources);$(MSBuildThisFileFullPath)"
+          Outputs="$(_McgReceiptPath)"
+          Condition="'$(McgEmitBuildReceipt)' != 'false' and '$(IsTestProject)' == 'true' and ('$(McgBuildReceiptProject)' == '' or '$(MSBuildProjectFullPath)' == '$(McgBuildReceiptProject)') and Exists('$(TargetPath)') and Exists('$(TargetDir)$(TargetName).pdb')">
     <GetFileHash Files="@(_McgReceiptSources)" Algorithm="SHA256" HashEncoding="hex">
       <Output TaskParameter="Items" ItemName="_McgReceiptSourceHashes" />
     </GetFileHash>

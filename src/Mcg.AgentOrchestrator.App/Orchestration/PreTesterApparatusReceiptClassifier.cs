@@ -23,7 +23,8 @@ internal static class PreTesterApparatusReceiptClassifier
         ConductorParallelAcceptanceAttemptOutcome.StaleCandidate;
 
     // Receipt validity and failure attribution determine whether a completed run is unusable.
-    internal static (string Outcome, FindingEvidenceArmReceipt? Candidate, IReadOnlyList<string> FailingTests)
+    internal static (string Outcome, FindingEvidenceArmReceipt? Candidate, IReadOnlyList<string> FailingTests,
+        PreTesterUnusableReason? Unusable)
         ClassifyOutcome(FocusedEvidenceRunResult? evidence, bool completed,
         string? candidateSha, IReadOnlyList<FindingEvidenceSelection> selections,
         Func<IReadOnlyList<string>, bool> everyFailureInsideCandidateChanges)
@@ -41,15 +42,26 @@ internal static class PreTesterApparatusReceiptClassifier
                             (baseline is null
                                 ? unlistedFailures.Length == 0 || everyFailureInsideCandidateChanges(unlistedFailures)
                                 : baseline.Disposition == FindingEvidenceArmDisposition.Green);
-        var green = completed && evidence!.IsValidEvidence &&
-                    candidate is { Accepted: true, Passed: true, Disposition: FindingEvidenceArmDisposition.Green,
-                        ExecutedTestCount: > 0 } &&
-                    AcceptanceCohortGateEvidence.HasContentBoundGreenTrxEvidence(
-                        candidate.TestResultPaths, candidate.ReceiptArtifacts,
-                        candidate.ExecutedTestCount!.Value,
-                        selections.Select(selection => selection.TestClass).ToHashSet(StringComparer.OrdinalIgnoreCase));
-        return (green ? "green" : actionableRed ? "actionable-red" : candidateRed ? "red" : "unusable",
-            candidate, failingTests);
+        var failure = FirstGreenFailure(evidence, completed, candidate, selections);
+        var outcome = failure is null ? "green" : actionableRed ? "actionable-red" : candidateRed ? "red" : "unusable";
+        return (outcome, candidate, failingTests, outcome == "unusable" ? failure : null);
+    }
+
+    private static PreTesterUnusableReason? FirstGreenFailure(FocusedEvidenceRunResult? evidence,
+        bool completed, FindingEvidenceArmReceipt? candidate, IReadOnlyList<FindingEvidenceSelection> selections)
+    {
+        if (!completed) return new("not-completed", []);
+        if (evidence is not { IsValidEvidence: true }) return new("evidence-invalid", []);
+        if (candidate is null) return new("candidate-arm-missing", []);
+        if (!candidate.Accepted) return new("candidate-arm-not-accepted", []);
+        if (!candidate.Passed) return new("candidate-arm-not-passed", []);
+        if (candidate.Disposition != FindingEvidenceArmDisposition.Green) return new("candidate-arm-not-green", []);
+        if (candidate.ExecutedTestCount is not > 0) return new("executed-count-missing", []);
+        var failure = ContentBoundGreenTrxEvidenceCheck.FirstFailure(
+            candidate.TestResultPaths, candidate.ReceiptArtifacts, candidate.ExecutedTestCount.Value,
+            selections.Select(selection => selection.TestClass).ToHashSet(StringComparer.OrdinalIgnoreCase),
+            allowShortNamePrefixCoverage: true);
+        return failure is null ? null : new(failure.Check, failure.MissingClasses);
     }
 
     internal static bool IsApparatusUnusable(FocusedEvidenceRunResult? evidence)
