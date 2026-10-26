@@ -145,7 +145,8 @@ public sealed class GoalSnapshotArchiveHotTableScenarioTests
         var at = Now.AddDays(-ageDays);
         var task = new TaskSnapshot(TaskId.New().Value, "Archive scenario work", AgentRole.Developer,
             taskStatus, null, null, null, null,
-            new TaskDispatchSnapshot("fixture", "fixture", "fixture", at.AddDays(-1), ResultCommit: "last-commit"), null);
+            new TaskDispatchSnapshot("fixture", "fixture", "fixture", at.AddDays(-1), ResultCommit: "last-commit"), null,
+            WorkerBuildInvocations: []);
         var snapshot = new GoalSnapshot(id, name, status, [task],
         [
             new ProgressEventSnapshot(id, null, ProgressKind.GoalCreated, "Created", at.AddDays(-2)),

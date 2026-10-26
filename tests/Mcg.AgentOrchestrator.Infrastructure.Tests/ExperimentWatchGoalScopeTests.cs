@@ -317,7 +317,8 @@ public sealed class ExperimentWatchGoalScopeTests
     {
         var tasks = Enumerable.Range(0, taskCount).Select(index => new TaskSnapshot($"{id}-{index}",
             "Implement", AgentRole.Developer, WorkTaskStatus.Completed, null, null, null, [], null, null,
-            DispatchHistory: [new("worker", "command", "root", dispatch, ResultCommit: "fixture-commit")])).ToArray();
+            DispatchHistory: [new("worker", "command", "root", dispatch, ResultCommit: "fixture-commit")],
+            WorkerBuildInvocations: [])).ToArray();
         return new(id, id, GoalStatus.Completed, tasks,
             [new ProgressEventSnapshot(id, null, ProgressKind.GoalPolicyDecision, "Completed", dispatch.AddMinutes(1))],
             CreatedAt: dispatch.AddHours(-1));
