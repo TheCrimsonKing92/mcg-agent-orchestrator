@@ -51,7 +51,6 @@ public sealed class CliMonitorReadOnlyRouteTests : CliTaskQueryTestSupport
     }
 
     [Xunit.Theory]
-    [Xunit.InlineData("monitor")]
     [Xunit.InlineData("monitor", "--help")]
     [Xunit.InlineData("monitor", "-h")]
     [Xunit.InlineData("monitor", "-x")]

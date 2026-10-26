@@ -10,7 +10,7 @@ internal static class CliCommandCapabilities
 {
     private static readonly HashSet<string> QueryCommands = new(StringComparer.OrdinalIgnoreCase)
     {
-        "tasks", "task", "verifications", "agents", "finding", "status", "goals", "monitor-goal",
+        "tasks", "task", "verifications", "agents", "finding", "status", "goals", "monitor-goal", "monitor",
         "failure-clusters",
         "storage-health",
         "build-attribution",

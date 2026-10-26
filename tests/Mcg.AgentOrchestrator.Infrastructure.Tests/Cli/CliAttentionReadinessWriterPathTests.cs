@@ -279,7 +279,6 @@ public sealed class CliAttentionReadinessWriterPathTests : CliTaskQueryTestSuppo
     [Xunit.InlineData("status", "-h")]
     [Xunit.InlineData("next", "--help")]
     [Xunit.InlineData("next", "-h")]
-    [Xunit.InlineData("monitor")]
     [Xunit.InlineData("readiness-repair")]
     public void StatusNextFlagsAndRepair_DeclineReadOnlyRoute(params string[] args) =>
         Xunit.Assert.False(CliReadOnlyCommandRunner.IsReadOnlyCommand(args));
