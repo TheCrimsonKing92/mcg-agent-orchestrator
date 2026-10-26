@@ -198,7 +198,8 @@ internal static class SourceSizeRatchet
             // Goal 568eb0fe keeps the tick alive for parked goals with unreconciled owned attempts;
             // the existing eligible-empty decision owns whether reconciliation can run. Its pre-walk
             // reset preserves admission isolation after batch reconciliation; measured 2698, no headroom.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs", 2578),
+            // Goal e1e7c5d3: four lines open and report the acceptance-admission CPU window.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs", 2582),
             // Goal 354522f1 tick persistence partial measured at 467 lines.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.TickPersistence.cs", 467),
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.DependencyReadmission.cs", 370),
@@ -631,7 +632,8 @@ internal static class SourceSizeRatchet
             // Its tick-context reset before the goal walk adds two lines after batch reconciliation;
             // merged-tree measurement is recorded below, with no additional headroom.
             // b596bd5a: probe completion/admission/backoff adds 32 lines; partial count unchanged, no headroom.
-            new SourceClassCeiling("ConductorBatchLoop", 9123, 56),
+            // Goal e1e7c5d3: four lines open and report the acceptance-admission CPU window.
+            new SourceClassCeiling("ConductorBatchLoop", 9127, 56),
             // Goal ec8903af moved the goal-prefix parser to CliGoalPrefixArguments.
             // Goal cd1f6380 adds four lines at the owning transaction boundary, forwarding both
             // registrars and invoking actions after commit; list behavior lives in PostCommitActions.

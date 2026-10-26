@@ -401,6 +401,10 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
     private readonly Func<string, string, CancellationToken, DotnetBuildEnvironmentLease> _acquireCohortStableSlotRound;
     private readonly Func<TimeSpan, CancellationToken, Task>? _cohortStableSlotRoundDelay;
     private readonly Func<ConductorParallelAcceptanceAttempt, SpawnTrackedProcessStatus> _classifyHolder;
+    private readonly SettledAttemptCensusMemo _settledCensusMemo = new();
+    private readonly Action<string>? _attemptMetadataReadObserver;
+    private long _settledCensusSkipCount;
+    internal long SettledCensusSkipCount => Interlocked.Read(ref _settledCensusSkipCount);
 
     internal ConductorParallelAcceptanceAttemptCoordinator(
         string rootDirectory, string integrationBranch,
@@ -435,7 +439,8 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
         AcceptanceHolderLease? holderLease = null,
         SpawnProcessIdentity? generationIdentity = null,
         Func<int, bool>? isHolderProcessAbsent = null,
-        Func<DateTimeOffset?>? hostBootTime = null)
+        Func<DateTimeOffset?>? hostBootTime = null,
+        Action<string>? attemptMetadataReadObserver = null)
     {
         if (runInline && attemptCompletionGateForTests is not null)
         {
@@ -445,6 +450,7 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
         }
 
         _rootDirectory = rootDirectory;
+        _attemptMetadataReadObserver = attemptMetadataReadObserver;
         _executionDirectory = executionDirectory;
         _stateDirectory = stateDirectory;
         _projectName = projectName;
@@ -517,15 +523,32 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
             var directory = Path.Combine(_rootDirectory, goalId);
             if (!Directory.Exists(directory))
             {
+                _settledCensusMemo.DropMissing(directory, []);
                 continue;
             }
 
-            foreach (var path in Directory.EnumerateFiles(directory, "*.attempt.json"))
+            // Materialize a complete enumeration before pruning. FileInfo metadata is
+            // supplied by directory enumeration; keep that stamp even if evaluation rewrites it.
+            var entries = new DirectoryInfo(directory).EnumerateFiles("*.attempt.json")
+                .Select(file => (Path: file.FullName, LastWriteUtc: file.LastWriteTimeUtc, file.Length)).ToArray();
+            _settledCensusMemo.DropMissing(directory, entries.Select(entry => entry.Path));
+            foreach (var entry in entries)
             {
+                var path = entry.Path;
+                if (_settledCensusMemo.IsSettled(path, entry.LastWriteUtc, entry.Length))
+                {
+                    Interlocked.Increment(ref _settledCensusSkipCount);
+                    continue;
+                }
+                _attemptMetadataReadObserver?.Invoke(path);
                 var attempt = ReadCanonicalAttempt(path, goalId);
                 if (!IsReconciled(attempt) || IsCapacityReservingAttempt(attempt))
                 {
                     attempts.Add(attempt);
+                }
+                else if (attempt.Outcome != ConductorParallelAcceptanceAttemptOutcome.Running)
+                {
+                    _settledCensusMemo.Record(path, entry.LastWriteUtc, entry.Length);
                 }
             }
         }
