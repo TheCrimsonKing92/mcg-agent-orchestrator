@@ -196,6 +196,14 @@ public sealed partial class TaskSpec
 
     internal TaskSnapshot ToSnapshot()
     {
+        var lastStandardOutput = LastVerification is null ? string.Empty
+            : VerificationTextBounds.BoundText(LastVerification.StandardOutput, LastVerification.StandardOutputPath);
+        var lastStandardError = LastVerification is null ? string.Empty
+            : VerificationTextBounds.BoundText(LastVerification.StandardError, LastVerification.StandardErrorPath);
+        var lastOutput = VerificationSnapshotText.Compact(
+            LastVerification?.AuthoritativeStandardOutput, LastVerification?.FullStandardOutputUnavailableReason, lastStandardOutput);
+        var lastError = VerificationSnapshotText.Compact(
+            LastVerification?.AuthoritativeStandardError, LastVerification?.FullStandardErrorUnavailableReason, lastStandardError);
         return new TaskSnapshot(
             Id.Value,
             Description,
@@ -225,8 +233,8 @@ public sealed partial class TaskSpec
                     LastVerification.Command,
                     LastVerification.WorkingDirectory,
                     LastVerification.ExitCode,
-                    VerificationTextBounds.BoundText(LastVerification.StandardOutput, LastVerification.StandardOutputPath),
-                    VerificationTextBounds.BoundText(LastVerification.StandardError, LastVerification.StandardErrorPath),
+                    lastStandardOutput,
+                    lastStandardError,
                     LastVerification.CompletedAt,
                     LastVerification.ModelFitNote,
                     LastVerification.StandardOutputPath,
@@ -242,10 +250,10 @@ public sealed partial class TaskSpec
                     LastVerification.ChildExitCode,
                     LastVerification.FindingEvidenceReceipts,
                     LastVerification.ReviewFindingTouchProofDiagnostic,
-                    LastVerification.AuthoritativeStandardOutput,
-                    LastVerification.AuthoritativeStandardError,
-                    LastVerification.FullStandardOutputUnavailableReason,
-                    LastVerification.FullStandardErrorUnavailableReason,
+                    lastOutput.Text,
+                    lastError.Text,
+                    lastOutput.UnavailableReason,
+                    lastError.UnavailableReason,
                     LastVerification.PlannerCandidateDivergence,
                     LastVerification.CompletionVerdictVerifiedSuccess,
                     LastVerification.CompletionVerdictRule,
@@ -258,42 +266,51 @@ public sealed partial class TaskSpec
                     LastVerification.DispatchAttemptAt,
                     LastVerification.FindingEvidenceRequestDispositions, LastVerification.PlannerEvidenceBatch, LastVerification.OrchestratorFailureReason),
             _verificationHistory
-                .Select(verification => new TaskVerificationSnapshot(
-                    verification.Command,
-                    verification.WorkingDirectory,
-                    verification.ExitCode,
-                    VerificationTextBounds.BoundText(verification.StandardOutput, verification.StandardOutputPath),
-                    VerificationTextBounds.BoundText(verification.StandardError, verification.StandardErrorPath),
-                    verification.CompletedAt,
-                    verification.ModelFitNote,
-                    verification.StandardOutputPath,
-                    verification.StandardErrorPath,
-                    verification.ProviderFailureKind,
-                    verification.ReviewFindingTouchedAnchors,
-                    verification.ReviewedCommit,
-                    verification.MergedReviewFindings,
-                    verification.WorkerResultPresent,
-                    verification.ReviewFindingContractViolation,
-                    verification.DispatchStartedAt,
-                    verification.ChildProcessId,
-                    verification.ChildExitCode,
-                    verification.FindingEvidenceReceipts,
-                    verification.ReviewFindingTouchProofDiagnostic,
-                    verification.AuthoritativeStandardOutput,
-                    verification.AuthoritativeStandardError,
-                    verification.FullStandardOutputUnavailableReason,
-                    verification.FullStandardErrorUnavailableReason,
-                    verification.PlannerCandidateDivergence,
-                    verification.CompletionVerdictVerifiedSuccess,
-                    verification.CompletionVerdictRule,
-                    verification.AssignedScopeComplete,
-                    verification.CandidateIdentity,
-                    verification.AcceptanceCriteriaVersionHash,
-                    verification.InconclusiveRoundInputs,
-                    verification.HumanInputStoreReference,
-                    verification.EvidenceSource,
-                    verification.DispatchAttemptAt,
-                    verification.FindingEvidenceRequestDispositions, verification.PlannerEvidenceBatch, verification.OrchestratorFailureReason))
+                .Select(verification =>
+                {
+                    var standardOutput = VerificationTextBounds.BoundText(verification.StandardOutput, verification.StandardOutputPath);
+                    var standardError = VerificationTextBounds.BoundText(verification.StandardError, verification.StandardErrorPath);
+                    var output = VerificationSnapshotText.Compact(
+                        verification.AuthoritativeStandardOutput, verification.FullStandardOutputUnavailableReason, standardOutput);
+                    var error = VerificationSnapshotText.Compact(
+                        verification.AuthoritativeStandardError, verification.FullStandardErrorUnavailableReason, standardError);
+                    return new TaskVerificationSnapshot(
+                        verification.Command,
+                        verification.WorkingDirectory,
+                        verification.ExitCode,
+                        standardOutput,
+                        standardError,
+                        verification.CompletedAt,
+                        verification.ModelFitNote,
+                        verification.StandardOutputPath,
+                        verification.StandardErrorPath,
+                        verification.ProviderFailureKind,
+                        verification.ReviewFindingTouchedAnchors,
+                        verification.ReviewedCommit,
+                        verification.MergedReviewFindings,
+                        verification.WorkerResultPresent,
+                        verification.ReviewFindingContractViolation,
+                        verification.DispatchStartedAt,
+                        verification.ChildProcessId,
+                        verification.ChildExitCode,
+                        verification.FindingEvidenceReceipts,
+                        verification.ReviewFindingTouchProofDiagnostic,
+                        output.Text,
+                        error.Text,
+                        output.UnavailableReason,
+                        error.UnavailableReason,
+                        verification.PlannerCandidateDivergence,
+                        verification.CompletionVerdictVerifiedSuccess,
+                        verification.CompletionVerdictRule,
+                        verification.AssignedScopeComplete,
+                        verification.CandidateIdentity,
+                        verification.AcceptanceCriteriaVersionHash,
+                        verification.InconclusiveRoundInputs,
+                        verification.HumanInputStoreReference,
+                        verification.EvidenceSource,
+                        verification.DispatchAttemptAt,
+                        verification.FindingEvidenceRequestDispositions, verification.PlannerEvidenceBatch, verification.OrchestratorFailureReason);
+                })
                 .ToList(),
             LastDispatch is null
                 ? null
@@ -399,6 +416,10 @@ public sealed partial class TaskSpec
         {
             foreach (var verification in snapshot.VerificationHistory)
             {
+                var output = VerificationSnapshotText.Expand(
+                    verification.AuthoritativeStandardOutput, verification.AuthoritativeStandardOutputUnavailableReason, verification.StandardOutput);
+                var error = VerificationSnapshotText.Expand(
+                    verification.AuthoritativeStandardError, verification.AuthoritativeStandardErrorUnavailableReason, verification.StandardError);
                 task.RestoreVerificationHistory(new TaskVerificationRecord(
                     verification.Command,
                     verification.WorkingDirectory,
@@ -420,16 +441,16 @@ public sealed partial class TaskSpec
                     ChildProcessId: verification.ChildProcessId,
                     ChildExitCode: verification.ChildExitCode,
                     FindingEvidenceReceipts: verification.FindingEvidenceReceipts,
-                    FullStandardOutput: verification.AuthoritativeStandardOutput,
-                    FullStandardError: verification.AuthoritativeStandardError,
+                    FullStandardOutput: output.Text,
+                    FullStandardError: error.Text,
                     FullStandardOutputUnavailableReason: RestoredAuthorityUnavailableReason(
-                        verification.AuthoritativeStandardOutput,
-                        verification.AuthoritativeStandardOutputUnavailableReason),
+                        output.Text,
+                        output.UnavailableReason),
                     FullStandardErrorUnavailableReason: RestoredAuthorityUnavailableReason(
-                        verification.AuthoritativeStandardError,
-                        verification.AuthoritativeStandardErrorUnavailableReason),
-                    StandardOutputIsAuthoritative: verification.AuthoritativeStandardOutput is not null,
-                    StandardErrorIsAuthoritative: verification.AuthoritativeStandardError is not null,
+                        error.Text,
+                        error.UnavailableReason),
+                    StandardOutputIsAuthoritative: output.Text is not null,
+                    StandardErrorIsAuthoritative: error.Text is not null,
                     PlannerCandidateDivergence: verification.PlannerCandidateDivergence,
                     CompletionVerdictVerifiedSuccess: verification.CompletionVerdictVerifiedSuccess,
                     CompletionVerdictRule: verification.CompletionVerdictRule,
@@ -446,6 +467,10 @@ public sealed partial class TaskSpec
 
         if (snapshot.LastVerification is not null)
         {
+            var output = VerificationSnapshotText.Expand(
+                snapshot.LastVerification.AuthoritativeStandardOutput, snapshot.LastVerification.AuthoritativeStandardOutputUnavailableReason, snapshot.LastVerification.StandardOutput);
+            var error = VerificationSnapshotText.Expand(
+                snapshot.LastVerification.AuthoritativeStandardError, snapshot.LastVerification.AuthoritativeStandardErrorUnavailableReason, snapshot.LastVerification.StandardError);
             var latestVerification = new TaskVerificationRecord(
                 snapshot.LastVerification.Command,
                 snapshot.LastVerification.WorkingDirectory,
@@ -467,16 +492,16 @@ public sealed partial class TaskSpec
                 ChildProcessId: snapshot.LastVerification.ChildProcessId,
                 ChildExitCode: snapshot.LastVerification.ChildExitCode,
                 FindingEvidenceReceipts: snapshot.LastVerification.FindingEvidenceReceipts,
-                FullStandardOutput: snapshot.LastVerification.AuthoritativeStandardOutput,
-                FullStandardError: snapshot.LastVerification.AuthoritativeStandardError,
+                FullStandardOutput: output.Text,
+                FullStandardError: error.Text,
                 FullStandardOutputUnavailableReason: RestoredAuthorityUnavailableReason(
-                    snapshot.LastVerification.AuthoritativeStandardOutput,
-                    snapshot.LastVerification.AuthoritativeStandardOutputUnavailableReason),
+                    output.Text,
+                    output.UnavailableReason),
                 FullStandardErrorUnavailableReason: RestoredAuthorityUnavailableReason(
-                    snapshot.LastVerification.AuthoritativeStandardError,
-                    snapshot.LastVerification.AuthoritativeStandardErrorUnavailableReason),
-                StandardOutputIsAuthoritative: snapshot.LastVerification.AuthoritativeStandardOutput is not null,
-                StandardErrorIsAuthoritative: snapshot.LastVerification.AuthoritativeStandardError is not null,
+                    error.Text,
+                    error.UnavailableReason),
+                StandardOutputIsAuthoritative: output.Text is not null,
+                StandardErrorIsAuthoritative: error.Text is not null,
                 PlannerCandidateDivergence: snapshot.LastVerification.PlannerCandidateDivergence,
                 CompletionVerdictVerifiedSuccess: snapshot.LastVerification.CompletionVerdictVerifiedSuccess,
                 CompletionVerdictRule: snapshot.LastVerification.CompletionVerdictRule,
