@@ -18,7 +18,7 @@ internal static class GoalMonitoringQuery
         var monitor = kernel.BuildMonitor(goal.Id);
         var lifecycle = GoalLifecycle.ResolveState(
             goal,
-            GoalMonitoringSubscriptionCommand.ReadLifecycleFacts(workspace, goal));
+            GoalLifecycleFactsReader.Read(workspace, goal));
         var inbox = OperatorInbox.Build(kernel, agents, workerProfiles, workspace, goal.Id.Value[..8], includeAcknowledged: false);
         var capacity = SubscriptionPlanBuilder.Build(
             goal,
@@ -42,7 +42,7 @@ internal static class GoalMonitoringQuery
                 ApplicationGoalStatusText.Resolve(monitor.Status, lifecycle),
                 monitor.AttentionItems.Select(_ => new QueryAttention()).ToList()),
             goal.Tasks.Select(task => new TaskMonitoringSnapshot(
-                ConsoleViews.GetTaskDisplayNumber(goal, task.Id),
+                TaskDisplayNumber.Resolve(goal, task.Id),
                 task.Id.Value,
                 task.RequiredRole,
                 task.Status,
@@ -56,7 +56,7 @@ internal static class GoalMonitoringQuery
                 disposition.Blockers),
             new QueryOperatorInbox(inbox.OpenCount),
             new QueryProviderCapacity(capacity.Disposition, capacity.ReadyNowCount, capacity.DeferredCount),
-            CliCommandHandlers.ResolveGoalFriendlyLabel(goal, workspace.BacklogStorePath));
+            GoalFriendlyLabel.Resolve(goal, workspace.BacklogStorePath));
 
         return new GoalMonitoringBatch(
             goal.Id.Value,
@@ -114,7 +114,7 @@ internal static class GoalMonitoringQuery
                     "timeline",
                     goal.Id.Value,
                     item.Event.TaskId?.Value,
-                    task is null ? null : ConsoleViews.GetTaskDisplayNumber(goal, task.Id),
+                    task is null ? null : TaskDisplayNumber.Resolve(goal, task.Id),
                     task?.RequiredRole,
                     task?.Status,
                     item.Event.Kind,

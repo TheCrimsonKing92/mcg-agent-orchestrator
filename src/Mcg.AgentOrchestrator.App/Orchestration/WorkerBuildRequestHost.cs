@@ -14,10 +14,13 @@ internal sealed class WorkerBuildRequestHost : IWorkerBuildRequestService
     private readonly TimeSpan _budget;
     private readonly Action<WorkerBuildInvocation>? _observe;
     private readonly DotnetBuildStorageRoot _storageRoot;
+    private readonly Func<int, uint, uint, bool>? _executionQosSetter;
+    private readonly TimeSpan? _executionQosInterval;
     private readonly List<object> _unresolved = [];
 
     internal WorkerBuildRequestHost(WorkerBuildHostReference reference, TimeProvider? time = null,
-        TimeSpan? budget = null, Action<WorkerBuildInvocation>? observe = null, DotnetBuildStorageRoot? storageRoot = null)
+        TimeSpan? budget = null, Action<WorkerBuildInvocation>? observe = null, DotnetBuildStorageRoot? storageRoot = null,
+        Func<int, uint, uint, bool>? executionQosSetter = null, TimeSpan? executionQosInterval = null)
     {
         _reference = reference;
         _operations = new(reference.StatePath, reference.ExecutionDirectory);
@@ -26,6 +29,8 @@ internal sealed class WorkerBuildRequestHost : IWorkerBuildRequestService
         _time = time ?? TimeProvider.System;
         _budget = budget ?? OrchestratorBuildEvidenceCheck.DefaultTimeout;
         _observe = observe;
+        _executionQosSetter = executionQosSetter;
+        _executionQosInterval = executionQosInterval;
         _storageRoot = storageRoot ?? (reference.StorageRoot is { } root
             ? new DotnetBuildStorageRoot(root) : DotnetBuildStorageLayout.CaptureStorageRoot());
         if (reference.Admission is not { } admission || admission.GoalId != reference.GoalId ||
@@ -65,6 +70,7 @@ internal sealed class WorkerBuildRequestHost : IWorkerBuildRequestService
         GoalEvidenceOperationScope? custody = null;
         DotnetBuildEnvironmentLease? slot = null;
         OwnedProcessGroup.SuspendedProcessStart? child = null;
+        BuildLaunchQosSweep? qos = null;
         using var queueDeadline = new CancellationTokenSource(_budget, _time);
         using var compileDeadline = new CancellationTokenSource(Timeout.InfiniteTimeSpan, _time);
         using var queueStop = CancellationTokenSource.CreateLinkedTokenSource(lifetime, queueDeadline.Token);
@@ -135,11 +141,12 @@ internal sealed class WorkerBuildRequestHost : IWorkerBuildRequestService
                     if (!labeling.Succeeded)
                         throw new UnauthorizedAccessException($"Host compiler output LowIL preparation failed. {labeling.Diagnostic}");
                 }
+                var gcEnvironment = BuildGcEnvironment.ForStatePath(_reference.StatePath);
                 foreach (var project in scope.Projects)
                 {
                     CheckCurrent();
                     Advance(WorkerBuildPhase.PreparingLaunch);
-                    var info = BuildStartInfo(root, project, request.Configuration, slot.Environment.Arguments, tempRoot);
+                    var info = BuildStartInfo(root, project, request.Configuration, slot.Environment.Arguments, tempRoot, gcEnvironment);
                     terminalSafe = false;
                     child = OwnedProcessGroup.StartSuspendedContainedWithFileCapture(info,
                         Path.Combine(logRoot, $"{invocation.Children?.Count ?? 0}.out.log"),
@@ -152,6 +159,10 @@ internal sealed class WorkerBuildRequestHost : IWorkerBuildRequestService
                     exits.Add(null);
                     Save(invocation with { Children = (invocation.Children ?? []).Append(identity).ToArray() });
                     Advance(WorkerBuildPhase.ChildRegistered);
+                    var started = child;
+                    qos = BuildLaunchQosSweep.Begin("worker-build", _reference.StatePath, invocation.GoalId,
+                        started.Process.Id, _ => started.Group.TryGetActiveProcessIds(out var ids) ? ids : null,
+                        _executionQosSetter, _executionQosInterval);
                     if (task.LastDispatch.SandboxLowIntegrity) child.LowerIntegrityBeforeResume();
                     TaskIntentAdmission.ExecuteAuthorized(_reference.Admission!, "worker-build:" + invocation.Id + ":" + identity.Pid, () =>
                     {
@@ -166,6 +177,8 @@ internal sealed class WorkerBuildRequestHost : IWorkerBuildRequestService
                     if (!child.Group.TerminateAndConfirmEmpty(TimeSpan.FromSeconds(10)))
                         throw new InvalidOperationException("Owned compiler descendants did not become terminal.");
                     terminalSafe = true;
+                    qos?.Dispose();
+                    qos = null;
                     child.Dispose();
                     child = null;
                     CheckCurrent();
@@ -200,6 +213,7 @@ internal sealed class WorkerBuildRequestHost : IWorkerBuildRequestService
         }
         finally
         {
+            qos?.Dispose();
             if (terminalSafe)
             {
                 child?.Dispose();
@@ -257,6 +271,7 @@ internal sealed class WorkerBuildRequestHost : IWorkerBuildRequestService
         }
         void StopChild()
         {
+            qos?.Dispose();
             if (child is null) return;
             var groupTerminal = child.Group.TerminateAndConfirmEmpty(TimeSpan.FromSeconds(10));
             if (!child.WaitForOwnedExit(TimeSpan.FromSeconds(10)) || !groupTerminal)
@@ -266,7 +281,8 @@ internal sealed class WorkerBuildRequestHost : IWorkerBuildRequestService
     }
 
     internal static ProcessStartInfo BuildStartInfo(string root, string project, string configuration,
-        IReadOnlyList<string> isolatedArguments, string temporaryDirectory)
+        IReadOnlyList<string> isolatedArguments, string temporaryDirectory,
+        IReadOnlyDictionary<string, string>? gcEnvironment = null)
     {
         var executable = Environment.ProcessPath;
         if (executable is null || !Path.GetFileNameWithoutExtension(executable).Equals("dotnet", StringComparison.OrdinalIgnoreCase))
@@ -280,8 +296,9 @@ internal sealed class WorkerBuildRequestHost : IWorkerBuildRequestService
         info.Environment["DOTNET_CLI_USE_MSBUILD_SERVER"] = "0";
         info.Environment["MSBUILDDISABLENODEREUSE"] = "1";
         info.Environment["MCG_ORCHESTRATOR_REPOSITORY_ROOT"] = root;
+        if (gcEnvironment is not null) BuildGcEnvironment.Apply(info.Environment, gcEnvironment);
         foreach (var argument in new[] { "build", Path.Combine(root, project), "--nologo", "--configuration", configuration,
-            "--verbosity", "minimal", "-maxcpucount:1", "-p:BuildInParallel=false", "-p:UseSharedCompilation=false", "-tl:off" }.Concat(isolatedArguments))
+            "--verbosity", "minimal", "-maxcpucount:1", "-p:BuildInParallel=false", "-p:UseSharedCompilation=false", "-tl:off" }.Concat(AcceptanceCheckCommandBuilder.AnalyzersOffBuildProperties).Concat(isolatedArguments))
             info.ArgumentList.Add(argument);
         return info;
     }

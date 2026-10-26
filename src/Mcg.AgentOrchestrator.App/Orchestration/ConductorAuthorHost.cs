@@ -162,7 +162,7 @@ internal sealed partial class ConductorAuthorHost
     private void HarvestReady(AgentOrchestratorKernel kernel, string? onlyGoalId, HashSet<GoalId> changed)
     {
         foreach (var ready in _claims.Ready()
-                     .OrderByDescending(entry => RequiresOwner(entry.Item, entry.Output)))
+                     .OrderByDescending(entry => RequiresOwner(kernel, entry.Item, entry.Output)))
         {
             if (onlyGoalId is not null && ready.Item.GoalId != onlyGoalId) continue;
             var goal = kernel.Goals.FirstOrDefault(candidate => candidate.Id.Value == ready.Item.GoalId);
@@ -172,11 +172,13 @@ internal sealed partial class ConductorAuthorHost
         }
     }
 
-    private static bool RequiresOwner(ConductorAuthorItem item, string output)
+    private static bool RequiresOwner(AgentOrchestratorKernel kernel, ConductorAuthorItem item, string output)
     {
         var result = ConductorAuthorResultParser.Parse(output);
+        var brief = kernel.Goals.FirstOrDefault(goal => goal.Id.Value == item.GoalId)?.Objective;
         return result?.Kind == "ask-owner" || result?.Kind == "answer" &&
-            ConductorAuthorAnswerRouting.Decide(item, result.Text!, result.EvidenceReferences).EscalationReason is not null;
+            ConductorAuthorAnswerRouting.Decide(item, result.Text!, result.EvidenceReferences,
+                brief, result.BriefCitations).EscalationReason is not null;
     }
 
     private void ProcessCompleted(AgentOrchestratorKernel kernel, ConductorAuthorItem item,
@@ -225,11 +227,20 @@ internal sealed partial class ConductorAuthorHost
     private void SubmitCheckedAnswer(AgentOrchestratorKernel kernel, Goal goal,
         ConductorAuthorItem item, ConductorAuthorResult result, HashSet<GoalId> changed)
     {
-        var route = ConductorAuthorAnswerRouting.Decide(item, result.Text!, result.EvidenceReferences);
+        var route = ConductorAuthorAnswerRouting.Decide(item, result.Text!, result.EvidenceReferences,
+            goal.Objective, result.BriefCitations);
         if (route.EscalationReason is { } reason)
         {
             Escalate(kernel, goal, item, item.Question, result.Text!, reason, changed);
             _claims.Complete(item.Identity, "owner-question");
+            return;
+        }
+        if (route.GroundedCitations is { } citations)
+        {
+            var baselineReason = ConductorAuthorAnswerRouting.Decide(item, result.Text!, result.EvidenceReferences).EscalationReason;
+            var references = (result.EvidenceReferences ?? []).Concat(citations.Select(citation => $"brief-span={citation}"))
+                .Append($"grounded-reason={baselineReason}").ToArray();
+            SubmitAnswer(item, route.SubmittedText, references, result.Precedent, "grounded-answer");
             return;
         }
         SubmitAnswer(item, route.SubmittedText, result.EvidenceReferences!, result.Precedent, "answer");

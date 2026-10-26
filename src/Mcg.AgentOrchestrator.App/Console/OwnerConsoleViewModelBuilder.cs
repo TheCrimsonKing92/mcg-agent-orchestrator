@@ -12,8 +12,10 @@ internal sealed class OwnerConsoleViewModelBuilder(IOrchestratorStateQueries sta
     Func<IReadOnlyDictionary<string, string>, OwnerConsoleGateProgress?>? gateProgress = null)
 {
     internal const int MaxActivityItems = 100;
+    internal const int RecentTerminalTitleRows = 200;
+    internal const int TitlePrefixChars = 1024;
     private readonly Dictionary<string, int> _numbers = new(StringComparer.OrdinalIgnoreCase);
-    private IReadOnlyList<GoalSummary> _metadata = [];
+    private readonly OwnerConsoleGoalTitleCache _titles = new();
     private IReadOnlyDictionary<string, AgentRole> _roles = new Dictionary<string, AgentRole>();
     private IReadOnlyDictionary<string, Goal> _goals = new Dictionary<string, Goal>();
     private readonly object _observationGate = new();
@@ -52,11 +54,12 @@ internal sealed class OwnerConsoleViewModelBuilder(IOrchestratorStateQueries sta
 
     internal async Task<OwnerConsoleViewModel> BuildBoardAsync(CancellationToken cancellationToken = default)
     {
-        var metadata = await state.ListGoalMetadataAsync(cancellationToken);
-        _metadata = metadata;
+        var metadata = await state.ListGoalBoardRowsAsync(
+            new(RecentTerminalTitleRows, TitlePrefixChars, BacklogIntakePlanner.TargetScopeHeadingLine), cancellationToken);
+        _titles.Merge(metadata);
         var now = clock.GetUtcNow();
         OwnerConsoleGateProgress? gate = null;
-        try { gate = gateProgress?.Invoke(metadata.ToDictionary(item => item.Id, item => OwnerGoalTitle.Full(item.Objective))); }
+        try { gate = gateProgress?.Invoke(_titles.Titles); }
         catch { /* A failed observation must not block the board refresh. */ }
         var ids = metadata.Where(item => Enum.TryParse<GoalStatus>(item.Status, true, out var status) &&
                 (IsActive(status) || status is GoalStatus.Failed or GoalStatus.Parked &&
@@ -180,13 +183,7 @@ internal sealed class OwnerConsoleViewModelBuilder(IOrchestratorStateQueries sta
 
     internal OwnerConductEvent EnrichEvent(OwnerConductEvent item) => OwnerGoalLifecycleEvent.WithRole(item, _roles);
 
-    private string Title(string? id)
-    {
-        if (string.IsNullOrEmpty(id)) return string.Empty;
-        var exact = _metadata.FirstOrDefault(goal => goal.Id.Equals(id, StringComparison.OrdinalIgnoreCase));
-        var matches = _metadata.Where(goal => goal.Id.StartsWith(id, StringComparison.OrdinalIgnoreCase)).ToArray();
-        return OwnerGoalTitle.Full((exact ?? (matches.Length == 1 ? matches[0] : null))?.Objective);
-    }
+    private string Title(string? id) => _titles.Title(id);
 
     internal static string Prefix(string id) => id[..Math.Min(8, id.Length)];
 

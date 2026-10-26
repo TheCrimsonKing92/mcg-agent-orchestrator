@@ -408,6 +408,7 @@ internal sealed class CompletionBuildEvidenceCoordinator : ICompletionBuildEvide
         };
         info.ArgumentList.Add(typeof(CompletionBuildEvidenceCoordinator).Assembly.Location);
         info.Environment[DotnetBuildStorageLayout.IsolatedRootOverrideVariable] = _storageRoot.RootPath;
+        BuildGcEnvironment.Apply(info.Environment, BuildGcEnvironment.ForStatePath(_statePath));
         foreach (var argument in new[] { Subcommand, _statePath, operation.GoalId, operation.TaskId, operation.Id })
             info.ArgumentList.Add(argument);
         try
@@ -500,7 +501,7 @@ internal sealed class CompletionBuildEvidenceCoordinator : ICompletionBuildEvide
                     configuration.WorkerBuildCheck,
                     request => RemoteWorkerBuildCheck.RunAsync(request, new(configuration, executor, TimeProvider.System,
                         TimeSpan.FromSeconds(1), RemoteBuildCandidateCommit.RunGit)),
-                    budget => CompletionBuildPlacement.RunLocal(operation, receiptPath, budget,
+                    budget => CompletionBuildPlacement.RunLocalWithExecutionQos(operation, args[1], receiptPath, budget,
                         () => CompletionBuildPlacement.DefaultLocalBuild(operation, budget)), TimeProvider.System);
                 result = operation with
                 {

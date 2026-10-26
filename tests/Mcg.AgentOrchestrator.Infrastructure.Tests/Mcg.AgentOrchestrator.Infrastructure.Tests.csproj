@@ -29,6 +29,7 @@
     <Compile Remove="Cli\**\*.cs" />
     <Compile Remove="Acceptance\**\*.cs" />
     <Compile Remove="Execution\**\*.cs" />
+    <Compile Remove="StorageRetention\**\*.cs" />
     <Compile Remove="Fixtures\IsolatedDotnetProbe\**\*.cs" />
     <Compile Remove="ProviderEnvironment\**\*.cs" />
     <Compile Remove="Fixtures\RealProcessShardProbe\**\*.cs" />

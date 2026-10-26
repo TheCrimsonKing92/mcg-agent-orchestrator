@@ -1,4 +1,5 @@
 using Mcg.AgentOrchestrator.App.Cli;
+using Mcg.AgentOrchestrator.App.Orchestration;
 using Xunit;
 
 // Parallel-safe: literal inputs and a pure projection, with no shared state or I/O.

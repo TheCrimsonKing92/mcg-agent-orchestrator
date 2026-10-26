@@ -17,8 +17,8 @@ public sealed class AcceptanceGateEngineSettingsTests
         Xunit.Assert.Equal(5, settings.MaxConcurrentShards);
         Xunit.Assert.Equal(5, settings.PartitionVerdictFullRerunEveryN);
         Xunit.Assert.Equal(AcceptanceGateEngineSettings.DefaultOutputCaptureLimitBytes, settings.OutputCaptureLimitBytes);
-        Xunit.Assert.Equal(28, settings.InfrastructureTestLanes.Count);
-        Xunit.Assert.Equal(8, startupContract.ManifestCheckCount);
+        Xunit.Assert.Equal(27, settings.InfrastructureTestLanes.Count);
+        Xunit.Assert.Equal(9, startupContract.ManifestCheckCount);
         using var manifestDocument = System.Text.Json.JsonDocument.Parse(
             File.ReadAllText(Path.Combine(repositoryRoot, "config", "acceptance-manifest.json")));
         var manifestLanes = manifestDocument.RootElement
@@ -121,6 +121,7 @@ public sealed class AcceptanceGateEngineSettingsTests
                 "GoalAcceptanceVerifierCancellationTests",
                 "GoalAcceptanceVerifierTests",
                 "GoalAcceptanceVerifierDotnetBuildSlotTests",
+                "GoalAcceptanceVerifierDotnetBuildSlotTestsAnalyzerAuthority",
                 "HermeticVerificationEnvironmentTests",
                 "PreReviewFocusedEvidenceVerifierTests",
                 "RealProcessShardAlphaSmokeTests",

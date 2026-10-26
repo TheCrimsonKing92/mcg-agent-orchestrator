@@ -4,7 +4,8 @@ public static partial class RepositoryTestImpactPlanner
 {
     internal static IReadOnlyList<string> BuiltInTestProjectPaths =>
         new[] { CoreTests, InfrastructureTests, AcceptanceTests, ProviderEnvironmentTests, CliTests }
-            .Select(ProjectArgument).OfType<string>().ToArray();
+            .Select(ProjectArgument).OfType<string>()
+            .Concat(RepositoryTestImpactPlannerNestedProjects.Routes.Select(route => route.Project)).ToArray();
 
     internal static RepositoryTestImpactPlan Plan(
         RepositoryChangeSummary summary,

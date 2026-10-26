@@ -628,18 +628,8 @@ internal static partial class CliPersistentStateRunner
         };
     }
 
-    internal static bool RequiresKernelBacklogState(IReadOnlyList<string> args)
-    {
-        if (args.Count == 0)
-            return false;
-
-        return args[0].ToLowerInvariant() switch
-        {
-            "backlog-list" or "backlog-show" or "backlog-depends" or "backlog-similar" => true,
-            "backlog-add" => HasFlag(args, "--depends-on") || !HasFlag(args, "--no-similar"),
-            _ => false
-        };
-    }
+    internal static bool RequiresKernelBacklogState(IReadOnlyList<string> args) =>
+        StoreSetupCommandKinds.RequiresBacklogState(args);
 
     private static bool HasFlag(IReadOnlyList<string> args, string flag) =>
         args.Any(arg => arg.Equals(flag, StringComparison.OrdinalIgnoreCase));
@@ -676,33 +666,18 @@ internal static partial class CliPersistentStateRunner
     }
 
     internal static bool IsInboxBackedGoalScopedTaskMutationCommand(IReadOnlyList<string> args) =>
-        args.Count > 0 &&
-        args[0].ToLowerInvariant() is
-            OperatorIntentVerbs.Progress or
-            OperatorIntentVerbs.Retry or
-            OperatorIntentVerbs.VerifyManual or
-            OperatorIntentVerbs.Adjudicate;
+        StoreSetupCommandKinds.IsInboxBackedTaskMutation(args);
 
     internal static bool IsCriterionEvidenceMutationCommand(IReadOnlyList<string> args) =>
-        args.Count > 0 && args[0].ToLowerInvariant() is
-            OperatorIntentVerbs.CriterionEvidenceMap or
-            OperatorIntentVerbs.CriterionEvidenceRecord or
-            OperatorIntentVerbs.CriterionEvidenceRepair;
+        StoreSetupCommandKinds.IsCriterionEvidenceMutation(args);
 
     private static bool IsOperatorIntentStatusCommand(IReadOnlyList<string> args) =>
         args.Count > 0 &&
         args[0].Equals("operator-intent-status", StringComparison.OrdinalIgnoreCase);
 
     // A conduct command running the batch loop (--loop) or single-goal continuous mode (--watch).
-    internal static bool IsConductLoop(IReadOnlyList<string> args)
-    {
-        if (args.Count == 0 || !args[0].Equals("conduct", StringComparison.OrdinalIgnoreCase))
-            return false;
-
-        return args.Any(a =>
-            a.Equals("--loop", StringComparison.OrdinalIgnoreCase) ||
-            a.Equals("--watch", StringComparison.OrdinalIgnoreCase));
-    }
+    internal static bool IsConductLoop(IReadOnlyList<string> args) =>
+        ConductCommandArguments.IsLoop(args);
 
     internal static bool IsSingleGoalConductCommand(IReadOnlyList<string> args)
     {
@@ -1001,10 +976,11 @@ internal static partial class CliPersistentStateRunner
             tickBaselines = startupKernel.ExportSnapshot().Goals.ToDictionary(goal => goal.Id, StringComparer.Ordinal);
             try
             {
+                var openWorkGoalIds = new Lazy<IReadOnlyList<GoalId>>(() => TerminalOpenWorkCandidates.Read(stateRepository, Console.WriteLine));
                 var watchGoalId = ResolveConductWatchGoalId(args, startupKernel, currentGoalAtStartup, stateRepository);
                 var heartbeat = ConductorStartupHeartbeat.Shipped;
                 var sweepKernel = heartbeat.Run(ConductorStartupHeartbeat.Phases.SweepKernelLoad, () => LoadConductLoopSweepKernel(
-                    stateRepository, startupKernel, workspace.ExecutionDirectory, workspace.IntegrationBranch, watchGoalId, cleanupContext.Hooks));
+                    stateRepository, startupKernel, workspace.ExecutionDirectory, workspace.IntegrationBranch, watchGoalId, cleanupContext.Hooks, openWorkGoalIds));
                 var sweepTimelineBaseline = TerminalGoalSweepLifecycleEvents.Capture(sweepKernel);
                 var sweepCheckpoint = new CliOwnedGoalCheckpoint(stateRepository, sweepKernel);
                 var sweep = heartbeat.Run(ConductorStartupHeartbeat.Phases.TerminalSweep, () => TerminalGoalSweep.Run(
@@ -1014,7 +990,7 @@ internal static partial class CliPersistentStateRunner
                     cleanupHooks: cleanupContext.Hooks,
                     orchestratorDirectory: workspace.OrchestratorDirectory, reclaimGoalRoots: true));
                 var metadataOnlyExcludedGoalCount = heartbeat.Run(ConductorStartupHeartbeat.Phases.MetadataExclusionCount, () => CountMetadataOnlyTerminalSweepExclusions(
-                    stateRepository, workspace.ExecutionDirectory, workspace.IntegrationBranch, watchGoalId, cleanupContext.Hooks));
+                    stateRepository, workspace.ExecutionDirectory, workspace.IntegrationBranch, watchGoalId, cleanupContext.Hooks, openWorkGoalIds));
                 if (metadataOnlyExcludedGoalCount > 0)
                 {
                     sweep = sweep with { ExcludedGoalCount = sweep.ExcludedGoalCount + metadataOnlyExcludedGoalCount };
@@ -1030,7 +1006,6 @@ internal static partial class CliPersistentStateRunner
                     startupKernel = LoadLoopKernel();
                     tickBaselines = startupKernel.ExportSnapshot().Goals.ToDictionary(goal => goal.Id, StringComparer.Ordinal);
                 });
-
                 heartbeat.Run(ConductorStartupHeartbeat.Phases.OrphanWorktreeSweep, () => cleanupContext.Scheduler.SweepIfDue(workspace.ExecutionDirectory, sweepKernel));
                 heartbeat.Run(ConductorStartupHeartbeat.Phases.RemoteMirrorStart, () => RemoteGitMirror.TryStartBackgroundProcessing(sweepKernel, workspace.ExecutionDirectory, watchGoalId, workspace.IntegrationBranch));
             }
@@ -1515,7 +1490,7 @@ internal static partial class CliPersistentStateRunner
         value.Replace(' ', '_').Replace('\t', '_').Replace('\n', '_').Replace('\r', '_');
 
     internal static AgentOrchestratorKernel LoadConductLoopKernel(
-        ITransactionalOrchestratorStateRepository stateRepository,
+        IOrchestratorStateQueries stateRepository,
         IReadOnlyCollection<string>? additionalHydratedGoalIds = null,
         string? executionDirectory = null)
     {
@@ -1612,9 +1587,9 @@ internal static partial class CliPersistentStateRunner
         AgentOrchestratorKernel workingSetKernel,
         string executionDirectory, string integrationBranch,
         GoalId? onlyGoalId,
-        GoalWorktreeCleanupHooks cleanupHooks)
+        GoalWorktreeCleanupHooks cleanupHooks, Lazy<IReadOnlyList<GoalId>> openWorkGoalIds)
     {
-        var candidates = ResolveTerminalSweepCandidateIds(stateRepository, executionDirectory, integrationBranch, onlyGoalId, cleanupHooks)
+        var candidates = ResolveTerminalSweepCandidateIds(stateRepository, executionDirectory, integrationBranch, onlyGoalId, cleanupHooks, openWorkGoalIds)
             .Where(id => workingSetKernel.Goals.FirstOrDefault(goal => goal.Id == id) is not { IsMetadataOnly: false })
             .ToArray();
         if (candidates.Length == 0)
@@ -1630,7 +1605,7 @@ internal static partial class CliPersistentStateRunner
         ITransactionalOrchestratorStateRepository stateRepository,
         string executionDirectory, string integrationBranch,
         GoalId? onlyGoalId,
-        GoalWorktreeCleanupHooks cleanupHooks)
+        GoalWorktreeCleanupHooks cleanupHooks, Lazy<IReadOnlyList<GoalId>> openWorkGoalIds)
     {
         if (onlyGoalId is not null)
         {
@@ -1639,7 +1614,7 @@ internal static partial class CliPersistentStateRunner
 
         var summaries = stateRepository.ListConductLoopGoalMetadataAsync().GetAwaiter().GetResult();
         return ResolveTerminalSweepCandidateIds(summaries, executionDirectory, integrationBranch, onlyGoalId, cleanupHooks)
-            .Concat(stateRepository.ListTerminalGoalIdsWithNonTerminalTasksAsync().GetAwaiter().GetResult())
+            .Concat(openWorkGoalIds.Value)
             .Distinct().ToArray();
     }
 
@@ -1671,7 +1646,7 @@ internal static partial class CliPersistentStateRunner
         ITransactionalOrchestratorStateRepository stateRepository,
         string executionDirectory, string integrationBranch,
         GoalId? onlyGoalId,
-        GoalWorktreeCleanupHooks cleanupHooks)
+        GoalWorktreeCleanupHooks cleanupHooks, Lazy<IReadOnlyList<GoalId>> openWorkGoalIds)
     {
         if (onlyGoalId is not null)
         {
@@ -1680,7 +1655,7 @@ internal static partial class CliPersistentStateRunner
 
         var summaries = stateRepository.ListConductLoopGoalMetadataAsync().GetAwaiter().GetResult();
         var hydratedSweepCandidateIds = ResolveTerminalSweepCandidateIds(summaries, executionDirectory, integrationBranch, onlyGoalId, cleanupHooks)
-            .Concat(stateRepository.ListTerminalGoalIdsWithNonTerminalTasksAsync().GetAwaiter().GetResult())
+            .Concat(openWorkGoalIds.Value)
             .Select(id => id.Value)
             .ToHashSet(StringComparer.Ordinal);
         return summaries

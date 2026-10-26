@@ -65,6 +65,7 @@ internal static class ConductorStatusSnapshotReader
                     status is not (GoalStatus.Completed or GoalStatus.Cancelled or GoalStatus.Superseded))
                 .Select(item => new GoalId(item.Id)).ToArray();
             var kernel = repository.LoadGoalsAsync(ids).GetAwaiter().GetResult();
+            var raised = ConductorStatusClarificationReader.Read(workspace, kernel);
             var goals = kernel.Goals.Where(goal => !goal.IsTerminal).OrderBy(goal => goal.Id.Value).ToArray();
             providerHolds = ProviderUsageHoldReader.Read(repository, kernel.Goals.Where(goal =>
                 !goal.IsTerminal || goal.Status == GoalStatus.Failed).ToArray(), now ?? DateTimeOffset.UtcNow);
@@ -74,15 +75,18 @@ internal static class ConductorStatusSnapshotReader
                     WorkTaskStatus.Running or WorkTaskStatus.Assigned or WorkTaskStatus.WaitingForHuman)
                     ?? goal.Tasks.FirstOrDefault(item => item.Status == WorkTaskStatus.Pending);
                 return new ConductorStatusSnapshot.GoalObservation(goal.Id.Value, goal.Status.ToString(),
-                    task?.RequiredRole.ToString() ?? "none", goal.LandingBlocker);
+                    task?.RequiredRole.ToString() ?? "none", goal.LandingBlocker,
+                    raised.ByGoal.GetValueOrDefault(goal.Id.Value));
             }).ToArray();
             var pending = goals.SelectMany(goal => kernel.GetPendingHumanInput(goal.Id)).ToArray();
             var clarifications = pending.Count(item => HumanWaitPolicyDefaults.IsSpecClarificationClass(item.Kind));
-            goalSnapshot = new(true, observations, clarifications, pending.Length - clarifications);
+            goalSnapshot = new(true, observations,
+                raised.Readable ? clarifications + raised.ByGoal.Values.Sum(items => items.Count) : null,
+                pending.Length - clarifications);
         }
-        var landing = ReadLatestLanding(workspace.GoalLifecycleEventsDirectory);
+        var landing = ConductorStatusLatestLandingReader.Read(workspace.SqliteStatePath);
         return new(owner, since, buildCommit, generation, tick, goalSnapshot,
-            landing is null ? null : new(landing.Value.Goal, landing.Value.At),
+            landing,
             ReadAdoption(workspace.RunEventStorePath), ReadIntents(workspace), providerHolds,
             ReadSupervisorJob(build?.Detail));
     }
@@ -306,26 +310,5 @@ internal static class ConductorStatusSnapshotReader
         command.Parameters.AddWithValue("$type", RunEventTypes.ConductorTick);
         var value = command.ExecuteScalar() as string;
         return value is null ? null : DateTimeOffset.Parse(value, CultureInfo.InvariantCulture);
-    }
-
-    private static (string Goal, DateTimeOffset At)? ReadLatestLanding(string directory)
-    {
-        if (!Directory.Exists(directory)) return null;
-        (string Goal, DateTimeOffset At)? latest = null;
-        foreach (var file in Directory.EnumerateFiles(directory, "*.jsonl"))
-        foreach (var line in File.ReadLines(file))
-        {
-            try
-            {
-                using var document = JsonDocument.Parse(line);
-                var root = document.RootElement;
-                if (root.GetProperty("eventType").GetString() != "GoalLanded") continue;
-                var at = root.GetProperty("timestamp").GetDateTimeOffset();
-                if (latest is null || at > latest.Value.At)
-                    latest = (root.GetProperty("goalId").GetString() ?? "unknown", at);
-            }
-            catch (Exception ex) when (ex is JsonException or InvalidOperationException or FormatException or KeyNotFoundException) { }
-        }
-        return latest;
     }
 }

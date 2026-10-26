@@ -4,11 +4,30 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 
 public interface IOrchestratorStateQueries
 {
+    /// <summary>
+    /// Reads every goal row as stored, archived goals as metadata-only summaries, all human-input
+    /// requests and active practices, without a write lock or write tag.
+    /// </summary>
+    Task<AgentOrchestratorKernel> LoadBoardSnapshotAsync(CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException("This repository does not support whole-board snapshot queries.");
+
     Task<AgentOrchestratorKernel> LoadGoalsAsync(
         IReadOnlyCollection<GoalId> goalIds,
         CancellationToken cancellationToken = default);
 
     Task<IReadOnlyList<GoalSummary>> ListGoalMetadataAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>Reads board columns with bounded terminal history and objective prefixes, in listing order.</summary>
+    async Task<IReadOnlyList<GoalSummary>> ListGoalBoardRowsAsync(
+        GoalBoardRowQuery query, CancellationToken cancellationToken = default)
+    {
+        query.EnsureValid();
+        var rows = await ListGoalMetadataAsync(cancellationToken);
+        var terminals = 0;
+        return rows.Where(row => !GoalBoardRowQuery.IsTerminal(row.Status) ||
+                query.RecentTerminalLimit is null || terminals++ < query.RecentTerminalLimit.Value)
+            .Select(row => new GoalSummary(row.Id, row.Status, query.Title(row.Objective), row.UpdatedAt)).ToArray();
+    }
 
     /// <summary>Optionally includes creation times for terminal goals; the default listing skips their snapshot JSON.</summary>
     Task<IReadOnlyList<GoalSummary>> ListGoalMetadataAsync(
@@ -34,6 +53,14 @@ public interface IOrchestratorStateQueries
 
     Task<IReadOnlyList<GoalSummary>> ListGoalIdStatusesAsync(CancellationToken cancellationToken = default) =>
         ListGoalMetadataAsync(cancellationToken);
+
+    Task<IReadOnlyList<GoalSummary>> ListConductLoopGoalMetadataAsync(CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException("This repository does not support conduct-loop goal metadata queries.");
+
+    Task<IReadOnlyList<ModelOutcomeRecord>> BuildModelOutcomeScorecardAsync(
+        int windowSize = ModelOutcomeScorecard.DefaultWindowSize,
+        CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException("This repository does not support model-outcome scorecard queries.");
 }
 
 public sealed record TerminalOwnerQuestionHold(
@@ -51,7 +78,7 @@ public interface IOrchestratorStateRepository : IOrchestratorStateQueries
         CancellationToken cancellationToken = default) =>
         SaveAsync(kernel, cancellationToken);
 
-    Task<IReadOnlyList<GoalSummary>> ListConductLoopGoalMetadataAsync(CancellationToken cancellationToken = default);
+    Task<bool> EnsureTerminalOpenWorkIndexAsync(CancellationToken cancellationToken = default) => Task.FromResult(false);
 
     async Task<IReadOnlyList<GoalId>> ListTerminalGoalIdsWithNonTerminalTasksAsync(CancellationToken cancellationToken = default)
     {
@@ -68,10 +95,6 @@ public interface IOrchestratorStateRepository : IOrchestratorStateQueries
         CancellationToken cancellationToken = default);
 
     Task<IReadOnlyList<ModelFitHistoryRow>> ListModelFitHistoryAsync(CancellationToken cancellationToken = default);
-
-    Task<IReadOnlyList<ModelOutcomeRecord>> BuildModelOutcomeScorecardAsync(
-        int windowSize = ModelOutcomeScorecard.DefaultWindowSize,
-        CancellationToken cancellationToken = default);
 
     Task<ModelFitBestFit?> QueryBestFitForRoleAsync(AgentRole role, CancellationToken cancellationToken = default);
 }

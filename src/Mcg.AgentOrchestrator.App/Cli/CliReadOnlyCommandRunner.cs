@@ -35,11 +35,12 @@ internal static class CliReadOnlyCommandRunner
         CliEpicPlanQueryCommand.IsEpicPlanQueryCommand(args) ||
         CliInspectionQueryCommand.IsInspectionQueryCommand(args) ||
         CliBacklogQueryCommand.IsBacklogQueryCommand(args) ||
-        CliMonitorGoalQueryCommand.IsMonitorGoalQueryCommand(args);
+        CliMonitorGoalQueryCommand.IsMonitorGoalQueryCommand(args) ||
+        CliBoardSnapshotQueryCommand.IsBoardSnapshotQueryCommand(args);
 
     internal static bool TryExecute(
         IReadOnlyList<string> args,
-        ITransactionalOrchestratorStateRepository stateRepository,
+        IOrchestratorStateQueries stateRepository,
         OrchestratorWorkspace workspace,
         IModelProviderRegistry providers,
         IOperatorChannel? channel,
@@ -236,13 +237,21 @@ internal static class CliReadOnlyCommandRunner
             return true;
         }
 
+        if (CliBoardSnapshotQueryCommand.IsBoardSnapshotQueryCommand(args))
+        {
+            CliBoardSnapshotQueryCommand.Execute(args, stateRepository, workspace, providers, channel,
+                ref agents, ref workerProfiles, ref currentGoal);
+            changed = false;
+            return true;
+        }
+
         changed = false;
         return false;
     }
 
     internal static bool ExecuteHistoricalTrialCompare(
         IReadOnlyList<string> args,
-        IOrchestratorStateRepository stateRepository,
+        IOrchestratorStateQueries stateRepository,
         OrchestratorWorkspace workspace,
         ref IReadOnlyList<AgentDefinition> agents,
         IModelProviderRegistry providers,

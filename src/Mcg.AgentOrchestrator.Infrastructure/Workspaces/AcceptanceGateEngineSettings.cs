@@ -24,6 +24,8 @@ internal sealed class AcceptanceGateEngineSettings
     public int MaxConcurrentShards { get; init; } = 1;
     public bool EnforceStructuralCoverage { get; init; }
     public int PartitionVerdictFullRerunEveryN { get; init; } = DefaultPartitionVerdictFullRerunEveryN;
+    // Off by default: 19 hits against 729 misses over 101 gates (10-18 to 10-25) did not repay about 60 s of identity hashing and 321 MiB of stores per gate.
+    public bool BaseBuildCacheEnabled { get; init; }
     public long OutputCaptureLimitBytes { get; init; } = DefaultOutputCaptureLimitBytes;
 
     public static AcceptanceGateEngineSettings Load(string worktreePath, string? projectHomeDirectory = null)

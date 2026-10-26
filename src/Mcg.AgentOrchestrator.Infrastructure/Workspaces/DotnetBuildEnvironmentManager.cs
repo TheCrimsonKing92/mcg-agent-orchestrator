@@ -1398,7 +1398,7 @@ public static class DotnetBuildEnvironmentManager
 
     internal static string ResolveIsolatedRootBase(string? overridden, string? localAppDataVariable, string? localAppDataKnownFolder, string tempPath, bool isWindows) => DotnetBuildStorageLayout.ResolveIsolatedRootBase(overridden, localAppDataVariable, localAppDataKnownFolder, tempPath, isWindows);
 
-    private static string BuildSlotExecutionLockPath(int slotIndex, DotnetBuildStorageRoot storageRoot)
+    internal static string BuildSlotExecutionLockPath(int slotIndex, DotnetBuildStorageRoot storageRoot)
     {
         return Path.Combine(storageRoot.RootPath, "build-slots", $"build-{slotIndex}.lock");
     }
@@ -1412,6 +1412,18 @@ public static class DotnetBuildEnvironmentManager
             .OfType<string>()
             .Distinct(StringComparer.Ordinal)
             .ToArray();
+
+    internal static IReadOnlyList<string> ReadHeldBuildPermitHolderLabels(DotnetBuildStorageRoot storageRoot)
+    {
+        var labels = new List<string>();
+        for (var slot = 0; slot < BuildConcurrencySlotCount; slot++)
+        {
+            var path = BuildSlotExecutionLockPath(slot, storageRoot);
+            if (IsExecutionLockHeld(path) && TryReadExecutionLeaseMetadata(path)?.HolderLabel is { } label &&
+                !string.IsNullOrWhiteSpace(label)) labels.Add(label);
+        }
+        return labels;
+    }
 
     private static DotnetBuildEnvironment WithBuildPermit(DotnetBuildEnvironment environment, int permitIndex)
     {

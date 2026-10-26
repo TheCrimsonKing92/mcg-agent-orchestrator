@@ -59,6 +59,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsPolicyShardScope :
             $"covered by {laneCount} partitioned checks; changed file in dependency closure; " +
             "changed projects: Infrastructure; dependency closure: App, Infrastructure, " +
             "Infrastructure.Acceptance.Tests, Infrastructure.Cli.Tests, Infrastructure.ProviderEnvironment.Tests, " +
+            "Infrastructure.StorageRetention.Tests, " +
             "Infrastructure.Tests, TestSupport",
             infrastructureRollup.ResultSummary);
         Assert.Equal(

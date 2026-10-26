@@ -51,7 +51,11 @@ public sealed record ConductorAutonomyPolicy(
     string CascadeCheapModelAlias = ConductorAutonomyPolicy.DefaultCascadeCheapModelAlias,
     bool CascadeMechanicalReworkCheap = true,
     bool FollowerGatesEnabled = false,
-    bool AcceptanceChildrenOptOutExecutionThrottling = false)
+    bool AcceptanceChildrenOptOutExecutionThrottling = false,
+    bool BuildGcConserveMemory = false,
+    int BuildGcConserveMemoryLevel = 5,
+    int BuildGcHeapCount = 0,
+    int BuildRootRetentionDays = 0)
 {
     public const string DefaultCascadeCheapModelAlias = "gpt-6-luna";
     public const int DefaultAcceptanceCohortGatherWindowSeconds = 480;
@@ -198,6 +202,13 @@ public sealed record ConductorAutonomyPolicy(
         if (BoardFillMaxDraftsPerDay is < 0 or > 20)
             errors.Add($"boardFillMaxDraftsPerDay must be between 0 and 20 (got {BoardFillMaxDraftsPerDay}).");
 
+        if (BuildGcConserveMemoryLevel is < 0 or > 9)
+            errors.Add($"buildGcConserveMemoryLevel must be between 0 and 9 (got {BuildGcConserveMemoryLevel}).");
+        if (BuildGcHeapCount is < 0 or > 64)
+            errors.Add($"buildGcHeapCount must be between 0 and 64 (got {BuildGcHeapCount}).");
+        if (BuildRootRetentionDays is < 0 or > 365)
+            errors.Add($"buildRootRetentionDays must be between 0 and 365 (got {BuildRootRetentionDays}).");
+
         foreach (var state in AllStates)
         {
             if (!TransitionMap.ContainsKey(state))
@@ -228,6 +239,10 @@ public sealed record ConductorAutonomyPolicy(
         sb.AppendLine($"  \"acceptanceCohortGatherWindowSeconds\": {AcceptanceCohortGatherWindowSeconds},");
         sb.AppendLine($"  \"acceptanceAttemptBelowNormalPriority\": {AcceptanceAttemptBelowNormalPriority.ToString().ToLowerInvariant()},");
         sb.AppendLine($"  \"acceptanceChildrenOptOutExecutionThrottling\": {AcceptanceChildrenOptOutExecutionThrottling.ToString().ToLowerInvariant()},");
+        sb.AppendLine($"  \"buildGcConserveMemory\": {BuildGcConserveMemory.ToString().ToLowerInvariant()},");
+        sb.AppendLine($"  \"buildGcConserveMemoryLevel\": {BuildGcConserveMemoryLevel},");
+        sb.AppendLine($"  \"buildGcHeapCount\": {BuildGcHeapCount},");
+        sb.AppendLine($"  \"buildRootRetentionDays\": {BuildRootRetentionDays},");
         sb.AppendLine($"  \"boardFillMode\": {JsonStr(BoardFillMode.ToString())},");
         sb.AppendLine($"  \"boardFillTargetActiveGoals\": {BoardFillTargetActiveGoals},");
         sb.AppendLine($"  \"boardFillMaxDraftsPerDay\": {BoardFillMaxDraftsPerDay},");
@@ -338,6 +353,42 @@ public sealed record ConductorAutonomyPolicy(
                         $"conductor-policy.json{src}: acceptanceChildrenOptOutExecutionThrottling must be a boolean.");
                 childrenOptOutExecutionThrottling = throttlingElement.GetBoolean();
             }
+            var buildGcConserveMemory = false;
+            if (root.TryGetProperty("buildGcConserveMemory", out var conserveElement) &&
+                conserveElement.ValueKind != JsonValueKind.Null)
+            {
+                if (conserveElement.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+                    throw new FormatException(
+                        $"conductor-policy.json{src}: buildGcConserveMemory must be a boolean.");
+                buildGcConserveMemory = conserveElement.GetBoolean();
+            }
+            var buildGcConserveMemoryLevel = 5;
+            if (root.TryGetProperty("buildGcConserveMemoryLevel", out var conserveLevelElement) &&
+                conserveLevelElement.ValueKind != JsonValueKind.Null)
+            {
+                if (conserveLevelElement.ValueKind != JsonValueKind.Number)
+                    throw new FormatException(
+                        $"conductor-policy.json{src}: buildGcConserveMemoryLevel must be an integer.");
+                buildGcConserveMemoryLevel = RequireInt(root, "buildGcConserveMemoryLevel", src);
+            }
+            var buildGcHeapCount = 0;
+            if (root.TryGetProperty("buildGcHeapCount", out var heapCountElement) &&
+                heapCountElement.ValueKind != JsonValueKind.Null)
+            {
+                if (heapCountElement.ValueKind != JsonValueKind.Number)
+                    throw new FormatException(
+                        $"conductor-policy.json{src}: buildGcHeapCount must be an integer.");
+                buildGcHeapCount = RequireInt(root, "buildGcHeapCount", src);
+            }
+            var buildRootRetentionDays = 0;
+            if (root.TryGetProperty("buildRootRetentionDays", out var retentionDaysElement) &&
+                retentionDaysElement.ValueKind != JsonValueKind.Null)
+            {
+                if (retentionDaysElement.ValueKind != JsonValueKind.Number)
+                    throw new FormatException(
+                        $"conductor-policy.json{src}: buildRootRetentionDays must be an integer.");
+                buildRootRetentionDays = RequireInt(root, "buildRootRetentionDays", src);
+            }
             var cascadeTesterCheapFirst = true;
             if (root.TryGetProperty("cascadeTesterCheapFirst", out var cascadeSwitch) &&
                 cascadeSwitch.ValueKind != JsonValueKind.Null)
@@ -444,7 +495,11 @@ public sealed record ConductorAutonomyPolicy(
                 cascadeCheapModelAlias,
                 cascadeMechanicalReworkCheap,
                 followerGatesEnabled,
-                childrenOptOutExecutionThrottling);
+                childrenOptOutExecutionThrottling,
+                buildGcConserveMemory,
+                buildGcConserveMemoryLevel,
+                buildGcHeapCount,
+                buildRootRetentionDays);
 
             var errors = policy.Validate();
             if (errors.Count > 0)

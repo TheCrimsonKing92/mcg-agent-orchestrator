@@ -1431,6 +1431,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             if (HasCliConfirmation(parts, "--loop"))
             {
                 using var loopSetup = ConductorStartupHeartbeat.Shipped.Begin(ConductorStartupHeartbeat.Phases.LoopSetup);
+                var firstTickEvent = ConductorFirstTickEvent.ForCurrentProcess();
                 var loopPolicyName = GetFlagValue(parts, "--policy");
                 var loopPolicyResolution = CliConductLoopStartup.PrepareConductLoopPolicy(
                     context.Workspace.OrchestratorDirectory, loopPolicyName, Console.Error, projectPolicyTemplatePath: ProjectConductorPolicySeeder.TemplatePathFor(context.Workspace, OrchestratorHome.ResolveForProcess()));
@@ -1575,6 +1576,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     AgentOrchestratorKernel loopKernel,
                     IReadOnlySet<string> checkpointHeldGoalIds)
                 {
+                    firstTickEvent.Observe();
                     agentRoster.Refresh();
                     loopReaper.BeginRefreshCycle();
                     intentGoalReloadObservations.Clear();
@@ -1660,12 +1662,10 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                         resolvedParkedHumanWaitKernel = ConductorTickStepLedger.Measure("parked-reloads", () => context.ReloadResolvedParkedHumanWaitKernel());
                     }
                     catch { /* dynamic pickup is best-effort */ }
-
                     if (resolvedParkedHumanWaitKernel is not null)
                     {
                         PersistResolvedParkedHumanWaitsForNextTick(context, resolvedParkedHumanWaitKernel);
                     }
-
                     AgentOrchestratorKernel? parkedGoalSafetyNetKernel = null;
                     parkedGoalSafetyNetTick++;
                     if (CliPersistentStateRunner.IsParkedGoalSafetyNetSweepTick(parkedGoalSafetyNetTick))
@@ -1730,7 +1730,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     ConductorTickStepLedger.Measure("state-log-check", () => stateLogCheck.OnTick());
                     ConductorTickStepLedger.Measure("failure-clusters", () => failureClustersDaily.OnTick());
                     ConductorTickStepLedger.Measure("host-health", () => hostHealthMonitor.Evaluate());
-                    ConductorTickStepLedger.Measure("program-health", () => programHealthMonitor.Evaluate(loopKernel.Goals.Select(goal => (goal.Id, goal.Status)).ToArray(), terminalSweepCache.ObservedMainSha, (goals, now) => ConductorInvariantObservationReader.ForWorkspace(context.Workspace).Read(goals, now)));
+                    ConductorTickStepLedger.Measure("program-health", () => programHealthMonitor.EvaluateWithInvariants(loopKernel.Goals.Select(goal => (goal.Id, goal.Status)).ToArray(), terminalSweepCache.ObservedMainSha));
                     ConductorTickStepLedger.Measure("remote-executor-probe", () => remoteExecutorProbe.Evaluate());
                     ConductorTickStepLedger.Measure("executor-tools-deploy", () => executorToolsDeploy.Evaluate());
                     ConductorTickStepLedger.Measure("remote-git-mirror", () => RemoteGitMirror.TryStartBackgroundProcessing(loopKernel, context.Workspace.ExecutionDirectory, integrationBranch: context.Workspace.IntegrationBranch));
@@ -1778,7 +1778,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                         progressiveReviewGlances: ProgressiveReviewGlanceCoordinator.CreateDefault(context.Workspace, context.WorkerProfiles),
                         progressiveReviewSteering: ProgressiveReviewSteeringCoordinator.CreateDefault(context.Workspace, context.Agents, context.WorkerProfiles, context.Providers),
                         selfRelaunch: selfRelaunch is null ? null : delegateSelfRelaunchToSupervisor
-                                ? ConductorSelfRelaunch.CreateSupervisorDelegated()
+                                ? SupervisedSelfRelaunchGuard.ForWorkspace(context.Workspace)
                                 : selfRelaunch,
                         selfRelaunchEnabled: ConductorBatchLoop.ResolveSelfRelaunchEnabled(
                             Environment.GetEnvironmentVariable(ConductorBatchLoop.SelfRelaunchEnabledEnvironmentVariable),

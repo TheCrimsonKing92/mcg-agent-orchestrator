@@ -472,17 +472,6 @@ internal static class RepoProcessCliCommand
 
     private static string FormatTime(DateTimeOffset? value) => value?.ToString("o", CultureInfo.InvariantCulture) ?? "";
 
-    private static string? NormalizeIdentityPath(string? value)
-    {
-        if (string.IsNullOrWhiteSpace(value))
-        {
-            return null;
-        }
-
-        try { return Path.GetFullPath(value).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar); }
-        catch { return null; }
-    }
-
     private static bool IsPotentialLockHolder(ProcessSnapshot snapshot) =>
         snapshot.Name.Equals("dotnet", StringComparison.OrdinalIgnoreCase) ||
         snapshot.Name.Equals("DispatchProcessHost", StringComparison.OrdinalIgnoreCase) ||
@@ -499,35 +488,13 @@ internal static class RepoProcessCliCommand
     internal static string? EvaluateStopRevalidation(
         ProcessSnapshot recorded,
         ProcessSnapshot? current,
-        IReadOnlyList<string> commandMarkers)
-    {
-        if (recorded.StartedAt is null || string.IsNullOrWhiteSpace(recorded.ExecutablePath))
-        {
-            return "identity-unavailable";
-        }
+        IReadOnlyList<string> commandMarkers) =>
+        ProcessStopRevalidation.Evaluate(
+            ToInspectionRecord(recorded), current is null ? null : ToInspectionRecord(current), commandMarkers);
 
-        if (current is null ||
-            current.InspectionStatus != ProcessInspectionStatus.Available ||
-            string.IsNullOrWhiteSpace(current.CommandLine))
-        {
-            return "inspection-unavailable";
-        }
-
-        var recordedPath = NormalizeIdentityPath(recorded.ExecutablePath);
-        var currentPath = NormalizeIdentityPath(current.ExecutablePath);
-        if (current.StartedAt != recorded.StartedAt ||
-            recordedPath is null ||
-            currentPath is null ||
-            !string.Equals(currentPath, recordedPath, StringComparison.OrdinalIgnoreCase))
-        {
-            return "identity-mismatch";
-        }
-
-        return commandMarkers.Any(marker =>
-            current.CommandLine.IndexOf(marker, StringComparison.OrdinalIgnoreCase) < 0)
-                ? "command-changed"
-                : null;
-    }
+    private static ProcessInspectionRecord ToInspectionRecord(ProcessSnapshot snapshot) =>
+        new(snapshot.ProcessId, snapshot.ParentProcessId, snapshot.Name, snapshot.ExecutablePath,
+            snapshot.StartedAt, snapshot.CommandLine, snapshot.InspectionStatus);
 
     internal sealed record ProcessSnapshot(
         int ProcessId,

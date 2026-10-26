@@ -100,7 +100,8 @@ internal sealed partial class ConductorContinuitySupervisor(
     Func<Action<string, string, CancellationToken>, CancellationToken, ConductorPreparedSuccessor>? stageSuccessorWithHook = null,
     string? stopFilePath = null,
     Func<string, string, IReadOnlyList<string>>? changedPathsBetween = null,
-    TimeSpan? successorExitRetryDelay = null)
+    TimeSpan? successorExitRetryDelay = null,
+    Action<string, string, string>? raiseEscalationAttention = null)
 {
     public const string ChildFlag = "--continuity-child";
     public const string ExitArtifactFlag = "--continuity-exit-artifact";
@@ -128,10 +129,24 @@ internal sealed partial class ConductorContinuitySupervisor(
         Environment.GetEnvironmentVariable("MCG_ORCHESTRATOR_DOTNET_PATH") ??
         "dotnet";
 
+    private void RaiseEscalationAttention(string kind, string reason, int attempt)
+    {
+        try
+        {
+            raiseEscalationAttention?.Invoke($"Continuity supervisor escalated: {kind}",
+                $"{reason}. No running conductor is supervised.",
+                $"conductor-supervisor-escalated:{kind}:{attempt}");
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[conduct supervisor] Could not raise escalation attention: {ex.Message}");
+        }
+    }
+
     public static bool ShouldSupervise(
         IReadOnlyList<string> args,
         bool authorityTransferRequested) =>
-        CliPersistentStateRunner.IsConductLoop(args) &&
+        ConductCommandArguments.IsLoop(args) &&
         args.Any(arg => arg.Equals("--loop", StringComparison.OrdinalIgnoreCase)) &&
         !args.Any(arg => arg.Equals(ChildFlag, StringComparison.OrdinalIgnoreCase)) &&
         !authorityTransferRequested;
@@ -145,7 +160,7 @@ internal sealed partial class ConductorContinuitySupervisor(
         string? logDirectory = null,
         CancellationToken cancellationToken = default)
     {
-        var unexpectedStarts = new Queue<DateTimeOffset>();
+        var unexpectedStarts = new ConductorSupervisorRestartLedger(_restartWindow);
         var renewalsWithoutProgress = 0;
         var consecutiveStagingFailures = 0;
         var stagingDisabled = false;
@@ -673,6 +688,7 @@ internal sealed partial class ConductorContinuitySupervisor(
                     TryAppendConductEvent($"SUPERVISOR_ESCALATED reason=renewal-cap count={renewalsWithoutProgress} max={maxRenewalsWithoutProgress}");
                     Record("restart", "escalated", attempt, reason, result.ProcessId, stdoutPath, stderrPath);
                     Console.Error.WriteLine($"[conduct supervisor] Escalated: {reason}.");
+                    RaiseEscalationAttention("renewal-cap", reason, attempt);
                     return 1;
                 }
 
@@ -807,20 +823,17 @@ internal sealed partial class ConductorContinuitySupervisor(
             }
 
             var now = _timeProvider.GetUtcNow();
-            while (unexpectedStarts.Count > 0 && now - unexpectedStarts.Peek() > _restartWindow)
-            {
-                unexpectedStarts.Dequeue();
-            }
-            unexpectedStarts.Enqueue(now);
             var failure = stallFailure ?? launchFailure ?? (artifact is null
                 ? $"exit={result.ExitCode} exit-artifact=missing-or-invalid"
                 : $"exit={result.ExitCode} stop={artifact.StopReason}");
+            unexpectedStarts.Record(now, attempt, result.ProcessId, result.ExitCode, failure, stderrPath);
             if (unexpectedStarts.Count > maxUnexpectedRestarts)
             {
-                var reason = $"restart-cap count={unexpectedStarts.Count} max={maxUnexpectedRestarts} windowSeconds={(int)_restartWindow.TotalSeconds} {failure}";
-                TryAppendConductEvent($"SUPERVISOR_ESCALATED reason=restart-cap count={unexpectedStarts.Count} max={maxUnexpectedRestarts}");
+                var reason = $"SUPERVISOR_ESCALATED reason=restart-cap count={unexpectedStarts.Count} max={maxUnexpectedRestarts} windowSeconds={(int)_restartWindow.TotalSeconds} starts=[{unexpectedStarts.Describe()}]";
+                TryAppendConductEvent(reason);
                 Record("restart", "escalated", attempt, reason, result.ProcessId, stdoutPath, stderrPath);
-                Console.Error.WriteLine($"[conduct supervisor] Escalated: {reason}.");
+                Console.Error.WriteLine(reason);
+                RaiseEscalationAttention("restart-cap", reason, attempt);
                 return 1;
             }
 

@@ -7,6 +7,26 @@ using Mcg.AgentOrchestrator.Infrastructure;
 [Xunit.Collection(TestCollections.DotnetBuildSlots)]
 public sealed class ConductorBatchLoopTestsStepLedger(ITestOutputHelper output) : ConductorBatchLoopTests(output)
 {
+    [Fact]
+    public void Sweep_ProgramHealth_ReportsCpuAsLastStepWithinPhaseBudget()
+    {
+        Assert.Equal(new[] { "kernel-reload", "refresh-dispatches", "parked-reloads", "terminal-sweep-run",
+            "owned-root-reap", "reconcile-remediation", "host-health", "maintenance", "state-log-check",
+            "failure-clusters", "remote-git-mirror", "goal-refinement", "program-health" }, ConductorTickStepLedger.SweepNames);
+        var (kernel, _) = SimpleGoal();
+        var cpu = TimeSpan.Zero;
+        var loop = new ConductorBatchLoop(measuredSweep: _ =>
+        {
+            ConductorTickStepLedger.Measure("program-health", () => cpu += TimeSpan.FromMilliseconds(4));
+            return null;
+        }, processCpuTime: () => cpu);
+        var tick = OneTick(loop, kernel, MakeDriver());
+        var sweep = Phase(tick, "sweep");
+        Assert.Contains(",program-health:4:1", sweep);
+        Assert.EndsWith(" cpu_ms=4", sweep);
+        AssertBound(sweep, "sweep_steps");
+    }
+
     [Xunit.Fact(DisplayName = "Early intent and prewalk steps stay within their injected CPU phases")]
     public void PrewalkReportsInjectedStepCpu()
     {

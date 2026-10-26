@@ -23,7 +23,8 @@ public sealed class AcceptancePolicyShardPlannerTestsNestedProjectMapping
         [AcceptancePolicyShardPlanner.AcceptanceTestsProject, "Infrastructure.Acceptance.Tests"],
         [AcceptancePolicyShardPlanner.ProviderEnvironmentTestsProject, "Infrastructure.ProviderEnvironment.Tests"],
         [AcceptancePolicyShardPlanner.CliTestsProject, "Infrastructure.Cli.Tests"],
-        [AcceptancePolicyShardPlanner.ExecutionTestsProject, "Infrastructure.Execution.Tests"]
+        [AcceptancePolicyShardPlanner.ExecutionTestsProject, "Infrastructure.Execution.Tests"],
+        [AcceptancePolicyShardPlanner.StorageRetentionTestsProject, "Infrastructure.StorageRetention.Tests"]
     ];
 
     [Fact]

@@ -14,7 +14,7 @@ internal sealed class OwnerQuestionReadModel(
         (await ReadAsync(cancellationToken)).Live;
 
     public async Task<OwnerQuestionSnapshot> ReadAsync(CancellationToken cancellationToken) =>
-        await ReadAsync(await state.ListGoalMetadataAsync(cancellationToken), cancellationToken);
+        await ReadAsync(await state.ListGoalBoardRowsAsync(new(null, 0, null), cancellationToken), cancellationToken);
 
     internal async Task<OwnerQuestionSnapshot> ReadAsync(
         IReadOnlyList<GoalSummary> metadata, CancellationToken cancellationToken)

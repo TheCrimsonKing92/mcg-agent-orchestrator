@@ -475,7 +475,7 @@ internal sealed partial class ConductorDriver
                 goal, requestingTask, candidateSha!, receiptId, actionableCandidateRed);
             return true;
         }
-        if (TryBuildUnattributableRedEscalation(
+        if (CandidateRedBaselineInheritance.TryBuildUnattributableRedEscalation(
                 candidateSha!, armReceipts, runnable, receiptId, out decision))
         {
             return true;
@@ -623,27 +623,27 @@ internal sealed partial class ConductorDriver
     {
         var candidate = arms.SingleOrDefault(arm => arm.Arm == FindingEvidenceArm.Candidate);
         var baseline = arms.SingleOrDefault(arm => arm.Arm == FindingEvidenceArm.Baseline);
-        if (candidate is not
-                {
-                    Accepted: true,
-                    Disposition: FindingEvidenceArmDisposition.Red,
-                    FailingTestIdentities.Count: > 0
-                } ||
+        if (candidate is not { Accepted: true, Disposition: FindingEvidenceArmDisposition.Red,
+                FailingTestIdentities.Count: > 0 } ||
             !string.Equals(candidate.Sha, candidateSha, StringComparison.OrdinalIgnoreCase) ||
-            (baseline is null
-                ? !EveryFailingTestIsInsideCandidateChanges(goal, batch, candidate.FailingTestIdentities)
-                : baseline.Disposition != FindingEvidenceArmDisposition.Green))
+            (baseline is null &&
+                !EveryFailingTestIsInsideCandidateChanges(goal, batch, candidate.FailingTestIdentities)))
         {
             return null;
         }
 
+        var (failures, baselineFailures) = CandidateRedBaselineInheritance.AttributableFailures(candidate, baseline);
+        if (failures is null)
+        {
+            return null;
+        }
         var attributableFindings = new List<ReviewFinding>();
         var attributableFailingTests = new HashSet<string>(StringComparer.Ordinal);
         foreach (var member in batch.Members)
         {
             var matchingFailures = batch.Members.Count == 1
-                ? candidate.FailingTestIdentities
-                : candidate.FailingTestIdentities!
+                ? failures
+                : failures
                     .Where(failingIdentity => member.TypedRequest.Selections.Any(selection =>
                         IsTestIdentitySelectionMatch(failingIdentity, selection.TestClass.Trim())))
                     .ToArray();
@@ -669,8 +669,7 @@ internal sealed partial class ConductorDriver
             ? null
             : new ActionableCandidateRedAttribution(
                 attributableFindings.DistinctBy(finding => finding.StableId).ToArray(),
-                attributableFailingTests.ToArray(),
-                candidate.TestResultPaths ?? []);
+                attributableFailingTests.ToArray(), candidate.TestResultPaths ?? [], baselineFailures);
     }
 
     private static bool IsDeveloperOwnedFindingAnchor(string path) =>
@@ -750,5 +749,6 @@ internal sealed partial class ConductorDriver
     internal sealed record ActionableCandidateRedAttribution(
         IReadOnlyList<ReviewFinding> Findings,
         IReadOnlyList<string> FailingTestIdentities,
-        IReadOnlyList<string> CandidateTestResultPaths);
+        IReadOnlyList<string> CandidateTestResultPaths,
+        IReadOnlyList<string>? BaselineFailingTestIdentities = null);
 }

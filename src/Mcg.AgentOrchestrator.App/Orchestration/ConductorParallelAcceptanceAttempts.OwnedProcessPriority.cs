@@ -1,3 +1,4 @@
+using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
@@ -19,6 +20,18 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
         Func<int, uint, uint, bool> setter)
     {
         if (!ResolveAttemptPolicy(attempt).AcceptanceChildrenOptOutExecutionThrottling) return;
+        AcceptanceChildQos.Enable();
+        try { _ = setter(Environment.ProcessId, 1, 0); }
+        catch (Exception) { /* QoS is best-effort and must not change acceptance. */ }
+    }
+
+    internal static void ApplyExecutionQos(string? policyJson, string? sourcePath,
+        Func<int, uint, uint, bool> setter)
+    {
+        ConductorAutonomyPolicy policy;
+        try { policy = ConductorAutonomyPolicy.ParseJson(policyJson!, sourcePath); }
+        catch (Exception) { return; }
+        if (!policy.AcceptanceChildrenOptOutExecutionThrottling) return;
         AcceptanceChildQos.Enable();
         try { _ = setter(Environment.ProcessId, 1, 0); }
         catch (Exception) { /* QoS is best-effort and must not change acceptance. */ }

@@ -911,9 +911,10 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
 
     internal void MarkReconciled(ConductorParallelAcceptanceAttempt attempt)
     {
+        ConductorParallelAcceptanceAttempt current;
         lock (MetadataWriteGate)
         {
-            var current = ReadCanonicalAttempt(attempt.MetadataPath, attempt.GoalId);
+            current = ReadCanonicalAttempt(attempt.MetadataPath, attempt.GoalId);
             if (!string.Equals(current.AttemptId, attempt.AttemptId, StringComparison.Ordinal))
             {
                 throw new InvalidDataException(
@@ -930,7 +931,18 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
                 LastHeartbeatAt = _utcNow()
             });
         }
+        if (current.Kind == PreReviewEvidenceDispatchKind && OwnsEvidencePermitTicket &&
+            current.Outcome != ConductorParallelAcceptanceAttemptOutcome.BlockedBuildSlot)
+        {
+            FocusedEvidencePermitTicket.Remove(
+                _buildStorageRoot ?? DotnetBuildEnvironmentManager.CaptureStorageRoot(),
+                _timeProvider, new GoalId(current.GoalId));
+        }
     }
+
+    private bool OwnsEvidencePermitTicket =>
+        _acquireStableSlotLease == (Func<ConductorParallelAcceptanceAttempt, ConductorParallelAcceptanceCandidate, DotnetBuildEnvironmentLease?>)AcquireAttemptStableSlotLease &&
+        (_runInline || _launchOwnedProcess == (Func<ConductorParallelAcceptanceOwnedProcessLaunch, ConductorParallelAcceptanceOwnedProcessLaunchResult>)LaunchExternalOwnedProcess);
 
     internal bool RecordFocusedEvidenceRequestDispositions(
         ConductorParallelAcceptanceAttempt attempt,
@@ -1160,6 +1172,12 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
                 HolderLease.Reserve(AcceptanceHolderBinding.For(attempt), _generationIdentity);
             if (attempt.Kind == GateDispatchKind)
                 ConductorBatchLoop.NoteActivationProbeAdmission(AcceptanceHolderBinding.For(attempt), attempt.ResultPath);
+            if (attempt.Kind == PreReviewEvidenceDispatchKind && OwnsEvidencePermitTicket)
+            {
+                FocusedEvidencePermitTicket.Adopt(
+                    _buildStorageRoot ?? DotnetBuildEnvironmentManager.CaptureStorageRoot(),
+                    _timeProvider, candidate.Goal.Id, Environment.ProcessId);
+            }
             EmitEvidenceStart(attempt);
             WriteHeartbeat(attempt, "starting");
             File.AppendAllText(attempt.StdoutPath, $"{attempt.Kind} attempt {attempt.AttemptId} started for {attempt.GoalPrefix} slot-{attempt.SlotIndex}{Environment.NewLine}");
@@ -1621,7 +1639,9 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
             timeProvider: _timeProvider,
             sleep: _buildPermitSleep,
             claimant: new BuildPermitClaimant(
-                $"{(purpose == "pre-review-evidence" ? "focused-evidence" : "gate")}:goal-{candidate.Goal.Id.Value}",
+                purpose == "pre-review-evidence"
+                    ? FocusedEvidencePermitTicket.Key(candidate.Goal.Id)
+                    : $"gate:goal-{candidate.Goal.Id.Value}",
                 purpose == "pre-review-evidence" ? BuildPermitClaimantKind.FocusedEvidence : BuildPermitClaimantKind.Gate,
                 Environment.ProcessId, OwnerBound: false));
         if (acquisition is DotnetBuildLeaseAcquisition.Acquired acquired)
@@ -2718,6 +2738,7 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
         GoalAcceptanceVerifier.ConfigureHermeticVerificationEnvironment(
             startInfo.Environment,
             attempt.ExecutionDirectory);
+        BuildGcEnvironment.Apply(startInfo.Environment, BuildGcEnvironment.For(ResolveAttemptPolicy(attempt)));
         if (buildStorageRoot is { } storageRoot)
         {
             // This attempt selects the namespace; the child and its build descendants
@@ -3247,6 +3268,22 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
         return latest is not null && IsReconciled(latest) ? TransientFailureCount(latest) : 0;
     }
 
+    internal bool TryReadWorkspaceProbeBackoff(
+        ConductorParallelAcceptanceCandidate candidate, out DateTimeOffset notBefore)
+    {
+        notBefore = default;
+        var latest = ReadNewestCandidateAttempt(
+            Path.Combine(_rootDirectory, candidate.Goal.Id.Value), candidate.CandidateKey);
+        if (latest is null || !IsReconciled(latest) ||
+            latest.Outcome != ConductorParallelAcceptanceAttemptOutcome.Failed ||
+            latest.TransientFailureCount is not (1 or 2) || latest.CompletedAt is not { } completedAt ||
+            WorkspaceProbeFaultClassifier.Classify(latest.Detail) != WorkspaceProbeFaultKind.HostContentionTimeout)
+            return false;
+
+        notBefore = WorkspaceProbeFaultClassifier.NotBefore(completedAt, latest.TransientFailureCount);
+        return _utcNow() < notBefore;
+    }
+
     private static int TransientFailureCount(ConductorParallelAcceptanceAttempt? attempt) =>
         attempt is not null && IsTransientTerminalFailure(attempt)
             ? Math.Max(1, attempt.TransientFailureCount) : 0;
@@ -3344,7 +3381,8 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
         string? detail) =>
         IsBoundedInfrastructureOutcome(outcome) ||
         outcome == ConductorParallelAcceptanceAttemptOutcome.Failed &&
-            ClassifyWorkerRegistrationFault(detail) == WorkerRegistrationFaultDisposition.BoundedRetry;
+            (ClassifyWorkerRegistrationFault(detail) == WorkerRegistrationFaultDisposition.BoundedRetry ||
+             WorkspaceProbeFaultClassifier.Classify(detail) == WorkspaceProbeFaultKind.HostContentionTimeout);
 
     private bool IsHeartbeatStale(ConductorParallelAcceptanceAttempt attempt)
     {

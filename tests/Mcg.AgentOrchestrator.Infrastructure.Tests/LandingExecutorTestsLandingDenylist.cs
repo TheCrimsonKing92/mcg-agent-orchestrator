@@ -37,6 +37,7 @@ public sealed class LandingExecutorTestsLandingDenylist
         {
             var (workspace, kernel, goal) = CreateAcceptedCandidate(repo, path);
             var sha = ReadGit(repo, "rev-parse", GoalWorktrees.BranchName(goal.Id));
+            if (path == Watched) LandingExecutorTestsDenylistOwnerHold.Approve(workspace, goal, sha);
             var writer = new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory);
             var result = LandingExecutor.Execute(kernel, goal, workspace, policy: ConductorAutonomyPolicy.Permissive, eventWriter: writer);
             Assert.True(result.MainAdvanced);
@@ -45,7 +46,7 @@ public sealed class LandingExecutorTestsLandingDenylist
             using var line = ReadLanded(workspace, goal.Id);
             Assert.Equal(result.MergeCommitSha, line.RootElement.GetProperty("admissionCandidateSha").GetString());
             Assert.Equal("built-in-default", line.RootElement.GetProperty("landingDenylistSource").GetString());
-            Assert.Equal(path == Watched ? "denylist-match-recorded" : "green-gate-auto", line.RootElement.GetProperty("admissionRule").GetString());
+            Assert.Equal(path == Watched ? "denylist-match-owner-approved" : "green-gate-auto", line.RootElement.GetProperty("admissionRule").GetString());
             var matches = ReadMatches(line);
             if (path == Watched) Assert.Equal([$"process-launch={Watched}"], matches);
             else Assert.Empty(matches);
@@ -75,6 +76,12 @@ public sealed class LandingExecutorTestsLandingDenylist
             GoalOperationJournal.AcceptancePassed(repo, goal, "conductor:acceptance", sha, main, "passed", DateTimeOffset.UtcNow.AddMinutes(-1));
             var result = LandingExecutor.Execute(kernel, goal, workspace, policy: ConductorAutonomyPolicy.Permissive,
                 eventWriter: new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory));
+            Assert.False(result.MainAdvanced);
+            Assert.StartsWith("landing mutation blocked: landing-denylist owner approval required",
+                Assert.IsType<LandingDecision.Escalate>(result.Decision).Reason);
+            LandingExecutorTestsDenylistOwnerHold.Approve(workspace, goal, sha);
+            result = LandingExecutor.Execute(kernel, goal, workspace, policy: ConductorAutonomyPolicy.Permissive,
+                eventWriter: new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory));
             Assert.True(result.MainAdvanced);
             Assert.Equal(result.MergeCommitSha, ReadGit(repo, "rev-parse", "main"));
             Assert.Equal(sha, ReadGit(repo, "rev-parse", "main^2"));
@@ -82,13 +89,13 @@ public sealed class LandingExecutorTestsLandingDenylist
             Assert.Equal(result.MergeCommitSha, line.RootElement.GetProperty("admissionCandidateSha").GetString());
             if (invalid)
             {
-                Assert.Equal("green-gate-auto", line.RootElement.GetProperty("admissionRule").GetString());
+                Assert.Equal("denylist-match-owner-approved", line.RootElement.GetProperty("admissionRule").GetString());
                 Assert.StartsWith("invalid:", line.RootElement.GetProperty("landingDenylistSource").GetString());
-                Assert.Empty(ReadMatches(line));
+                Assert.Equal([$"landing-policy={Config}"], ReadMatches(line));
             }
             else
             {
-                Assert.Equal("denylist-match-recorded", line.RootElement.GetProperty("admissionRule").GetString());
+                Assert.Equal("denylist-match-owner-approved", line.RootElement.GetProperty("admissionRule").GetString());
                 Assert.Equal($"main:{main}", line.RootElement.GetProperty("landingDenylistSource").GetString());
                 Assert.Equal(["watched=src/watched/a.txt", $"self={Config}"], ReadMatches(line));
             }

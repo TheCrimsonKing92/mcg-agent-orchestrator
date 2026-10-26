@@ -578,6 +578,15 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
         }, cancellationToken);
     }
 
+    public async Task<AgentOrchestratorKernel> LoadBoardSnapshotAsync(CancellationToken cancellationToken = default)
+    {
+        return await WithBusyRetryAsync(async () =>
+        {
+            await using var conn = OpenConnection();
+            return await LoadFromConnectionAsync(conn, goalIds: null, cancellationToken);
+        }, cancellationToken);
+    }
+
     public async Task SaveAsync(AgentOrchestratorKernel kernel, CancellationToken cancellationToken = default)
     {
         await SaveAsync(ResolveOperationTag(nameof(SaveAsync)), kernel, cancellationToken);
@@ -1596,6 +1605,13 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
     private static string MetadataNonTerminalPredicate() =>
         $"status NOT IN ('{GoalStatus.Completed}', '{GoalStatus.Cancelled}', '{GoalStatus.Superseded}')";
 
+    public async Task<IReadOnlyList<GoalSummary>> ListGoalBoardRowsAsync(
+        GoalBoardRowQuery query, CancellationToken cancellationToken = default)
+    {
+        await using var conn = OpenConnection();
+        return await SqliteGoalBoardRowReader.ReadAsync(conn, query, _statementObserver, cancellationToken);
+    }
+
     public async Task<IReadOnlyList<GoalSummary>> ListGoalIdStatusesAsync(CancellationToken cancellationToken = default)
     {
         await using var conn = OpenConnection();
@@ -1686,23 +1702,49 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
         return results;
     }
 
+    public async Task<bool> EnsureTerminalOpenWorkIndexAsync(CancellationToken cancellationToken = default)
+    {
+        _statementObserver?.Invoke("BEGIN IMMEDIATE");
+        var write = await BeginWriteAsync(ResolveOperationTag(nameof(EnsureTerminalOpenWorkIndexAsync)), cancellationToken);
+        await using var conn = write.Connection;
+        async Task ExecuteAsync(string sql, CancellationToken ct)
+        {
+            _statementObserver?.Invoke(sql);
+            await RunNonQueryAsync(conn, sql, ct);
+        }
+        try
+        {
+            await using var probe = conn.CreateCommand();
+            probe.CommandText = TerminalOpenWorkIndex.ExistsSql;
+            _statementObserver?.Invoke(probe.CommandText);
+            var exists = Convert.ToInt64(await probe.ExecuteScalarAsync(cancellationToken)) != 0;
+            if (!exists)
+            {
+                await ExecuteAsync(TerminalOpenWorkIndex.SchemaSql, cancellationToken);
+                await ExecuteAsync(TerminalOpenWorkIndex.BackfillSql, cancellationToken);
+            }
+            await ExecuteAsync("COMMIT", cancellationToken);
+            write.Telemetry.Emit("commit");
+            return !exists;
+        }
+        catch (Exception ex)
+        {
+            try { await ExecuteAsync("ROLLBACK", CancellationToken.None); } catch { }
+            write.Telemetry.Emit("rollback", ex);
+            throw;
+        }
+    }
+
     public async Task<IReadOnlyList<GoalId>> ListTerminalGoalIdsWithNonTerminalTasksAsync(
         CancellationToken cancellationToken = default)
     {
         await using var conn = OpenConnection();
         await using var cmd = conn.CreateCommand();
-        cmd.CommandText = $"""
-            SELECT id FROM goals
-            WHERE status IN ('{GoalStatus.Superseded}', '{GoalStatus.Cancelled}', '{GoalStatus.Completed}')
-              AND EXISTS (
-                  SELECT 1 FROM json_each(goals.snapshot_json, '$.Tasks') AS task
-                  WHERE json_extract(task.value, '$.Status') NOT IN ('{WorkTaskStatus.Completed}', '{WorkTaskStatus.Cancelled}')
-                    OR EXISTS (
-                        SELECT 1 FROM json_each(task.value, '$.WorkerBuildInvocations') AS invocation
-                        WHERE json_extract(invocation.value, '$.Outcome') IS NULL
-                           OR COALESCE(json_extract(invocation.value, '$.CustodyReleased'), 0) = 0)
-              )
-            """;
+        cmd.CommandText = TerminalOpenWorkIndex.ExistsSql;
+        _statementObserver?.Invoke(cmd.CommandText);
+        var exists = Convert.ToInt64(await cmd.ExecuteScalarAsync(cancellationToken)) != 0;
+        cmd.CommandText = exists ? TerminalOpenWorkIndex.ListSql : TerminalOpenWorkIndex.ScanSql;
+        _statementObserver?.Invoke(cmd.CommandText);
         var ids = new List<GoalId>();
         await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
         while (await reader.ReadAsync(cancellationToken))

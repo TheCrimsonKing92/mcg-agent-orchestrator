@@ -1,3 +1,5 @@
+using System.Globalization;
+using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Microsoft.Data.Sqlite;
 
@@ -74,6 +76,38 @@ internal static partial class TerminalGoalSweep
         catch (Exception ex) when (ex is SqliteException or IOException or UnauthorizedAccessException)
         {
             failure = $"shared goal store read failed: {ex.Message}";
+            return false;
+        }
+    }
+
+    private static bool TryReadGoalRetentionFacts(
+        IReadOnlyList<string> storePaths, out IReadOnlyList<StoredGoalRetentionFact> facts)
+    {
+        var collected = new List<StoredGoalRetentionFact>();
+        facts = collected;
+        try
+        {
+            foreach (var path in storePaths)
+            {
+                if (!File.Exists(path) || !StateDbMigrations.IsUpToDate(path)) return false;
+                using var connection = StateDbConnectionFactory.Open(path, StateDbConnectionProfile.FastFailRead);
+                using var command = connection.CreateCommand();
+                command.CommandText = "SELECT id, status, updated_at FROM goals";
+                using var reader = command.ExecuteReader();
+                while (reader.Read())
+                {
+                    if (reader.IsDBNull(0) || reader.IsDBNull(1) ||
+                        !Enum.TryParse<GoalStatus>(reader.GetString(1), out var status) || !Enum.IsDefined(status))
+                        return false;
+                    DateTimeOffset? updated = !reader.IsDBNull(2) && DateTimeOffset.TryParse(reader.GetString(2),
+                        CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var parsed) ? parsed : null;
+                    collected.Add(new StoredGoalRetentionFact(reader.GetString(0), status, updated));
+                }
+            }
+            return true;
+        }
+        catch (Exception ex) when (ex is SqliteException or IOException or UnauthorizedAccessException)
+        {
             return false;
         }
     }

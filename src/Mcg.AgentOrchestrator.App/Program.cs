@@ -13,7 +13,7 @@ if (args.Length >= 1 && args[0] == CompletionBuildEvidenceCoordinator.Subcommand
 // workspace, or state setup so the detached worker process stays minimal and self-contained.
 if (args.Length >= 2 && args[0] == DispatchProcessHost.SubcommandName)
 {
-    return DispatchProcessHost.Run(args[1], reference => new WorkerBuildRequestHost(reference));
+    return DispatchProcessHost.Run(args[1], reference => new WorkerBuildRequestHost(reference), DispatchJobExecutionQos.Start);
 }
 
 if (args.Length >= 2 && args[0] == ConductorParallelAcceptanceAttemptCoordinator.OwnedProcessSubcommandName)
@@ -344,7 +344,10 @@ if (ConductorContinuitySupervisor.ShouldSupervise(
                 supervisorSeam,
                 SystemConductorSupervisorHandoffSeam.ReadOwnBuild(),
                 TimeSpan.FromMinutes(2),
-                TimeSpan.FromMilliseconds(250)));
+                TimeSpan.FromMilliseconds(250)),
+            raiseEscalationAttention: (title, body, key) =>
+                CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory)
+                    .RaiseAsync(CollaborationItemType.Decision, null, title, body, key).GetAwaiter().GetResult());
         return await supervisor.RunAsync(
             startupArgs.Concat(new[] { "--repository-root", workspace.RootDirectory,
                 "--expected-state-directory", workspace.OrchestratorDirectory })

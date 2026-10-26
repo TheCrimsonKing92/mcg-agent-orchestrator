@@ -12,12 +12,14 @@ internal static class ConductorGroupedGateAttemptHost
     internal static int Run(string metadataPath) => Run(metadataPath, RunGateBody, RedirectConsole);
 
     internal static int Run(string metadataPath, Action<ConductorGroupedGateAttempt> gateBody,
-        Func<TextWriter, TextWriter, IDisposable> redirectConsole)
-        => Run(metadataPath, attempt => { gateBody(attempt); return null; }, redirectConsole);
+        Func<TextWriter, TextWriter, IDisposable> redirectConsole,
+        Func<int, uint, uint, bool>? optOutExecutionThrottling = null)
+        => Run(metadataPath, attempt => { gateBody(attempt); return null; }, redirectConsole, optOutExecutionThrottling);
 
     internal static int Run(string metadataPath,
         Func<ConductorGroupedGateAttempt, ConductorGroupedGateOutcome?> gateBody,
-        Func<TextWriter, TextWriter, IDisposable> redirectConsole)
+        Func<TextWriter, TextWriter, IDisposable> redirectConsole,
+        Func<int, uint, uint, bool>? optOutExecutionThrottling = null)
     {
         var processError = Console.Error;
         ConductorGroupedGateAttempt? attempt = null;
@@ -46,6 +48,8 @@ internal static class ConductorGroupedGateAttemptHost
             if (claimed is not null)
             {
                 attempt = claimed;
+                ConductorParallelAcceptanceAttemptCoordinator.ApplyExecutionQos(attempt.PolicyJson, metadataPath,
+                    optOutExecutionThrottling ?? ProcessExecutionThrottlingOptOut.TrySet);
                 var outcome = gateBody(attempt);
                 File.WriteAllText(attempt.ResultPath,
                     outcome is null

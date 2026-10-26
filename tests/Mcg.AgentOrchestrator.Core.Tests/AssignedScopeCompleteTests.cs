@@ -3,6 +3,20 @@ using Mcg.AgentOrchestrator.Core;
 public sealed class AssignedScopeCompleteTests
 {
     [Xunit.Fact]
+    public void DeveloperInfrastructureDirectiveAppearsOnceImmediatelyAfterScopeDirective()
+    {
+        const string scope = "Developer: set `assigned_scope_complete` to `true` only when your assigned implementation is complete; `false` requests bounded revision and excludes later Acceptance/operator evidence.";
+        const string infrastructure = "Developer: if the build host returned a queue deadline, a compile deadline or an apparatus failure and printed no compiler error, that is not a code blocker; finish the edits, put the host message and invocation id in `commands`, keep `blockers: none`, and set `assigned_scope_complete` from the edits alone; the conductor then builds the candidate.";
+        var lines = AgentOutputDirectives.WorkerResultTemplateLinesForRole(AgentRole.Developer).ToList();
+
+        Xunit.Assert.Equal(1, lines.Count(line => line == infrastructure));
+        Xunit.Assert.Equal(lines.IndexOf(scope) + 1, lines.IndexOf(infrastructure));
+        foreach (var role in Enum.GetValues<AgentRole>().Where(role => role != AgentRole.Developer))
+            Xunit.Assert.DoesNotContain(infrastructure, AgentOutputDirectives.WorkerResultTemplateLinesForRole(role));
+        Xunit.Assert.DoesNotContain(infrastructure, AgentOutputDirectives.WorkerResultTemplateLinesForRole(null));
+    }
+
+    [Xunit.Fact]
     public void DeveloperBriefRequestsAssignedScopeCompletionWithoutMakingItRequired()
     {
         var lines = AgentOutputDirectives.WorkerResultTemplateLinesForRole(AgentRole.Developer);

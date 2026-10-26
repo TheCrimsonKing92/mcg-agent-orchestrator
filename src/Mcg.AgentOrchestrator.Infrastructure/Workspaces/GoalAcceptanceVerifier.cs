@@ -1276,11 +1276,11 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         bool continueAfterFailure,
         IAcceptanceRunExecutionContext? executionOwner)
     {
-        var dotnetTestBuildPhase = CreateDotnetTestBuildPhase(
+        var dotnetTestBuildPhase = AcceptanceDotnetBuildPhase.WithoutAnalyzers(CreateDotnetTestBuildPhase(
             worktreePath,
             focusedChecks,
             changedFiles: null,
-            PolicyShardPlan.NotApplicable("focused evidence"));
+            PolicyShardPlan.NotApplicable("focused evidence")));
         dotnetTestBuildPhase.BuildEnvironment = executionEnvironment;
         var shardCoreBudget =
             _testOverrides.ResolveShardCoreBudgetForTests?.Invoke() ?? Math.Max(1, Environment.ProcessorCount / 2);
@@ -1289,7 +1289,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             _testOverrides, _timeProvider, worktreePath, focusedChecks, goalId, executionOwner, cancellationToken);
         var batch = await RemoteFirstFocusedEvidence.RunAsync(_testOverrides, _timeProvider, worktreePath, focusedChecks, goalId, executionOwner,
             continueAfterFailure, async checks => (await RunCheckBatchAsync(checks, cacheContext: null, worktreePath, goalId, stableSlotIndex, stableSlotLease,
-                dotnetTestBuildPhase, shardConcurrencyBudget, cancellationToken, continueAfterFailure, executionOwner).ConfigureAwait(false)).Results, cancellationToken).ConfigureAwait(false);
+                dotnetTestBuildPhase, shardConcurrencyBudget, cancellationToken, continueAfterFailure, executionOwner).ConfigureAwait(false)).Results, cancellationToken, () => ReleaseStableSlotExecutionLockUnlessCoverageHoldActive(stableSlotLease)).ConfigureAwait(false);
         await shadow.CompleteAsync(batch.Results).ConfigureAwait(false);
         return batch.Results;
     }
@@ -3978,8 +3978,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         IReadOnlyList<string>? changedFiles,
         PolicyShardPlan policyShardPlan) =>
         AcceptanceDotnetBuildPhase.Create(worktreePath, checks, changedFiles, policyShardPlan,
-            path => _testOverrides.ResolveBaseBuildMainShaForTests?.Invoke(path) ??
-                ResolveGitScalar(path, "merge-base", "HEAD", IntegrationBranch));
+            path => EngineSettings.BaseBuildCacheEnabled ? _testOverrides.ResolveBaseBuildMainShaForTests?.Invoke(path) ??
+                ResolveGitScalar(path, "merge-base", "HEAD", IntegrationBranch) : null);
 
     internal static string? ResolveGitScalar(string worktreePath, params string[] arguments)
     {

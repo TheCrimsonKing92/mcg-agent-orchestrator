@@ -15,15 +15,7 @@ internal static class DeveloperReportEvidence
         if (required.Count == 0)
             return false;
 
-        var verification = developer.LastVerification;
-        var dispatch = developer.LastDispatch;
-        if (verification is null || dispatch is null ||
-            verification.EvidenceSource == VerificationEvidenceSource.Manual || !verification.WorkerResultPresent ||
-            verification.CompletedAt == default || dispatch.DispatchedAt == default ||
-            verification.CompletedAt < dispatch.DispatchedAt ||
-            !WorkerResultBlockers.TryFindTests(
-                verification.AuthoritativeStandardOutput ?? verification.StandardOutput, out var reportedField) ||
-            !FirstWordIsDeferred(reportedField))
+        if (!TryReadReport(developer, out var reportedField))
         {
             skipReason = "developer-report-missing";
             return false;
@@ -40,7 +32,21 @@ internal static class DeveloperReportEvidence
         return true;
     }
 
-    private static string? FindRequiredField(string criterion)
+    internal static bool TryReadReport(TaskSpec developer, out string reportedField)
+    {
+        reportedField = string.Empty;
+        var verification = developer.LastVerification;
+        var dispatch = developer.LastDispatch;
+        return verification is not null && dispatch is not null &&
+            verification.EvidenceSource != VerificationEvidenceSource.Manual && verification.WorkerResultPresent &&
+            verification.CompletedAt != default && dispatch.DispatchedAt != default &&
+            verification.CompletedAt >= dispatch.DispatchedAt &&
+            WorkerResultBlockers.TryFindTests(
+                verification.AuthoritativeStandardOutput ?? verification.StandardOutput, out reportedField) &&
+            FirstWordIsDeferred(reportedField);
+    }
+
+    internal static string? FindRequiredField(string criterion)
     {
         for (var offset = 0; offset < criterion.Length;)
         {
