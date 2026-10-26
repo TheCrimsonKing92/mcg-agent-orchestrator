@@ -55,7 +55,7 @@ public sealed class NuGetPackagesRootAlignmentTests : IDisposable
 
     private ProcessStartInfo EvidenceStartInfo(string? inheritedValue)
     {
-        var start = new ProcessStartInfo();
+        var start = new ProcessStartInfo { CreateNoWindow = true };
         start.Environment.Remove("NUGET_PACKAGES");
         if (inheritedValue is not null) start.Environment["NUGET_PACKAGES"] = inheritedValue;
         GoalAcceptanceVerifier.ConfigureHermeticVerificationEnvironment(start.Environment,
