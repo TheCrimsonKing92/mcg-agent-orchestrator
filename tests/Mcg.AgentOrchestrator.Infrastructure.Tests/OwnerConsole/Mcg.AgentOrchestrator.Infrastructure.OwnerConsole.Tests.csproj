@@ -26,6 +26,7 @@
     <Compile Include="..\VerifiedRepositoryRoot.cs" Link="VerifiedRepositoryRoot.cs" />
     <Compile Include="..\SourceSnapshot\RepositorySourceSnapshotCache.cs" Link="SourceSnapshot\RepositorySourceSnapshotCache.cs" />
     <Compile Include="..\SourceSnapshot\RepositorySourceSnapshot.cs" Link="SourceSnapshot\RepositorySourceSnapshot.cs" />
+    <Compile Include="..\SourceSnapshot\SourceSnapshotLineView.cs" Link="SourceSnapshot\SourceSnapshotLineView.cs" />
     <Compile Include="..\SourceSnapshot\ISourceSnapshotObserver.cs" Link="SourceSnapshot\ISourceSnapshotObserver.cs" />
     <Compile Include="..\SourceSnapshot\SourceGuardFileFilter.cs" Link="SourceSnapshot\SourceGuardFileFilter.cs" />
     <ProjectReference Include="..\..\..\src\Mcg.AgentOrchestrator.Core\Mcg.AgentOrchestrator.Core.csproj" />
