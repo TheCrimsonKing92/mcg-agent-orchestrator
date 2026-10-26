@@ -102,7 +102,7 @@ try {
             Push-Location $work
             try {
                 & pwsh -NoProfile -File (Join-Path $work 'scripts\Invoke-WorkerBuildDiagnostic.ps1') -TimeoutSeconds 1800 `
-                    build (Join-Path $work $Project) "/p:McgIsolatedArtifactsPath=$work" "/p:Configuration=Debug" "-p:RunAnalyzers=false" "-p:EnforceCodeStyleInBuild=false" *>&1 |
+                    build (Join-Path $work $Project) "/p:McgIsolatedArtifactsPath=$work" "/p:Configuration=Debug" "/p:RunAnalyzers=false" "/p:EnforceCodeStyleInBuild=false" *>&1 |
                     Tee-Object -FilePath (Join-Path $out 'prebuild.log') | Out-Null
                 $prebuildExit = $LASTEXITCODE
             }

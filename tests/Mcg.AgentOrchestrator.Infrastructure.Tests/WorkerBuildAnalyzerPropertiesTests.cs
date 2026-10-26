@@ -12,7 +12,7 @@ public sealed class WorkerBuildAnalyzerPropertiesTests
         var line = Assert.Single(lines, line => line.Contains("McgIsolatedArtifactsPath=", StringComparison.Ordinal));
 
         foreach (var property in AcceptanceCheckCommandBuilder.AnalyzersOffBuildProperties)
-            Assert.Contains($"\"{property}\"", line, StringComparison.Ordinal);
+            Assert.Contains($"\"{property.Replace("-p:", "/p:", StringComparison.Ordinal)}\"", line, StringComparison.Ordinal);
     }
 
     [Xunit.Fact]
