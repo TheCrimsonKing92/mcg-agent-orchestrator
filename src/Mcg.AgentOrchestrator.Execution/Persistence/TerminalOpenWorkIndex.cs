@@ -21,18 +21,22 @@ internal static class TerminalOpenWorkIndex
 
     internal static readonly string ScanSql = $"SELECT id FROM goals WHERE {OpenWorkFlagSql("status", "goals.snapshot_json")} = 1 ORDER BY id";
 
+    // An outer goals UPSERT can override a trigger's OR REPLACE conflict policy.
+    // Handle the side-table key explicitly so existing-goal saves update its flag.
     internal static readonly string SchemaSql = $"""
         CREATE TABLE goal_open_work (goal_id TEXT PRIMARY KEY, terminal_open_work INTEGER NOT NULL);
         CREATE INDEX ix_goal_open_work_terminal ON goal_open_work(goal_id) WHERE terminal_open_work = 1;
         CREATE TRIGGER goal_open_work_after_insert AFTER INSERT ON goals
         BEGIN
-            INSERT OR REPLACE INTO goal_open_work (goal_id, terminal_open_work)
-            VALUES (NEW.id, {OpenWorkFlagSql("NEW.status", "NEW.snapshot_json")});
+            INSERT INTO goal_open_work (goal_id, terminal_open_work)
+            VALUES (NEW.id, {OpenWorkFlagSql("NEW.status", "NEW.snapshot_json")})
+            ON CONFLICT(goal_id) DO UPDATE SET terminal_open_work = excluded.terminal_open_work;
         END;
         CREATE TRIGGER goal_open_work_after_update AFTER UPDATE OF status, snapshot_json ON goals
         BEGIN
-            INSERT OR REPLACE INTO goal_open_work (goal_id, terminal_open_work)
-            VALUES (NEW.id, {OpenWorkFlagSql("NEW.status", "NEW.snapshot_json")});
+            INSERT INTO goal_open_work (goal_id, terminal_open_work)
+            VALUES (NEW.id, {OpenWorkFlagSql("NEW.status", "NEW.snapshot_json")})
+            ON CONFLICT(goal_id) DO UPDATE SET terminal_open_work = excluded.terminal_open_work;
         END;
         """;
 
