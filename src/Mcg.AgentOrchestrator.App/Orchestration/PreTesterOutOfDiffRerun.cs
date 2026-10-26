@@ -52,7 +52,7 @@ internal sealed class PreTesterOutOfDiffRerun(
                 ConductorParallelAcceptanceAttemptDecisionKind.TerminalWithoutRun) ||
             PreTesterApparatusReceiptClassifier.IsTransientAttemptOutcome(attempt?.Outcome) ||
             kind == ConductorParallelAcceptanceAttemptDecisionKind.Completed && decision.Kind == FailedGoalFindingObservationKind.FindingEvidencePending)) return true;
-        var (outcome, _, _) = PreTesterApparatusReceiptClassifier.ClassifyOutcome(evidence, completed, entry.CandidateSha, selections, _ => false);
+        var (outcome, _, _, _) = PreTesterApparatusReceiptClassifier.ClassifyOutcome(evidence, completed, entry.CandidateSha, selections, _ => false);
         var marker = new PreTesterOutOfDiffRerunMarker(entry.CandidateSha, entry.ReceiptId, rerunReceipt, outcome,
             entry.FailingTests, receiptHistory,
             PreTesterOutOfDiffRerunMarker.DecideVerdict(outcome, keys, history));
