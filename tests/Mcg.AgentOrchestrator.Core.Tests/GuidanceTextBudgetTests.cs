@@ -47,7 +47,8 @@ public sealed class GuidanceTextBudgetTests
         // Reviewer Complex requirements are loaded in every complex Reviewer brief.
         new("requirements/Reviewer/Complex", 5671, () => Requirements(AgentRole.Reviewer, TaskComplexity.Complex)),
         // Explicit post-landing operator-check guidance adds 168 chars over the 4403 gate-owned evidence ceiling.
-        new("Planner directive", 4571, () => AgentOutputDirectives.WorkerResultTemplateLinesForRole(AgentRole.Planner)[0]),
+        // needed-as-string clarification adds 71 chars.
+        new("Planner directive", 4642, () => AgentOutputDirectives.WorkerResultTemplateLinesForRole(AgentRole.Planner)[0]),
         // Planner standing rules are loaded inline or through the Planner context artifact.
         new("PlannerStandingRules", 289, () => AgentOutputDirectives.PlannerStandingRules),
         // Developer standing rules are loaded inline or through rule.md in every Developer brief.

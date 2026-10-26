@@ -282,15 +282,17 @@ internal sealed class WorkerBuildRequestHost : IWorkerBuildRequestService
 
     internal static ProcessStartInfo BuildStartInfo(string root, string project, string configuration,
         IReadOnlyList<string> isolatedArguments, string temporaryDirectory,
-        IReadOnlyDictionary<string, string>? gcEnvironment = null)
+        IReadOnlyDictionary<string, string>? gcEnvironment = null, Func<string, string?>? readVariable = null)
     {
+        readVariable ??= Environment.GetEnvironmentVariable;
         var executable = Environment.ProcessPath;
         if (executable is null || !Path.GetFileNameWithoutExtension(executable).Equals("dotnet", StringComparison.OrdinalIgnoreCase))
             executable = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "dotnet", "dotnet.exe");
         var info = new ProcessStartInfo(executable) { UseShellExecute = false, CreateNoWindow = true, WorkingDirectory = root };
         info.Environment.Clear();
         foreach (var name in new[] { "SystemRoot", "WINDIR", "PATH", "PATHEXT", "USERPROFILE", "LOCALAPPDATA", "APPDATA", "ProgramFiles", "ProgramFiles(x86)", "DOTNET_ROOT", "NUGET_PACKAGES", "SSL_CERT_FILE" })
-            if (Environment.GetEnvironmentVariable(name) is { } value) info.Environment[name] = value;
+            if (readVariable(name) is { } value) info.Environment[name] = value;
+        info.Environment[AcceptanceTempRootNames.NuGetPackagesVariable] = AcceptanceTempRootNames.ResolveNuGetPackagesFolder(readVariable(AcceptanceTempRootNames.NuGetPackagesVariable));
         info.Environment["TEMP"] = temporaryDirectory;
         info.Environment["TMP"] = temporaryDirectory;
         info.Environment["DOTNET_CLI_USE_MSBUILD_SERVER"] = "0";

@@ -24,6 +24,7 @@ public sealed class AcceptancePolicyShardPlannerTestsNestedProjectMapping
         [AcceptancePolicyShardPlanner.ProviderEnvironmentTestsProject, "Infrastructure.ProviderEnvironment.Tests"],
         [AcceptancePolicyShardPlanner.CliTestsProject, "Infrastructure.Cli.Tests"],
         [AcceptancePolicyShardPlanner.ExecutionTestsProject, "Infrastructure.Execution.Tests"],
+        [AcceptancePolicyShardPlanner.OwnerConsoleTestsProject, "Infrastructure.OwnerConsole.Tests"],
         [AcceptancePolicyShardPlanner.StorageRetentionTestsProject, "Infrastructure.StorageRetention.Tests"]
     ];
 

@@ -67,7 +67,7 @@ internal static class SourceSizeRatchet
             // Goal 56ff780e adds three lines at the existing shard-progress seam to carry the result,
             // outcome and failed-test count to the owner gate view; measured 4976 lines, no extra headroom.
             // Goal bd3c0539 adds one settled-check progress call.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs", 4968),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs", 4965),
             // Goal c0cfa8ae test telemetry collaborator measured at 423 lines.
             // Goal 402c1005 moved TRX completion inspection and shard decisions into AcceptanceShardCompletionAdjudicator.
             // Goal ad3fafc0 extracted run ownership publication and stale-receipt clearing into AcceptanceTestRunPreparation.
@@ -146,7 +146,7 @@ internal static class SourceSizeRatchet
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.AcceptanceCohortExecution.cs", 631),
             // Goal 5a07b0d6 retains three orchestration lines carrying reattached receipt ids to the
             // closure-first route; the reused-green branch owns this delivery handoff, not receipt selection.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.FindingEvidenceRequests.cs", 754),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.FindingEvidenceRequests.cs", 746),
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.FailedGoalRecovery.cs", 346), // Provider hold redispatch hook and injected recovery seam.
             // Goal 4ff31b70 (ConductorDriver size relief) moved parallel acceptance members unchanged to this partial.
             // Goal 568eb0fe distinguishes explicit admission parks from attempt cancellation and
@@ -352,7 +352,7 @@ internal static class SourceSizeRatchet
             // for outcome/compatibility mutations; parsing and application live in dedicated collaborators.
             // Goal 9d55c9bf adds four lines to classify dogfood-log list at the existing kernel-state route seam;
             // extracting this single switch case would split route ownership. No additional headroom.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Cli/CliPersistentStateRunner.cs", 4749),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Cli/CliPersistentStateRunner.cs", 4745),
             // Goal 03aaf13e adds the explicit-root isolation fact at the verifier's existing execution-
             // environment seam; the production verifier remains at its prior ceiling.
             // Goal 56ff780e keeps passed/failed/unknown shard-completion producer coverage in its owning
@@ -458,7 +458,7 @@ internal static class SourceSizeRatchet
             // Goal 5daaa1db replaces ambient build-root mutation with explicit child-launch ownership
             // and disposes the owned root; the real-process transport assertions remain in this fixture.
             // Goal 2c245bc3 waits for the primer holder's capacity release before asserting next-slot admission.
-            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorBatchLoopTestsParallelAcceptance.cs", 5285),
+            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorBatchLoopTestsParallelAcceptance.cs", 5282),
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/DotnetBuildEnvironmentManagerTests.cs", 1357),
         });
 
@@ -524,7 +524,7 @@ internal static class SourceSizeRatchet
             // b596bd5a: fault-recorded route arm/executor and typed outcome evidence add 20 lines; no new partial or headroom.
             // Goal a5412d04: bound deferred no-change interruptions and retain their durable escalation (+15 lines).
             // Goal 7139117b: the focused runner binds the attribution occupancy heartbeat (+2 lines).
-            new SourceClassCeiling("ConductorDriver", 14689, 70),
+            new SourceClassCeiling("ConductorDriver", 14655, 70),
             // Goal b7c2f833: epic-at-creation validation and post-commit inheritance call sites
             // require handler glue; resolution/assignment remain in the separate EpicAtCreation type.
             // Measured 12223 total lines across the existing 30 partial files after integrating main; no extra headroom.
@@ -574,7 +574,7 @@ internal static class SourceSizeRatchet
             // Goal bd3c0539 adds three lane progress call lines across existing partials.
             // Measured 8683 lines in the same 28 partials after integrating main at 6dff3b77a.
             // Goal 3651d0e4: the offer-context call site binds the remote-lane occupancy owner.
-            new SourceClassCeiling("GoalAcceptanceVerifier", 8650, 28),
+            new SourceClassCeiling("GoalAcceptanceVerifier", 8647, 28),
             // Goal d647b5f3 extracts premise-invalid clarification construction to PremiseInvalidClarification.
             // Goal 439c80ae extracts Reviewer evidence brief projection to ReviewerEvidenceBriefSection;
             // measured 9319 total lines across the existing 27 partial files, with no extra headroom.
@@ -644,7 +644,7 @@ internal static class SourceSizeRatchet
             // the command owns intent submission. After integrating main, measured 5972 lines in the same 18 partials; no headroom.
             // Goal 9d55c9bf adds the same four-line dogfood-log list case in the owning route classifier;
             // keep classification centralized across the same 18 partial files. No additional headroom.
-            new SourceClassCeiling("CliPersistentStateRunner", 5918, 18),
+            new SourceClassCeiling("CliPersistentStateRunner", 5914, 18),
             // Goal 5935c270 extracts subscription-plan output into SubscriptionPlanTextView
             // (2026-10-09 console architecture review, finding 4, taming slice 13).
             // Goal c0ff6203 extracts six small text views (taming slice 14).
