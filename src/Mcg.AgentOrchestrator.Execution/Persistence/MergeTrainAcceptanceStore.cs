@@ -270,6 +270,43 @@ public sealed class MergeTrainAcceptanceStore
             .ToArray();
     }
 
+    public IReadOnlyList<GoalFinalizedLanding> ReadFinalizedLandingsForGoal(GoalId goalId)
+    {
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT r.receipt_id, r.payload_json, l.commit_revision
+            FROM merge_train_receipt_members m
+            JOIN merge_train_receipts r ON r.train_id=m.train_id
+            JOIN merge_train_landings l ON l.train_id=r.train_id AND l.receipt_id=r.receipt_id
+            WHERE m.goal_id=$goal AND l.state='finalized';
+            """;
+        command.Parameters.AddWithValue("$goal", goalId.Value);
+        using var reader = command.ExecuteReader();
+        var landings = new List<GoalFinalizedLanding>();
+        while (reader.Read())
+        {
+            ReceiptDto? receipt;
+            try
+            {
+                receipt = JsonSerializer.Deserialize<ReceiptDto>(reader.GetString(1), JsonOptions);
+            }
+            catch (JsonException)
+            {
+                continue;
+            }
+
+            if (receipt is not { Outcome: MergeTrainGateOutcome.Passed, ValidForLanding: true, GateExitCode: 0 })
+                continue;
+            var member = receipt.Members?.FirstOrDefault(member => member.GoalId == goalId);
+            if (member is not null)
+                landings.Add(new GoalFinalizedLanding(
+                    "merge-train-receipt", reader.GetString(0), member.CandidateRevision, reader.GetString(2)));
+        }
+
+        return landings.OrderBy(landing => landing.ReceiptId, StringComparer.Ordinal).ToArray();
+    }
+
     public void RecordTrainImplicatedCandidate(
         GoalId goalId, string candidateRevision, string trainId, string observedMainRevision)
     {

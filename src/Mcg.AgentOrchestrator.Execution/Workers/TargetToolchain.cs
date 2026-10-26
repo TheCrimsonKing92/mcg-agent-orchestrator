@@ -46,7 +46,8 @@ public static class TargetToolchainDetector
     ];
 
     /// <summary>
-    /// Priority order: go.mod → Go; package.json → Node; *.sln/*.csproj → Dotnet;
+    /// Priority order: go.mod → Go; package.json → Node;
+    /// *.sln/*.slnx/*.csproj/*.fsproj/*.vbproj (root or one level down; project files also two levels down) → Dotnet;
     /// pyproject.toml/requirements.txt → Python; else Unknown.
     /// </summary>
     public static Toolchain Detect(string workingDirectory)
@@ -61,7 +62,7 @@ public static class TargetToolchainDetector
             return Toolchain.Node;
         }
 
-        if (HasSlnOrCsproj(workingDirectory))
+        if (HasDotnetMarker(workingDirectory))
         {
             return Toolchain.Dotnet;
         }
@@ -104,28 +105,34 @@ public static class TargetToolchainDetector
         _ => "running the project's build and test commands"
     };
 
-    private static bool HasSlnOrCsproj(string workingDirectory)
+    private static bool HasDotnetMarker(string workingDirectory)
     {
+        string[] projectExtensions = [".csproj", ".fsproj", ".vbproj"];
+        string[] solutionOrProjectExtensions = [".sln", ".slnx", .. projectExtensions];
+
+        static bool Holds(string directory, string[] extensions) =>
+            Directory.EnumerateFiles(directory, "*", SearchOption.TopDirectoryOnly)
+                .Any(file => extensions.Contains(Path.GetExtension(file), StringComparer.OrdinalIgnoreCase));
+
         try
         {
-            // .sln files are nearly always at the repository root.
-            if (Directory.EnumerateFiles(workingDirectory, "*.sln", SearchOption.TopDirectoryOnly).Any())
+            // Solution and project files can sit at the repository root.
+            if (Holds(workingDirectory, solutionOrProjectExtensions))
             {
                 return true;
             }
 
-            // .csproj files live up to two levels deep (e.g. src/ProjectName/Project.csproj).
+            // Project files live up to two levels deep (e.g. src/ProjectName/Project.csproj).
             foreach (var level1 in Directory.EnumerateDirectories(workingDirectory))
             {
-                if (Directory.EnumerateFiles(level1, "*.sln", SearchOption.TopDirectoryOnly).Any() ||
-                    Directory.EnumerateFiles(level1, "*.csproj", SearchOption.TopDirectoryOnly).Any())
+                if (Holds(level1, solutionOrProjectExtensions))
                 {
                     return true;
                 }
 
                 foreach (var level2 in Directory.EnumerateDirectories(level1))
                 {
-                    if (Directory.EnumerateFiles(level2, "*.csproj", SearchOption.TopDirectoryOnly).Any())
+                    if (Holds(level2, projectExtensions))
                     {
                         return true;
                     }
