@@ -9,6 +9,158 @@ using static WorkerBuildCapacityGateTests;
 public sealed class WorkerBuildCheckRecoveryTestsCapacityQueue
 {
     [Fact]
+    public void CompletionCompilerFailureUsesCompilerRecoveryDespiteHostQueueDeadline()
+    {
+        using var repository = CreateSeededGitRepository();
+        var (kernel, goal) = SimpleGoal();
+        var task = goal.Tasks.Single();
+        var worktree = GoalWorktrees.Ensure(repository.WorkingDirectory, goal.Id);
+        DispatchTask(kernel, goal, task, workingDirectory: worktree);
+        InfrastructureBuildBlockerClassifierTests.RecordInvocation(kernel, goal, task, WorkerBuildOutcome.CapacityBeforeStart);
+        var at = task.LastDispatch!.DispatchedAt;
+        var worker = new TaskProcessRecord(123, "test.exe", worktree, "out.log", "err.log", "exit.code", at, at, 0);
+        kernel.RecordCompletionBuildEvidence(goal.Id, task.Id, new CompletionBuildEvidenceOperation(
+            "completion-build", goal.Id.Value, task.Id.Value, at, at.ToString("O"), worktree, "tree", ["App.csproj"],
+            worker, at.AddMinutes(12), CompletionBuildEvidencePhase.CompilerFailure, "state.db", repository.WorkingDirectory,
+            "result.json", 123, at, BuildExitCode: 1, Applied: true, CustodyReleased: true));
+        kernel.RecordDispatchExecutionResult(goal.Id, task.Id, new TaskVerificationRecord("test.exe", worktree, 1,
+            "Worker build check failed; diagnostics are in the build log.", DispatchFailureDiagnosticMarker.Format(DispatchFailureDiagnosticMarker.WorkerBuildCheckFailed), at));
+        Assert.False(Assert.Single(task.WorkerBuildInvocations).Consumed);
+        Assert.Equal(WorkerBuildInfrastructureBlocker.QueueDeadline, WorkerBuildInfrastructureEvidence.Classify(task));
+        Assert.Equal(DispatchFailureDiagnosticMarker.WorkerBuildCheckFailed, TaskOutcomeClassifier.TryExtractRule(
+            DispatchFailureClassifier.Classify(task, task.LastVerification!).ClassifierReceipt));
+        WriteCompilerLog(repository.WorkingDirectory);
+        var retries = new List<string>();
+        var dispatches = 0;
+        var driver = RecoveryDriver(kernel, repository.WorkingDirectory, retries, () => dispatches++);
+        driver.UseWorkerBuildCapacityReader(() => throw new InvalidOperationException("Compiler failure must not read capacity."));
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.IsType<ConductorAdvanceOutcome.Executed>(result.Outcome);
+        var feedback = Assert.Single(retries);
+        Assert.StartsWith("worker-build-check-failed automatic recovery 1/2:", feedback, StringComparison.Ordinal);
+        Assert.Contains("CS0117", feedback);
+        Assert.Equal(1, dispatches);
+        Assert.Equal(1, task.WorkerBuildCheckRecoveryCount);
+        Assert.Equal(0, goal.AutomaticAcceptanceRetryCount);
+    }
+
+    [Fact]
+    public void UnconsumedQueueDeadlineWithIncompleteScopeHoldsThenRetriesWithoutBudgets()
+    {
+        using var repository = CreateSeededGitRepository();
+        var (kernel, goal) = SimpleGoal();
+        var task = goal.Tasks.Single();
+        var worktree = GoalWorktrees.Ensure(repository.WorkingDirectory, goal.Id);
+        FailIncompleteScope(kernel, goal, task, worktree, WorkerBuildOutcome.CapacityBeforeStart);
+        Assert.False(Assert.Single(task.WorkerBuildInvocations).Consumed);
+        Assert.Equal("incomplete-scope-declaration", TaskOutcomeClassifier.TryExtractRule(
+            DispatchFailureClassifier.Classify(task, task.LastVerification!).ClassifierReceipt));
+        var retries = new List<string>();
+        var dispatches = 0;
+        var driver = RecoveryDriver(kernel, repository.WorkingDirectory, retries, () => dispatches++);
+        var free = false;
+        driver.UseWorkerBuildCapacityReader(() => new(free ? 1 : 0, 2, 0, true));
+
+        var first = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        var held = Assert.IsType<ConductorAdvanceOutcome.Held>(first.Outcome);
+        Assert.Equal("build-capacity-held", held.Decision!.DiscriminatingEvidence);
+        Assert.Empty(retries);
+        Assert.Equal(0, dispatches);
+        Assert.Equal(0, task.WorkerBuildCheckRecoveryCount);
+        Assert.Equal(0, goal.AutomaticAcceptanceRetryCount);
+        free = true;
+
+        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.StartsWith("worker-build-capacity automatic retry 1/3:", Assert.Single(retries), StringComparison.Ordinal);
+        Assert.Equal(1, dispatches);
+        Assert.Equal(0, task.WorkerBuildCheckRecoveryCount);
+        Assert.Equal(0, goal.AutomaticAcceptanceRetryCount);
+    }
+
+    [Theory]
+    [InlineData(WorkerBuildOutcome.TimeoutAfterStart)]
+    [InlineData(WorkerBuildOutcome.ApparatusFailure)]
+    [InlineData(WorkerBuildOutcome.Interrupted)]
+    public void NonQueueInfrastructureWithIncompleteScopeMatchesNoInvocationDecision(WorkerBuildOutcome outcome)
+    {
+        AssertIncompleteScopeControl(outcome, compilerFailure: false);
+    }
+
+    [Fact]
+    public void CompilerFailureBesideUnconsumedQueueMatchesCompilerOnlyDecision()
+    {
+        AssertIncompleteScopeControl(WorkerBuildOutcome.CapacityBeforeStart, compilerFailure: true);
+    }
+
+    private static void AssertIncompleteScopeControl(WorkerBuildOutcome outcome, bool compilerFailure)
+    {
+        using var repository = CreateSeededGitRepository();
+        var (kernel, goal) = SimpleGoal();
+        var task = goal.Tasks.Single();
+        var worktree = GoalWorktrees.Ensure(repository.WorkingDirectory, goal.Id);
+        FailIncompleteScope(kernel, goal, task, worktree, outcome, compilerFailure);
+        var snapshot = kernel.ExportGoalSnapshot(goal.Id);
+        var controlKernel = new AgentOrchestratorKernel();
+        controlKernel.ReplaceGoalWithSnapshot(snapshot with { Tasks = snapshot.Tasks.Select(candidate => candidate with
+        {
+            WorkerBuildInvocations = candidate.WorkerBuildInvocations!.Where(invocation =>
+                invocation.Outcome == WorkerBuildOutcome.CompilerFailure).ToArray()
+        }).ToArray() });
+        var controlGoal = controlKernel.GetGoal(goal.Id);
+        var retries = new List<string>();
+        var controlRetries = new List<string>();
+        var driver = IncompleteScopeControlDriver(kernel, repository.WorkingDirectory, retries);
+        var controlDriver = IncompleteScopeControlDriver(controlKernel, repository.WorkingDirectory, controlRetries);
+
+        var actual = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+        var control = controlDriver.AdvanceOnce(controlGoal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.Equal(controlRetries.ToArray(), retries.ToArray());
+        Assert.Single(retries);
+        Assert.DoesNotContain(retries, feedback => feedback.StartsWith("worker-build-capacity", StringComparison.Ordinal));
+        var actualOutcome = Assert.IsType<ConductorAdvanceOutcome.Executed>(actual.Outcome);
+        var controlOutcome = Assert.IsType<ConductorAdvanceOutcome.Executed>(control.Outcome);
+        var actualDecision = Assert.IsType<PolicyDecisionRecord>(actualOutcome.Decision);
+        var controlDecision = Assert.IsType<PolicyDecisionRecord>(controlOutcome.Decision);
+        Assert.Equal(controlDecision.Facts.ToArray(), actualDecision.Facts.ToArray());
+        Assert.Equal(controlDecision with { Facts = actualDecision.Facts }, actualDecision);
+        Assert.Equal(controlOutcome with { Decision = actualDecision }, actualOutcome);
+    }
+
+    private static ConductorDriver IncompleteScopeControlDriver(AgentOrchestratorKernel kernel, string directory,
+        List<string> retries)
+    {
+        var driver = MakeDriver(getFacts: _ => GoalLifecycleFacts.None, executionDirectory: directory,
+            recordCriterionRetryFeedback: kernel.RecordCriterionRetryFeedback,
+            dispatchAndStart: _ => DispatchStartOutcome.Started(),
+            retryTaskWithCause: (goalId, taskId, message, round, cause) =>
+            {
+                retries.Add(message);
+                return kernel.RetryTask(goalId, taskId, message, cause, retryRoundKind: round);
+            },
+            workerBuildRecoveryRetry: (_, _, _) => throw new InvalidOperationException("Non-queue evidence must not enter build recovery."),
+            workerBuildArtifactsPath: _ => Path.Combine(directory, "build-artifacts"));
+        driver.UseWorkerBuildCapacityReader(() => throw new InvalidOperationException("Non-queue evidence must not read capacity."));
+        return driver;
+    }
+
+    private static void FailIncompleteScope(AgentOrchestratorKernel kernel, Goal goal, TaskSpec task, string worktree,
+        WorkerBuildOutcome outcome, bool compilerFailure = false)
+    {
+        DispatchTask(kernel, goal, task, workingDirectory: worktree);
+        InfrastructureBuildBlockerClassifierTests.RecordInvocation(kernel, goal, task, outcome);
+        if (compilerFailure)
+            InfrastructureBuildBlockerClassifierTests.RecordInvocation(kernel, goal, task, WorkerBuildOutcome.CompilerFailure);
+        kernel.RecordDispatchExecutionResult(goal.Id, task.Id, new TaskVerificationRecord("test.exe", worktree, 1,
+            "WORKER_RESULT:\nblockers: none\nassigned_scope_complete: false\nEND_WORKER_RESULT", string.Empty, DateTimeOffset.UtcNow,
+            WorkerResultPresent: true, AssignedScopeComplete: false));
+    }
+
+    [Fact]
     public void CapacityFailure_HoldsThenRetries_AsEnvironmentRound()
     {
         using var repository = CreateSeededGitRepository();
