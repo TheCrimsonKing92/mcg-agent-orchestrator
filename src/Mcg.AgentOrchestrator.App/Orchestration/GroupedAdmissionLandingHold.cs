@@ -9,12 +9,13 @@ internal static class GroupedAdmissionLandingHold
         GateTestObligation.IsAcceptanceGateOwner(wait.EvidenceOwner) &&
         wait.TestNames is { Count: > 0 };
 
-    internal static HumanInputRequest? FindBlockingWait(IReadOnlyList<HumanInputRequest> pending) =>
-        pending.FirstOrDefault(wait => !wait.IsCompleted && !PostLandingOperatorCheck.IsPostLandingCheck(wait) && !IsGateSatisfiable(wait));
+    internal static HumanInputRequest? FindBlockingWait(IReadOnlyList<HumanInputRequest> pending, Goal? goal = null) =>
+        pending.FirstOrDefault(wait => !wait.IsCompleted && !PostLandingOperatorCheck.IsPostLandingCheck(wait) && !IsGateSatisfiable(wait) &&
+            !(goal is not null && DeveloperReportWait.IsReportWait(goal, wait) && DeveloperReportWait.HasReportedClasses(goal)));
 
     internal static GateReadyCandidateProjectionResult Apply(
-        GateReadyCandidateProjectionResult projection, IReadOnlyList<HumanInputRequest> pending) =>
-        projection is GateReadyCandidateProjectionResult.Ready && FindBlockingWait(pending) is { } wait
+        GateReadyCandidateProjectionResult projection, IReadOnlyList<HumanInputRequest> pending, Goal? goal = null) =>
+        projection is GateReadyCandidateProjectionResult.Ready && FindBlockingWait(pending, goal) is { } wait
             ? new GateReadyCandidateProjectionResult.Excluded(GateReadyCandidateExclusionReason.LandingHeld)
                 { HoldRequestId = wait.Id.Value }
             : projection;

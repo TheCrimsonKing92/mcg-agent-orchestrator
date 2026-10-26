@@ -219,6 +219,7 @@ public sealed class GoalWorktreeTestsRemoveCleanupTerminal : GoalWorktreeTestBas
 
             Assert.True(result.CanApply);
             Assert.Equal(GoalStatus.Cancelled, kernel.GetGoal(goal.Id).Status);
+            Assert.All(kernel.GetGoal(goal.Id).Tasks, task => Assert.Equal(WorkTaskStatus.Cancelled, task.Status));
             var worktreesRoot = Path.Combine(repo, GoalWorktrees.DirectoryName);
             Assert.Empty(Directory.Exists(worktreesRoot)
                 ? Directory.EnumerateDirectories(worktreesRoot)

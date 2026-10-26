@@ -189,17 +189,12 @@ public sealed class CliCommandTestsGoalLifecycleCleanupHooksAbandon : CliCommand
             evt.Message == "Operator chose a different route.");
         var journal = GoalOperationJournal.Read(root, goal.Id);
         Xunit.Assert.True(GoalOperationJournal.HasRetiredTerminalDisposition(journal));
-        Xunit.Assert.All(goal.Tasks, task => Xunit.Assert.Equal(WorkTaskStatus.Assigned, task.Status));
+        Xunit.Assert.All(goal.Tasks, task => Xunit.Assert.Equal(WorkTaskStatus.Cancelled, task.Status));
 
         var firstSweep = TerminalGoalSweep.Run(kernel, root, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, goal.Id);
         var secondSweep = TerminalGoalSweep.Run(kernel, root, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, goal.Id);
 
-        var firstResult = Xunit.Assert.Single(firstSweep.Goals);
-        Xunit.Assert.Equal(goal.Id, firstResult.GoalId);
-        var repair = Xunit.Assert.Single(firstResult.Repairs);
-        Xunit.Assert.Equal("terminal-task-desync", repair.Kind);
-        Xunit.Assert.Contains("goalState=Cancelled", repair.Evidence, StringComparison.Ordinal);
-        Xunit.Assert.Contains("action=cancel-stale-tasks", repair.Evidence, StringComparison.Ordinal);
+        Xunit.Assert.Empty(firstSweep.Goals);
         Xunit.Assert.Empty(secondSweep.Goals);
         Xunit.Assert.Equal(GoalStatus.Cancelled, goal.Status);
         Xunit.Assert.All(goal.Tasks, task => Xunit.Assert.Equal(WorkTaskStatus.Cancelled, task.Status));

@@ -10,10 +10,10 @@ public sealed class CliGoalCancelLifecycleOutboxTests : CliGoalParkTestSupport
 {
     private const string PendingSentence =
         "The lifecycle event delivery is pending and will be retried by the next writer-path command.";
-    // Derived from main 5d57c263a's unchanged PrintGoal and cancel renderer for this fixed seed.
+    // Fixed-seed output includes task closure during the cancel transition.
     private const string MainCancelOutput =
         "\nGoal aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\nObjective: Cancel target\nStatus: Cancelled\nTasks:\n" +
-        "  1. [Pending] Developer: Cancel task (unassigned)\n\n";
+        "  1. [Cancelled] Developer: Cancel task (unassigned)\n\n";
 
     [Xunit.Theory]
     [Xunit.InlineData(false)]

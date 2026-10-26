@@ -19,6 +19,8 @@ internal sealed class RoleReportEvidenceClosure(
                 .ToArray())
             {
                 var owner = request.EvidenceOwner?.Trim().ToLowerInvariant();
+                var workerReport = owner == "worker" && DeveloperReportWait.IsReportWait(goal, request);
+                if (workerReport) owner = "developer";
                 if (owner is not ("developer" or "tester" or "reviewer")) continue;
                 var role = owner switch
                 {
@@ -54,6 +56,7 @@ internal sealed class RoleReportEvidenceClosure(
                     $"landing_candidate={landingCandidateSha} worker_result_log={Available(log)}";
                 if (owner == "developer") answer += $" tests={tests} gate={gate}";
                 if (owner == "reviewer") answer += " verdict=pass";
+                if (workerReport) answer += " requested_owner=worker";
                 request.Complete(answer, clock.UtcNow, origin: HumanInputAnswerOrigin.Worker,
                     briefVersion: goal.AuthoritativeBrief.Version);
                 append(goal, request.TaskId, ProgressKind.HumanInputReceived, answer);

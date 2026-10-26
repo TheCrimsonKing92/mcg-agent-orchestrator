@@ -1,3 +1,4 @@
+using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
@@ -11,8 +12,11 @@ public sealed class CliCommandTestsDashboardRemoval : CliCommandTestBase
     {
         var root = CreateTempDirectory();
         var workspace = OrchestratorWorkspace.ForDirectory(root);
+        using var writer = new StringWriter();
         var error = Assert.ThrowsAny<ArgumentException>(() =>
-            ExecuteCliAndCapture(["monitor-goal", url, "abc123"], new AgentOrchestratorKernel(), workspace));
+            GoalMonitoringSubscriptionCommand.RunAsync(
+                ["monitor-goal", url, "abc123"], writer, new AgentOrchestratorKernel(), workspace,
+                AgentCatalog.Default().Agents, WorkerProfileCatalog.Default()).GetAwaiter().GetResult());
         Assert.Contains($"Invalid goal argument '{url}'.", error.Message, StringComparison.Ordinal);
     }
 
@@ -27,7 +31,11 @@ public sealed class CliCommandTestsDashboardRemoval : CliCommandTestBase
         kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
         kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Running, "Started local work.");
 
-        var output = ExecuteCliAndCapture(["monitor-goal", goal.Id.Value, "--once"], kernel, workspace);
+        using var writer = new StringWriter();
+        GoalMonitoringSubscriptionCommand.RunAsync(
+            ["monitor-goal", goal.Id.Value, "--once"], writer, kernel, workspace,
+            AgentCatalog.Default().Agents, WorkerProfileCatalog.Default()).GetAwaiter().GetResult();
+        var output = writer.ToString();
 
         Assert.Contains("event: goal.snapshot", output, StringComparison.Ordinal);
         Assert.Contains("event: task.status", output, StringComparison.Ordinal);

@@ -60,8 +60,7 @@ internal static partial class CliPersistentStateRunner
                             ?? throw new InvalidOperationException("Committed lifecycle outcome is missing its timeline event."))
                         : null;
                     IReadOnlyList<OrchestratorStateOutboxMessage> messages = message is null ? [] : [message];
-                    var updated = new GoalStateSnapshot(
-                        result.ShouldSave ? ExportGoalSnapshot(kernel, goalId) : state.Goal, []);
+                    var updated = result.ShouldSave ? StoppedGoalTaskClosure.ExportStoppedGoalState(kernel, goalId, state) : new GoalStateSnapshot(state.Goal, []);
                     return Task.FromResult((result.ShouldSave, (GoalStateSnapshot?)updated,
                         (Outcome: result, MessageId: message?.Id), messages));
                 }).GetAwaiter().GetResult();

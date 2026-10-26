@@ -11,10 +11,7 @@ internal static partial class TerminalGoalSweep
         string desyncEvidence,
         List<TerminalGoalSweepRepair> repairs)
     {
-        var staleTasks = goal.Tasks
-            .Where(task => task.Status is not (WorkTaskStatus.Completed or WorkTaskStatus.Cancelled))
-            .Where(task => task.LastProcess is not { IsRunning: true } process ||
-                           !process.TrackedProcessIds.Any(IsProcessAlive))
+        var staleTasks = StoppedGoalTaskClosure.SelectClosableTasks(goal)
             .Select(task => (task.Id, task.Status))
             .ToArray();
         if (staleTasks.Length == 0)
