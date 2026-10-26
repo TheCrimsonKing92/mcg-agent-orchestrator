@@ -1431,6 +1431,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             if (HasCliConfirmation(parts, "--loop"))
             {
                 using var loopSetup = ConductorStartupHeartbeat.Shipped.Begin(ConductorStartupHeartbeat.Phases.LoopSetup);
+                var firstTickEvent = ConductorFirstTickEvent.ForCurrentProcess();
                 var loopPolicyName = GetFlagValue(parts, "--policy");
                 var loopPolicyResolution = CliConductLoopStartup.PrepareConductLoopPolicy(
                     context.Workspace.OrchestratorDirectory, loopPolicyName, Console.Error, projectPolicyTemplatePath: ProjectConductorPolicySeeder.TemplatePathFor(context.Workspace, OrchestratorHome.ResolveForProcess()));
@@ -1575,6 +1576,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     AgentOrchestratorKernel loopKernel,
                     IReadOnlySet<string> checkpointHeldGoalIds)
                 {
+                    firstTickEvent.Observe();
                     agentRoster.Refresh();
                     loopReaper.BeginRefreshCycle();
                     intentGoalReloadObservations.Clear();
@@ -1660,12 +1662,10 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                         resolvedParkedHumanWaitKernel = ConductorTickStepLedger.Measure("parked-reloads", () => context.ReloadResolvedParkedHumanWaitKernel());
                     }
                     catch { /* dynamic pickup is best-effort */ }
-
                     if (resolvedParkedHumanWaitKernel is not null)
                     {
                         PersistResolvedParkedHumanWaitsForNextTick(context, resolvedParkedHumanWaitKernel);
                     }
-
                     AgentOrchestratorKernel? parkedGoalSafetyNetKernel = null;
                     parkedGoalSafetyNetTick++;
                     if (CliPersistentStateRunner.IsParkedGoalSafetyNetSweepTick(parkedGoalSafetyNetTick))

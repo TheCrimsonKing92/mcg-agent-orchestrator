@@ -78,6 +78,8 @@ public interface IOrchestratorStateRepository : IOrchestratorStateQueries
         CancellationToken cancellationToken = default) =>
         SaveAsync(kernel, cancellationToken);
 
+    Task<bool> EnsureTerminalOpenWorkIndexAsync(CancellationToken cancellationToken = default) => Task.FromResult(false);
+
     async Task<IReadOnlyList<GoalId>> ListTerminalGoalIdsWithNonTerminalTasksAsync(CancellationToken cancellationToken = default)
     {
         var summaries = await ListConductLoopGoalMetadataAsync(cancellationToken);
