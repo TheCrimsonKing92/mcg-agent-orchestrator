@@ -44,7 +44,7 @@ public sealed class AgentOutputDirectivesPlannerLineRulesTests
             "An undecidable criterion does not block other criteria and requires `blockers: none` when no operator action is needed. ",
             "Repeat `PLANNER_EVIDENCE_REQUEST:` JSON-object lines per criterion_index/evidence_key (max 16 lines/65536 UTF-8 payload bytes total). ",
             "Mix historical/future Acceptance/Operator items; none only alone; no substantive HUMAN_INPUT. ",
-            "Each object requires criterion_index, evidence_key, availability, needed, and reason. ",
+            "Each object requires criterion_index, evidence_key, availability, needed, and reason; needed is a non-empty string naming the evidence, never true or false. ",
             "Unreadable store: availability=retrievable plus store. Never-recorded: prefer undecidable; operator action requires availability=never-recorded, no store. ",
             "Prerequisites block now; future obligations: availability=post-implementation plus owner, no store, never claim execution. ",
             "Gate tests: owner=acceptance-gate; non-empty tests array of class, Class.Method or exact theory rows. Selectorless acceptance: authorized explicit answer; Operator checks stay independent. ",
