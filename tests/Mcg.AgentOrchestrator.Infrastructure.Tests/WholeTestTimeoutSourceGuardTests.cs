@@ -72,7 +72,16 @@ public sealed class WholeTestTimeoutSourceGuardTests
         Assert.True(File.Exists(path), $"External-child test source missing: {path}");
         var body = FindMethodBody(File.ReadAllText(path), "RunExternalOwnedStartScenario");
         Assert.False(string.IsNullOrWhiteSpace(body), $"RunExternalOwnedStartScenario declaration not found in {path}");
-        Assert.Contains("externalProcess.WaitForExit(TestHangGuard.HangSafetyBound)", body, StringComparison.Ordinal);
+        Assert.Contains("OwnedAttemptExitWait.WaitForExit(externalProcess, initialAttempt)", body, StringComparison.Ordinal);
+        var helperPath = Path.Combine(Path.GetDirectoryName(path)!, "OwnedAttemptExitWait.cs");
+        Assert.True(File.Exists(helperPath), $"External-child wait helper source missing: {helperPath}");
+        var helperBody = CSharpSyntaxTree.ParseText(File.ReadAllText(helperPath)).GetRoot().DescendantNodes()
+            .OfType<MethodDeclarationSyntax>().Single(method => method.Identifier.ValueText == "WaitForExit"
+                && method.ParameterList.Parameters.Count == 5).Body?.ToString();
+        Assert.False(string.IsNullOrWhiteSpace(helperBody), $"WaitForExit declaration not found in {helperPath}");
+        // The helper owns both the no-progress window and the total-wait failsafe.
+        Assert.Contains("TestHangGuard.HangSafetyBound", helperBody, StringComparison.Ordinal);
+        Assert.Contains("TimeSpan.FromMilliseconds(TestHangGuard.WholeTestMilliseconds)", helperBody, StringComparison.Ordinal);
         // Guard the external child only; the separate finally cleanup wait is outside this change's scope.
         Assert.Empty(FindNumericLiteralWaitForExitCalls(body!, receiver: "externalProcess"));
     }
