@@ -2725,6 +2725,7 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
         GoalAcceptanceVerifier.ConfigureHermeticVerificationEnvironment(
             startInfo.Environment,
             attempt.ExecutionDirectory);
+        BuildGcEnvironment.Apply(startInfo.Environment, BuildGcEnvironment.For(ResolveAttemptPolicy(attempt)));
         if (buildStorageRoot is { } storageRoot)
         {
             // This attempt selects the namespace; the child and its build descendants

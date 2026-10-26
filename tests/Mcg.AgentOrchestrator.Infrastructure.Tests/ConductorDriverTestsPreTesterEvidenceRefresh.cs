@@ -10,6 +10,37 @@ public sealed class ConductorDriverTestsPreTesterEvidenceRefresh
     private const string CandidateSha = "bbb2222";
     private const string ChangedPath = "tests/Mcg.AgentOrchestrator.Core.Tests/DeclaredCoreTests.cs";
 
+    [Fact]
+    public void UnusableRunRecordsItsFailingCheckOnTheTimeline()
+    {
+        using var scenario = new Scenario();
+        var unusable = scenario.FirstUnusable();
+
+        var marker = Assert.Single(scenario.Goal.Timeline.Where(evt =>
+            evt.Kind == ProgressKind.FindingEvidenceRunRecorded &&
+            PreTesterEvidenceIndexLines.Parse(evt.Message)?.ReceiptId == unusable.ReceiptId));
+
+        Assert.Contains("unusable_check=evidence-invalid", marker.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SubclassOnlyGreenRunReachesTesterAsGreen()
+    {
+        using var scenario = new Scenario(subclassOnlyGreen: true);
+
+        Assert.IsType<ConductorAdvanceOutcome.Executed>(scenario.Advance().Outcome);
+
+        var receipt = scenario.Latest();
+        Assert.Equal("green", receipt.Outcome);
+        Assert.Equal(1, scenario.Runs);
+        Assert.Equal(1, scenario.Dispatches);
+        Assert.Contains(Assert.Single(scenario.DeliveredIndex), line =>
+            line.Contains("verdict=green", StringComparison.Ordinal) &&
+            line.Contains("receipt=" + receipt.ReceiptId, StringComparison.Ordinal));
+        Assert.DoesNotContain(scenario.Goal.Timeline, evt =>
+            evt.Message.Contains("unusable_check=", StringComparison.Ordinal));
+    }
+
     // The bound detects a hang; assertions measure cross-tick evidence and dispatch state.
     [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Trait("Category", "CrossTick")]
@@ -256,6 +287,7 @@ public sealed class ConductorDriverTestsPreTesterEvidenceRefresh
         private readonly FixtureClock _clock = new();
         private readonly bool _secondUnusable;
         private readonly bool _buildPhaseOnly;
+        private readonly bool _subclassOnlyGreen;
         public AgentOrchestratorKernel Kernel { get; }
         public Goal Goal { get; }
         public TaskSpec Tester { get; }
@@ -265,10 +297,11 @@ public sealed class ConductorDriverTestsPreTesterEvidenceRefresh
         public List<string> Escalations { get; } = [];
         public List<FailedGoalRecoveryDecision> Recoveries { get; } = [];
 
-        public Scenario(bool secondUnusable = false, bool buildPhaseOnly = false)
+        public Scenario(bool secondUnusable = false, bool buildPhaseOnly = false, bool subclassOnlyGreen = false)
         {
             _secondUnusable = secondUnusable;
             _buildPhaseOnly = buildPhaseOnly;
+            _subclassOnlyGreen = subclassOnlyGreen;
             Kernel = new(_clock);
             Kernel.ConfigureCandidateIdentityResolver(_ => new CandidateIdentity("patch", "base", "manifest"));
             var developer = new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer);
@@ -354,7 +387,10 @@ public sealed class ConductorDriverTestsPreTesterEvidenceRefresh
         }
 
         private FocusedEvidenceRunResult Green(string request) =>
-            ConductorDriverTestsFindingEvidenceReuse.RetainedEvidenceWithExecutedClasses(_root, request, CandidateSha);
+            ConductorDriverTestsFindingEvidenceReuse.RetainedEvidenceWithExecutedClasses(_root, request, CandidateSha,
+                _subclassOnlyGreen ? request.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                    .Select(selection => selection.Split(':', 2)[1])
+                    .Select(name => name == "DeclaredCoreTests" ? "DeclaredCoreTestsFirst" : name).ToArray() : null);
 
         public FocusedEvidenceRunResult RunGreen(string request)
         {
@@ -386,7 +422,7 @@ public sealed class ConductorDriverTestsPreTesterEvidenceRefresh
                 getPreReviewEvidenceContext: _ => NoPreReviewContext(CandidateSha),
                 getLandingFileScopes: _ => [ChangedPath], executionDirectory: _root,
                 focusedEvidenceAttemptCoordinator: coordinator ?? Coordinator(),
-                runFocusedEvidence: (_, request) => ++Runs == 1 || _secondUnusable
+                runFocusedEvidence: (_, request) => (++Runs == 1 || _secondUnusable) && !_subclassOnlyGreen
                     ? _buildPhaseOnly ? BuildOnlyUnusable(request) : Unusable(request) : Green(request),
                 dispatchAndStart: _ =>
                 {
