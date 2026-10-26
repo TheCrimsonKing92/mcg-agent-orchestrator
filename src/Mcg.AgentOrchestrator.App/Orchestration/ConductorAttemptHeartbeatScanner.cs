@@ -14,15 +14,25 @@ internal static class ConductorAttemptHeartbeatScanner
     internal static int CountLive(string root, DateTimeOffset now, TimeSpan window) =>
         ReadLive(root, now, window).Count;
 
-    private static List<DateTimeOffset> ReadLive(string root, DateTimeOffset now, TimeSpan window)
+    internal static DateTimeOffset? LatestProgress(string root, DateTimeOffset now, TimeSpan window,
+        IReadOnlyList<string> directories) =>
+        ReadLive(root, now, window, directories).Select(at => (DateTimeOffset?)at).Max();
+
+    internal static int CountLive(string root, DateTimeOffset now, TimeSpan window,
+        IReadOnlyList<string> directories) => ReadLive(root, now, window, directories).Count;
+
+    private static List<DateTimeOffset> ReadLive(string root, DateTimeOffset now, TimeSpan window,
+        IReadOnlyList<string>? directories = null)
     {
         var progress = new List<DateTimeOffset>();
         if (!Directory.Exists(root)) return progress;
         var earliestWrite = (now - window).UtcDateTime;
         try
         {
-            foreach (var file in new DirectoryInfo(root).EnumerateFiles("*.heartbeat.json",
-                new EnumerationOptions { RecurseSubdirectories = true, MaxRecursionDepth = MaxHeartbeatRecursionDepth, IgnoreInaccessible = true, AttributesToSkip = 0 }))
+            var files = directories is null ? new DirectoryInfo(root).EnumerateFiles("*.heartbeat.json",
+                new EnumerationOptions { RecurseSubdirectories = true, MaxRecursionDepth = MaxHeartbeatRecursionDepth, IgnoreInaccessible = true, AttributesToSkip = 0 }) :
+                ConductorAttemptDirectoryScope.HeartbeatFiles(root, directories, "*.heartbeat.json");
+            foreach (var file in files)
             {
                 try
                 {
