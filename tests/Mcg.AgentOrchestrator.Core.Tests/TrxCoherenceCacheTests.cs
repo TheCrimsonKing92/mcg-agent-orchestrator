@@ -188,16 +188,68 @@ public sealed class TrxCoherenceCacheTests : IDisposable
         var path = Path.Combine(directory, "bounded.trx");
         File.WriteAllText(path, Trx(total: 1));
         var firstStamp = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
-        for (var index = 0; index <= 2048; index++)
+        var entry = PersistedVerdict(path, verdict: true);
+        for (var index = 0; index < TrxCoherenceCache.MaxEntries; index++)
         {
-            File.SetLastWriteTimeUtc(path, firstStamp.AddMinutes(index));
-            Assert.True(TrxCoherenceCache.Evaluate(path, static _ => true));
+            TrxCoherenceCache.Seed(entry with { Ticks = firstStamp.AddMinutes(index).Ticks });
         }
+        File.SetLastWriteTimeUtc(path, firstStamp.AddMinutes(TrxCoherenceCache.MaxEntries));
+        Assert.True(TrxCoherenceCache.Evaluate(path, static _ => true));
         File.SetLastWriteTimeUtc(path, firstStamp);
         var loadsBeforeProbe = TrxCoherenceCache.LoadCount;
 
         Assert.False(TrxCoherenceCache.Evaluate(path, static _ => false));
         Assert.Equal(loadsBeforeProbe + 1, TrxCoherenceCache.LoadCount);
+    }
+
+    [Fact]
+    public void InsertAtCeilingEvictsOnlyOldestEntry()
+    {
+        var path = Path.Combine(directory, "fifo.trx");
+        File.WriteAllText(path, Trx(total: 1));
+        var stamp = File.GetLastWriteTimeUtc(path);
+        var entry = PersistedVerdict(path, verdict: true);
+        for (var index = 0; index < TrxCoherenceCache.MaxEntries; index++)
+        {
+            TrxCoherenceCache.Seed(entry with { Ticks = stamp.AddMinutes(index).Ticks });
+        }
+
+        File.SetLastWriteTimeUtc(path, stamp.AddMinutes(TrxCoherenceCache.MaxEntries));
+        Assert.True(TrxCoherenceCache.Evaluate(path, static _ => true));
+        Assert.Equal(1, TrxCoherenceCache.LoadCount);
+        Assert.Equal(TrxCoherenceCache.MaxEntries, TrxCoherenceCache.Count);
+
+        foreach (var index in new[] { 1, TrxCoherenceCache.MaxEntries - 1 })
+        {
+            File.SetLastWriteTimeUtc(path, stamp.AddMinutes(index));
+            Assert.True(TrxCoherenceCache.Evaluate(path, static _ => throw new InvalidOperationException("seed expected")));
+            Assert.Equal(1, TrxCoherenceCache.LoadCount);
+        }
+        File.SetLastWriteTimeUtc(path, stamp);
+        Assert.False(TrxCoherenceCache.Evaluate(path, static _ => false));
+        Assert.Equal(2, TrxCoherenceCache.LoadCount);
+    }
+
+    [Fact]
+    public void ChangedContentAtFullCacheIsReevaluated()
+    {
+        var path = Path.Combine(directory, "full-rewrite.trx");
+        File.WriteAllText(path, Trx(total: 1));
+        var stamp = File.GetLastWriteTimeUtc(path);
+        var entry = PersistedVerdict(path, verdict: true);
+        for (var index = 0; index < TrxCoherenceCache.MaxEntries; index++)
+        {
+            TrxCoherenceCache.Seed(entry with { Ticks = stamp.AddMinutes(index).Ticks });
+        }
+        Assert.Equal(TrxCoherenceCache.MaxEntries, TrxCoherenceCache.Count);
+        var loadsBeforeRewrite = TrxCoherenceCache.LoadCount;
+        File.WriteAllText(path, Trx(total: 2));
+        File.SetLastWriteTimeUtc(path, stamp);
+        Assert.Equal(entry.Length, new FileInfo(path).Length);
+        Assert.Equal(stamp, File.GetLastWriteTimeUtc(path));
+
+        Assert.False(AcceptanceCohortGateEvidence.HasCoherentTrxEvidence([path]));
+        Assert.Equal(loadsBeforeRewrite + 1, TrxCoherenceCache.LoadCount);
     }
 
     [Fact]
@@ -370,29 +422,108 @@ public sealed class TrxCoherenceCacheTests : IDisposable
     }
 
     [Fact]
-    public void Store_SeedingStopsAtCeilingAndDuplicateKeysUseLastVerdict()
+    public void Store_SeedingKeepsNewestAndDuplicateKeysUseLastVerdict()
     {
         var path = Path.Combine(directory, "ceiling.trx");
         File.WriteAllText(path, Trx(total: 1));
         var stamp = File.GetLastWriteTimeUtc(path);
-        var lines = Enumerable.Range(0, 2049)
+        var lines = Enumerable.Range(0, TrxCoherenceCache.MaxEntries + 1)
             .Select(index => StoreLine(path, verdict: true, ticks: stamp.AddMinutes(index).Ticks))
-            .Append(StoreLine(path, verdict: false));
+            .Append(StoreLine(path, verdict: false, ticks: stamp.AddMinutes(1).Ticks));
         File.WriteAllLines(StorePath, lines);
 
         TrxCoherenceVerdictStore.Load(directory);
 
+        Assert.Equal(TrxCoherenceCache.MaxEntries, File.ReadAllLines(StorePath).Length);
+        File.SetLastWriteTimeUtc(path, stamp.AddMinutes(1));
         Assert.False(TrxCoherenceCache.Evaluate(path, static _ => throw new InvalidOperationException("seed expected")));
         Assert.Equal(0, TrxCoherenceCache.LoadCount);
-        File.SetLastWriteTimeUtc(path, stamp.AddMinutes(2047));
+        File.SetLastWriteTimeUtc(path, stamp.AddMinutes(TrxCoherenceCache.MaxEntries));
         Assert.True(TrxCoherenceCache.Evaluate(path, static _ => throw new InvalidOperationException("seed expected")));
         Assert.Equal(0, TrxCoherenceCache.LoadCount);
-        File.SetLastWriteTimeUtc(path, stamp.AddMinutes(2048));
+        File.SetLastWriteTimeUtc(path, stamp);
         Assert.False(TrxCoherenceCache.Evaluate(path, static _ => false));
         Assert.Equal(1, TrxCoherenceCache.LoadCount);
     }
 
+    [Fact]
+    public void Store_LoadCompactsToLatestVerdictPerIdentity()
+    {
+        var x = Path.Combine(directory, "x.trx");
+        var y = Path.Combine(directory, "y.trx");
+        File.WriteAllText(x, Trx(total: 1));
+        File.WriteAllText(y, Trx(total: 1));
+        var yLine = StoreLine(y, verdict: true);
+        var xLastLine = StoreLine(x, verdict: false);
+        File.WriteAllLines(StorePath, [StoreLine(x, verdict: true), yLine, "{torn", xLastLine]);
+
+        TrxCoherenceVerdictStore.Load(directory);
+
+        Assert.Equal(new[] { yLine, xLastLine }, File.ReadAllLines(StorePath));
+        Assert.False(TrxCoherenceCache.Evaluate(x, static _ => throw new InvalidOperationException("seed expected")));
+        Assert.True(TrxCoherenceCache.Evaluate(y, static _ => throw new InvalidOperationException("seed expected")));
+        Assert.Equal(0, TrxCoherenceCache.LoadCount);
+
+        var cleanDirectory = Path.Combine(directory, "distinct");
+        Directory.CreateDirectory(cleanDirectory);
+        var z = Path.Combine(cleanDirectory, "z.trx");
+        File.WriteAllText(z, Trx(total: 1));
+        var cleanStorePath = Path.Combine(cleanDirectory, "trx-coherence-verdicts.jsonl");
+        // Deliberate non-default formatting and timestamp make an unnecessary rewrite observable.
+        File.WriteAllText(cleanStorePath, string.Join("\n", StoreLine(x, true), yLine, StoreLine(z, true)));
+        File.SetLastWriteTimeUtc(cleanStorePath, new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc));
+        var originalBytes = File.ReadAllBytes(cleanStorePath);
+        var originalStamp = File.GetLastWriteTimeUtc(cleanStorePath);
+        TrxCoherenceCache.Reset();
+
+        TrxCoherenceVerdictStore.Load(cleanDirectory);
+
+        Assert.Equal(originalBytes, File.ReadAllBytes(cleanStorePath));
+        Assert.Equal(originalStamp, File.GetLastWriteTimeUtc(cleanStorePath));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void Store_AppendSkipsIdentityAlreadyPersistedWithSameVerdict(bool verdict)
+    {
+        var x = Path.Combine(directory, "persisted.trx");
+        File.WriteAllText(x, Trx(total: 1));
+        File.WriteAllLines(StorePath, [StoreLine(x, verdict: true)]);
+        var originalBytes = File.ReadAllBytes(StorePath);
+        TrxCoherenceVerdictStore.Load(directory);
+        TrxCoherenceVerdictStore.EnableAppend(directory);
+        var entry = PersistedVerdict(x, verdict: true);
+        var stamp = File.GetLastWriteTimeUtc(x);
+        for (var index = 1; index <= TrxCoherenceCache.MaxEntries; index++)
+        {
+            TrxCoherenceCache.Seed(entry with { Ticks = stamp.AddMinutes(index).Ticks });
+        }
+
+        Assert.Equal(verdict, TrxCoherenceCache.Evaluate(x, _ => verdict));
+        Assert.Equal(1, TrxCoherenceCache.LoadCount);
+        if (verdict)
+        {
+            Assert.Equal(originalBytes, File.ReadAllBytes(StorePath));
+        }
+        else
+        {
+            Assert.Equal(new[] { StoreLine(x, true), StoreLine(x, false) }, File.ReadAllLines(StorePath));
+        }
+
+        var z = Path.Combine(directory, "new.trx");
+        File.WriteAllText(z, Trx(total: 1));
+        var linesBeforeNewIdentity = File.ReadAllLines(StorePath);
+        Assert.True(TrxCoherenceCache.Evaluate(z, static _ => true));
+        Assert.Equal(linesBeforeNewIdentity.Append(StoreLine(z, true)).ToArray(), File.ReadAllLines(StorePath));
+        Assert.Equal(2, TrxCoherenceCache.LoadCount);
+    }
+
     private string StorePath => Path.Combine(directory, "trx-coherence-verdicts.jsonl");
+
+    private static TrxCoherenceCache.PersistedVerdict PersistedVerdict(string path, bool verdict) => new(
+        Path.GetFullPath(path), new FileInfo(path).Length, File.GetLastWriteTimeUtc(path).Ticks,
+        Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path))), verdict);
 
     private static string StoreLine(string path, bool verdict, int version = 1, long? ticks = null) =>
         JsonSerializer.Serialize(new
