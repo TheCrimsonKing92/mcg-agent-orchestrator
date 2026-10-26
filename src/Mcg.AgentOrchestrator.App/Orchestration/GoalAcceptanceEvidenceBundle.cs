@@ -312,6 +312,10 @@ internal static class GoalAcceptanceEvidenceBundleBuilder
         }
 
         var aggregateName = check.CommandLine.Contains(
+            "Mcg.AgentOrchestrator.Infrastructure.OwnerConsole.Tests.csproj",
+            StringComparison.OrdinalIgnoreCase)
+            ? "owner console tests"
+            : check.CommandLine.Contains(
             "Mcg.AgentOrchestrator.Infrastructure.StorageRetention.Tests.csproj",
             StringComparison.OrdinalIgnoreCase)
             ? "storage retention tests"
