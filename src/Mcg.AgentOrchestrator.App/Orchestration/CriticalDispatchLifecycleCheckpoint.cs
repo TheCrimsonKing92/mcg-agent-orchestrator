@@ -1,8 +1,7 @@
-using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
-namespace Mcg.AgentOrchestrator.App.Cli;
+namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 /// <summary>
 /// Owns one conductor dispatch's lifecycle hold and critical checkpoint callback.

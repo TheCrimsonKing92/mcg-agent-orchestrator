@@ -1,7 +1,7 @@
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
-namespace Mcg.AgentOrchestrator.App.Cli;
+namespace Mcg.AgentOrchestrator.App.ReadModels;
 
 internal enum EpicPlanOwnershipResolution { Unclaimed, Persisted, Legacy, Ambiguous, MissingOwner, InvalidCoverage }
 internal sealed record EpicPlanLinkedGoal(string Id, string Status, string? Coverage);

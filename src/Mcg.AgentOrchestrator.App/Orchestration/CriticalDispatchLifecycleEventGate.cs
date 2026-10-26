@@ -1,6 +1,6 @@
 using Mcg.AgentOrchestrator.Core;
 
-namespace Mcg.AgentOrchestrator.App.Cli;
+namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 /// <summary>
 /// Holds conductor dispatch projections until their critical snapshot checkpoint commits.
