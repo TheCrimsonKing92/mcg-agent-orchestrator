@@ -7,6 +7,7 @@
     <DefaultItemExcludes>$(DefaultItemExcludes);**\artifacts\**;**/artifacts/**;**\.scratch\**;**/.scratch/**</DefaultItemExcludes>
     <DefaultItemExcludesInProjectFolder>$(DefaultItemExcludesInProjectFolder);**\artifacts\**;**/artifacts/**;**\.scratch\**;**/.scratch/**</DefaultItemExcludesInProjectFolder>
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+    <EnableSourceLink>false</EnableSourceLink>
   </PropertyGroup>
   <PropertyGroup Condition="'$(AuditPipeline)' == 'true'">
     <NuGetAudit>true</NuGetAudit>
