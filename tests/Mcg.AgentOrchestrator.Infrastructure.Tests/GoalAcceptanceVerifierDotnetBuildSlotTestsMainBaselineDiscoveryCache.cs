@@ -8,6 +8,23 @@ using static GoalAcceptanceVerifierDotnetBuildSlotTestsTrustedBaselineDiscovery;
 public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsMainBaselineDiscoveryCache : GoalAcceptanceVerifierDotnetBuildSlotTests
 {
     [Xunit.Fact]
+    public async Task CandidateAndTrustedMainBuildsRunWithoutAnalyzers()
+    {
+        using var fixture = new Fixture(TestOverrides, enableCache: false);
+        var result = await fixture.Run();
+
+        Assert.True(result.Passed, result.OutputTail);
+        var builds = fixture.Calls.Where(call => call.Args is ["dotnet", "build", ..] &&
+            (call.Worktree == fixture.CandidateRoot || call.Worktree == fixture.MainRoot)).ToArray();
+        Assert.Contains(builds, call => call.Worktree == fixture.MainRoot);
+        Assert.All(builds, call =>
+        {
+            foreach (var property in AcceptanceCheckCommandBuilder.AnalyzersOffBuildProperties)
+                Assert.Single(call.Args, argument => argument == property);
+        });
+    }
+
+    [Xunit.Fact]
     public async Task SameMainContentSkipsBothBaselineCommandsAcrossGates()
     {
         using var fixture = new Fixture(TestOverrides);
