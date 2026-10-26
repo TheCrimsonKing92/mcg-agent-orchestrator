@@ -38,8 +38,10 @@ internal sealed partial class ConductorContinuitySupervisor
             while (!seam.IsOwner(seam.Self))
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                if (!seam.IsAlive(record.Incumbent) || _timeProvider.GetUtcNow() >= deadline)
-                    throw new InvalidOperationException("Supervisor lease was not transferred before the handoff deadline.");
+                if (!seam.IsAlive(record.Incumbent))
+                    throw new InvalidOperationException($"incumbent-exited pid={record.Incumbent.ProcessId}");
+                if (_timeProvider.GetUtcNow() >= deadline)
+                    throw new TimeoutException($"deadline timeoutSeconds={supervisorHandoff.Timeout.TotalSeconds}");
                 await _delay(supervisorHandoff.PollDelay, cancellationToken).ConfigureAwait(false);
             }
         }
@@ -78,6 +80,7 @@ internal sealed partial class ConductorContinuitySupervisor
         var readyPath = Path.Combine(outputDirectory, $"supervisor-ready-{token}.json");
         int launchedPid = 0;
         ConductorSupervisorProcessIdentity? launchedIdentity = null;
+        var phase = "record";
         try
         {
             var appDll = target.CommandPrefix is { Count: > 1 }
@@ -102,34 +105,39 @@ internal sealed partial class ConductorContinuitySupervisor
                 {
                     [SystemConductorSupervisorHandoffSeam.InboundEnvironmentVariable] = recordPath
                 });
+            phase = "launch";
             var launched = seam.Launch(request);
             launchedPid = launched.ProcessId;
             launchedIdentity = launched.SuccessorIdentity;
-            if (launched.StartedAt is null)
-                throw new InvalidDataException("Launched supervisor identity has no start time.");
+            RequireSupervisorHandoff(launched.StartedAt is not null,
+                new InvalidDataException("Launched supervisor identity has no start time."));
+            phase = "readiness";
             var deadline = _timeProvider.GetUtcNow() + supervisorHandoff.Timeout;
             ConductorSupervisorReadyRecord? ready;
             while ((ready = seam.ReadReady(readyPath)) is null)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                if (!seam.IsAlive(launchedIdentity))
-                    throw new InvalidOperationException("successor-exited");
-                if (_timeProvider.GetUtcNow() >= deadline)
-                    throw new TimeoutException("readiness-timeout");
+                RequireSupervisorHandoff(seam.IsAlive(launchedIdentity),
+                    new InvalidOperationException("successor-exited"));
+                RequireSupervisorHandoff(_timeProvider.GetUtcNow() < deadline,
+                    new TimeoutException("readiness-timeout"));
                 await _delay(supervisorHandoff.PollDelay, cancellationToken).ConfigureAwait(false);
             }
-            if (ready.Token != token || ready.Successor != launchedIdentity ||
-                ready.Build.CommitSha != targetBuild.CommitSha ||
-                !SameRunDirectory(ready.Build.RunDirectory, target.StagedBuildId) ||
-                !seam.IsAlive(ready.Successor))
-                throw new InvalidDataException("Successor readiness identity did not match the launched build and pid.");
+            phase = "identity";
+            RequireSupervisorHandoff(ready.Token == token && ready.Successor == launchedIdentity &&
+                ready.Build.CommitSha == targetBuild.CommitSha &&
+                SameRunDirectory(ready.Build.RunDirectory, target.StagedBuildId) &&
+                seam.IsAlive(ready.Successor),
+                new InvalidDataException("Successor readiness identity did not match the launched build and pid."));
 
             cancellationToken.ThrowIfCancellationRequested();
+            phase = "transfer";
             seam.Transfer(seam.Self, launchedIdentity, targetBuild);
+            phase = "post-transfer";
             if (!seam.IsAlive(ready.Successor))
             {
                 seam.Transfer(ready.Successor, seam.Self, supervisorHandoff.OwnBuild);
-                throw new InvalidOperationException("successor-exited-after-transfer");
+                RequireSupervisorHandoff(false, new InvalidOperationException("successor-exited-after-transfer"));
             }
             RecordSupervisorEvent("supervisor-handoff", "completed", "SUPERVISOR_HANDOFF",
                 new { fromCommit = supervisorHandoff.OwnBuild.CommitSha,
@@ -137,14 +145,29 @@ internal sealed partial class ConductorContinuitySupervisor
                     toCommit = target.CommitSha, toRunDir = target.StagedBuildId,
                     successorPid = launchedPid, successorStartedAt = launchedIdentity.StartedAt,
                     childPid = activeChild?.Process.ProcessId,
-                    childStartedAt = activeChild?.Process.StartedAt });
+                    childStartedAt = activeChild?.Process.StartedAt,
+                    phase, leaseOwner = "successor" });
             _consecutiveSupervisorHandoffFailures = 0;
             return true;
         }
         catch (Exception ex)
         {
-            if (!seam.IsOwner(seam.Self))
-                throw new InvalidOperationException("Supervisor lease left incumbent during failed handoff.", ex);
+            var ownsSelf = SafelyCheck(() => seam.IsOwner(seam.Self));
+            if (!ownsSelf && launchedIdentity is not null &&
+                SafelyCheck(() => seam.IsOwner(launchedIdentity) && seam.IsAlive(launchedIdentity)))
+            {
+                RecordSupervisorEvent("supervisor-handoff", "completed", "SUPERVISOR_HANDOFF",
+                    new { fromCommit = supervisorHandoff.OwnBuild.CommitSha,
+                        fromRunDir = supervisorHandoff.OwnBuild.RunDirectory,
+                        toCommit = target.CommitSha, toRunDir = target.StagedBuildId,
+                        successorPid = launchedPid, successorStartedAt = launchedIdentity.StartedAt,
+                        childPid = activeChild?.Process.ProcessId, childStartedAt = activeChild?.Process.StartedAt,
+                        phase, leaseOwner = "successor", recoveredFrom = ex.GetType().Name });
+                _consecutiveSupervisorHandoffFailures = 0;
+                if (ex is OperationCanceledException && cancellationToken.IsCancellationRequested) throw;
+                return true;
+            }
+            var leaseOwner = ownsSelf ? "self" : "unknown";
             if (launchedIdentity is not null)
             {
                 try { seam.StopPending(launchedIdentity); }
@@ -153,7 +176,8 @@ internal sealed partial class ConductorContinuitySupervisor
                     RecordSupervisorEvent("supervisor-handoff", "failed", "SUPERVISOR_HANDOFF_FAILED",
                         new { reason = $"stop-pending-failed:{stopEx.Message}", launchedPid,
                             fromCommit = supervisorHandoff.OwnBuild.CommitSha,
-                            toCommit = target.CommitSha });
+                            toCommit = target.CommitSha, phase, exceptionType = ex.GetType().Name,
+                            message = ex.Message, hresult = ex.HResult, leaseOwner });
                 }
             }
             if (ex is OperationCanceledException && cancellationToken.IsCancellationRequested)
@@ -164,7 +188,9 @@ internal sealed partial class ConductorContinuitySupervisor
                     fromCommit = supervisorHandoff.OwnBuild.CommitSha,
                     fromRunDir = supervisorHandoff.OwnBuild.RunDirectory,
                     toCommit = target.CommitSha, toRunDir = target.StagedBuildId,
-                    consecutiveFailures = _consecutiveSupervisorHandoffFailures });
+                    consecutiveFailures = _consecutiveSupervisorHandoffFailures,
+                    phase, exceptionType = ex.GetType().Name, message = ex.Message,
+                    hresult = ex.HResult, leaseOwner });
             if (_consecutiveSupervisorHandoffFailures == 3)
                 RecordSupervisorEvent("supervisor-handoff", "escalated", "SUPERVISOR_HANDOFF_ESCALATED",
                     new { consecutiveFailures = _consecutiveSupervisorHandoffFailures,
@@ -172,6 +198,17 @@ internal sealed partial class ConductorContinuitySupervisor
                         toCommit = target.CommitSha });
             return false;
         }
+    }
+
+    private static void RequireSupervisorHandoff(bool condition, Exception error)
+    {
+        if (!condition) throw error;
+    }
+
+    private static bool SafelyCheck(Func<bool> check)
+    {
+        try { return check(); }
+        catch { return false; }
     }
 
     private void RecordSupervisorBuild(string reason)
