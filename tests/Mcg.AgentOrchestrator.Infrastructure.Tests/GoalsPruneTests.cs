@@ -67,6 +67,7 @@ public sealed class GoalsPruneTests : HostCapacityBoundTestBase
             Assert.Equal(1, applied.PrunedCount);
             Assert.Equal(GoalPruneDisposition.Pruned, applied.Items[0].Disposition);
             Assert.Equal(GoalStatus.Cancelled, goal.Status);
+            Assert.All(goal.Tasks, task => Assert.Equal(WorkTaskStatus.Cancelled, task.Status));
             Assert.False(BranchExists(repo, branch));
             Assert.False(Directory.Exists(ownedArtifacts));
             Assert.Equal("preserve this independent owner", File.ReadAllText(foreignMarker));

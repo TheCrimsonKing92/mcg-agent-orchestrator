@@ -55,7 +55,7 @@ internal static class GoalsPrunePlanner
                 continue;
             }
 
-            kernel.CancelGoal(item.GoalId, PruneReason);
+            StoppedGoalTaskClosure.CloseOpenTasks(kernel, kernel.CancelGoal(item.GoalId, PruneReason));
             GoalWorktrees.RemoveTerminal(executionDirectory, item.GoalId, kernel, cleanupHooks);
             applied.Add(item with { Disposition = GoalPruneDisposition.Pruned });
         }

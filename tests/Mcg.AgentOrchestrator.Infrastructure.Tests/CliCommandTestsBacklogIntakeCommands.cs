@@ -139,9 +139,9 @@ public sealed class CliCommandTestsBacklogIntakeCommands : CliCommandTestBase
             Links = [new BacklogLink("related-one", "related-two", BacklogLinkKind.Related, null, now)]
         };
 
-        Xunit.Assert.Equal("[Superseded→replacem]", CliCommandHandlers.RenderBacklogListTag(superseded));
-        Xunit.Assert.Equal("[Dup→canonica]", CliCommandHandlers.RenderBacklogListTag(duplicate));
-        Xunit.Assert.Equal(" [Related→related-]", CliCommandHandlers.RenderBacklogListSuffix(related));
+        Xunit.Assert.Equal("[Superseded→replacem]", BacklogTextView.RenderBacklogListTag(superseded));
+        Xunit.Assert.Equal("[Dup→canonica]", BacklogTextView.RenderBacklogListTag(duplicate));
+        Xunit.Assert.Equal(" [Related→related-]", BacklogTextView.RenderBacklogListSuffix(related));
     }
 
 
@@ -156,7 +156,7 @@ public sealed class CliCommandTestsBacklogIntakeCommands : CliCommandTestBase
             BacklogItemFor("Closed stale", status: BacklogItemStatus.Done, updatedAt: now.AddDays(-60))
         };
 
-        var output = CliCommandHandlers.RenderBacklogTriage(items, [], limit: 5, staleDays: 30, now);
+        var output = BacklogTextView.RenderBacklogTriage(items, [], limit: 5, staleDays: 30, now);
 
         Xunit.Assert.Contains("Stale open (>30d):", output);
         Xunit.Assert.Contains("Very stale open", output);

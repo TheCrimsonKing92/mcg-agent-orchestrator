@@ -82,6 +82,17 @@ public sealed class GoalOperatorDispositionSurface
                 $"terminal-goal-sweep {goal.Id.Value[..8]}", blockers, evidence, dispatches);
         }
 
+        if (goal.Status is not (GoalStatus.Completed or GoalStatus.Cancelled or GoalStatus.Superseded) &&
+            OwnerQuestionHoldBlocker.TryRead(goal) is { } hold)
+        {
+            blockers.Add(hold.State);
+            evidence.Add(new OperatorEvidencePointer("goal-hold", hold.Identity,
+                $"started={hold.StartedAt.ToString("O", System.Globalization.CultureInfo.InvariantCulture)}"));
+            return Build(goal, OperatorDispositionState.Blocked, OperatorDispositionConfidence.High,
+                $"{hold.State} hold excludes this goal from every conductor walk: {hold.Question}",
+                hold.NextAction, blockers, evidence, dispatches);
+        }
+
         if (TryFindCleanupDebt(goal, executionDirectory, operationallyTerminal, out var cleanupReason, out var cleanupEvidence))
         {
             blockers.Add("goal-worktree-cleanup-debt");

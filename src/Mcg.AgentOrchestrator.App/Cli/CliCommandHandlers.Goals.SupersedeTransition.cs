@@ -44,12 +44,12 @@ internal static partial class CliCommandHandlers
         var reason = ResolveTextArgument(textParts, inlineIndex: 2,
             CliCommandHelp.SupersedeGoalUsage["Usage: ".Length..], "--text-file");
         var liveDispatches = CollectLiveDispatches(goal);
-        _ = kernel.SupersedeGoal(goalId, reason, allowLiveDispatches: true);
+        var committedEvent = StoppedGoalTaskClosure.CloseOpenTasks(kernel, kernel.SupersedeGoal(goalId, reason, allowLiveDispatches: true));
         return new GoalLifecycleTransitionOutcome(
             liveDispatches.Length == 0
                 ? GoalLifecycleTransitionDisposition.Applied
                 : GoalLifecycleTransitionDisposition.AppliedWithLiveDispatches,
-            goalId, goal.Status, goal, goal.Timeline[^1], LiveDispatches: liveDispatches);
+            goalId, goal.Status, goal, committedEvent, LiveDispatches: liveDispatches);
     }
 
     internal static void RenderGoalSupersedeOutcome(

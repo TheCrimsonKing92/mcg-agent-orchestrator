@@ -91,7 +91,7 @@ internal static partial class CliPersistentStateRunner
                 var messages = new List<OrchestratorStateOutboxMessage>();
                 if (lifecycle is not null) messages.Add(lifecycle);
                 if (cleanup is not null) messages.Add(cleanup);
-                var updated = new GoalStateSnapshot(result.ShouldSave ? ExportGoalSnapshot(kernel, goalId) : state.Goal, []);
+                var updated = result.ShouldSave ? StoppedGoalTaskClosure.ExportStoppedGoalState(kernel, goalId, state) : new GoalStateSnapshot(state.Goal, []);
                 return Task.FromResult((result.ShouldSave, (GoalStateSnapshot?)updated,
                     (Outcome: result, Kernel: kernel, MessageId: lifecycle?.Id, CleanupId: cleanup?.Id),
                     (IReadOnlyList<OrchestratorStateOutboxMessage>)messages));

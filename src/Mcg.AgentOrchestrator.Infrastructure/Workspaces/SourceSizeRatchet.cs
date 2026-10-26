@@ -557,7 +557,7 @@ internal static class SourceSizeRatchet
             // Goal 6cf5a8ce routes the backlog-premise-check/close verbs to their separately owned command type.
             // Goal 568eb0fe reports the retained lifecycle outcome after committed unpark instead
             // of promising Active; this belongs with the existing command outcome rendering.
-            new SourceClassCeiling("CliCommandHandlers", 11965, 30),
+            new SourceClassCeiling("CliCommandHandlers", 11769, 30),
             // Goal ae77554f extracts bounded remote offer history parsing into RemoteLaneOfferHistoryReader.
             // Measured 9053 total lines across the existing 32 partial files; no extra headroom.
             // Goal 03580ad1 extracts source-mutation edits to AcceptanceSourceMutation; measured 8938 lines in 31 partials.
@@ -644,7 +644,7 @@ internal static class SourceSizeRatchet
             // the command owns intent submission. After integrating main, measured 5972 lines in the same 18 partials; no headroom.
             // Goal 9d55c9bf adds the same four-line dogfood-log list case in the owning route classifier;
             // keep classification centralized across the same 18 partial files. No additional headroom.
-            new SourceClassCeiling("CliPersistentStateRunner", 5901, 18),
+            new SourceClassCeiling("CliPersistentStateRunner", 5899, 18),
             // Goal 5935c270 extracts subscription-plan output into SubscriptionPlanTextView
             // (2026-10-09 console architecture review, finding 4, taming slice 13).
             // Goal c0ff6203 extracts six small text views (taming slice 14).

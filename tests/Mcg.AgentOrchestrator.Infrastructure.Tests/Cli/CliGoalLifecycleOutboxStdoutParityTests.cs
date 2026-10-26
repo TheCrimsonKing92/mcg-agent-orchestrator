@@ -6,12 +6,12 @@ using Mcg.AgentOrchestrator.Infrastructure;
 [Xunit.Collection(CliTestCollections.ConsoleSerialized)]
 public sealed class CliGoalLifecycleOutboxStdoutParityTests : CliGoalLifecycleOutboxTestSupport
 {
-    // Fixed-seed outputs transcribed from main 18438ee33's unchanged renderers and plan.
+    // Fixed-seed outputs include task closure during the supersede transition.
     // The missing-lease seed prints no paths, ids or timestamps beyond the pinned goal id.
     private const string MainUnparkOutput = "Goal unparked aaaaaaaa.\nStatus change: Parked -> Active\n";
     private const string MainSupersedeOutput =
         "\nGoal aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\nObjective: Lifecycle target\nStatus: Superseded\nTasks:\n" +
-        "  1. [Pending] Developer: Lifecycle task (unassigned)\n\n";
+        "  1. [Cancelled] Developer: Lifecycle task (unassigned)\n\n";
     private const string MainAbandonOutput =
         "Goal abandon aaaaaaaa Cancelled: Operator transition\n" +
         "Dry run: False\nCan apply: True\nSteps:\n" +
