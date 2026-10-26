@@ -14,10 +14,13 @@ internal static partial class LandingExecutor
             kernel.CloseRoleReportEvidence(goal.Id, candidateRevision,
                 RoleReportGateClassEvidence.For(orchestratorDirectory, goal.Id, candidateRevision));
         var obligations = GateTestObligationEvaluator.Evaluate(goal, orchestratorDirectory, candidateRevision,
-            new(workspace.ExecutionDirectory, workspace.IntegrationBranch));
+            new(workspace.ExecutionDirectory, workspace.IntegrationBranch), kernel.HumanInputRequests.ToArray());
         foreach (var result in obligations.Where(result => result.Outcome == GateTestObligationEvaluator.Outcome.Satisfied &&
             result.RenameProvenance.Length > 0))
             Console.WriteLine(result.RenameProvenance);
+        foreach (var result in obligations.Where(result => result.Outcome == GateTestObligationEvaluator.Outcome.Satisfied &&
+            result.AnswerRebindProvenance.Length > 0))
+            Console.WriteLine(result.AnswerRebindProvenance);
         var obligationLines = obligations
             .Where(result => result.Outcome is not (GateTestObligationEvaluator.Outcome.Satisfied or GateTestObligationEvaluator.Outcome.Waived))
             .Select(result =>
