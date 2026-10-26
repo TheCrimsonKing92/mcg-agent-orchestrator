@@ -141,11 +141,12 @@ internal sealed class WorkerBuildRequestHost : IWorkerBuildRequestService
                     if (!labeling.Succeeded)
                         throw new UnauthorizedAccessException($"Host compiler output LowIL preparation failed. {labeling.Diagnostic}");
                 }
+                var gcEnvironment = BuildGcEnvironment.ForStatePath(_reference.StatePath);
                 foreach (var project in scope.Projects)
                 {
                     CheckCurrent();
                     Advance(WorkerBuildPhase.PreparingLaunch);
-                    var info = BuildStartInfo(root, project, request.Configuration, slot.Environment.Arguments, tempRoot);
+                    var info = BuildStartInfo(root, project, request.Configuration, slot.Environment.Arguments, tempRoot, gcEnvironment);
                     terminalSafe = false;
                     child = OwnedProcessGroup.StartSuspendedContainedWithFileCapture(info,
                         Path.Combine(logRoot, $"{invocation.Children?.Count ?? 0}.out.log"),
@@ -280,7 +281,8 @@ internal sealed class WorkerBuildRequestHost : IWorkerBuildRequestService
     }
 
     internal static ProcessStartInfo BuildStartInfo(string root, string project, string configuration,
-        IReadOnlyList<string> isolatedArguments, string temporaryDirectory)
+        IReadOnlyList<string> isolatedArguments, string temporaryDirectory,
+        IReadOnlyDictionary<string, string>? gcEnvironment = null)
     {
         var executable = Environment.ProcessPath;
         if (executable is null || !Path.GetFileNameWithoutExtension(executable).Equals("dotnet", StringComparison.OrdinalIgnoreCase))
@@ -294,6 +296,7 @@ internal sealed class WorkerBuildRequestHost : IWorkerBuildRequestService
         info.Environment["DOTNET_CLI_USE_MSBUILD_SERVER"] = "0";
         info.Environment["MSBUILDDISABLENODEREUSE"] = "1";
         info.Environment["MCG_ORCHESTRATOR_REPOSITORY_ROOT"] = root;
+        if (gcEnvironment is not null) BuildGcEnvironment.Apply(info.Environment, gcEnvironment);
         foreach (var argument in new[] { "build", Path.Combine(root, project), "--nologo", "--configuration", configuration,
             "--verbosity", "minimal", "-maxcpucount:1", "-p:BuildInParallel=false", "-p:UseSharedCompilation=false", "-tl:off" }.Concat(AcceptanceCheckCommandBuilder.AnalyzersOffBuildProperties).Concat(isolatedArguments))
             info.ArgumentList.Add(argument);

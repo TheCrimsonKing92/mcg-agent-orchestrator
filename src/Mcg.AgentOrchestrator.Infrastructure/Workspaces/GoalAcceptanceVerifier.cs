@@ -3978,8 +3978,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         IReadOnlyList<string>? changedFiles,
         PolicyShardPlan policyShardPlan) =>
         AcceptanceDotnetBuildPhase.Create(worktreePath, checks, changedFiles, policyShardPlan,
-            path => _testOverrides.ResolveBaseBuildMainShaForTests?.Invoke(path) ??
-                ResolveGitScalar(path, "merge-base", "HEAD", IntegrationBranch));
+            path => EngineSettings.BaseBuildCacheEnabled ? _testOverrides.ResolveBaseBuildMainShaForTests?.Invoke(path) ??
+                ResolveGitScalar(path, "merge-base", "HEAD", IntegrationBranch) : null);
 
     internal static string? ResolveGitScalar(string worktreePath, params string[] arguments)
     {

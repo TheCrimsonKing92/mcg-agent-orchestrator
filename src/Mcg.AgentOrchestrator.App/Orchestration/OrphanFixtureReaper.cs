@@ -93,8 +93,7 @@ internal sealed class OrphanFixtureReaper(IOrphanFixtureReaperSources sources, T
                 try
                 {
                     var current = sources.ReadCurrent(process.ProcessId);
-                    refusal = RepoProcessCliCommand.EvaluateStopRevalidation(
-                        ToSnapshot(process), current is null ? null : ToSnapshot(current), []);
+                    refusal = ProcessStopRevalidation.Evaluate(process, current, []);
                     if (refusal is null && !sources.TryStopTree(process.ProcessId))
                         refusal = "stop-failed";
                 }
@@ -197,10 +196,6 @@ internal sealed class OrphanFixtureReaper(IOrphanFixtureReaperSources sources, T
         }
         return false;
     }
-
-    private static RepoProcessCliCommand.ProcessSnapshot ToSnapshot(ProcessInspectionRecord record) =>
-        new(record.ProcessId, record.ParentProcessId, record.Name, record.ExecutablePath,
-            record.StartedAt, record.CommandLine, record.Status);
 
     private static string Clean(string value) => value.Replace('\r', ' ').Replace('\n', ' ').Replace('"', '\'');
 

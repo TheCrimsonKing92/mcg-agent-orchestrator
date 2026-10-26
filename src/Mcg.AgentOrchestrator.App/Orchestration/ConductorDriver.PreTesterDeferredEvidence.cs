@@ -246,14 +246,14 @@ internal sealed partial class ConductorDriver
 
         var attributionBatch = new FindingEvidenceBatch(
             identity, request, new FindingEvidenceRequest(distinct), [], []);
-        var (outcome, candidate, failingTests) = PreTesterApparatusReceiptClassifier.ClassifyOutcome(evidence, completed, candidateSha, distinct,
+        var (outcome, candidate, failingTests, unusable) = PreTesterApparatusReceiptClassifier.ClassifyOutcome(evidence, completed, candidateSha, distinct,
             failures => EveryFailingTestIsInsideCandidateChanges(goal, attributionBatch, failures));
         if (outcome == "unusable" && attempt is not null)
             _focusedEvidenceAttemptCoordinator.RecordFocusedEvidenceRequestDispositions(attempt, requestContext.FindingRoundFingerprint, receiptId, []);
-        _recordFindingEvidenceRun(goal.Id, tester.Id, PreTesterFailureSignatureReader.AppendTo(
+        _recordFindingEvidenceRun(goal.Id, tester.Id, PreTesterUnusableReason.AppendTo(unusable, PreTesterFailureSignatureReader.AppendTo(
             PreTesterEvidenceIndexLines.FormatMarker(new PreTesterEvidenceEntry(
                 outcome, candidateSha!, receiptId, selectionNames, notRun,
-                attempt?.ResultPath, failingTests)), outcome, failingTests, candidate?.TestResultPaths));
+                attempt?.ResultPath, failingTests)), outcome, failingTests, candidate?.TestResultPaths)));
         if (PreTesterEvidenceRefreshRule.DecideAfterRun(refresh, receiptId, outcome) == PreTesterEvidenceRefreshDecision.EscalateRepeat)
         {
             result = Escalate(goal, goalPrefix, policy, fromState, PreTesterEvidenceRefreshRule.DescribeRepeat(candidateSha!, refresh!.SupersededReceiptId, receiptId));
