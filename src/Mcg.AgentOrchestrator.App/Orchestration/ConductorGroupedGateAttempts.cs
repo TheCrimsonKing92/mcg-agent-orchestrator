@@ -737,13 +737,11 @@ internal sealed class ConductorGroupedGateAttemptCoordinator
     {
         if (attempt.OwnerProcessId <= 0 || attempt.OwnerProcessStartedAt is null ||
             string.IsNullOrWhiteSpace(attempt.OwnerExecutablePath)) return false;
-        RepoProcessCliCommand.ProcessSnapshot? Snapshot()
+        ProcessInspectionRecord? Snapshot()
         {
             var current = ProcessCommandLines.Snapshot([attempt.OwnerProcessId]);
             return current.Records.TryGetValue(attempt.OwnerProcessId, out var process)
-                ? new RepoProcessCliCommand.ProcessSnapshot(process.ProcessId, process.ParentProcessId,
-                    process.Name, process.ExecutablePath, process.StartedAt,
-                    process.CommandLine, process.Status)
+                ? process
                 : null;
         }
         var recorded = Snapshot();
@@ -754,7 +752,7 @@ internal sealed class ConductorGroupedGateAttemptCoordinator
             ExecutablePath = attempt.OwnerExecutablePath
         };
         var current = Snapshot();
-        if (RepoProcessCliCommand.EvaluateStopRevalidation(
+        if (ProcessStopRevalidation.Evaluate(
                 expected, current, [OwnedProcessSubcommandName, attempt.MetadataPath]) is not null)
             return false;
         return WorkerProcessJobs.TryKillOrFallback(attempt.OwnerProcessId);
