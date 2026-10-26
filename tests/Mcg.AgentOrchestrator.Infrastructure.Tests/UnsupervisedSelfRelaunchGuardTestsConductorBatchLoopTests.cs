@@ -6,9 +6,9 @@ using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 [Xunit.Collection(TestCollections.DotnetBuildSlots)]
-public sealed class ConductorBatchLoopTestsUnsupervisedSelfRelaunchGuardTests : ConductorBatchLoopTests
+public sealed class UnsupervisedSelfRelaunchGuardTestsConductorBatchLoopTests : ConductorBatchLoopTests
 {
-    public ConductorBatchLoopTestsUnsupervisedSelfRelaunchGuardTests(ITestOutputHelper output) : base(output) { }
+    public UnsupervisedSelfRelaunchGuardTestsConductorBatchLoopTests(ITestOutputHelper output) : base(output) { }
 
     [Xunit.Theory]
     [Xunit.InlineData(false, false)]
