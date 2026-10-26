@@ -25,7 +25,8 @@ public sealed class WorkspaceProbeTimeoutRegateScenarioTests : ConductorBatchLoo
             var workerRetries = 0;
             var escalations = new List<string>();
             var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-                root, TrunkBranchName.Default, runInline: true, utcNow: () => now);
+                root, TrunkBranchName.Default, runInline: true, utcNow: () => now,
+                buildStorageRoot: new DotnetBuildStorageRoot(Path.Combine(root, "test-dotnet")));
             var driver = MakeDriver(
                 getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
                 runAcceptanceWithSlot: (_, _) =>
@@ -132,7 +133,8 @@ public sealed class WorkspaceProbeTimeoutRegateScenarioTests : ConductorBatchLoo
                 runAcceptanceWithSlot: (_, _) => { calls++; throw new InvalidOperationException(detail); },
                 getLandingFileScopes: _ => ["src/Probe.cs"], utcNow: () => now,
                 parallelAcceptanceAttemptCoordinator: new ConductorParallelAcceptanceAttemptCoordinator(
-                    root, TrunkBranchName.Default, runInline: true, utcNow: () => now));
+                    root, TrunkBranchName.Default, runInline: true, utcNow: () => now,
+                    buildStorageRoot: new DotnetBuildStorageRoot(Path.Combine(root, "test-dotnet"))));
             BatchLoopSummary Tick() => new ConductorBatchLoop().Run(kernel, driver,
                 ConductorAutonomyPolicy.Conservative, NoStopPath(), maxIterations: 1);
             var first = Tick();

@@ -61,7 +61,7 @@ public sealed class IsolatedDotnetRootFixture : IDisposable
         Environment.SetEnvironmentVariable(DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable, _root);
     }
 
-    private static string? GetWindowsBasePath()
+    internal static string? GetWindowsBasePath()
     {
         var localAppData = Environment.GetEnvironmentVariable("LOCALAPPDATA");
         return OperatingSystem.IsWindows() && !string.IsNullOrWhiteSpace(localAppData)
