@@ -33,6 +33,28 @@ internal static class LandedGoalBranchRetirement
             GoalOperationJournal.TryGetLatestLandingIntent(journal) is not { } intent)
             return null;
 
+        var finalized = mergeTrainStore.ReadFinalizedLandingsForGoal(goal.Id)
+            .Concat(cohortStore.ReadFinalizedLandingsForGoal(goal.Id))
+            .Where(landing => string.Equals(landing.LandingCommit, intent.MergeCommitSha, StringComparison.OrdinalIgnoreCase))
+            .OrderBy(landing => landing.ReceiptKind, StringComparer.Ordinal)
+            .ThenBy(landing => landing.ReceiptId, StringComparer.Ordinal)
+            .ToArray();
+        bool? isAncestor = null;
+        if (finalized.Length > 0)
+        {
+            isAncestor = AcceptanceCriterionEvidenceRecovery.IsAncestor(
+                executionDirectory, intent.MergeCommitSha, mainSha, gitRunner, ancestryCache);
+            if (!isAncestor.Value)
+                return null;
+            var landing = finalized.FirstOrDefault(item =>
+                string.Equals(item.CandidateRevision, branchTip, StringComparison.OrdinalIgnoreCase));
+            if (landing is not null)
+            {
+                proof = new Proof(landing.ReceiptKind, landing.ReceiptId, branchTip, intent.MergeCommitSha);
+                return branchTip;
+            }
+        }
+
         var train = mergeTrainStore.ReadPassedReceiptsForGoal(goal.Id)
             .OrderBy(receipt => receipt.ReceiptId, StringComparer.Ordinal)
             .FirstOrDefault(receipt => receipt.Identity.Members.Any(member =>
@@ -51,7 +73,7 @@ internal static class LandedGoalBranchRetirement
 
         if (proof is null)
             return null;
-        if (AcceptanceCriterionEvidenceRecovery.IsAncestor(
+        if (isAncestor ?? AcceptanceCriterionEvidenceRecovery.IsAncestor(
             executionDirectory, intent.MergeCommitSha, mainSha, gitRunner, ancestryCache))
             return branchTip;
 
