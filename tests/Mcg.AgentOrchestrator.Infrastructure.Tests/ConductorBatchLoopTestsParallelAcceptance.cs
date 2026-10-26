@@ -3326,10 +3326,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
             Assert.Equal(ConductorParallelAcceptanceAttemptDecisionKind.Started, decision.Kind);
             var initialAttempt = decision.Attempt;
             var externalProcess = Assert.Single(externalProcesses);
-            Assert.True(
-                externalProcess.WaitForExit(TestHangGuard.HangSafetyBound),
-                $"External acceptance PID {externalProcess.Id} did not exit within {TestHangGuard.HangSafetyBound.TotalSeconds:0} s. stdout={TryReadAllTextShared(initialAttempt.StdoutPath)} stderr={TryReadAllTextShared(initialAttempt.StderrPath)}");
-            externalProcess.WaitForExit();
+            OwnedAttemptExitWait.WaitForExit(externalProcess, initialAttempt);
             var completedAttempt = JsonSerializer.Deserialize<ConductorParallelAcceptanceAttempt>(
                 File.ReadAllText(initialAttempt.MetadataPath),
                 new JsonSerializerOptions(JsonSerializerDefaults.Web));
