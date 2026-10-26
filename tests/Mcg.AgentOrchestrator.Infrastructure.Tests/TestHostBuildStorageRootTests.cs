@@ -6,12 +6,12 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 // Serial collection: the two scenario facts temporarily change the process storage root.
 [Xunit.Collection(TestCollections.IsolatedDotnetRoot)]
-public sealed class TestHostBuildStorageRootTests : ConductorBatchLoopTests
+public sealed class CliCommandTestsTestHostBuildStorageRootTests : ConductorBatchLoopTests
 {
     private const string PreservationReceiptVariable = "MCG_TEST_BUILD_STORAGE_ROOT_RECEIPT";
     private const string RootVariable = DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable;
 
-    public TestHostBuildStorageRootTests(ITestOutputHelper output) : base(output) { }
+    public CliCommandTestsTestHostBuildStorageRootTests(ITestOutputHelper output) : base(output) { }
 
     [Fact]
     public void ModuleBaselineRootIsNotTheDefaultRoot()
@@ -111,9 +111,9 @@ public sealed class TestHostBuildStorageRootTests : ConductorBatchLoopTests
                 RedirectStandardError = true,
                 CreateNoWindow = true
             };
-            startInfo.ArgumentList.Add(typeof(TestHostBuildStorageRootTests).Assembly.Location);
+            startInfo.ArgumentList.Add(typeof(CliCommandTestsTestHostBuildStorageRootTests).Assembly.Location);
             startInfo.ArgumentList.Add("--filter-method");
-            startInfo.ArgumentList.Add($"*{nameof(TestHostBuildStorageRootTests)}.{nameof(InheritedNonDefaultRootIsKeptByAFreshProcess)}");
+            startInfo.ArgumentList.Add($"*{nameof(CliCommandTestsTestHostBuildStorageRootTests)}.{nameof(InheritedNonDefaultRootIsKeptByAFreshProcess)}");
             startInfo.ArgumentList.Add("--results-directory");
             startInfo.ArgumentList.Add(Path.Combine(root, "results"));
             startInfo.Environment[RootVariable] = configuredRoot;
