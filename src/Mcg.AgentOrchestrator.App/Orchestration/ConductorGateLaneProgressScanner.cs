@@ -6,6 +6,13 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 internal static class ConductorGateLaneProgressScanner
 {
     internal static DateTimeOffset? LatestProgress(string root, DateTimeOffset now, TimeSpan window)
+        => ReadProgress(root, now, window);
+
+    internal static DateTimeOffset? LatestProgress(string root, DateTimeOffset now, TimeSpan window,
+        IReadOnlyList<string> directories) => ReadProgress(root, now, window, directories);
+
+    private static DateTimeOffset? ReadProgress(string root, DateTimeOffset now, TimeSpan window,
+        IReadOnlyList<string>? directories = null)
     {
         DateTimeOffset? latest = null;
         if (!Directory.Exists(root)) return null;
@@ -13,8 +20,10 @@ internal static class ConductorGateLaneProgressScanner
         try
         {
             // FileInfo write times come from enumeration; only recent files need their bodies opened.
-            foreach (var file in new DirectoryInfo(root).EnumerateFiles("*.gate-heartbeat.json",
-                new EnumerationOptions { RecurseSubdirectories = true, MaxRecursionDepth = ConductorAttemptHeartbeatScanner.MaxHeartbeatRecursionDepth, IgnoreInaccessible = true, AttributesToSkip = 0 }))
+            var files = directories is null ? new DirectoryInfo(root).EnumerateFiles("*.gate-heartbeat.json",
+                new EnumerationOptions { RecurseSubdirectories = true, MaxRecursionDepth = ConductorAttemptHeartbeatScanner.MaxHeartbeatRecursionDepth, IgnoreInaccessible = true, AttributesToSkip = 0 }) :
+                ConductorAttemptDirectoryScope.HeartbeatFiles(root, directories, "*.gate-heartbeat.json");
+            foreach (var file in files)
             {
                 try
                 {
