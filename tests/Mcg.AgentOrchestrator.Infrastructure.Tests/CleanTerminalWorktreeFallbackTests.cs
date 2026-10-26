@@ -12,12 +12,16 @@ public sealed class CleanTerminalWorktreeFallbackTests : CliCommandTestBase
     public void UntrackedFile_RemoveFailureDefers() => Check("untracked", GoalStatus.Completed, false);
 
     [Fact]
+    public void UntrackedFile_HiddenByConfig_RemoveFailureDefers() =>
+        Check("untracked", GoalStatus.Completed, false, hideUntracked: true);
+
+    [Fact]
     public void ModifiedTrackedFile_RemoveFailureDefers() => Check("modified", GoalStatus.Completed, false);
 
     [Fact]
     public void CleanActiveWorktree_RemoveFailureDefers() => Check("clean", GoalStatus.Active, false);
 
-    private static void Check(string contents, GoalStatus status, bool complete)
+    private static void Check(string contents, GoalStatus status, bool complete, bool hideUntracked = false)
     {
         var root = CreateAcceptanceRepository();
         try
@@ -32,6 +36,12 @@ public sealed class CleanTerminalWorktreeFallbackTests : CliCommandTestBase
             var tip = RunGitOutput(path, "rev-parse", "HEAD").Trim();
             if (contents == "untracked") File.WriteAllText(Path.Combine(path, "real-change.txt"), "keep me");
             if (contents == "modified") File.WriteAllText(Path.Combine(path, "tracked.txt"), "modified");
+            if (hideUntracked)
+            {
+                RunGitOutput(path, "config", "--local", "status.showUntrackedFiles", "no");
+                Assert.Empty(RunGitOutput(path, "status", "--porcelain").Trim());
+                Assert.Contains("?? real-change.txt", RunGitOutput(path, "status", "--porcelain", "--untracked-files=all"));
+            }
             Assert.Contains(path.Replace('\\', '/'), RunGitOutput(root, "worktree", "list", "--porcelain").Replace('\\', '/'), StringComparison.OrdinalIgnoreCase);
             var attempts = 0;
             var hooks = CreateIsolatedCleanupContext(workspace, new GoalWorktreeCleanupHooks

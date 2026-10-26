@@ -10,7 +10,7 @@ internal static class CleanTerminalWorktreeFallback
         if (goal is null || !GoalWorktrees.IsTerminalCleanupStatus(goal.Status))
             return false;
 
-        var status = GitCli.Run(path, "status", "--porcelain");
+        var status = GitCli.Run(path, "status", "--porcelain", "--untracked-files=all");
         return status.ExitCode == 0 && string.IsNullOrWhiteSpace(status.Output);
     }
 }
