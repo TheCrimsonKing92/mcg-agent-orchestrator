@@ -22,6 +22,9 @@ public sealed class CleanTerminalWorktreeFallbackTests : CliCommandTestBase
         var root = CreateAcceptanceRepository();
         try
         {
+            var workspace = OrchestratorWorkspace.ForDirectory(root);
+            // Cleanup records deferrals in the migrated state store, as it does in a real workspace.
+            SeededStateDatabaseTemplate.CopyTo(workspace.SqliteStatePath);
             var kernel = new AgentOrchestratorKernel();
             var goalId = kernel.CreateGoal("Cleanup fallback", [new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer)]).Id;
             kernel = WithGoalStatus(kernel, goalId, status);
@@ -31,7 +34,7 @@ public sealed class CleanTerminalWorktreeFallbackTests : CliCommandTestBase
             if (contents == "modified") File.WriteAllText(Path.Combine(path, "tracked.txt"), "modified");
             Assert.Contains(path.Replace('\\', '/'), RunGitOutput(root, "worktree", "list", "--porcelain").Replace('\\', '/'), StringComparison.OrdinalIgnoreCase);
             var attempts = 0;
-            var hooks = CreateIsolatedCleanupContext(OrchestratorWorkspace.ForDirectory(root), new GoalWorktreeCleanupHooks
+            var hooks = CreateIsolatedCleanupContext(workspace, new GoalWorktreeCleanupHooks
             {
                 ResetSandboxAcl = (_, _) => { },
                 FindLockHoldersForCleanup = _ => [],
