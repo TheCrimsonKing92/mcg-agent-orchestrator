@@ -13,6 +13,7 @@ public static class OperatorCancelAwareDispatchRunner
             workspace.SqliteStatePath, workspace.ExecutionDirectory))
         {
             WorkerBuildInvocations = new WorkerBuildInvocationOperations(workspace.SqliteStatePath, workspace.ExecutionDirectory),
+            ExecutionThrottlingOptOut = () => DispatchJobExecutionQos.IsEnabled(workspace.SqliteStatePath),
             OperatorIntents = SqliteOperatorIntentStore.ForDirectories(
                 workspace.OrchestratorDirectory, workspace.LogDirectory)
         };

@@ -40,13 +40,13 @@ internal sealed class LandingAppBuildStore
         _lockContended = lockContended;
     }
 
-    internal static LandingAppBuildStore ForRepository(string repositoryRoot, string? dotnetPath = null)
+    internal static LandingAppBuildStore ForRepository(string repositoryRoot, string? dotnetPath = null, string? statePath = null)
     {
         var key = Convert.ToHexString(SHA256.HashData(
             Encoding.UTF8.GetBytes(Path.GetFullPath(repositoryRoot))))[..16];
         return new LandingAppBuildStore(
             Path.Combine(OrchestratorTempRoot.GetPurposeDirectory("landing-app-build"), key),
-            build: (request, ct) => ConductorSelfRelaunch.RunAppBuildProcess(dotnetPath ?? "dotnet", request, ct));
+            build: (request, ct) => ConductorSelfRelaunch.RunAppBuildProcess(dotnetPath ?? "dotnet", request, ct, statePath));
     }
 
     internal string GetOrBuild(string sourceRoot, string sha, TimeSpan timeout, CancellationToken cancellationToken = default)
