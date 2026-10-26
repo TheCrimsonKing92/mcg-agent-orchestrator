@@ -31,7 +31,7 @@ public sealed class MtpTimeoutPolicySeamContainmentTests
 
         foreach (var name in names)
         {
-            Xunit.Assert.False(GoalAcceptanceVerifier.IsHermeticVerificationEnvironmentVariable(name));
+            Xunit.Assert.False(AcceptanceHermeticEnvironment.IsHermeticVerificationEnvironmentVariable(name));
             var occurrence = source.IndexOf(name, StringComparison.Ordinal);
             Xunit.Assert.True(occurrence >= start && occurrence < end, $"{name} is missing from the policy helper.");
             while (occurrence >= 0)

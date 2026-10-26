@@ -1265,7 +1265,7 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
 
         var profileRoot = Path.Combine(Path.GetTempPath(), "mcg-hvp");
         var environment = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
-        GoalAcceptanceVerifier.ConfigureHermeticVerificationEnvironment(
+        AcceptanceHermeticEnvironment.ConfigureHermeticVerificationEnvironment(
             environment,
             Path.GetTempPath());
 
@@ -1333,7 +1333,7 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
         const string NestedAppData = @"C:\Temp\mcg-hvp\AppData\Roaming";
         const string NestedLocalAppData = @"C:\Temp\mcg-hvp\AppData\Local";
 
-        var (appData, localAppData) = GoalAcceptanceVerifier.ResolvePerUserFolders(
+        var (appData, localAppData) = AcceptanceHermeticEnvironment.ResolvePerUserFolders(
             appDataVariable: RealAppData,
             localAppDataVariable: RealLocalAppData,
             appDataKnownFolder: NestedAppData,
@@ -1353,7 +1353,7 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
         const string KnownAppData = @"C:\Users\real\AppData\Roaming";
         const string KnownLocalAppData = @"C:\Users\real\AppData\Local";
 
-        var (appData, localAppData) = GoalAcceptanceVerifier.ResolvePerUserFolders(
+        var (appData, localAppData) = AcceptanceHermeticEnvironment.ResolvePerUserFolders(
             appDataVariable: null,
             localAppDataVariable: "   ",
             appDataKnownFolder: KnownAppData,

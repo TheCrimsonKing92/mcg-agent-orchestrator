@@ -23,13 +23,13 @@ public sealed class HermeticVerificationEnvironmentTestsGoToolCache : GoalAccept
             ["GONOSUMDB"] = "example.com"
         };
 
-        GoalAcceptanceVerifier.ConfigureHermeticVerificationEnvironment(environment, Path.GetTempPath());
+        AcceptanceHermeticEnvironment.ConfigureHermeticVerificationEnvironment(environment, Path.GetTempPath());
 
         AssertProfileGoValues(environment);
         Assert.DoesNotContain("GOPROXY", environment.Keys);
         Assert.DoesNotContain("GONOSUMDB", environment.Keys);
         Assert.All(environment.Keys, name => Assert.True(
-            GoalAcceptanceVerifier.IsHermeticVerificationEnvironmentVariable(name),
+            AcceptanceHermeticEnvironment.IsHermeticVerificationEnvironmentVariable(name),
             $"Unexpected verification environment variable survived: {name}"));
     }
 
@@ -45,11 +45,11 @@ public sealed class HermeticVerificationEnvironmentTestsGoToolCache : GoalAccept
         try
         {
             var environment = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
-            GoalAcceptanceVerifier.ConfigureHermeticVerificationEnvironment(environment, Path.GetTempPath());
+            AcceptanceHermeticEnvironment.ConfigureHermeticVerificationEnvironment(environment, Path.GetTempPath());
             AssertProfileGoValues(environment);
             var originalGoValues = GoVariables.ToDictionary(name => name, name => environment[name]);
 
-            GoalAcceptanceVerifier.ConfigureHermeticVerificationEnvironment(environment, Path.GetTempPath());
+            AcceptanceHermeticEnvironment.ConfigureHermeticVerificationEnvironment(environment, Path.GetTempPath());
 
             Assert.All(GoVariables, name => Assert.Equal(originalGoValues[name], environment[name]));
             AssertPowerShellCache(environment);
@@ -58,7 +58,7 @@ public sealed class HermeticVerificationEnvironmentTestsGoToolCache : GoalAccept
                 var laneRoot = Path.Combine(buildEnvironmentRoot, lane);
                 var laneEnvironment = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
 
-                GoalAcceptanceVerifier.ConfigureHermeticVerificationEnvironment(
+                AcceptanceHermeticEnvironment.ConfigureHermeticVerificationEnvironment(
                     laneEnvironment, Path.GetTempPath(), laneRoot);
 
                 Assert.Equal(Path.Combine(laneRoot, "dotnet-cli-home"), laneEnvironment["DOTNET_CLI_HOME"]);
@@ -81,14 +81,14 @@ public sealed class HermeticVerificationEnvironmentTestsGoToolCache : GoalAccept
     {
         foreach (var name in GoVariables)
         {
-            Assert.True(GoalAcceptanceVerifier.IsHermeticVerificationEnvironmentVariable(name));
-            Assert.True(GoalAcceptanceVerifier.IsHermeticVerificationEnvironmentVariable(name.ToLowerInvariant()));
+            Assert.True(AcceptanceHermeticEnvironment.IsHermeticVerificationEnvironmentVariable(name));
+            Assert.True(AcceptanceHermeticEnvironment.IsHermeticVerificationEnvironmentVariable(name.ToLowerInvariant()));
             Assert.True(GoToolCacheEnvironment.IsVariable(name));
             Assert.True(GoToolCacheEnvironment.IsVariable(name.ToLowerInvariant()));
         }
         foreach (var name in new[] { "GOPROXY", "GONOSUMDB", "GOPRIVATE", "GOINSECURE", "GO", "GOCACHE_EXTRA" })
         {
-            Assert.False(GoalAcceptanceVerifier.IsHermeticVerificationEnvironmentVariable(name));
+            Assert.False(AcceptanceHermeticEnvironment.IsHermeticVerificationEnvironmentVariable(name));
             Assert.False(GoToolCacheEnvironment.IsVariable(name));
             Assert.False(GoToolCacheEnvironment.IsVariable(name.ToLowerInvariant()));
         }

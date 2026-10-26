@@ -827,7 +827,7 @@ internal sealed class ConductorGroupedGateAttemptCoordinator
             startInfo.ArgumentList.Add(commandLineArgs[0]);
         startInfo.ArgumentList.Add(OwnedProcessSubcommandName);
         startInfo.ArgumentList.Add(attempt.MetadataPath);
-        GoalAcceptanceVerifier.ConfigureHermeticVerificationEnvironment(startInfo.Environment, attempt.ExecutionDirectory);
+        AcceptanceHermeticEnvironment.ConfigureHermeticVerificationEnvironment(startInfo.Environment, attempt.ExecutionDirectory);
         BuildGcEnvironment.Apply(startInfo.Environment, BuildGcEnvironment.ForPolicyJson(attempt.PolicyJson));
         startInfo.Environment[DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable] =
             buildStorageRoot.RootPath;

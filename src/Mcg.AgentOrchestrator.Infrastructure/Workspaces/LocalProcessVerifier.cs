@@ -314,7 +314,7 @@ public sealed class LocalProcessVerifier
 
         // This path also produces a verdict (a TaskVerificationRecord), so it needs the same hermeticity
         // as the acceptance gate: a verification result must describe the code, not the launch context.
-        GoalAcceptanceVerifier.ConfigureHermeticVerificationEnvironment(startInfo.Environment, workingDirectory);
+        AcceptanceHermeticEnvironment.ConfigureHermeticVerificationEnvironment(startInfo.Environment, workingDirectory);
 
         using var process = WorkerProcessJobs.StartRegisteredOwnedRedirectedOrThrow(
             startInfo,
