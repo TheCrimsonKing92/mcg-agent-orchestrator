@@ -45,7 +45,7 @@ internal static class AcceptanceExecutionRunner
         CancellationToken cancellationToken,
         string integrationBranch,
         FindingEvidenceNegativeControl? negativeControl = null, IReadOnlyList<string>? revertPaths = null, FindingEvidenceMutation? mutation = null, IReadOnlyList<string>? declaredPaths = null,
-        string? projectHomeDirectory = null)
+        string? projectHomeDirectory = null, Action<AcceptanceGateProgress>? progressSink = null)
     {
         ArgumentNullException.ThrowIfNull(verifier);
         var executionOwner = AcceptanceExecutionOwners.CreateFocusedVerification(
@@ -53,7 +53,7 @@ internal static class AcceptanceExecutionRunner
             goalId,
             stableSlotIndex,
             cancellationToken,
-            new AcceptanceRunExecutionOptions(ProjectHomeDirectory: projectHomeDirectory, IntegrationBranch: integrationBranch));
+            new AcceptanceRunExecutionOptions(ProjectHomeDirectory: projectHomeDirectory, IntegrationBranch: integrationBranch, ProgressSink: progressSink));
         return AcceptanceExecutionOwnerLifetime.Run(
             executionOwner,
             () => (negativeControl is { } mode

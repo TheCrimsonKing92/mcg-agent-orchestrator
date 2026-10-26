@@ -166,9 +166,11 @@ internal sealed partial class ConductorDriver
             using var lease = driver.CohortPartitionStableSlotLeaseSource is { } source
                 ? source(identity.Value, cancellationToken)
                 : driver._parallelAcceptanceAttemptCoordinator.AcquireCohortStableSlotLease(identity.Value, cancellationToken);
+            using var occupancy = AttributionOccupancyHeartbeat.Start(member.GoalId.Value, lease.Environment.BuildPermitIndex, identity.Value, ordinal,
+                driver._cohortCleanupHooks.BuildStorageRoot ?? DotnetBuildEnvironmentManager.CaptureStorageRoot(), driver._utcNow);
             var result = AcceptanceExecutionRunner.RunFocusedVerification(verifier, partition.Path, member.GoalId,
                 selection.Request, lease.Environment.BuildPermitIndex, lease, runBaselineArm: false, cancellationToken,
-                integrationBranch: workspace.IntegrationBranch, projectHomeDirectory: workspace.ProjectHomeDirectoryOrNull);
+                integrationBranch: workspace.IntegrationBranch, projectHomeDirectory: workspace.ProjectHomeDirectoryOrNull, progressSink: occupancy.Observe);
             partition.AssertGoalBranchesUnchanged();
             return ConductorAcceptanceCohortFocusedAttribution.Interpret(result, selection) with
             {
