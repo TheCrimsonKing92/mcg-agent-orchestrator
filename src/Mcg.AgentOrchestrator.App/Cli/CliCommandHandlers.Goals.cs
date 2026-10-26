@@ -1778,7 +1778,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                         progressiveReviewGlances: ProgressiveReviewGlanceCoordinator.CreateDefault(context.Workspace, context.WorkerProfiles),
                         progressiveReviewSteering: ProgressiveReviewSteeringCoordinator.CreateDefault(context.Workspace, context.Agents, context.WorkerProfiles, context.Providers),
                         selfRelaunch: selfRelaunch is null ? null : delegateSelfRelaunchToSupervisor
-                                ? ConductorSelfRelaunch.CreateSupervisorDelegated()
+                                ? SupervisedSelfRelaunchGuard.ForWorkspace(context.Workspace)
                                 : selfRelaunch,
                         selfRelaunchEnabled: ConductorBatchLoop.ResolveSelfRelaunchEnabled(
                             Environment.GetEnvironmentVariable(ConductorBatchLoop.SelfRelaunchEnabledEnvironmentVariable),

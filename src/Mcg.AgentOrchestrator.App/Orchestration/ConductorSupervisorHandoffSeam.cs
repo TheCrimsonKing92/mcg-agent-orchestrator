@@ -70,9 +70,12 @@ internal sealed class SystemConductorSupervisorHandoffSeam : IConductorSuperviso
     private readonly string _leasePath;
     private readonly IConductLockPidProbe _probe = new ConductLockPidProbe();
     private readonly Dictionary<int, DateTimeOffset> _launched = [];
+    private readonly Action<int>? _leaseRetryDelay;
+    internal const int LeaseOpenAttempts = 40;
 
-    internal SystemConductorSupervisorHandoffSeam(string directory)
+    internal SystemConductorSupervisorHandoffSeam(string directory, Action<int>? leaseRetryDelay = null)
     {
+        _leaseRetryDelay = leaseRetryDelay;
         _directory = directory;
         _leasePath = Path.Combine(directory, "conduct-supervisor.lock");
         IncomingRecordPath = Environment.GetEnvironmentVariable(InboundEnvironmentVariable);
@@ -221,7 +224,25 @@ internal sealed class SystemConductorSupervisorHandoffSeam : IConductorSuperviso
         ConductorLoopHandoff.StopFailedSuccessor(identity);
     }
 
-    private FileStream OpenLease() => new(_leasePath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+    private FileStream OpenLease()
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            try { return new FileStream(_leasePath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None); }
+            catch (IOException ex) when (attempt < LeaseOpenAttempts && IsLeaseContention(ex))
+            {
+                DelayLeaseRetry(attempt, _leaseRetryDelay);
+            }
+        }
+    }
+
+    internal static bool IsLeaseContention(IOException error) => (error.HResult & 0xFFFF) is 32 or 33;
+
+    internal static void DelayLeaseRetry(int attempt, Action<int>? delay)
+    {
+        if (delay is not null) delay(attempt);
+        else Thread.Sleep(25);
+    }
 
     private static LeaseOwner? ReadLease(FileStream stream)
     {

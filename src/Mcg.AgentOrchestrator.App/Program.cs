@@ -344,7 +344,10 @@ if (ConductorContinuitySupervisor.ShouldSupervise(
                 supervisorSeam,
                 SystemConductorSupervisorHandoffSeam.ReadOwnBuild(),
                 TimeSpan.FromMinutes(2),
-                TimeSpan.FromMilliseconds(250)));
+                TimeSpan.FromMilliseconds(250)),
+            raiseEscalationAttention: (title, body, key) =>
+                CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory)
+                    .RaiseAsync(CollaborationItemType.Decision, null, title, body, key).GetAwaiter().GetResult());
         return await supervisor.RunAsync(
             startupArgs.Concat(new[] { "--repository-root", workspace.RootDirectory,
                 "--expected-state-directory", workspace.OrchestratorDirectory })

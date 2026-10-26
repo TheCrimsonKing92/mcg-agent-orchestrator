@@ -408,6 +408,7 @@ internal sealed class CompletionBuildEvidenceCoordinator : ICompletionBuildEvide
         };
         info.ArgumentList.Add(typeof(CompletionBuildEvidenceCoordinator).Assembly.Location);
         info.Environment[DotnetBuildStorageLayout.IsolatedRootOverrideVariable] = _storageRoot.RootPath;
+        BuildGcEnvironment.Apply(info.Environment, BuildGcEnvironment.ForStatePath(_statePath));
         foreach (var argument in new[] { Subcommand, _statePath, operation.GoalId, operation.TaskId, operation.Id })
             info.ArgumentList.Add(argument);
         try
