@@ -976,10 +976,11 @@ internal static partial class CliPersistentStateRunner
             tickBaselines = startupKernel.ExportSnapshot().Goals.ToDictionary(goal => goal.Id, StringComparer.Ordinal);
             try
             {
+                var openWorkGoalIds = new Lazy<IReadOnlyList<GoalId>>(() => TerminalOpenWorkCandidates.Read(stateRepository, Console.WriteLine));
                 var watchGoalId = ResolveConductWatchGoalId(args, startupKernel, currentGoalAtStartup, stateRepository);
                 var heartbeat = ConductorStartupHeartbeat.Shipped;
                 var sweepKernel = heartbeat.Run(ConductorStartupHeartbeat.Phases.SweepKernelLoad, () => LoadConductLoopSweepKernel(
-                    stateRepository, startupKernel, workspace.ExecutionDirectory, workspace.IntegrationBranch, watchGoalId, cleanupContext.Hooks));
+                    stateRepository, startupKernel, workspace.ExecutionDirectory, workspace.IntegrationBranch, watchGoalId, cleanupContext.Hooks, openWorkGoalIds));
                 var sweepTimelineBaseline = TerminalGoalSweepLifecycleEvents.Capture(sweepKernel);
                 var sweepCheckpoint = new CliOwnedGoalCheckpoint(stateRepository, sweepKernel);
                 var sweep = heartbeat.Run(ConductorStartupHeartbeat.Phases.TerminalSweep, () => TerminalGoalSweep.Run(
@@ -989,7 +990,7 @@ internal static partial class CliPersistentStateRunner
                     cleanupHooks: cleanupContext.Hooks,
                     orchestratorDirectory: workspace.OrchestratorDirectory, reclaimGoalRoots: true));
                 var metadataOnlyExcludedGoalCount = heartbeat.Run(ConductorStartupHeartbeat.Phases.MetadataExclusionCount, () => CountMetadataOnlyTerminalSweepExclusions(
-                    stateRepository, workspace.ExecutionDirectory, workspace.IntegrationBranch, watchGoalId, cleanupContext.Hooks));
+                    stateRepository, workspace.ExecutionDirectory, workspace.IntegrationBranch, watchGoalId, cleanupContext.Hooks, openWorkGoalIds));
                 if (metadataOnlyExcludedGoalCount > 0)
                 {
                     sweep = sweep with { ExcludedGoalCount = sweep.ExcludedGoalCount + metadataOnlyExcludedGoalCount };
@@ -1005,7 +1006,6 @@ internal static partial class CliPersistentStateRunner
                     startupKernel = LoadLoopKernel();
                     tickBaselines = startupKernel.ExportSnapshot().Goals.ToDictionary(goal => goal.Id, StringComparer.Ordinal);
                 });
-
                 heartbeat.Run(ConductorStartupHeartbeat.Phases.OrphanWorktreeSweep, () => cleanupContext.Scheduler.SweepIfDue(workspace.ExecutionDirectory, sweepKernel));
                 heartbeat.Run(ConductorStartupHeartbeat.Phases.RemoteMirrorStart, () => RemoteGitMirror.TryStartBackgroundProcessing(sweepKernel, workspace.ExecutionDirectory, watchGoalId, workspace.IntegrationBranch));
             }
@@ -1587,9 +1587,9 @@ internal static partial class CliPersistentStateRunner
         AgentOrchestratorKernel workingSetKernel,
         string executionDirectory, string integrationBranch,
         GoalId? onlyGoalId,
-        GoalWorktreeCleanupHooks cleanupHooks)
+        GoalWorktreeCleanupHooks cleanupHooks, Lazy<IReadOnlyList<GoalId>> openWorkGoalIds)
     {
-        var candidates = ResolveTerminalSweepCandidateIds(stateRepository, executionDirectory, integrationBranch, onlyGoalId, cleanupHooks)
+        var candidates = ResolveTerminalSweepCandidateIds(stateRepository, executionDirectory, integrationBranch, onlyGoalId, cleanupHooks, openWorkGoalIds)
             .Where(id => workingSetKernel.Goals.FirstOrDefault(goal => goal.Id == id) is not { IsMetadataOnly: false })
             .ToArray();
         if (candidates.Length == 0)
@@ -1605,7 +1605,7 @@ internal static partial class CliPersistentStateRunner
         ITransactionalOrchestratorStateRepository stateRepository,
         string executionDirectory, string integrationBranch,
         GoalId? onlyGoalId,
-        GoalWorktreeCleanupHooks cleanupHooks)
+        GoalWorktreeCleanupHooks cleanupHooks, Lazy<IReadOnlyList<GoalId>> openWorkGoalIds)
     {
         if (onlyGoalId is not null)
         {
@@ -1614,7 +1614,7 @@ internal static partial class CliPersistentStateRunner
 
         var summaries = stateRepository.ListConductLoopGoalMetadataAsync().GetAwaiter().GetResult();
         return ResolveTerminalSweepCandidateIds(summaries, executionDirectory, integrationBranch, onlyGoalId, cleanupHooks)
-            .Concat(stateRepository.ListTerminalGoalIdsWithNonTerminalTasksAsync().GetAwaiter().GetResult())
+            .Concat(openWorkGoalIds.Value)
             .Distinct().ToArray();
     }
 
@@ -1646,7 +1646,7 @@ internal static partial class CliPersistentStateRunner
         ITransactionalOrchestratorStateRepository stateRepository,
         string executionDirectory, string integrationBranch,
         GoalId? onlyGoalId,
-        GoalWorktreeCleanupHooks cleanupHooks)
+        GoalWorktreeCleanupHooks cleanupHooks, Lazy<IReadOnlyList<GoalId>> openWorkGoalIds)
     {
         if (onlyGoalId is not null)
         {
@@ -1655,7 +1655,7 @@ internal static partial class CliPersistentStateRunner
 
         var summaries = stateRepository.ListConductLoopGoalMetadataAsync().GetAwaiter().GetResult();
         var hydratedSweepCandidateIds = ResolveTerminalSweepCandidateIds(summaries, executionDirectory, integrationBranch, onlyGoalId, cleanupHooks)
-            .Concat(stateRepository.ListTerminalGoalIdsWithNonTerminalTasksAsync().GetAwaiter().GetResult())
+            .Concat(openWorkGoalIds.Value)
             .Select(id => id.Value)
             .ToHashSet(StringComparer.Ordinal);
         return summaries

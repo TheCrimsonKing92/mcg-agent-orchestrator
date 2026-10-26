@@ -65,6 +65,7 @@ internal static class ConductorStatusSnapshotReader
                     status is not (GoalStatus.Completed or GoalStatus.Cancelled or GoalStatus.Superseded))
                 .Select(item => new GoalId(item.Id)).ToArray();
             var kernel = repository.LoadGoalsAsync(ids).GetAwaiter().GetResult();
+            var raised = ConductorStatusClarificationReader.Read(workspace, kernel);
             var goals = kernel.Goals.Where(goal => !goal.IsTerminal).OrderBy(goal => goal.Id.Value).ToArray();
             providerHolds = ProviderUsageHoldReader.Read(repository, kernel.Goals.Where(goal =>
                 !goal.IsTerminal || goal.Status == GoalStatus.Failed).ToArray(), now ?? DateTimeOffset.UtcNow);
@@ -74,11 +75,14 @@ internal static class ConductorStatusSnapshotReader
                     WorkTaskStatus.Running or WorkTaskStatus.Assigned or WorkTaskStatus.WaitingForHuman)
                     ?? goal.Tasks.FirstOrDefault(item => item.Status == WorkTaskStatus.Pending);
                 return new ConductorStatusSnapshot.GoalObservation(goal.Id.Value, goal.Status.ToString(),
-                    task?.RequiredRole.ToString() ?? "none", goal.LandingBlocker);
+                    task?.RequiredRole.ToString() ?? "none", goal.LandingBlocker,
+                    raised.ByGoal.GetValueOrDefault(goal.Id.Value));
             }).ToArray();
             var pending = goals.SelectMany(goal => kernel.GetPendingHumanInput(goal.Id)).ToArray();
             var clarifications = pending.Count(item => HumanWaitPolicyDefaults.IsSpecClarificationClass(item.Kind));
-            goalSnapshot = new(true, observations, clarifications, pending.Length - clarifications);
+            goalSnapshot = new(true, observations,
+                raised.Readable ? clarifications + raised.ByGoal.Values.Sum(items => items.Count) : null,
+                pending.Length - clarifications);
         }
         var landing = ReadLatestLanding(workspace.GoalLifecycleEventsDirectory);
         return new(owner, since, buildCommit, generation, tick, goalSnapshot,

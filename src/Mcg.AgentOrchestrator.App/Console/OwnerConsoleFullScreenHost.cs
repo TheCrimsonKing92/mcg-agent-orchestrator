@@ -54,6 +54,8 @@ internal static class OwnerConsoleFullScreenHost
         Task streamRefresh = Task.CompletedTask;
         OwnerConsoleRefreshCoalescer? coalescer = null;
         var timings = new OwnerConsoleRefreshTimings(clock);
+        var timingsFile = new OwnerConsoleRefreshTimingsFile(
+            Path.Combine(workspace.LogDirectory, "owner-console-refresh-timings.txt"), clock, Environment.ProcessId);
         void Post(string phase, Action action) => app.Invoke(diagnostics?.ObservePost(phase, action) ?? action);
         try
         {
@@ -138,6 +140,7 @@ internal static class OwnerConsoleFullScreenHost
                 {
                     rebuild.Release();
                     diagnostics?.Mark("refresh-loaders", detail: timings.Detail());
+                    timingsFile.Write(timings.Detail());
                 }
             }
 

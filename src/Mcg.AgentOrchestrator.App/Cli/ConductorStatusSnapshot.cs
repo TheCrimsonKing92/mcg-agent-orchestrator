@@ -22,7 +22,8 @@ internal sealed record ConductorStatusSnapshot(
     internal sealed record SinceObservation(string Kind, DateTimeOffset? At, string? Reason,
         SinceObservation? Previous = null);
     internal sealed record GenerationObservation(string State, string? Build, string? Main);
-    internal sealed record GoalObservation(string Id, string Status, string Role, GoalLandingBlocker? LandingBlocker = null);
+    internal sealed record GoalObservation(string Id, string Status, string Role, GoalLandingBlocker? LandingBlocker = null,
+        IReadOnlyList<ConductorStatusClarification>? Clarifications = null);
     internal sealed record GoalsObservation(bool Available, IReadOnlyList<GoalObservation>? NonTerminal,
         int? PendingClarifications, int? HumanWaits);
     internal sealed record LandingObservation(string Goal, DateTimeOffset At);

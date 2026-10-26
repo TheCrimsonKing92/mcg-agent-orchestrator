@@ -386,7 +386,7 @@ internal sealed partial class ConductorDriver
                 goal, requestingTask, candidateSha, batch.Findings, [receiptId],
                 "The candidate re-run was GREEN after baseline execution failed.");
 
-    private static FailedGoalFindingObservation BuildBaselineExecutionFailureEscalation(
+    internal static FailedGoalFindingObservation BuildBaselineExecutionFailureEscalation(
         string candidateSha, FindingEvidenceBatch batch, string receiptId) =>
         FailedGoalFindingObservation.Observed(
             FailedGoalFindingObservationKind.FindingOperatorEvidenceRequired,
@@ -430,48 +430,6 @@ internal sealed partial class ConductorDriver
         return "finding-request-" + Convert.ToHexString(
             System.Security.Cryptography.SHA256.HashData(
                 System.Text.Encoding.UTF8.GetBytes(string.Join("\u001d", values)))).ToLowerInvariant()[..16];
-    }
-
-    internal static bool TryBuildUnattributableRedEscalation(
-        string candidateSha,
-        IReadOnlyList<FindingEvidenceArmReceipt> arms,
-        FindingEvidenceBatch batch,
-        string receiptId,
-        out FailedGoalFindingObservation decision)
-    {
-        decision = FailedGoalFindingObservation.None;
-        var candidate = arms.SingleOrDefault(arm => arm.Arm == FindingEvidenceArm.Candidate);
-        if (candidate is not { Accepted: true, Disposition: FindingEvidenceArmDisposition.Red } ||
-            !string.Equals(candidate.Sha, candidateSha, StringComparison.OrdinalIgnoreCase))
-        {
-            return false;
-        }
-
-        var findingIds = string.Join(',', batch.Findings.Select(finding => finding.StableId));
-        if (candidate.FailingTestIdentities is not { Count: > 0 })
-        {
-            decision = FailedGoalFindingObservation.Observed(
-                FailedGoalFindingObservationKind.FindingOperatorEvidenceRequired,
-                $"Candidate RED receipt {receiptId} at candidate {candidateSha} for finding(s) {findingIds} carried no failing test identities. No worker was dispatched.");
-            return true;
-        }
-
-        var baseline = arms.SingleOrDefault(arm => arm.Arm == FindingEvidenceArm.Baseline);
-        if (baseline?.Disposition == FindingEvidenceArmDisposition.Red)
-        {
-            decision = FailedGoalFindingObservation.Observed(
-                FailedGoalFindingObservationKind.FindingOperatorEvidenceRequired,
-                $"Candidate RED receipt {receiptId} at candidate {candidateSha} for finding(s) {findingIds} is inherited from a RED Baseline arm. No worker was dispatched.");
-            return true;
-        }
-        if (baseline?.Disposition is
-                FindingEvidenceArmDisposition.ApparatusFailure or FindingEvidenceArmDisposition.Inconclusive)
-        {
-            decision = BuildBaselineExecutionFailureEscalation(candidateSha, batch, receiptId);
-            return true;
-        }
-
-        return false;
     }
 
     internal static FailedGoalFindingObservation BuildCappedFindingEvidenceDeliveryRetry(
@@ -606,7 +564,7 @@ internal sealed partial class ConductorDriver
                 goal, requestingTask, candidateSha, routedReceiptId, attribution);
             return true;
         }
-        if (TryBuildUnattributableRedEscalation(
+        if (CandidateRedBaselineInheritance.TryBuildUnattributableRedEscalation(
                 candidateSha, arms, batch, routedReceiptId, out decision))
         {
             return true;
@@ -641,7 +599,7 @@ internal sealed partial class ConductorDriver
                 BuildFailedGoalAttemptIdentity(developer),
                 AppendActionableCandidateRedFailureDetail(
                     FormatActionableCandidateRedMessage(candidateSha, receiptId, findingIds,
-                        attribution.FailingTestIdentities, additionalDetail),
+                        attribution.FailingTestIdentities, additionalDetail, attribution.BaselineFailingTestIdentities),
                     receiptId, attribution.FailingTestIdentities, attribution.CandidateTestResultPaths),
                 null);
     }
@@ -655,9 +613,12 @@ internal sealed partial class ConductorDriver
         string receiptId,
         string findingIds,
         IReadOnlyList<string> failingTestIdentities,
-        string? additionalDetail = null) =>
+        string? additionalDetail = null,
+        IReadOnlyList<string>? baselineFailingTestIdentities = null) =>
         $"ACTIONABLE_CANDIDATE_RED candidate_sha={candidateSha}; receipt_id={receiptId}; finding_ids={findingIds}; " +
-        $"failing_tests={string.Join(',', failingTestIdentities)}. {additionalDetail} Repair the Developer-owned source/test anchor before any remaining focused evidence or downstream verification runs.";
+        $"failing_tests={string.Join(',', failingTestIdentities)}" +
+        (baselineFailingTestIdentities is null ? "" : $"; baseline_failures={CandidateRedBaselineInheritance.FormatIdentities(baselineFailingTestIdentities)}") +
+        $". {additionalDetail} Repair the Developer-owned source/test anchor before any remaining focused evidence or downstream verification runs.";
 
     private bool EveryFailingTestIsInsideCandidateChanges(
         Goal goal,
