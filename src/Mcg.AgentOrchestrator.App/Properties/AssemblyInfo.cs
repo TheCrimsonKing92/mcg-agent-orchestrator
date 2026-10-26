@@ -1,6 +1,7 @@
 using System.Runtime.CompilerServices;
 
 [assembly: InternalsVisibleTo("Mcg.AgentOrchestrator.Infrastructure.Tests")]
+[assembly: InternalsVisibleTo("Mcg.AgentOrchestrator.Infrastructure.OwnerConsole.Tests")]
 [assembly: InternalsVisibleTo("Mcg.AgentOrchestrator.Infrastructure.StorageRetention.Tests")]
 [assembly: InternalsVisibleTo("Mcg.AgentOrchestrator.Infrastructure.Acceptance.Tests")]
 [assembly: InternalsVisibleTo("Mcg.AgentOrchestrator.TestSupport")]
