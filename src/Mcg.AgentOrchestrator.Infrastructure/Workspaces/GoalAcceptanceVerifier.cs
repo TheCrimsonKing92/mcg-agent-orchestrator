@@ -1276,11 +1276,11 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         bool continueAfterFailure,
         IAcceptanceRunExecutionContext? executionOwner)
     {
-        var dotnetTestBuildPhase = CreateDotnetTestBuildPhase(
+        var dotnetTestBuildPhase = AcceptanceDotnetBuildPhase.WithoutAnalyzers(CreateDotnetTestBuildPhase(
             worktreePath,
             focusedChecks,
             changedFiles: null,
-            PolicyShardPlan.NotApplicable("focused evidence"));
+            PolicyShardPlan.NotApplicable("focused evidence")));
         dotnetTestBuildPhase.BuildEnvironment = executionEnvironment;
         var shardCoreBudget =
             _testOverrides.ResolveShardCoreBudgetForTests?.Invoke() ?? Math.Max(1, Environment.ProcessorCount / 2);

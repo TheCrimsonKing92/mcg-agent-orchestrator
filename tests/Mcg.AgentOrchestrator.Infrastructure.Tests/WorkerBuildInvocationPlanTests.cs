@@ -48,6 +48,17 @@ public sealed class WorkerBuildInvocationPlanTests
         });
     }
 
+    [Xunit.Fact]
+    public void DirectAndTraversalPlans_DisableAnalyzers()
+    {
+        foreach (var single in new[] { true, false })
+            WithPlan(single, maxCpuCount: null, (plan, _, _) =>
+            {
+                foreach (var property in AcceptanceCheckCommandBuilder.AnalyzersOffBuildProperties)
+                    Assert.Contains(property, Invocation(plan));
+            });
+    }
+
     private static string[] Invocation(JsonElement plan)
     {
         var invocations = plan.GetProperty("Invocations").EnumerateArray().ToArray();

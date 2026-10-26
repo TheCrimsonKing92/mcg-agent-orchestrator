@@ -121,6 +121,7 @@ public sealed class AcceptanceGateEngineSettingsTests
                 "GoalAcceptanceVerifierCancellationTests",
                 "GoalAcceptanceVerifierTests",
                 "GoalAcceptanceVerifierDotnetBuildSlotTests",
+                "GoalAcceptanceVerifierDotnetBuildSlotTestsAnalyzerAuthority",
                 "HermeticVerificationEnvironmentTests",
                 "PreReviewFocusedEvidenceVerifierTests",
                 "RealProcessShardAlphaSmokeTests",
