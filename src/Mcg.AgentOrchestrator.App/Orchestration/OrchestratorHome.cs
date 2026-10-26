@@ -101,7 +101,7 @@ internal sealed class OrchestratorHome
             DotnetPath: dotnetPath ?? "dotnet",
             PowerShellPath: "powershell")
         {
-            LandingAppBuildStore = LandingAppBuildStore.ForRepository(repositoryRoot, dotnetPath),
+            LandingAppBuildStore = LandingAppBuildStore.ForRepository(repositoryRoot, dotnetPath, workspace.SqliteStatePath),
             RequiredCheckoutBranch = workspace.IntegrationBranch
         };
     }

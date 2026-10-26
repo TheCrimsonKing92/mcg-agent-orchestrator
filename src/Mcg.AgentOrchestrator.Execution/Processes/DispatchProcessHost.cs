@@ -91,7 +91,8 @@ public static class DispatchProcessHost
         ClaudeCredentialSourceSelection? ClaudeCredentialSelection = null,
         TaskIntentAdmissionReference? TaskIntentAdmission = null,
         string? StartGatePath = null,
-        WorkerBuildHostReference? WorkerBuildHost = null);
+        WorkerBuildHostReference? WorkerBuildHost = null,
+        bool OptOutExecutionThrottling = false);
 
     public sealed record DispatchChildExitRecord(
         int ProcessId,
@@ -1367,7 +1368,8 @@ public static void DropToLow() {
 
     /// <summary>Entry point for the detached <c>__dispatch-run &lt;paramsPath&gt;</c> subcommand.</summary>
     public static int Run(string parametersPath,
-        Func<WorkerBuildHostReference, IWorkerBuildRequestService>? buildService = null)
+        Func<WorkerBuildHostReference, IWorkerBuildRequestService>? buildService = null,
+        Func<int, Func<int, IReadOnlyList<int>?>, IDisposable?>? startJobQos = null)
     {
         DispatchRunParameters parameters;
         try
@@ -1379,7 +1381,7 @@ public static void DropToLow() {
             return 1;
         }
 
-        return RunCore(parameters, null, buildService);
+        return RunCore(parameters, null, buildService, startJobQos);
     }
 
     internal sealed class HeartbeatTestHooks
@@ -1394,11 +1396,13 @@ public static void DropToLow() {
         internal Func<Process, SpawnProcessIdentityReadResult>? ReadTaskIntentLaunchIdentity { get; init; }
     }
 
-    internal static int RunWithHeartbeatHooksForTests(DispatchRunParameters parameters, HeartbeatTestHooks hooks) =>
-        RunCore(parameters, hooks);
+    internal static int RunWithHeartbeatHooksForTests(DispatchRunParameters parameters, HeartbeatTestHooks hooks,
+        Func<int, Func<int, IReadOnlyList<int>?>, IDisposable?>? startJobQos = null) =>
+        RunCore(parameters, hooks, startJobQos: startJobQos);
 
     private static int RunCore(DispatchRunParameters parameters, HeartbeatTestHooks? heartbeatHooks,
-        Func<WorkerBuildHostReference, IWorkerBuildRequestService>? buildService = null)
+        Func<WorkerBuildHostReference, IWorkerBuildRequestService>? buildService = null,
+        Func<int, Func<int, IReadOnlyList<int>?>, IDisposable?>? startJobQos = null)
     {
         var startedAt = DateTimeOffset.UtcNow;
         var lastProgressAt = startedAt;
@@ -1413,6 +1417,13 @@ public static void DropToLow() {
         var prepExitWritten = false;
         Process? worker = null;
         OwnedProcessGroup? workerGroup = null;
+        IDisposable? jobQos = null;
+        void StopJobQos()
+        {
+            var sweep = jobQos;
+            jobQos = null;
+            try { sweep?.Dispose(); } catch (Exception) { }
+        }
         WorkerBuildRequestChannel? buildChannel = null;
         Process? selectedChild = null;
         var selectedChildLock = new object();
@@ -1877,6 +1888,12 @@ public static void DropToLow() {
                 }, heartbeatHooks?.ReadTaskIntentLaunchIdentity)
                 : ProcessTreeGuiSuppression.Start(startInfo);
             workerGroup ??= OwnedProcessGroup.Attach(worker);
+            if (parameters.OptOutExecutionThrottling && startJobQos is not null)
+            {
+                var group = workerGroup;
+                try { jobQos = startJobQos(worker.Id, _ => group.TryGetActiveProcessIds(out var ids) ? ids : null); }
+                catch (Exception) { } // QoS must not change dispatch results.
+            }
             buildChannel?.Register(worker, workerGroup);
             heartbeatHooks?.AfterTaskIntentAdmission?.Invoke(worker);
 
@@ -1916,6 +1933,7 @@ public static void DropToLow() {
                     : $"stalled {idleFor.TotalMinutes:0} min with no output (idle cap {maxIdle.TotalMinutes:0} min)";
                 try { File.AppendAllText(parameters.StderrPath, $"\n[dispatch-host] terminating worker tree: {reason}.\n"); }
                 catch { /* diagnostics are best-effort */ }
+                StopJobQos();
                 TryKillWorkerTree(worker, workerGroup);
                 worker.WaitForExit(5000);
                 break;
@@ -1934,6 +1952,7 @@ public static void DropToLow() {
             if (!Task.WaitAll(drainTasks, drainPolicy.Completion))
             {
                 drainCts.Cancel();
+                StopJobQos();
                 TryKillWorkerTree(worker, workerGroup);
                 try { Task.WaitAll(drainTasks, drainPolicy.CancellationGrace); } catch { }
             }
@@ -1972,6 +1991,7 @@ public static void DropToLow() {
                 exitCode = 1;
                 RecordFallbackDiagnostic($"[dispatch-host] worker build reconciliation failed: {failure.GetType().Name}: {failure.Message}");
             }
+            StopJobQos();
             WorkerProcessJobs.ReadAccountingAndDispose(workerGroup, kill: false, captureAccounting: false, out _);
             // The exit file is the completion signal consumed by BackgroundDispatchRunner. Publish it
             // only after every child/diagnostic artifact the completion path reads is durable.

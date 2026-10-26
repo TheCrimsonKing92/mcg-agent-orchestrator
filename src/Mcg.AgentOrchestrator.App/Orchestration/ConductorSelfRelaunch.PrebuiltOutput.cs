@@ -55,7 +55,8 @@ internal static partial class ConductorSelfRelaunch
 
     private static CapturedProcessResult RunCachedAppBuild(
         string dotnetPath, string appProjectPath, string outputDirectory,
-        string repositoryRoot, TimeSpan timeout, CancellationToken cancellationToken)
+        string repositoryRoot, TimeSpan timeout, CancellationToken cancellationToken,
+        string? qosStatePath = null, Func<int, uint, uint, bool>? qosSetter = null)
     {
         var cacheRoot = AppBuildArtifactsRoot(appProjectPath);
         var cachedOutput = Path.Combine(cacheRoot, "output");
@@ -90,7 +91,9 @@ internal static partial class ConductorSelfRelaunch
             var remaining = timeout == Timeout.InfiniteTimeSpan ? timeout : timeout - elapsed.Elapsed;
             if (remaining <= TimeSpan.Zero && timeout != Timeout.InfiniteTimeSpan)
                 return new(-1, "", "Timed out waiting for isolated App build cache.", TimedOut: true);
-            var result = RunProcess(dotnetPath, command.Arguments, repositoryRoot, remaining, cancellationToken);
+            var result = RunProcess(dotnetPath, command.Arguments, repositoryRoot, remaining, cancellationToken,
+                onStarted: qosStatePath is null ? null : pid => BuildLaunchQosSweep.Begin(
+                    "relaunch-build", qosStatePath, string.Empty, pid, BuildLaunchQosSweep.RootAndDescendants, qosSetter));
             if (result.ExitCode == 0 && !result.TimedOut)
                 CopyAppBuildOutput(cachedOutput, outputDirectory, cancellationToken, overwrite: true);
             return result;
@@ -123,7 +126,7 @@ internal static partial class ConductorSelfRelaunch
         {
             Interlocked.Increment(ref _appBuildInvocationCount);
             return RunCachedAppBuild(options.DotnetPath, options.AppProjectPath, buildOutputDirectory,
-                options.RepositoryRoot, buildTimeout, cancellationToken);
+                options.RepositoryRoot, buildTimeout, cancellationToken, options.StateStorePath);
         }
 
         var source = options.PrebuiltAppOutputDirectory;
@@ -150,11 +153,12 @@ internal static partial class ConductorSelfRelaunch
     }
 
     internal static LandingAppBuildResult RunAppBuildProcess(
-        string dotnetPath, LandingAppBuildRequest request, CancellationToken cancellationToken)
+        string dotnetPath, LandingAppBuildRequest request, CancellationToken cancellationToken,
+        string? qosStatePath = null, Func<int, uint, uint, bool>? qosSetter = null)
     {
         var result = RunCachedAppBuild(dotnetPath,
             Path.Combine(request.SourceRoot, "src", "Mcg.AgentOrchestrator.App", "Mcg.AgentOrchestrator.App.csproj"),
-            request.OutputDirectory, request.SourceRoot, request.Timeout, cancellationToken);
+            request.OutputDirectory, request.SourceRoot, request.Timeout, cancellationToken, qosStatePath, qosSetter);
         return new(result.ExitCode, result.Stdout, result.Stderr, result.TimedOut);
     }
 }
