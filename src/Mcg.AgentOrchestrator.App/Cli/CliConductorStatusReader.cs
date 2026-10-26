@@ -45,8 +45,12 @@ internal static class CliConductorStatusReader
                 output.WriteLine($"  {goal.Id} | {goal.Status} | role={goal.Role}");
                 if (goal.LandingBlocker is { } blocker)
                     output.WriteLine($"    landing-blocker: {blocker.Kind} since={blocker.Since.ToString("O", CultureInfo.InvariantCulture)} next={blocker.NextActor} verb={blocker.NextVerb} detail={blocker.Detail}");
+                foreach (var item in goal.Clarifications ?? [])
+                    output.WriteLine($"    clarification: id={item.Id} hold={item.Hold} raised={item.RaisedAt.ToString("O", CultureInfo.InvariantCulture)} answer={item.AnswerCommand}");
             }
-            output.WriteLine($"Pending clarifications: {snapshot.Goals.PendingClarifications}; human waits: {snapshot.Goals.HumanWaits}");
+            output.WriteLine(snapshot.Goals.PendingClarifications is null
+                ? $"Pending clarifications: unavailable (collaboration items unreadable); human waits: {snapshot.Goals.HumanWaits}"
+                : $"Pending clarifications: {snapshot.Goals.PendingClarifications}; human waits: {snapshot.Goals.HumanWaits}");
         }
         output.WriteLine(snapshot.MostRecentLanding is { } landing
             ? $"Most recent landing: {landing.Goal} at {landing.At:O}"

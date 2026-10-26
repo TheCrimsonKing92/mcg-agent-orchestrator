@@ -206,7 +206,7 @@ internal static class OutsideDiffFindingRerun
                 receipt.Summary);
             return true;
         }
-        if (TryBuildUnattributableRedEscalation(sha, arms, batch, receipt.ReceiptId, out observation)) return true;
+        if (CandidateRedBaselineInheritance.TryBuildUnattributableRedEscalation(sha, arms, batch, receipt.ReceiptId, out observation)) return true;
         var candidate = arms.SingleOrDefault(arm => arm.Arm == FindingEvidenceArm.Candidate);
         var baseline = arms.SingleOrDefault(arm => arm.Arm == FindingEvidenceArm.Baseline);
         // This combination has no closure authority; deliver both arms to the existing Developer owner.

@@ -62,6 +62,20 @@ public sealed class RuntimeMaintenanceOwnershipTests
     [Fact]
     public void CancelledDashboardLifetimeDoesNotCancelRuntimeConductorJanitorialPhase()
     {
+        RunDashboardAndRuntimeScenario(_ => { });
+    }
+
+    [Fact]
+    public void JanitorialPhaseTiedToDashboardLifetimeIsReportedAsCancelledWithTheDashboard()
+    {
+        var exception = Assert.Throws<Xunit.Sdk.TrueException>(() =>
+            RunDashboardAndRuntimeScenario(ct => ct.ThrowIfCancellationRequested()));
+
+        Assert.Contains("Runtime janitorial phase was cancelled with the dashboard.", exception.Message);
+    }
+
+    private static void RunDashboardAndRuntimeScenario(Action<CancellationToken> beforeSchedulerSweep)
+    {
         using var dashboardLifetime = new CancellationTokenSource();
         using var dashboardStarted = new ManualResetEventSlim();
         using var dashboardStopped = new ManualResetEventSlim();
@@ -79,21 +93,22 @@ public sealed class RuntimeMaintenanceOwnershipTests
                     return DateTimeOffset.Parse("2026-09-19T00:00:00Z");
                 }
             });
-            var dashboard = Task.Run(() =>
+            var dashboard = Task.Factory.StartNew(() =>
             {
                 dashboardStarted.Set();
                 dashboardLifetime.Token.WaitHandle.WaitOne();
                 dashboardStopped.Set();
-            });
+            }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
             Assert.True(dashboardStarted.Wait(TimeSpan.FromSeconds(5)), "Dashboard lifetime did not start.");
 
-            var runtime = Task.Run(() =>
+            var runtime = Task.Factory.StartNew(() =>
                 new ConductorBatchLoop(sweep: kernel =>
                 {
                     sweepEntered.Set();
                     Assert.True(
                         dashboardStopped.Wait(TimeSpan.FromSeconds(5)),
                         "Runtime sweep did not observe dashboard shutdown.");
+                    beforeSchedulerSweep(dashboardLifetime.Token);
                     scheduler.SweepIfDue(root, kernel);
                     sweepCompleted.Set();
                 }).Run(
@@ -101,7 +116,7 @@ public sealed class RuntimeMaintenanceOwnershipTests
                     CreateDriver(),
                     ConductorAutonomyPolicy.Conservative,
                     Path.Combine(root, "stop"),
-                    maxIterations: 1));
+                    maxIterations: 1), CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
 
             Assert.True(sweepEntered.Wait(TimeSpan.FromSeconds(5)), "Runtime janitorial phase did not start.");
             dashboardLifetime.Cancel();
