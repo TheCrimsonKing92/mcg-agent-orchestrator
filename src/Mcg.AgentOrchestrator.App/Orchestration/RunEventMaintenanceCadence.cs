@@ -28,7 +28,8 @@ internal static class RunEventMaintenanceCadence
         string? mtpResultsRootOverride = null,
         Func<OrchestratorWorkspace, IReadOnlyCollection<StorageRetentionGoal>, DateTimeOffset, string?, StorageRetentionResult>?
             artifactRetentionOperation = null,
-        Func<DateTimeOffset, int>? goalSnapshotArchiveOperation = null)
+        Func<DateTimeOffset, int>? goalSnapshotArchiveOperation = null,
+        GoalSnapshotArchiveDrain? goalSnapshotArchiveDrain = null)
     {
         var now = (utcNow ?? (() => DateTimeOffset.UtcNow))();
         var cadenceKey = Path.GetFullPath(runEventStorePath);
@@ -145,7 +146,8 @@ internal static class RunEventMaintenanceCadence
 
                 var archiveResult = GoalSnapshotArchiveCadence.Run(
                     goalSnapshotArchiveOperation ?? (cutoff =>
-                        stateRepository!.ArchiveTerminalGoalSnapshotsAsync(cutoff).GetAwaiter().GetResult()), now);
+                        (goalSnapshotArchiveDrain ?? GoalSnapshotArchiveDrain.Default).Run(bytes =>
+                            stateRepository!.ArchiveTerminalGoalSnapshotsAsync(cutoff, bytes).GetAwaiter().GetResult())), now);
                 var archiveLine = GoalSnapshotArchiveCadence.Format(archiveResult);
                 Console.WriteLine(archiveLine);
                 TryAppendJournal(journal, "goal-snapshot-archive", archiveLine, now);

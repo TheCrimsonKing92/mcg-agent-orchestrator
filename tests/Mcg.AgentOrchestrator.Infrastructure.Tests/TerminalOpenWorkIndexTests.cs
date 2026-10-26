@@ -31,9 +31,10 @@ public sealed class TerminalOpenWorkIndexTests
         await fixture.AssertParity();
 
         Assert.True(await repository.ArchiveTerminalGoalSnapshotsAsync(Fixture.At.AddDays(10)) > 0);
-        Assert.Equal(fixture.Ids(2, 3, 7), await repository.ListTerminalGoalIdsWithNonTerminalTasksAsync());
+        Assert.Equal(fixture.Ids(2, 3, 4, 5, 7), await repository.ListTerminalGoalIdsWithNonTerminalTasksAsync());
         Assert.Equal("0", Assert.Single(fixture.Query(
-            "SELECT json_array_length(snapshot_json, '$.Tasks') FROM goals WHERE id = $id", fixture.Id(4))));
+            "SELECT json_array_length(snapshot_json, '$.Tasks') FROM goals WHERE id = $id", fixture.Id(6))));
+        Assert.Equal("1", Assert.Single(fixture.Query("SELECT json_array_length(snapshot_json, '$.Tasks') FROM goals WHERE id = $id", fixture.Id(4))));
         await fixture.AssertParity();
 
         // New post-ensure save exercises the INSERT trigger as well as the existing-row UPDATEs.
@@ -46,7 +47,7 @@ public sealed class TerminalOpenWorkIndexTests
             "SELECT terminal_open_work FROM goal_open_work WHERE goal_id = $id", ninth.Id)));
         await fixture.AssertParity();
         fixture.Execute("UPDATE goals SET status = 'Completed' WHERE id = $id", ninth.Id);
-        Assert.Equal(fixture.Ids(2, 3, 7).Append(ninth.Id).OrderBy(id => id.Value, StringComparer.Ordinal),
+        Assert.Equal(fixture.Ids(2, 3, 4, 5, 7).Append(ninth.Id).OrderBy(id => id.Value, StringComparer.Ordinal),
             await repository.ListTerminalGoalIdsWithNonTerminalTasksAsync());
         await fixture.AssertParity();
     }
