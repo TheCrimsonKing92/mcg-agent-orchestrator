@@ -102,14 +102,15 @@ internal sealed class OwnerConsoleViewModelBuilder(IOrchestratorStateQueries sta
                 board.Add(new(Prefix(goal.Id.Value), await epics.GetTitleAsync(goal.Id.Value, cancellationToken),
                     OwnerGoalTitle.Full(goal.Objective), goal.Status.ToString(), stage,
                     Age(goal.Timeline.MaxBy(item => item.OccurredAt)?.OccurredAt), goal.Id.Value,
-                    key.Rank == OwnerConsoleAttention.RecentTerminal, PriorityBadge(goal, [])) { SortKey = key, StageWithoutQuestion = stage });
+                    key.Rank == OwnerConsoleAttention.RecentTerminal, OwnerConsolePriorityText.Column(goal),
+                    OwnerConsolePriorityText.Warning(goal, [])) { SortKey = key, StageWithoutQuestion = stage });
             }
         }
         DateTimeOffset? tick = null;
         try { tick = latestTick?.Invoke(); }
         catch { /* An unavailable tick must not prevent status refresh or produce a stale alarm. */ }
         return new(new(liveness.IsRunning(), board.Count(row => !row.Dimmed), 0, 0, null, 0,
-            board.Count(row => row.Dimmed && row.State == nameof(GoalStatus.Failed)), tick), [], board.ToImmutable(), [], Gate: WithPriority(gate, []));
+            board.Count(row => row.Dimmed && row.State == nameof(GoalStatus.Failed)), tick), [], board.ToImmutable(), [], Gate: gate);
     }
 
     internal OwnerConsoleViewModel WithDecisions(OwnerConsoleViewModel model,
@@ -141,38 +142,11 @@ internal sealed class OwnerConsoleViewModelBuilder(IOrchestratorStateQueries sta
             }).ToImmutableArray();
         return model with { Activity = activity,
             Board = model.Board.Select(row => _goals.TryGetValue(row.GoalId, out var goal)
-                ? row with { Priority = PriorityBadge(goal, inputs.RecentEvents) } : row).ToImmutableArray(),
-            Gate = WithPriority(model.Gate, inputs.RecentEvents), Status = model.Status with
+                ? row with { Priority = OwnerConsolePriorityText.Column(goal),
+                    PriorityWarning = OwnerConsolePriorityText.Warning(goal, inputs.RecentEvents) } : row).ToImmutableArray(),
+            Status = model.Status with
             { LastEventAge = Age(inputs.LastConductEvent), PlannedStopReason = planned?.Reason,
                 PlannedStopAt = planned?.At, LandedToday = inputs.LandedToday } };
-    }
-
-    private OwnerConsoleGateProgress? WithPriority(OwnerConsoleGateProgress? gate, IReadOnlyList<OwnerConductEvent> events) =>
-        gate is null ? null : gate with
-        {
-            Members = gate.Members.Select(member =>
-            {
-                var matches = _goals.Values.Where(item => item.Id.Value.StartsWith(member.Id, StringComparison.OrdinalIgnoreCase)).Take(2).ToArray();
-                return matches.Length != 1 ? member : member with { Priority = PriorityBadge(matches[0], events) };
-            }).ToArray(),
-            OtherLiveGates = gate.OtherLiveGates?.Select(item => WithPriority(item, events)!).ToArray()
-        };
-
-    private static string PriorityBadge(Goal goal, IReadOnlyList<OwnerConductEvent> events)
-    {
-        var badge = goal.Priority switch
-        {
-            GoalPriority.Critical => "C", GoalPriority.High => "H", GoalPriority.Low => "L",
-            _ => GoalEffectivePriorityIndex.StoredLevel(goal) switch
-            {
-                GoalPriority.Critical => "c", GoalPriority.High => "h", _ => ""
-            }
-        };
-        if (goal.Isolation == GoalIsolation.Solo) badge += "S";
-        if (events.Any(item => (item.Detail.StartsWith("PRIORITY_DILUTION ", StringComparison.Ordinal) ||
-                               item.Detail.StartsWith("PRIORITY_OVERLAP ", StringComparison.Ordinal)) &&
-                              OwnerActivityNarrator.Field(item, "goal") == Prefix(goal.Id.Value))) badge += "!";
-        return badge.Length == 0 ? "" : "[" + badge + "]";
     }
 
     private void Observe(OwnerConductEvent item)
