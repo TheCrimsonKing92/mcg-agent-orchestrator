@@ -18,7 +18,8 @@ public enum RepositoryTestProject
     Infrastructure,
     Acceptance,
     ProviderEnvironment,
-    Cli
+    Cli,
+    StorageRetention
 }
 
 public enum ReverseDependencyDegradationKind
@@ -196,7 +197,12 @@ public static partial class RepositoryTestImpactPlanner
         const string cliTestsPrefix = "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Cli/";
         var cliTestSources = summary.Files.Where(file => StartsWith(file.Path, cliTestsPrefix) &&
             file.Path.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)).ToArray();
-        var nonCliSummary = summary with { Files = summary.Files.Except(cliTestSources).ToArray() };
+        var nestedTestSources = summary.Files.Where(file =>
+            RepositoryTestImpactPlannerNestedProjects.Routes.Any(route => StartsWith(file.Path, route.Prefix))).ToArray();
+        var nonCliSummary = summary with
+        {
+            Files = summary.Files.Except(cliTestSources).Except(nestedTestSources).ToArray()
+        };
         var touchesAcceptanceTests = summary.Files.Any(file => StartsWith(file.Path, acceptanceTestsPrefix));
         var touchesInfrastructure = nonCliSummary.Files.Any(file =>
             StartsWith(file.Path, "src/Mcg.AgentOrchestrator.Infrastructure/") ||
@@ -356,6 +362,30 @@ public static partial class RepositoryTestImpactPlanner
                 cliTestFilter.Filter is null ? null : cliTestFilter.TestClasses));
         }
 
+        foreach (var route in RepositoryTestImpactPlannerNestedProjects.Routes)
+        {
+            var sources = nestedTestSources.Where(file => StartsWith(file.Path, route.Prefix) &&
+                file.Path.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)).ToArray();
+            if (sources.Length == 0)
+                continue;
+
+            var selections = sources.Select(file => BuildChangedTestClassFilter(
+                summary with { Files = [file] }, route.Prefix, declarationReader)).ToArray();
+            var classes = selections.Where(selection => selection.Filter is not null)
+                .SelectMany(selection => selection.TestClasses)
+                .Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.Ordinal).ToArray();
+            var filter = classes.Length == 0 ? null : JoinFilterUnion(classes.Select(name => $"FullyQualifiedName~{name}"));
+            checks.Add(new RepositoryTestImpactCheck(
+                filter is null ? route.CheckName : route.FocusedName,
+                filter is null ? route.Command : [.. route.Command, "--filter", filter],
+                filter is null
+                    ? selections.Select(selection => selection.AbandonReason).FirstOrDefault(reason => reason is not null)
+                        ?? "Nested test files changed; run their project."
+                    : "Nested test files changed; run the touched test classes.",
+                route.TestProject,
+                filter is null ? null : classes));
+        }
+
         var distinctChecks = checks
             .GroupBy(check => check.CommandLine, StringComparer.OrdinalIgnoreCase)
             .Select(group => group.First())
@@ -431,7 +461,9 @@ public static partial class RepositoryTestImpactPlanner
                     "cli tests",
                     CliTests,
                     summary,
-                    RepositoryTestProject.Cli)
+                    RepositoryTestProject.Cli),
+                .. RepositoryTestImpactPlannerNestedProjects.Routes.Select(route =>
+                    new RepositoryTestImpactCheck(route.CheckName, route.Command, summary, route.TestProject))
             ]);
 
     private static bool StartsWith(string path, string prefix) =>

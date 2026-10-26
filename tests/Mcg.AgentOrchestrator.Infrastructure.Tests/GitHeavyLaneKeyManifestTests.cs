@@ -16,7 +16,7 @@ public sealed class GitHeavyLaneKeyManifestTests
     public void ShippedManifest_OnlyThreeGitHeavyLanesDeclareTheSharedKey()
     {
         var lanes = LoadLanes();
-        Assert.Equal(28, lanes.Count);
+        Assert.Equal(27, lanes.Count);
         var keyedLanes = lanes.Where(lane => lane.ExclusiveResourceKeys.Contains(SharedKey)).ToArray();
         Assert.Equal(GitHeavyLaneNames, keyedLanes.Select(lane => lane.Name)
             .OrderBy(name => name, StringComparer.Ordinal).ToArray());

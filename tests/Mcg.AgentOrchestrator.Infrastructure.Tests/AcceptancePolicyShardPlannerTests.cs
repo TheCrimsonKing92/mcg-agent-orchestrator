@@ -4,7 +4,7 @@ public sealed class AcceptancePolicyShardPlannerTests
 {
     private const string AppEvidence =
         "changed projects: App; dependency closure: App, Infrastructure.Acceptance.Tests, Infrastructure.Cli.Tests, " +
-        "Infrastructure.ProviderEnvironment.Tests, Infrastructure.Tests, TestSupport";
+        "Infrastructure.ProviderEnvironment.Tests, Infrastructure.StorageRetention.Tests, Infrastructure.Tests, TestSupport";
 
     [Fact]
     public void BuildPolicyShardPlan_PreservesFullShardReasonsAndPrecedence()
@@ -33,7 +33,7 @@ public sealed class AcceptancePolicyShardPlannerTests
                 "build-system file changed: src/Mcg.AgentOrchestrator.Core/Mcg.AgentOrchestrator.Core.csproj; " +
                 "changed projects: Core; dependency closure: App, Core, Core.Tests, Execution, " +
                 "Infrastructure, Infrastructure.Acceptance.Tests, Infrastructure.Cli.Tests, Infrastructure.Execution.Tests, Infrastructure.OperatorComms, " +
-                "Infrastructure.ProviderEnvironment.Tests, Infrastructure.Providers, Infrastructure.Tests, TestSupport",
+                "Infrastructure.ProviderEnvironment.Tests, Infrastructure.Providers, Infrastructure.StorageRetention.Tests, Infrastructure.Tests, TestSupport",
                 AcceptancePolicyShardPlanner.BuildPolicyShardPlan(
                     ["src/Mcg.AgentOrchestrator.Core/Mcg.AgentOrchestrator.Core.csproj"]).Evidence);
             Assert.Equal(
@@ -90,7 +90,7 @@ public sealed class AcceptancePolicyShardPlannerTests
         Assert.Equal(
             "changed projects: Infrastructure.OperatorComms; dependency closure: App, " +
             "Infrastructure.Acceptance.Tests, Infrastructure.Cli.Tests, Infrastructure.OperatorComms, Infrastructure.ProviderEnvironment.Tests, " +
-            "Infrastructure.Tests, TestSupport",
+            "Infrastructure.StorageRetention.Tests, Infrastructure.Tests, TestSupport",
             plan.Evidence);
         Assert.DoesNotContain(
             AcceptancePolicyShardPlanner.InfrastructureProject,

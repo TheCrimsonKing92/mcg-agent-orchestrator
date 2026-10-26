@@ -16,7 +16,8 @@ internal static class AcceptanceIdenticalTreeReuseRule
         var project = check.Project.Replace('\\', '/').ToLowerInvariant();
         if (project is not ("tests/mcg.agentorchestrator.core.tests/mcg.agentorchestrator.core.tests.csproj" or
             "tests/mcg.agentorchestrator.infrastructure.tests/cli/mcg.agentorchestrator.infrastructure.cli.tests.csproj" or
-            "tests/mcg.agentorchestrator.infrastructure.tests/acceptance/mcg.agentorchestrator.infrastructure.acceptance.tests.csproj"))
+            "tests/mcg.agentorchestrator.infrastructure.tests/acceptance/mcg.agentorchestrator.infrastructure.acceptance.tests.csproj" or
+            "tests/mcg.agentorchestrator.infrastructure.tests/storageretention/mcg.agentorchestrator.infrastructure.storageretention.tests.csproj"))
             return false;
 
         var input = project + "\n" + string.Join('\n', check.Arguments);
@@ -30,6 +31,7 @@ internal static class AcceptanceIdenticalTreeReuseRule
             "tests/mcg.agentorchestrator.core.tests/mcg.agentorchestrator.core.tests.csproj" => "core-tests",
             "tests/mcg.agentorchestrator.infrastructure.tests/cli/mcg.agentorchestrator.infrastructure.cli.tests.csproj" => "cli-tests",
             "tests/mcg.agentorchestrator.infrastructure.tests/acceptance/mcg.agentorchestrator.infrastructure.acceptance.tests.csproj" => "acceptance-execution-owner-tests",
+            "tests/mcg.agentorchestrator.infrastructure.tests/storageretention/mcg.agentorchestrator.infrastructure.storageretention.tests.csproj" => "storage-retention-tests",
             _ => throw new InvalidOperationException("An identical-tree partition requires an eligible project.")
         };
 
