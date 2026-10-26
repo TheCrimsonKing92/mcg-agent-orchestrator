@@ -40,7 +40,6 @@ public sealed class CliGoalsEpicReadOnlyRouteTests : CliTaskQueryTestSupport, ID
     [InlineData("goals", "--epic", "Board", "extra")]
     [InlineData("goals", "--json", "--epic", "Board")]
     [InlineData("goals", "--epic", "Board", "--help")]
-    [InlineData("goals", "subscribe")]
     [InlineData("goals", "--epic", "")]
     [InlineData("goals", "--epic", " ")]
     [InlineData("goals", "--epic= ")]

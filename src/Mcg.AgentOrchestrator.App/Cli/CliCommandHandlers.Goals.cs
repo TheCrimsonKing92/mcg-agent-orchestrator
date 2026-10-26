@@ -876,15 +876,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
         case "goals":
             if (parts.Count > 1 && parts[1].Equals("subscribe", StringComparison.OrdinalIgnoreCase))
             {
-                GoalMonitoringSubscriptionCommand.RunAsync(
-                    parts,
-                    Console.Out,
-                    context.Kernel,
-                    context.Workspace,
-                    context.Agents,
-                    context.WorkerProfiles,
-                    context.ReloadKernel).GetAwaiter().GetResult();
-                return false;
+                throw new InvalidOperationException(CliMonitorGoalQueryCommand.WriterPathRefusal);
             }
 
             if (EpicProgressReadModel.IsEpicGoalsListing(parts))
