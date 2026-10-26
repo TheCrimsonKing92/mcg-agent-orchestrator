@@ -537,7 +537,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
     {
         var manifestPath = Path.Combine(root, "config", "acceptance-manifest.json");
         var manifest = JsonNode.Parse(File.ReadAllText(manifestPath))!.AsObject();
-        manifest["engine"] = new JsonObject { ["baseBuildCacheEnabled"] = true };
+        manifest["engine"]!["baseBuildCacheEnabled"] = true;
         File.WriteAllText(manifestPath, manifest.ToJsonString());
     }
 
