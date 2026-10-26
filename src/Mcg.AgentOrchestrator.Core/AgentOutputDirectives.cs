@@ -87,7 +87,7 @@ public static class AgentOutputDirectives
                 "An undecidable criterion does not block other criteria and requires `blockers: none` when no operator action is needed. " +
                 "Repeat `PLANNER_EVIDENCE_REQUEST:` JSON-object lines per criterion_index/evidence_key (max 16 lines/65536 UTF-8 payload bytes total). " +
                 "Mix historical/future Acceptance/Operator items; none only alone; no substantive HUMAN_INPUT. " +
-                "Each object requires criterion_index, evidence_key, availability, needed, and reason. " +
+                "Each object requires criterion_index, evidence_key, availability, needed, and reason; needed is a non-empty string naming the evidence, never true or false. " +
                 "In that directive criterion_index is the 1-based criterion number used on the mapping lines, so the first criterion is 1; this differs from the 0-based criterion_index of criteria_verdicts. " +
                 "For an orchestrator record, add store_ref as <kind>:<locator>[#<selector>]. " +
                 "Unreadable store: availability=retrievable plus store. Never-recorded: prefer undecidable; operator action requires availability=never-recorded, no store. " +
@@ -247,6 +247,13 @@ public static class AgentOutputDirectives
             {
                 return MalformedEvidenceRequest(
                     "criterion_index is the 1-based criterion number from the mapping lines; use 1 for the first criterion");
+            }
+
+            if (root.TryGetProperty("needed", out var neededProperty) &&
+                neededProperty.ValueKind is JsonValueKind.True or JsonValueKind.False)
+            {
+                return MalformedEvidenceRequest(
+                    "needed must be a non-empty JSON string that names the evidence, not true or false");
             }
 
             if (!TryGetPositiveInt(root, "criterion_index", out var criterionIndex) ||

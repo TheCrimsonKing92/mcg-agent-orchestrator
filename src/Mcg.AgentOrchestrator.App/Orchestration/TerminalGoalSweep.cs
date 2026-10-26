@@ -69,6 +69,8 @@ internal sealed record TerminalGoalSweepResult(
     public long OwnedRootDurationMs { get; init; }
     public int GitSpawnCount { get; init; }
     public int GoalsSweptCount { get; init; }
+    public int TerminalGoalsSweptCount { get; init; }
+    public IReadOnlyList<(GoalId GoalId, long ElapsedMs)> GoalDurations { get; init; } = [];
     public TerminalGoalSweepOwnedRootResult? OwnedRoots { get; init; }
     public bool Changed => Goals.Any(goal => goal.Changed);
     public IReadOnlyList<TerminalGoalSweepBlocker> Blockers => Goals.SelectMany(goal => goal.Blockers).ToArray();
@@ -471,6 +473,8 @@ internal static partial class TerminalGoalSweep
             cleanupHooks);
         var results = new List<TerminalGoalSweepGoalResult>();
         var sweptGoalIds = new List<GoalId>();
+        var goalDurations = new List<(GoalId GoalId, long ElapsedMs)>();
+        var terminalGoalsSweptCount = 0;
         var terminalizedGoalIds = new List<GoalId>();
         var cacheHits = 0;
         var cacheMisses = 0;
@@ -520,6 +524,9 @@ internal static partial class TerminalGoalSweep
             }
 
             sweptGoalIds.Add(originalGoal.Id);
+            using var goalTiming = new GoalDurationScope(goalDurations, originalGoal.Id);
+            if (IsTerminalSweepStatus(originalGoal.Status))
+                terminalGoalsSweptCount++;
             var repairs = new List<TerminalGoalSweepRepair>();
             var blockers = new List<TerminalGoalSweepBlocker>();
             var prefix = originalGoal.Id.Value[..Math.Min(8, originalGoal.Id.Value.Length)];
@@ -809,6 +816,11 @@ internal static partial class TerminalGoalSweep
             var equivalentBranchTip = branchFacts.ContentState == GoalBranchContentState.EquivalentToMain
                 ? branchFactIndex.TryGetGoalBranchTip(goal.Id)
                 : null;
+            LandedGoalBranchRetirement.Proof? landedProof = null;
+            equivalentBranchTip ??= LandedGoalBranchRetirement.TryGetLandedBranchTip(
+                goal, branchFacts, branchFactIndex.TryGetGoalBranchTip(goal.Id), branchFactIndex.MainSha,
+                recoveryJournal, mergeTrainAcceptanceStore, cohortAcceptanceStore,
+                executionDirectory, gitRunner, out landedProof, cache?.Ancestry);
             if (!blockedByDirtyWorktree &&
                 blockers.Count == 0 &&
                 goal.Status == GoalStatus.Completed &&
@@ -826,7 +838,8 @@ internal static partial class TerminalGoalSweep
 
                 if (removeResult.IsComplete)
                 {
-                    var evidence = BuildSupersededBranchEvidence(goal, removeResult.Message);
+                    var evidence = landedProof?.Describe(goal, removeResult.Message)
+                        ?? BuildSupersededBranchEvidence(goal, removeResult.Message);
                     RecordTerminalDisposition(
                         kernel,
                         executionDirectory,
@@ -834,7 +847,7 @@ internal static partial class TerminalGoalSweep
                         GoalTerminalDispositionKind.Retired,
                         evidence);
                     repairs.Add(new TerminalGoalSweepRepair(
-                        "completed-branch-superseded",
+                        landedProof is null ? "completed-branch-superseded" : LandedGoalBranchRetirement.RepairKind,
                         evidence,
                         "retired"));
                 }
@@ -842,7 +855,7 @@ internal static partial class TerminalGoalSweep
                 {
                     blockers.Add(new TerminalGoalSweepBlocker(
                         "completed-branch-superseded",
-                        BuildSupersededBranchEvidence(goal, removeResult.Message),
+                        landedProof?.Describe(goal, removeResult.Message) ?? BuildSupersededBranchEvidence(goal, removeResult.Message),
                         $"conduct {prefix} --loop",
                         goal.Id,
                         prefix));
@@ -993,8 +1006,18 @@ internal static partial class TerminalGoalSweep
             OwnedRootDurationMs = ownedRootTiming.ElapsedMilliseconds,
             GitSpawnCount = gitSpawnCounter.Value,
             GoalsSweptCount = sweptGoalIds.Count,
+            TerminalGoalsSweptCount = terminalGoalsSweptCount,
+            GoalDurations = goalDurations,
             OwnedRoots = ownedRoots
         };
+    }
+
+    private sealed class GoalDurationScope(List<(GoalId GoalId, long ElapsedMs)> durations, GoalId goalId) : IDisposable
+    {
+        private readonly long startedAt = System.Diagnostics.Stopwatch.GetTimestamp();
+
+        public void Dispose() => durations.Add((goalId,
+            (long)System.Diagnostics.Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds));
     }
 
     private static Dictionary<GoalId, GoalIntegrationEvidence> ResolveMergeEvidenceCandidates(

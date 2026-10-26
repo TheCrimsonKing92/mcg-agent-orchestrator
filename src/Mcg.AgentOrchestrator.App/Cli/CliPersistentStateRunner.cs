@@ -983,12 +983,8 @@ internal static partial class CliPersistentStateRunner
                     stateRepository, startupKernel, workspace.ExecutionDirectory, workspace.IntegrationBranch, watchGoalId, cleanupContext.Hooks, openWorkGoalIds));
                 var sweepTimelineBaseline = TerminalGoalSweepLifecycleEvents.Capture(sweepKernel);
                 var sweepCheckpoint = new CliOwnedGoalCheckpoint(stateRepository, sweepKernel);
-                var sweep = heartbeat.Run(ConductorStartupHeartbeat.Phases.TerminalSweep, () => TerminalGoalSweep.Run(
-                    sweepKernel,
-                    workspace.ExecutionDirectory, workspace.IntegrationBranch,
-                    watchGoalId,
-                    cleanupHooks: cleanupContext.Hooks,
-                    orchestratorDirectory: workspace.OrchestratorDirectory, reclaimGoalRoots: true));
+                var sweep = heartbeat.Run(ConductorStartupHeartbeat.Phases.TerminalSweep, () => StartupTerminalSweep.Run(
+                    sweepKernel, workspace, watchGoalId, cleanupContext.Hooks));
                 var metadataOnlyExcludedGoalCount = heartbeat.Run(ConductorStartupHeartbeat.Phases.MetadataExclusionCount, () => CountMetadataOnlyTerminalSweepExclusions(
                     stateRepository, workspace.ExecutionDirectory, workspace.IntegrationBranch, watchGoalId, cleanupContext.Hooks, openWorkGoalIds));
                 if (metadataOnlyExcludedGoalCount > 0)
