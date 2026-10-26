@@ -193,7 +193,7 @@ internal static class GoalAbandonPlanner
 
         if (!IsTerminal(goal.Status))
         {
-            _ = kernel.CancelGoal(goal.Id, before.Reason);
+            _ = StoppedGoalTaskClosure.CloseOpenTasks(kernel, kernel.CancelGoal(goal.Id, before.Reason));
         }
 
         return CompleteAfterCommit(kernel, goal, workspace, before.Reason, cleanupHooks);

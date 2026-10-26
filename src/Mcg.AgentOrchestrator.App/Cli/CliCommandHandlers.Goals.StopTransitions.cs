@@ -76,8 +76,7 @@ internal static partial class CliCommandHandlers
         ProgressEvent? committedEvent = null;
         if (updated.Status is not (GoalStatus.Completed or GoalStatus.Failed or GoalStatus.Cancelled or GoalStatus.Superseded))
         {
-            kernel.CancelGoal(goalId, before.Reason);
-            committedEvent = updated.Timeline[^1];
+            committedEvent = StoppedGoalTaskClosure.CloseOpenTasks(kernel, kernel.CancelGoal(goalId, before.Reason));
         }
         return new(GoalLifecycleTransitionDisposition.Applied, goalId, updated.Status, updated, committedEvent);
     }

@@ -46,12 +46,12 @@ internal static partial class CliCommandHandlers
             "cancel-goal <goal-id-prefix> <reason> [--confirm-goal-stop] | cancel-goal <goal-id-prefix> --text-file <path> [--confirm-goal-stop]",
             "--text-file");
         var liveDispatches = CollectLiveDispatches(goal);
-        _ = kernel.CancelGoal(goalId, reason, allowLiveDispatches: true);
+        var committedEvent = StoppedGoalTaskClosure.CloseOpenTasks(kernel, kernel.CancelGoal(goalId, reason, allowLiveDispatches: true));
         return new GoalLifecycleTransitionOutcome(
             liveDispatches.Length == 0
                 ? GoalLifecycleTransitionDisposition.Applied
                 : GoalLifecycleTransitionDisposition.AppliedWithLiveDispatches,
-            goalId, goal.Status, goal, goal.Timeline[^1], LiveDispatches: liveDispatches);
+            goalId, goal.Status, goal, committedEvent, LiveDispatches: liveDispatches);
     }
 
     internal static void RenderGoalCancelOutcome(
