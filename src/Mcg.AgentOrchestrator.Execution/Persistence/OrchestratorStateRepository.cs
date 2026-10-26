@@ -17,6 +17,18 @@ public interface IOrchestratorStateQueries
 
     Task<IReadOnlyList<GoalSummary>> ListGoalMetadataAsync(CancellationToken cancellationToken = default);
 
+    /// <summary>Reads board columns with bounded terminal history and objective prefixes, in listing order.</summary>
+    async Task<IReadOnlyList<GoalSummary>> ListGoalBoardRowsAsync(
+        GoalBoardRowQuery query, CancellationToken cancellationToken = default)
+    {
+        query.EnsureValid();
+        var rows = await ListGoalMetadataAsync(cancellationToken);
+        var terminals = 0;
+        return rows.Where(row => !GoalBoardRowQuery.IsTerminal(row.Status) ||
+                query.RecentTerminalLimit is null || terminals++ < query.RecentTerminalLimit.Value)
+            .Select(row => new GoalSummary(row.Id, row.Status, query.Title(row.Objective), row.UpdatedAt)).ToArray();
+    }
+
     /// <summary>Optionally includes creation times for terminal goals; the default listing skips their snapshot JSON.</summary>
     Task<IReadOnlyList<GoalSummary>> ListGoalMetadataAsync(
         bool includeTerminalCreatedAt, CancellationToken cancellationToken = default) =>
