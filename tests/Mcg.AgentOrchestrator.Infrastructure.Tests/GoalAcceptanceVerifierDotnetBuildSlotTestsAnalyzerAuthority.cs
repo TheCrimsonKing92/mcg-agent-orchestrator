@@ -5,7 +5,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 // Serialized with JobAccounting: the gate fact owns stable slot 0; focused roots are private.
 [Xunit.Collection(TestCollections.JobAccounting)]
-public sealed class AcceptanceAnalyzerAuthorityTests
+public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsAnalyzerAuthority
     : GoalAcceptanceVerifierDotnetBuildSlotTests
 {
     [Xunit.Fact]
@@ -57,7 +57,7 @@ public sealed class AcceptanceAnalyzerAuthorityTests
         var manifestPath = Path.Combine(fixture.Root, "config", "acceptance-manifest.json");
         var manifest = JsonNode.Parse(File.ReadAllText(manifestPath))!.AsObject();
         manifest["checks"] = new JsonArray(JsonNode.Parse("""
-            { "name": "core tests", "type": "dotnet-test",
+            { "name": "core tests", "type": "dotnet-test", "runner": "mtp",
               "project": "tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj" }
             """));
         File.WriteAllText(manifestPath, manifest.ToJsonString());
@@ -76,7 +76,7 @@ public sealed class AcceptanceAnalyzerAuthorityTests
             var result = await verifier.RunAsync(fixture.Root, GoalId.New(),
                 changedFiles: ["Directory.Build.props"], stableSlotIndex: 0);
 
-            Assert.True(result.Passed);
+            Assert.True(result.Passed, result.OutputTail);
             Assert.NotEmpty(builds);
             Assert.All(builds, arguments => Assert.DoesNotContain(arguments, argument =>
                 argument.Contains("RunAnalyzers", StringComparison.OrdinalIgnoreCase) ||
