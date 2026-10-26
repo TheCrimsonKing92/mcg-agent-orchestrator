@@ -9,7 +9,7 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 internal sealed class ConductorProgramHealthMonitor(string statePath, Func<string?> policyReader,
     ConductEventLogWriter writer, TimeProvider clock,
     Func<GoalId, IReadOnlyList<ProgramHealthReceiptObservation>> receiptReader,
-    ICollaborationItemStore? attention = null)
+    ICollaborationItemStore? attention = null, ConductorInvariantObservationReader? invariantReader = null)
 {
     private ICollaborationItemStore? _attention = attention;
     internal const string EventKind = "program-health";
@@ -18,6 +18,10 @@ internal sealed class ConductorProgramHealthMonitor(string statePath, Func<strin
     internal const string ClearedEvent = "PROGRAM_HEALTH_CLEARED";
 
     internal static ConductorProgramHealthMonitor ForWorkspace(OrchestratorWorkspace workspace, ConductEventLogWriter writer)
+        => ForWorkspace(workspace, writer, DotnetBuildEnvironmentManager.CaptureStorageRoot());
+
+    internal static ConductorProgramHealthMonitor ForWorkspace(OrchestratorWorkspace workspace, ConductEventLogWriter writer,
+        DotnetBuildStorageRoot storageRoot)
     {
         // Store setup stays inside Evaluate's advisory exception boundary, including retries after a failed open.
         MergeTrainAcceptanceStore? store = null;
@@ -29,7 +33,16 @@ internal sealed class ConductorProgramHealthMonitor(string statePath, Func<strin
         }
         return new(Path.Combine(workspace.OrchestratorDirectory, StateFileName), ReadPolicy, writer, TimeProvider.System,
             id => (store ??= new MergeTrainAcceptanceStore(Path.Combine(workspace.OrchestratorDirectory, "merge-train-acceptance.db")))
-                .ReadPassedReceiptsForGoal(id).Select(ProgramHealthReceiptObservation.FromMergeTrainReceipt).ToArray());
+                .ReadPassedReceiptsForGoal(id).Select(ProgramHealthReceiptObservation.FromMergeTrainReceipt).ToArray(),
+            invariantReader: ConductorInvariantObservationReader.ForWorkspace(workspace, storageRoot));
+    }
+
+    internal ConductorInvariantObservationReader? InvariantReader { get; } = invariantReader;
+
+    internal void EvaluateWithInvariants(IReadOnlyList<(GoalId Id, GoalStatus Status)> goals, string? integrationHead)
+    {
+        if (InvariantReader is { } reader) Evaluate(goals, integrationHead, reader.Read);
+        else Evaluate(goals, integrationHead);
     }
 
     internal void Evaluate(IReadOnlyList<(GoalId Id, GoalStatus Status)> goals, string? integrationHead,

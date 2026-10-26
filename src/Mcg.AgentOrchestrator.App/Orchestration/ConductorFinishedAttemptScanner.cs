@@ -11,6 +11,12 @@ internal static class ConductorFinishedAttemptScanner
     internal static IReadOnlyList<ConductorFinishedAttempt> Scan(IReadOnlyList<string> roots,
         IReadOnlyList<(GoalId Id, GoalStatus Status)> goals, DateTimeOffset now,
         IReadOnlyDictionary<string, List<ConductorGoalLine>>? goalLines = null)
+        => Scan(roots, goals, now, Directories, goalLines);
+
+    internal static IReadOnlyList<ConductorFinishedAttempt> Scan(IReadOnlyList<string> roots,
+        IReadOnlyList<(GoalId Id, GoalStatus Status)> goals, DateTimeOffset now,
+        Func<string, IReadOnlyList<string>> directories,
+        IReadOnlyDictionary<string, List<ConductorGoalLine>>? goalLines = null)
     {
         var active = goals.Where(goal => goal.Status is not (GoalStatus.Parked or GoalStatus.Completed or
             GoalStatus.Failed or GoalStatus.Cancelled or GoalStatus.Superseded))
@@ -18,7 +24,7 @@ internal static class ConductorFinishedAttemptScanner
         var newest = new Dictionary<(string Goal, string Kind), (ConductorParallelAcceptanceAttempt Attempt, string Path)>();
         var cutoff = (now - ConductorInvariantThresholds.FinishedAttemptScanWindow).UtcDateTime;
         foreach (var root in roots)
-        foreach (var directory in Directories(root))
+        foreach (var directory in directories(root))
         foreach (var path in AttemptPaths(directory))
         {
             try
