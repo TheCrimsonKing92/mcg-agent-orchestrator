@@ -5,6 +5,17 @@ using Mcg.AgentOrchestrator.Infrastructure;
 public sealed class WorkerBuildAnalyzerPropertiesTests
 {
     [Xunit.Fact]
+    public void ExecutorLanePrebuild_ContainsQuotedAnalyzerProperties()
+    {
+        var lines = File.ReadAllLines(Path.Combine(VerifiedRepositoryRoot.Find(),
+            "scripts", "executor", "tools", "Invoke-ExecutorLane.ps1"));
+        var line = Assert.Single(lines, line => line.Contains("McgIsolatedArtifactsPath=", StringComparison.Ordinal));
+
+        foreach (var property in AcceptanceCheckCommandBuilder.AnalyzersOffBuildProperties)
+            Assert.Contains($"\"{property.Replace("-p:", "/p:", StringComparison.Ordinal)}\"", line, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
     public void BuildStartInfo_AppendsAnalyzerPropertiesBeforeIsolatedArguments()
     {
         const string root = @"C:\repo\project";

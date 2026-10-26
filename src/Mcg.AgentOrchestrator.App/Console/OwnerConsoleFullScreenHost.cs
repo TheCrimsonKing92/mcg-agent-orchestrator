@@ -61,7 +61,9 @@ internal static class OwnerConsoleFullScreenHost
         {
             IOrchestratorStateQueries state = File.Exists(workspace.SqliteStatePath)
                 ? SqliteOrchestratorStateRepository.OpenReadOnly(workspace.SqliteStatePath) : new EmptyOwnerConsoleStateQueries();
-            var questions = new SerializedOwnerQuestionSource(new OwnerQuestionReadModel(state, workspace.OrchestratorDirectory));
+            var refreshFilter = new OwnerConsoleEventRefreshFilter();
+            var snapshots = new OwnerConsoleRefreshGoalSnapshots(state);
+            var questions = new SerializedOwnerQuestionSource(new OwnerQuestionReadModel(state, workspace.OrchestratorDirectory, snapshots));
             var cohortEvidence = new OwnerActivityEvidenceReader(Path.Combine(workspace.OrchestratorDirectory, "cohort-acceptance.db"));
             var gateEvidence = new OwnerGateFailureEvidence(workspace.OrchestratorDirectory);
             var jointEvidence = new OwnerJointGateFailureEvidence(workspace.OrchestratorDirectory);
@@ -81,7 +83,7 @@ internal static class OwnerConsoleFullScreenHost
                 item => item.EventKind == "acceptance-cohort" ? jointEvidence.Read(item, cohortEvidence.Read(item)) :
                     gateEvidence.Read(item) ?? jointEvidence.Read(item), id => timings.Time("gate-motion", () => gateMotion.Describe(id)),
                 latestTick: () => timings.Time("latest-tick", latestTick.Read),
-                gateProgress: titles => timings.Time("gate-progress", () => gateProgress.Load(titles)));
+                gateProgress: titles => timings.Time("gate-progress", () => gateProgress.Load(titles)), snapshots: snapshots);
             var opened = clock.GetUtcNow();
             DateTimeOffset? last = null;
             var landings = 0;
@@ -113,9 +115,11 @@ internal static class OwnerConsoleFullScreenHost
                             TimeZoneInfo.ConvertTime(item.Timestamp, clock.LocalTimeZone).Date == landingDate && countedLandings.Add(item)) landings++;
                         OwnerConsoleStartupActivity.Append(recent, item, OwnerConsoleStartupActivity.MaxRawEvents);
                     }
+                    last = refreshFilter.FoldLast(last);
                     var inputs = new OwnerConsoleViewInputs(opened, last, recent.ToArray(), landings);
                     await refreshOperation.RunAsync(items is not { Count: > 0 } ? "refresh" : "refresh after conductor event", async stepToken =>
                     {
+                        using var goalLoads = snapshots.BeginRefresh();
                         var board = await timings.TimeAsync("board", () => builder.BuildBoardAsync(stepToken));
                         boardIds = board.Board.Select(row => row.GoalId).ToArray();
                         foreach (var lifecycle in timings.Time("lifecycle-tail", () => activityLoader.ReadNew(boardIds, scope ?? OwnerConsoleRefreshScope.All).ToArray())) OwnerConsoleStartupActivity.Append(recent, builder.EnrichEvent(lifecycle), OwnerConsoleStartupActivity.MaxRawEvents);
@@ -192,7 +196,7 @@ internal static class OwnerConsoleFullScreenHost
                 events = activityLoader.Events ?? new OwnerConsoleStartupEventSource(workspace.ConductEventsLogPath, clock);
                 await new OwnerConsoleEventPump(events, clock,
                     message => app.Invoke(() => { if (!token.IsCancellationRequested) view!.ShowNotice(message, OwnerConsoleNoticeSeverity.Failure, OwnerConsoleNoticeSource.Refresh); }))
-                    .RunAsync(item => { coalescer.Request(item, OwnerConsoleRefreshScope.None); return Task.CompletedTask; }, token);
+                    .RunAsync(item => { refreshFilter.Route(item, coalescer); return Task.CompletedTask; }, token);
             });
             periodicRefresh = Task.Run(async () =>
             {
