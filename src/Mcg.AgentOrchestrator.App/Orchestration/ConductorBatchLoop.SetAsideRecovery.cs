@@ -54,7 +54,7 @@ internal sealed partial class ConductorBatchLoop
             if (onlyGoalId is not null && entry.GoalId != onlyGoalId)
                 continue;
             var goal = kernel.Goals.FirstOrDefault(g => g.Id.Value == entry.GoalId);
-            if (goal is null || IsTerminalGoal(goal))
+            if (goal is null || ConductorWorkingSet.IsTerminalGoal(goal))
                 continue;
 
             string decision;

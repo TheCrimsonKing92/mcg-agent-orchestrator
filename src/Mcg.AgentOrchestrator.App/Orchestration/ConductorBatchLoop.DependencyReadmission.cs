@@ -28,7 +28,7 @@ internal sealed partial class ConductorBatchLoop
                 continue;
             }
 
-            if (IsPreWalkExcludedGoal(goal) || goal.Status is not (GoalStatus.Verifying or GoalStatus.Verified or GoalStatus.Completed))
+            if (ConductorWorkingSet.IsPreWalkExcludedGoal(goal) || goal.Status is not (GoalStatus.Verifying or GoalStatus.Verified or GoalStatus.Completed))
             {
                 continue;
             }
@@ -75,7 +75,7 @@ internal sealed partial class ConductorBatchLoop
             }
 
             var goal = kernel.Goals.FirstOrDefault(g => g.Id.Value == entry.GoalId);
-            if (goal is null || IsTerminalGoal(goal))
+            if (goal is null || ConductorWorkingSet.IsTerminalGoal(goal))
             {
                 continue;
             }
@@ -327,7 +327,7 @@ internal sealed partial class ConductorBatchLoop
             return false;
         }
 
-        if (goal.Status != GoalStatus.Active || IsPreWalkExcludedGoal(goal))
+        if (goal.Status != GoalStatus.Active || ConductorWorkingSet.IsPreWalkExcludedGoal(goal))
         {
             return false;
         }
