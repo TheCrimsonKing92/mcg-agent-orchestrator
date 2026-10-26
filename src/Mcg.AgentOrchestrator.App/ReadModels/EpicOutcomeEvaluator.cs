@@ -1,7 +1,7 @@
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
-namespace Mcg.AgentOrchestrator.App.Cli;
+namespace Mcg.AgentOrchestrator.App.ReadModels;
 
 internal enum EpicOutcomeState { Unknown, Unmet, Proven }
 internal sealed record EpicOutcomeEvidenceReference(string ReceiptId, long BarVersion, EpicOutcomeSource Source,

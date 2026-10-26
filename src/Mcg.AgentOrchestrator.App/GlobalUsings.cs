@@ -4,3 +4,4 @@ global using Mcg.AgentOrchestrator.App.CostControl;
 global using Mcg.AgentOrchestrator.App.Orchestration;
 global using Mcg.AgentOrchestrator.App.Providers;
 global using Mcg.AgentOrchestrator.App.SubscriptionPlanning;
+global using Mcg.AgentOrchestrator.App.ReadModels;

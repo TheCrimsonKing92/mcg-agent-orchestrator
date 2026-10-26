@@ -3,7 +3,7 @@ using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Microsoft.Data.Sqlite;
 
-namespace Mcg.AgentOrchestrator.App.Cli;
+namespace Mcg.AgentOrchestrator.App.ReadModels;
 
 internal static class CliOwnerDigestRetryIntents
 {
