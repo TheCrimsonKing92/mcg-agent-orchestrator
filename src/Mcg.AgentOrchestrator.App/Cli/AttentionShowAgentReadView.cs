@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text.Json;
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Cli;
 
@@ -48,6 +49,21 @@ internal static class AttentionShowAgentReadView
                     body = item.Body,
                     correlationKey = item.CorrelationKey,
                     raisedAt = item.RaisedAt.UtcDateTime.ToString("O", CultureInfo.InvariantCulture)
-                }).ToArray()
+                }).ToArray(),
+                ownerQuestionHolds = (goals ?? []).Where(goal => goalId is null || goal.Id.Value == goalId)
+                    .Where(goal => goal.Status is not (GoalStatus.Completed or GoalStatus.Cancelled or GoalStatus.Superseded))
+                    .Select(OwnerQuestionHoldBlocker.TryRead).OfType<OwnerQuestionHoldBlocker>()
+                    .Select(hold => new
+                    {
+                        goalId = hold.GoalId.Value,
+                        state = hold.State,
+                        identity = hold.Identity,
+                        question = hold.Question,
+                        taskId = hold.TaskId,
+                        taskNumber = hold.TaskNumber,
+                        startedAt = hold.StartedAt.UtcDateTime.ToString("O", CultureInfo.InvariantCulture),
+                        resolvingVerb = hold.ResolvingVerb,
+                        nextAction = hold.NextAction
+                    }).ToArray()
             }, new JsonSerializerOptions(JsonSerializerDefaults.Web), time);
 }

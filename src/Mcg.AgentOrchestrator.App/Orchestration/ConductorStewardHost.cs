@@ -147,8 +147,9 @@ internal sealed partial class ConductorStewardHost
     internal IReadOnlySet<GoalId> ServiceTick(AgentOrchestratorKernel kernel, string? onlyGoalId = null)
     {
         _kernel = kernel;
-        if (!Enabled) return new HashSet<GoalId>();
         var changed = new HashSet<GoalId>();
+        StewardOwnerQuestionHoldReconciler.Reconcile(kernel, _conduct, onlyGoalId, changed);
+        if (!Enabled) return changed;
         var now = _utcNow();
         foreach (var expired in _triggers.ExpireStale(now.AddMinutes(-15)))
             Record(expired.Trigger, "model-failure", "timeout", null);

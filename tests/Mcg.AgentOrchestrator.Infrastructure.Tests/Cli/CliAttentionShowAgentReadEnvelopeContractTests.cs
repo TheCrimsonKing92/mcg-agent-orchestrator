@@ -222,7 +222,7 @@ public sealed class CliAttentionShowAgentReadEnvelopeContractTests : CliTaskQuer
                     subject = item.Subject, body = item.Body, correlationKey = item.CorrelationKey,
                     raisedAt = item.RaisedAt.UtcDateTime.ToString("O", CultureInfo.InvariantCulture)
                 }).ToArray(),
-                providerHolds = Array.Empty<object>()
+                providerHolds = Array.Empty<object>(), ownerQuestionHolds = Array.Empty<object>()
             }, new JsonSerializerOptions(JsonSerializerDefaults.Web));
             using var bare = JsonDocument.Parse(Run(["attention", "--json"], seed.Workspace, seed.Kernel));
             Assert.Equal("mcg.attention", bare.RootElement.GetProperty("schema").GetString());
@@ -312,7 +312,7 @@ public sealed class CliAttentionShowAgentReadEnvelopeContractTests : CliTaskQuer
         Assert.Equal(TimeSpan.Zero, DateTimeOffset.ParseExact(timestamp, "O", CultureInfo.InvariantCulture).Offset);
         Assert.EndsWith("Z", timestamp);
         var payload = envelope.GetProperty("payload");
-        Assert.Equal(new[] { "goalId", "waits", "gateEvidence", "items" }, payload.EnumerateObject().Select(property => property.Name));
+        Assert.Equal(new[] { "goalId", "waits", "gateEvidence", "items", "ownerQuestionHolds" }, payload.EnumerateObject().Select(property => property.Name));
         return payload;
     }
 
