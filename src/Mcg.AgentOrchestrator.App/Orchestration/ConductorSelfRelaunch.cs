@@ -396,7 +396,8 @@ internal static partial class ConductorSelfRelaunch
         IReadOnlyList<string> arguments,
         string workingDirectory,
         TimeSpan timeout,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        Func<int, IDisposable?>? onStarted = null)
     {
         var startInfo = new ProcessStartInfo(fileName)
         {
@@ -414,60 +415,69 @@ internal static partial class ConductorSelfRelaunch
 
         using var process = Process.Start(startInfo)
             ?? throw new InvalidOperationException($"Failed to start {fileName}.");
-        process.StandardInput.Close();
-        var stdoutDrain = PipeDrain.Start(process.StandardOutput, "self-relaunch-stdout-drain");
-        var stderrDrain = PipeDrain.Start(process.StandardError, "self-relaunch-stderr-drain");
-        using var timeoutCts = new CancellationTokenSource(timeout);
-        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(
-            timeoutCts.Token,
-            cancellationToken);
+        IDisposable? launchQos = null;
+        try { launchQos = onStarted?.Invoke(process.Id); } catch (Exception) { }
         try
         {
-            process.WaitForExitAsync(linkedCts.Token).GetAwaiter().GetResult();
-        }
-        catch (OperationCanceledException)
-        {
+            process.StandardInput.Close();
+            var stdoutDrain = PipeDrain.Start(process.StandardOutput, "self-relaunch-stdout-drain");
+            var stderrDrain = PipeDrain.Start(process.StandardError, "self-relaunch-stderr-drain");
+            using var timeoutCts = new CancellationTokenSource(timeout);
+            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(
+                timeoutCts.Token,
+                cancellationToken);
             try
             {
-                process.Kill(entireProcessTree: true);
-                process.WaitForExit(5000);
+                process.WaitForExitAsync(linkedCts.Token).GetAwaiter().GetResult();
             }
-            catch
+            catch (OperationCanceledException)
             {
+                try
+                {
+                    process.Kill(entireProcessTree: true);
+                    process.WaitForExit(5000);
+                }
+                catch
+                {
+                }
+
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                }
+
+                return new CapturedProcessResult(
+                    -1,
+                    stdoutDrain.Text,
+                    stderrDrain.Text,
+                    TimedOut: true);
             }
 
-            if (cancellationToken.IsCancellationRequested)
+            var drainDeadline = Environment.TickCount64 + PipeDrain.DefaultTimeoutMilliseconds;
+            var outputDrained = stdoutDrain.Join(drainDeadline);
+            var errorDrained = stderrDrain.Join(drainDeadline);
+            var stderr = stderrDrain.Text;
+            if (!outputDrained || !errorDrained)
             {
-                cancellationToken.ThrowIfCancellationRequested();
+                stderr = PipeDrain.AppendDiagnostic(
+                    stderr,
+                    PipeDrain.DescribeTimeout(
+                        "conductor self-relaunch",
+                        PipeDrain.DefaultTimeoutMilliseconds,
+                        stdoutDrain,
+                        stderrDrain));
             }
 
             return new CapturedProcessResult(
-                -1,
+                process.ExitCode,
                 stdoutDrain.Text,
-                stderrDrain.Text,
-                TimedOut: true);
-        }
-
-        var drainDeadline = Environment.TickCount64 + PipeDrain.DefaultTimeoutMilliseconds;
-        var outputDrained = stdoutDrain.Join(drainDeadline);
-        var errorDrained = stderrDrain.Join(drainDeadline);
-        var stderr = stderrDrain.Text;
-        if (!outputDrained || !errorDrained)
-        {
-            stderr = PipeDrain.AppendDiagnostic(
                 stderr,
-                PipeDrain.DescribeTimeout(
-                    "conductor self-relaunch",
-                    PipeDrain.DefaultTimeoutMilliseconds,
-                    stdoutDrain,
-                    stderrDrain));
+                TimedOut: !outputDrained || !errorDrained);
         }
-
-        return new CapturedProcessResult(
-            process.ExitCode,
-            stdoutDrain.Text,
-            stderr,
-            TimedOut: !outputDrained || !errorDrained);
+        finally
+        {
+            try { launchQos?.Dispose(); } catch (Exception) { }
+        }
     }
 
     internal static (int ExitCode, string Stdout, string Stderr, bool TimedOut) RunProcessForTests(
