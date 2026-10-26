@@ -270,9 +270,9 @@ public sealed class CliConductorStatusAgentReadEnvelopeContractTests
         File.WriteAllText(workspace.ConductEventsLogPath,
             string.Join("\r\n", events.Select(item => JsonSerializer.Serialize(item))) + "\r\n");
         File.WriteAllText(Path.Combine(workspace.OrchestratorDirectory, "conduct-loop.lock"), "old lock");
-        Directory.CreateDirectory(workspace.GoalLifecycleEventsDirectory);
-        File.WriteAllText(Path.Combine(workspace.GoalLifecycleEventsDirectory, "landings.jsonl"),
-            JsonSerializer.Serialize(new { eventType = "GoalLanded", goalId = GoalB, timestamp = Start.AddMinutes(30) }) + "\r\n");
+        new SqliteOrchestratorStateRepository(workspace.SqliteStatePath).RecordPromotionFacts([
+            new GoalPromotionFact(GoalB, new string('a', 40), new string('b', 40), new string('c', 40),
+                Start.AddMinutes(30), GoalPromotionFact.MergeTrainProvenance)]);
 
         var runs = new SqliteRunEventStore(workspace.RunEventStorePath);
         await runs.AppendAsync(new(RunEventTypes.ConductorTick, null, "tick", "complete", "tick=3", null, Start.AddMinutes(45)));

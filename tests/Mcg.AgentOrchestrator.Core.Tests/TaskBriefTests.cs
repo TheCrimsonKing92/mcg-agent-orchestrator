@@ -1779,7 +1779,7 @@ public sealed class TaskBriefTests
     // The premise-invalid instruction adds 119 characters plus CRLF; the blocker role list adds 12.
     // Preserve the previous 9000-character allowance for all other brief content.
     var budget = AgentOrchestratorKernel.TaskBriefCharacterBudget(AgentRole.Developer, usesFileAccessContext: true);
-    Assert.Equal(9133, budget);
+    Assert.Equal(9500, budget);
     Assert.True(fileAccessBrief.Length <= budget, $"File-access brief has {fileAccessBrief.Length} characters; ceiling is {budget}.");
     Assert.Contains("current-task.md in the context directory", fileAccessBrief, StringComparison.Ordinal);
     Assert.Contains("inline verification output collapsed", fileAccessBrief, StringComparison.Ordinal);

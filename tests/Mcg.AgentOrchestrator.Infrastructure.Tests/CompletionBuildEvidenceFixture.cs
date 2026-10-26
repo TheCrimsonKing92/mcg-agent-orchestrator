@@ -30,7 +30,7 @@ internal sealed class CompletionBuildEvidenceFixture : WorkerDispatchTestSupport
     internal Action? BeforeChildCheckpoint;
     internal CompletionBuildEvidenceOperation? Launched;
 
-    internal CompletionBuildEvidenceFixture()
+    internal CompletionBuildEvidenceFixture(bool workerBuildProtocol1 = false)
     {
         Root = CreateSeededDispatchRepository();
         Storage = new DotnetBuildStorageRoot(Path.Combine(Root, "build-storage"));
@@ -45,7 +45,18 @@ internal sealed class CompletionBuildEvidenceFixture : WorkerDispatchTestSupport
                 File.WriteAllText(Path.Combine(directory, "Feature.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\" />");
                 File.WriteAllText(Path.Combine(directory, "Feature.cs"), "public sealed class Feature { }");
             });
-        Kernel = AgentOrchestratorKernel.FromSnapshot(fixture.Kernel.ExportSnapshot(), Clock);
+        var snapshot = fixture.Kernel.ExportSnapshot();
+        if (workerBuildProtocol1)
+            snapshot = snapshot with { Goals = snapshot.Goals.Select(goal => goal with
+            {
+                Tasks = goal.Tasks.Select(task => task with
+                {
+                    LastDispatch = task.LastDispatch! with { WorkerBuildProtocolVersion = 1 },
+                    DispatchHistory = task.DispatchHistory!.Select(dispatch => dispatch.DispatchedAt == task.LastDispatch!.DispatchedAt
+                        ? dispatch with { WorkerBuildProtocolVersion = 1 } : dispatch).ToArray()
+                }).ToArray()
+            }).ToArray() };
+        Kernel = AgentOrchestratorKernel.FromSnapshot(snapshot, Clock);
         GoalId = fixture.Goal.Id;
         TaskId = fixture.Task.Id;
         // This fixture owns the isolated bootstrap database; repositories never migrate implicitly.

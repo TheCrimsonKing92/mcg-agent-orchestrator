@@ -33,10 +33,10 @@ internal sealed partial class ConductorDriver
              (string.Equals(rule, DispatchFailureDiagnosticMarker.WorkerBuildEvidenceMissing,
                  StringComparison.Ordinal) && WorkerBuildCheckRecoveryText.NoBuildCause(
                      verification.StandardError + Environment.NewLine + verification.StandardOutput) != WorkerBuildNoBuildCause.None) ||
-             (string.Equals(rule, DispatchFailureDiagnosticMarker.WorkerBuildEvidenceMissing, StringComparison.Ordinal) &&
-              WorkerBuildCapacityEvidence.LastDispatchEndedOnCapacity(candidate))));
+             ((rule == DispatchFailureDiagnosticMarker.WorkerBuildEvidenceMissing || TaskOutcomeClassifier.IsIncompleteScopeDeclaration(rule)) &&
+              WorkerBuildInfrastructureEvidence.LastDispatchEndedOnQueueCapacity(candidate))));
         if (task is null) return null;
-        var capacity = WorkerBuildCapacityEvidence.LastDispatchEndedOnCapacity(task);
+        var capacity = WorkerBuildInfrastructureEvidence.LastDispatchEndedOnQueueCapacity(task) && !(task.CompletionBuildEvidence is { Phase: CompletionBuildEvidencePhase.CompilerFailure } build && build.DispatchAt == task.LastDispatch?.DispatchedAt);
         var cause = capacity ? WorkerBuildNoBuildCause.SlotCapacity : WorkerBuildCheckRecoveryText.NoBuildCause(
             task.LastVerification!.StandardError + Environment.NewLine + task.LastVerification.StandardOutput);
         if (!capacity && cause == WorkerBuildNoBuildCause.SlotCapacity &&
@@ -61,7 +61,7 @@ internal sealed partial class ConductorDriver
                     Decision = FailedGoalRecoveryDecisionRecords.StaleRecoveryFacts(decision.Identity, staleReason) });
         }
         ApplyPendingFailedGoalNotes(goal, pendingNotes);
-        var capacityRounds = capacity ? WorkerBuildCapacityEvidence.CapacityDispatchCount(task) : 0;
+        var capacityRounds = capacity ? WorkerBuildInfrastructureEvidence.QueueCapacityDispatchCount(task) : 0;
         var capacityVerdict = WorkerBuildCapacityVerdict.Retry;
         if (capacity)
         {
