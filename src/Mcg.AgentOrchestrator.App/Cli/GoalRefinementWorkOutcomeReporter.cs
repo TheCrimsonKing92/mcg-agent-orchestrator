@@ -1,8 +1,7 @@
-using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
-namespace Mcg.AgentOrchestrator.App.Orchestration;
+namespace Mcg.AgentOrchestrator.App.Cli;
 
 internal static class GoalRefinementWorkOutcomeReporter
 {

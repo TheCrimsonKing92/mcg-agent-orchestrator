@@ -1,6 +1,6 @@
 using Mcg.AgentOrchestrator.App.OwnerConsole;
 
-namespace Mcg.AgentOrchestrator.App.Cli;
+namespace Mcg.AgentOrchestrator.App.ReadModels;
 
 /// <summary>Reads completed fleet-wide gate attempts, retaining their first completion instant.</summary>
 internal static class ExperimentGateAttempts
