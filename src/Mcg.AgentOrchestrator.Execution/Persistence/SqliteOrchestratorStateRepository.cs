@@ -1605,6 +1605,13 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
     private static string MetadataNonTerminalPredicate() =>
         $"status NOT IN ('{GoalStatus.Completed}', '{GoalStatus.Cancelled}', '{GoalStatus.Superseded}')";
 
+    public async Task<IReadOnlyList<GoalSummary>> ListGoalBoardRowsAsync(
+        GoalBoardRowQuery query, CancellationToken cancellationToken = default)
+    {
+        await using var conn = OpenConnection();
+        return await SqliteGoalBoardRowReader.ReadAsync(conn, query, _statementObserver, cancellationToken);
+    }
+
     public async Task<IReadOnlyList<GoalSummary>> ListGoalIdStatusesAsync(CancellationToken cancellationToken = default)
     {
         await using var conn = OpenConnection();
