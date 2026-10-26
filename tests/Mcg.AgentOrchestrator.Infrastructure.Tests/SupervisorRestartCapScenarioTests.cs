@@ -116,6 +116,43 @@ public sealed class SupervisorRestartCapScenarioTests
         Assert.Empty(fixture.Host.Requests);
     }
 
+    [Xunit.Theory]
+    [Xunit.InlineData(false, "self")]
+    [Xunit.InlineData(true, "unknown")]
+    public async Task ChildIdentityFailure_RecordsDiagnosticsAndKeepsWatching(
+        bool ownerProbeThrows, string expectedLeaseOwner)
+    {
+        // Parallel-safe: the host, lease seam, clock and temporary root belong to this fixture.
+        using var fixture = new Fixture(children: 2);
+        var error = new IOException("fixture child identity failure", unchecked((int)0x80070020));
+        fixture.Seam.ChildIdentityFailure = error;
+        fixture.Seam.OwnerProbeThrowsAfterIdentityFailure = ownerProbeThrows;
+
+        Assert.Equal(0, await fixture.RunAsync().WaitAsync(TimeSpan.FromSeconds(30), Xunit.TestContext.Current.CancellationToken));
+
+        Assert.Equal(1, fixture.Seam.ChildIdentityFailures);
+        Assert.Equal(2, fixture.Host.Requests.Count);
+        Assert.Equal(1, fixture.Host.MaxInFlight);
+        Assert.False(fixture.Seam.TransferObserved.Task.IsCompleted);
+        Assert.Empty(fixture.Seam.Stopped);
+        var failure = Assert.Single(fixture.Events.Items,
+            e => e.Operation == "supervisor-handoff" && e.Status == "failed");
+        using var payload = System.Text.Json.JsonDocument.Parse(failure.PayloadJson!);
+        var detail = payload.RootElement;
+        Assert.Equal("identity", detail.GetProperty("phase").GetString());
+        Assert.Equal(nameof(IOException), detail.GetProperty("exceptionType").GetString());
+        Assert.Equal(error.Message, detail.GetProperty("message").GetString());
+        Assert.Equal(error.HResult, detail.GetProperty("hresult").GetInt32());
+        Assert.Equal(expectedLeaseOwner, detail.GetProperty("leaseOwner").GetString());
+        Assert.Equal($"child-identity:IOException:{error.Message}", detail.GetProperty("reason").GetString());
+        Assert.Equal(1, detail.GetProperty("consecutiveFailures").GetInt32());
+        Assert.Contains($"SUPERVISOR_HANDOFF_FAILED {failure.PayloadJson}", fixture.ConductEvents);
+        Assert.DoesNotContain(fixture.Events.Items,
+            e => e.Operation == "restart" && e.Status is "unexpected" or "escalated");
+        Assert.DoesNotContain(fixture.ConductEvents, IsRestartEscalation);
+        Assert.Empty(fixture.Attention);
+    }
+
     private static bool IsRestartEscalation(string line) => line.StartsWith("SUPERVISOR_ESCALATED ", StringComparison.Ordinal);
 
     private sealed class Fixture : IDisposable
@@ -223,6 +260,9 @@ public sealed class SupervisorRestartCapScenarioTests
         internal HashSet<int> FalseSelfOnTransfers { get; } = [];
         internal bool CommitBeforeThrow { get; set; }
         internal bool AutoReleaseChild { get; set; } = true;
+        internal Exception? ChildIdentityFailure { get; set; }
+        internal bool OwnerProbeThrowsAfterIdentityFailure { get; set; }
+        internal int ChildIdentityFailures { get; private set; }
         internal TaskCompletionSource TransferObserved { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal List<ConductorSupervisorProcessIdentity> Stopped { get; } = [];
         internal ConductorSupervisorProcessIdentity? Owner { get; private set; }
@@ -234,6 +274,8 @@ public sealed class SupervisorRestartCapScenarioTests
         public void Acquire(ConductorSupervisorBuildIdentity build) => Owner = Self;
         public bool IsOwner(ConductorSupervisorProcessIdentity identity)
         {
+            if (OwnerProbeThrowsAfterIdentityFailure && ChildIdentityFailures > 0)
+                throw new IOException("fixture lease unreadable");
             if (identity == Self && _falseSelfOnce)
             {
                 _falseSelfOnce = false;
@@ -267,7 +309,16 @@ public sealed class SupervisorRestartCapScenarioTests
         public bool IsAlive(ConductorSupervisorProcessIdentity identity) =>
             identity.ProcessId != 700 || !_ready || _incumbentAlive;
         public bool IsRunning(int processId) => true;
-        public ConductorSupervisorProcessIdentity Identify(int processId) => new(processId, Self.StartedAt);
+        public ConductorSupervisorProcessIdentity Identify(int processId)
+        {
+            if (ChildIdentityFailure is { } error)
+            {
+                ChildIdentityFailures++;
+                host.Release(processId - 500);
+                throw error;
+            }
+            return new(processId, Self.StartedAt);
+        }
         public Task<ConductorSupervisorProcessResult> ObserveChildAsync(
             ConductorSupervisorActiveChild child, CancellationToken cancellationToken) =>
             throw new NotSupportedException("This scenario launches its children through the host.");

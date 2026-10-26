@@ -228,12 +228,16 @@ internal sealed partial class ConductorContinuitySupervisor
         if (supervisorHandoff is null) return;
         _adoptedSupervisorTarget = null;
         _consecutiveSupervisorHandoffFailures++;
+        var leaseOwner = SafelyCheck(() => supervisorHandoff.Seam.IsOwner(supervisorHandoff.Seam.Self))
+            ? "self" : "unknown";
         RecordSupervisorEvent("supervisor-handoff", "failed", "SUPERVISOR_HANDOFF_FAILED",
             new { reason = $"child-identity:{error.GetType().Name}:{error.Message}",
                 fromCommit = supervisorHandoff.OwnBuild.CommitSha,
                 fromRunDir = supervisorHandoff.OwnBuild.RunDirectory,
                 toCommit = target.CommitSha, toRunDir = target.StagedBuildId,
-                consecutiveFailures = _consecutiveSupervisorHandoffFailures });
+                consecutiveFailures = _consecutiveSupervisorHandoffFailures,
+                phase = "identity", exceptionType = error.GetType().Name, message = error.Message,
+                hresult = error.HResult, leaseOwner });
         if (_consecutiveSupervisorHandoffFailures == 3)
             RecordSupervisorEvent("supervisor-handoff", "escalated", "SUPERVISOR_HANDOFF_ESCALATED",
                 new { consecutiveFailures = _consecutiveSupervisorHandoffFailures,
