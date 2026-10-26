@@ -4,7 +4,7 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal sealed class GoalSnapshotArchiveCadence
 {
-    internal static readonly TimeSpan RetentionAge = TimeSpan.FromDays(14);
+    internal static readonly TimeSpan RetentionAge = TimeSpan.FromDays(2);
 
     internal static GoalSnapshotArchiveCadenceResult Run(Func<DateTimeOffset, int> archive, DateTimeOffset now)
     {

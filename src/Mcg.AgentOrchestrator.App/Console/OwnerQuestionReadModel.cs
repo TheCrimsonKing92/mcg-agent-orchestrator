@@ -5,7 +5,8 @@ using Mcg.AgentOrchestrator.Infrastructure;
 namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 
 internal sealed class OwnerQuestionReadModel(
-    IOrchestratorStateQueries state, string orchestratorDirectory) : IOwnerQuestionSource
+    IOrchestratorStateQueries state, string orchestratorDirectory,
+    OwnerConsoleRefreshGoalSnapshots? snapshots = null) : IOwnerQuestionSource
 {
     private readonly Dictionary<string, string> _terminalUpdatedAt = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, QuestionCandidate> _terminalHolds = new(StringComparer.OrdinalIgnoreCase);
@@ -43,10 +44,11 @@ internal sealed class OwnerQuestionReadModel(
             foreach (var item in terminal.Where(item => changedTerminalIds.Contains(item.Id)))
                 _terminalUpdatedAt[item.Id] = item.UpdatedAt;
         }
-        var kernel = ids.Length == 0 ? new AgentOrchestratorKernel() :
+        var kernel = snapshots is not null ? null : ids.Length == 0 ? new AgentOrchestratorKernel() :
             await state.LoadGoalsAsync(ids, cancellationToken);
+        var loaded = snapshots is null ? null : await snapshots.LoadAsync(ids, cancellationToken);
         var loadedIds = ids.Select(id => id.Value).ToHashSet(StringComparer.Ordinal);
-        var loadedGoals = kernel.Goals.Where(goal => loadedIds.Contains(goal.Id.Value)).ToArray();
+        var loadedGoals = (loaded?.Goals ?? kernel!.Goals).Where(goal => loadedIds.Contains(goal.Id.Value)).ToArray();
         var goals = loadedGoals.ToDictionary(goal => goal.Id.Value, goal => goal.Status,
             StringComparer.OrdinalIgnoreCase);
         foreach (var item in terminal) goals[item.Id] = Enum.Parse<GoalStatus>(item.Status, ignoreCase: true);
@@ -57,7 +59,7 @@ internal sealed class OwnerQuestionReadModel(
         var detachedKernel = AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot([], detached));
         var authorHolds = loadedGoals.ToDictionary(goal => goal.Id.Value,
             goal => AuthorOwnerQuestionHold.TryParse(goal.CurrentHold), StringComparer.OrdinalIgnoreCase);
-        var open = kernel.HumanInputRequests.Where(request => !request.IsCompleted && loadedIds.Contains(request.GoalId.Value))
+        var open = (loaded?.Requests ?? kernel!.HumanInputRequests).Where(request => !request.IsCompleted && loadedIds.Contains(request.GoalId.Value))
             .Concat(detachedKernel.HumanInputRequests.Where(request => !request.IsCompleted))
             .Select(request => RequestCandidate(request, authorHolds.GetValueOrDefault(request.GoalId.Value)))
             .ToDictionary(candidate => candidate.Question.ItemId, StringComparer.Ordinal);

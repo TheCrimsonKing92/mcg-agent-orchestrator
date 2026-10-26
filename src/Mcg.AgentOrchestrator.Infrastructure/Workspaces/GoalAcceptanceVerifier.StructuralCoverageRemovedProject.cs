@@ -185,14 +185,14 @@ public sealed partial class GoalAcceptanceVerifier
                     baselineWorktreePath, UsesMicrosoftTestingPlatform(baselineCheck), false, cachedDiscovery);
             if (key is not null) cacheWrite = new MainBaselineDiscoveryCacheWrite(cache, key);
         }
-        var mainBuildArguments = new[]
-        {
+        string[] mainBuildArguments =
+        [
             "dotnet",
             "build",
-            baselineCheck.Project,
+            baselineCheck.Project!,
             "--verbosity",
-            "minimal"
-        };
+            "minimal", .. AcceptanceCheckCommandBuilder.AnalyzersOffBuildProperties
+        ];
         AcceptanceCheckResult mainBuild;
         var lockRemediationApplied = false;
         try

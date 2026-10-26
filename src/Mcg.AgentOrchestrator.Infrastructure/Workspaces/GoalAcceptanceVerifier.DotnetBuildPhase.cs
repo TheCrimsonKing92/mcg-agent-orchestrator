@@ -104,7 +104,7 @@ internal sealed class AcceptanceDotnetBuildPhase
 
         var firstCheck = dotnetTestChecks.FirstOrDefault();
         return new DotnetTestBuildPhase(firstCheck is null
-            ? ["dotnet", "build"]
+            ? ["dotnet", "build", .. AnalyzersOffBuildProperties]
             : BuildDotnetTestBuildArguments(firstCheck), cachePlan);
     }
 

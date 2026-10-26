@@ -5,7 +5,7 @@ using System.Text.RegularExpressions;
 namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 
 internal enum OwnerConsoleGateLaneState { Queued, Running, Done, Cached }
-internal sealed record OwnerConsoleGateMember(string Id, string Title, string Priority = "");
+internal sealed record OwnerConsoleGateMember(string Id, string Title);
 internal sealed record OwnerConsoleGateLane(string Name, OwnerConsoleGateLaneState State,
     string Outcome, string Location, TimeSpan Elapsed, double? MedianSeconds, bool IsEstimate,
     double? QuietSeconds = null, bool IsManifestLane = true,
