@@ -80,7 +80,7 @@ internal sealed partial class ConductorBatchLoop
             "LOOP_JANITORIAL_RECOVERED" => "loop-janitorial-recovered",
             "LOOP_JANITORIAL_RETRYING" => "loop-janitorial-retry",
             "LOOP_JANITORIAL_RETRY_SUCCEEDED" => "loop-janitorial-retry",
-            "LOOP_START" => "loop-start",
+            "LOOP_START" => "loop-start", "STARTUP_FIRST_TICK" => "startup-first-tick",
             "LOOP_START_DEFERRED" => "loop-start-deferred",
             "LOOP_STOP_DEFERRED" => "loop-stop-deferred",
             "LOOP_STOP" => "loop-stop",
