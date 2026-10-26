@@ -325,6 +325,13 @@ internal sealed partial class GoalRefinementService
             var disposition = SpecRefinerPlanner.ClassifyFork(fork, policy ?? ConductorAutonomyPolicy.Conservative);
             if (disposition == SpecForkDisposition.Ask)
             {
+                if (VerificationOwnershipBriefSettlement.TrySettle(fork.Kind, fork.TopicKey, fork.Question, goal.Objective, out var paragraph))
+                {
+                    AddDecisionIfMissing(decisions, fork.Question, paragraph, $"Settled by the brief's Verification ownership paragraph (topic: {topicKey}).");
+                    kernel.RecordGoalPolicyDecision(goalId, $"Spec refiner fork settled by the brief's Verification ownership paragraph: topic={topicKey}");
+                    continue;
+                }
+
                 var precedent = await _precedents.TryGetPrecedentAsync(topicKey, cancellationToken)
                     ?? await _precedents.TryGetPrecedentAsync(fork.Kind, cancellationToken);
                 if (precedent is not null)
