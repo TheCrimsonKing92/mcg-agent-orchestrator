@@ -133,7 +133,7 @@ internal sealed partial class ConductorWatchProgressReporter
         DateTimeOffset now,
         EmittedSnapshot? previous)
     {
-        var taskNumber = ConsoleViews.GetTaskDisplayNumber(goal, task.Id);
+        var taskNumber = TaskDisplayNumber.Resolve(goal, task.Id);
         var totalTasks = goal.Tasks.Count;
         var dispatch = task.LastDispatch!;
         var process = task.LastProcess;
@@ -259,7 +259,7 @@ internal sealed partial class ConductorWatchProgressReporter
 
         var machine =
             $"WATCH_TRANSITION goal={previous.GoalPrefix} {previous.Role}=✓ commit={commit} " +
-            $"files={previous.ChangedFileCount} elapsed={FormatDuration(previous.Elapsed)} next={next.RequiredRole} task={ConsoleViews.GetTaskDisplayNumber(goal, next.Id)}/{goal.Tasks.Count}";
+            $"files={previous.ChangedFileCount} elapsed={FormatDuration(previous.Elapsed)} next={next.RequiredRole} task={TaskDisplayNumber.Resolve(goal, next.Id)}/{goal.Tasks.Count}";
         var humanCommit = commit == "unknown" ? commit : commit[..Math.Min(7, commit.Length)];
         var human =
             $"[{previous.GoalPrefix}] {previous.Role} - committed {humanCommit} ({FormatFileCount(previous.ChangedFileCount)}, {FormatDuration(previous.Elapsed)}) -> {next.RequiredRole} dispatched";
@@ -291,7 +291,7 @@ internal sealed partial class ConductorWatchProgressReporter
             commit = commit[..12];
         }
 
-        var taskNumber = ConsoleViews.GetTaskDisplayNumber(goal, priorTask.Id);
+        var taskNumber = TaskDisplayNumber.Resolve(goal, priorTask.Id);
         var machine =
             $"WATCH_TRANSITION goal={previous.GoalPrefix} {previous.Role}=✓ commit={commit} " +
             $"files={previous.ChangedFileCount} elapsed={FormatDuration(previous.Elapsed)} next={next} task={taskNumber}/{goal.Tasks.Count}";
