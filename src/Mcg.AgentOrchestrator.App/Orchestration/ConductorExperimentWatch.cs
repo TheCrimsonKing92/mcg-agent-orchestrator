@@ -16,6 +16,7 @@ internal sealed class ConductorExperimentWatch
     private readonly ConductEventLogWriter? _writer;
     private readonly Func<ICollaborationItemStore> _collaborationStore;
     private readonly ExperimentWatchInputCache _inputs = new();
+    internal ExperimentWatchInputCache Inputs => _inputs;
     private readonly HashSet<(string Id, string Trigger)> _raised = [];
     private bool _rehydrated;
 
@@ -37,7 +38,11 @@ internal sealed class ConductorExperimentWatch
     {
         try
         {
-            if (!File.Exists(_workspace.ExperimentStorePath)) return;
+            if (!File.Exists(_workspace.ExperimentStorePath))
+            {
+                _inputs.Clear();
+                return;
+            }
             var experiments = ExperimentStore.OpenReadOnly(_workspace.ExperimentStorePath);
             var open = experiments.ListOpenAsync().GetAwaiter().GetResult();
             var items = _collaborationStore();
@@ -75,10 +80,25 @@ internal sealed class ConductorExperimentWatch
                 catch (Exception error) { LogFailure(error); }
             }
 
-            if (open.Count == 0) return;
+            if (open.Count == 0)
+            {
+                _inputs.Clear();
+                return;
+            }
+            var effectiveRecords = new List<(ExperimentRecord Record, ExperimentRecord Effective)>();
+            foreach (var record in open)
+            {
+                try
+                {
+                    effectiveRecords.Add((record, ExperimentMembership.Effective(record,
+                        experiments.ListMemberEventsAsync(record.Id).GetAwaiter().GetResult())));
+                }
+                catch (Exception error) { LogFailure(error); }
+            }
             // The production loop kernel excludes terminal goals; experiment readings need the
             // same durable history as experiment-show, refreshed without a writer transaction.
-            var goals = _inputs.ReadGoals(_workspace.SqliteStatePath, asOf);
+            var goals = _inputs.ReadGoals(_workspace.SqliteStatePath, asOf,
+                ExperimentGoalScope.For(effectiveRecords.Select(pair => pair.Effective).ToArray()));
             var landings = _inputs.ReadLandings(_workspace.GoalLifecycleEventsDirectory);
             var hostLedgers = ExperimentHostLedgers.Read(_workspace.ExecutionDirectory);
             var gateAttempts = new Lazy<IReadOnlyCollection<DateTimeOffset>>(
@@ -97,11 +117,10 @@ internal sealed class ConductorExperimentWatch
             var toggles = new ConductorExperimentFlagToggleController(
                 () => SqliteOperatorIntentStore.ForDirectories(_workspace.OrchestratorDirectory, _workspace.LogDirectory),
                 flags, () => GateLoadContextProbe.CaptureLiveGateOccupants().Any(occupant => occupant.CountsAsAcceptanceOccupant));
-            foreach (var record in open)
+            foreach (var (record, effective) in effectiveRecords)
             {
                 try
                 {
-                    var effective = ExperimentMembership.Effective(record, experiments.ListMemberEventsAsync(record.Id).GetAwaiter().GetResult());
                     var reading = ExperimentReading.Evaluate(effective, goals, landings, intents, asOf,
                         record.Spec.StopRule.Unit == ExperimentStopUnit.Gates
                             ? ExperimentGateStopCount.Count(record, asOf, hostLedgers, () => gateAttempts.Value)
