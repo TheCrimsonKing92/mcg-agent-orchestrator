@@ -8,6 +8,62 @@ public sealed class RoleReportEvidenceClosureTests
     private static readonly DateTimeOffset DispatchTime = new(2026, 10, 25, 12, 0, 0, TimeSpan.Zero);
 
     [Theory]
+    [InlineData("worker")]
+    [InlineData(" WORKER ")]
+    public void WorkerOwnedReportWait_PassedClasses_ClosesAsDeveloperReport(string owner)
+    {
+        var scenario = CreateScenario();
+        var request = CreateWait(scenario, owner);
+
+        var skipped = scenario.Kernel.CloseRoleReportEvidence(scenario.Goal.Id, "landing-C", _ => "attempt G1");
+
+        Assert.Empty(skipped);
+        Assert.True(request.IsCompleted);
+        Assert.Equal(HumanInputAnswerOrigin.Worker, request.AuthoritativeAnswer!.Origin);
+        Assert.StartsWith($"ROLE_REPORT_EVIDENCE owner=developer task={scenario.Developer.Id.Value}", request.Answer);
+        Assert.EndsWith(" requested_owner=worker", request.Answer);
+        Assert.Contains("gate=AlphaTests@attempt G1,BetaTests@attempt G1", request.Answer);
+        Assert.Empty(scenario.Kernel.GetPendingHumanInput(scenario.Goal.Id));
+    }
+
+    [Theory]
+    [InlineData("missing-report", "developer-report-missing")]
+    [InlineData("empty-report", "developer-report-missing")]
+    [InlineData("missing-class", "class-not-in-passed-gate:BetaTests")]
+    public void WorkerOwnedReportWait_MissingEvidence_KeepsWaitWithReason(string failure, string reason)
+    {
+        var scenario = CreateScenario(tests: failure == "missing-report" ? null :
+            failure == "empty-report" ? "deferred - " : "deferred - AlphaTests, BetaTests");
+        var request = CreateWait(scenario, "worker");
+
+        var skipped = scenario.Kernel.CloseRoleReportEvidence(scenario.Goal.Id, "landing-C",
+            name => failure == "missing-class" && name == "BetaTests" ? null : "attempt G1");
+
+        var entry = Assert.Single(skipped);
+        Assert.Equal(request.Id, entry.Key);
+        Assert.Equal(reason, entry.Value);
+        Assert.False(request.IsCompleted);
+        Assert.Null(request.Answer);
+        Assert.DoesNotContain(scenario.Goal.Timeline, item => item.Kind == ProgressKind.HumanInputReceived);
+    }
+
+    [Fact]
+    public void WorkerOwnedNonReportCriterion_LeavesWaitForReviewerClosure()
+    {
+        var scenario = CreateScenario("The Developer implements the change.");
+        var request = CreateWait(scenario, "worker");
+
+        var skipped = scenario.Kernel.CloseRoleReportEvidence(scenario.Goal.Id, "landing-C",
+            _ => throw new Exception("Non-report waits must not query gate evidence"));
+
+        Assert.False(request.IsCompleted);
+        Assert.Null(request.Answer);
+        Assert.Empty(skipped);
+        Assert.DoesNotContain(scenario.Goal.Timeline,
+            item => item.Message.StartsWith("ROLE_REPORT_EVIDENCE_SKIPPED", StringComparison.Ordinal));
+    }
+
+    [Theory]
     [InlineData("developer")]
     [InlineData(" DEVELOPER ")]
     public void DeferredReport_PassedClasses_CloseWithWorkerReceipt(string owner)
@@ -141,7 +197,7 @@ public sealed class RoleReportEvidenceClosureTests
     {
         var scenario = CreateScenario();
         var excluded = new[] { CreateWait(scenario, "operator"), CreateWait(scenario, "acceptance-gate"),
-            CreateWait(scenario, "worker"), CreateWait(scenario, "developer", "post-landing") };
+            CreateWait(scenario, "developer", "post-landing") };
         var stale = CreateWait(scenario, "developer", version: scenario.Goal.AuthoritativeBrief.Version + 1);
 
         var skipped = scenario.Kernel.CloseRoleReportEvidence(scenario.Goal.Id, "C", _ => "attempt G1");

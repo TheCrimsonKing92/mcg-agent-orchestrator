@@ -7,6 +7,69 @@ using Mcg.AgentOrchestrator.Infrastructure;
 public sealed class LandingExecutorRoleReportEvidenceTests
 {
     [Fact]
+    public void Execute_WorkerOwnedDeveloperReport_LandsLikeIncident()
+    {
+        var repo = LandingExecutorTests.CreateGitRepository();
+        try
+        {
+            var (workspace, kernel, goal, wait, candidate) = CreateCandidate(repo, owner: "worker");
+            var mainBefore = LandingExecutorTests.ReadGit(repo, "rev-parse", "main");
+            var (attemptId, _, _) = ProspectiveEvidenceGateFixture.WriteAttempt(workspace.OrchestratorDirectory,
+                goal, candidate, ProspectiveEvidenceGateFixture.PassingRows);
+
+            var result = LandingExecutor.Execute(kernel, goal, workspace);
+
+            Assert.True(result.MainAdvanced);
+            Assert.IsNotType<LandingDecision.Escalate>(result.Decision);
+            var mainAfter = LandingExecutorTests.ReadGit(repo, "rev-parse", "main");
+            Assert.NotEqual(mainBefore, mainAfter);
+            Assert.Equal(result.MergeCommitSha, mainAfter);
+            Assert.Equal(0, GitCli.Run(repo, "merge-base", "--is-ancestor", candidate, "main").ExitCode);
+            Assert.True(wait.IsCompleted);
+            Assert.StartsWith("ROLE_REPORT_EVIDENCE owner=developer", wait.Answer);
+            Assert.Contains($"landing_candidate={candidate}", wait.Answer);
+            Assert.Contains($"{ProspectiveEvidenceGateFixture.IncidentClass}@attempt {attemptId}", wait.Answer);
+            Assert.EndsWith(" requested_owner=worker", wait.Answer);
+            Assert.Empty(kernel.GetPendingHumanInput(goal.Id));
+        }
+        finally
+        {
+            LandingExecutorTests.TryDeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
+    public void Execute_WorkerOwnedEmptyReport_EscalatesAndKeepsWait()
+    {
+        var repo = LandingExecutorTests.CreateGitRepository();
+        try
+        {
+            var (workspace, kernel, goal, wait, candidate) = CreateCandidate(repo, owner: "worker", tests: "deferred - ");
+            var mainBefore = LandingExecutorTests.ReadGit(repo, "rev-parse", "main");
+            ProspectiveEvidenceGateFixture.WriteAttempt(workspace.OrchestratorDirectory,
+                goal, candidate, ProspectiveEvidenceGateFixture.PassingRows);
+
+            var result = LandingExecutor.Execute(kernel, goal, workspace);
+
+            Assert.False(result.MainAdvanced);
+            var escalation = Assert.IsType<LandingDecision.Escalate>(result.Decision);
+            Assert.Equal(2, escalation.Decision!.Rung);
+            Assert.Contains(wait.Id.Value[..8], escalation.Reason, StringComparison.Ordinal);
+            Assert.Equal(mainBefore, LandingExecutorTests.ReadGit(repo, "rev-parse", "main"));
+            Assert.False(wait.IsCompleted);
+            Assert.Null(wait.Answer);
+            Assert.Same(wait, Assert.Single(kernel.GetPendingHumanInput(goal.Id)));
+            var notes = goal.Timeline.Where(item => item.Message.StartsWith("ROLE_REPORT_EVIDENCE_SKIPPED", StringComparison.Ordinal));
+            Assert.Equal($"ROLE_REPORT_EVIDENCE_SKIPPED request={wait.Id.Value[..8]} reason=developer-report-missing",
+                Assert.Single(notes).Message);
+        }
+        finally
+        {
+            LandingExecutorTests.TryDeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
     public void Execute_PassedDeveloperReport_LandsAndClosesWait()
     {
         var repo = LandingExecutorTests.CreateGitRepository();
@@ -119,7 +182,8 @@ public sealed class LandingExecutorRoleReportEvidenceTests
     }
 
     private static (OrchestratorWorkspace Workspace, AgentOrchestratorKernel Kernel, Goal Goal,
-        HumanInputRequest Wait, string Candidate) CreateCandidate(string repo, bool failed = false)
+        HumanInputRequest Wait, string Candidate) CreateCandidate(string repo, bool failed = false,
+        string owner = "developer", string? tests = null)
     {
         // Follow CreateAcceptedCandidate's git/journal sequence; its manual Developer cannot be re-dispatched.
         var workspace = OrchestratorWorkspace.ForDirectory(repo);
@@ -137,7 +201,7 @@ public sealed class LandingExecutorRoleReportEvidenceTests
             "codex-cli", "implement", repo, started, BaseCommit: main));
         kernel.RecordDispatchResultCommit(goal.Id, developer.Id, candidate);
         var output = RoleReportEvidenceClosureTests.DeveloperOutput(
-            $"deferred - {ProspectiveEvidenceGateFixture.IncidentClass}").Replace("commit: B", $"commit: {candidate}", StringComparison.Ordinal);
+            tests ?? $"deferred - {ProspectiveEvidenceGateFixture.IncidentClass}").Replace("commit: B", $"commit: {candidate}", StringComparison.Ordinal);
         kernel.RecordDispatchExecutionResult(goal.Id, developer.Id, new TaskVerificationRecord(
             "implement", repo, 0, output, string.Empty, started.AddSeconds(1),
             WorkerResultPresent: true, HasCommittedChanges: true, DispatchStartedAt: started));
@@ -158,10 +222,10 @@ public sealed class LandingExecutorRoleReportEvidenceTests
         GoalOperationJournal.AcceptancePassed(repo, goal, "conductor:acceptance", candidate, main,
             "Passed candidate gate", DateTimeOffset.UtcNow.AddMinutes(-1));
         var wait = kernel.RequestHumanInputDeduplicated(goal.Id, null, "Provide Developer report",
-            kind: HumanWaitKind.ProspectiveAcceptanceEvidence, evidenceOwner: "developer",
+            kind: HumanWaitKind.ProspectiveAcceptanceEvidence, evidenceOwner: owner,
             plannerIdentity: new PlannerEvidenceIdentity(goal.Id.Value, developer.Id.Value,
                 goal.AuthoritativeBrief.Version, 1, "developer-report"),
-            plannerEvidence: new PlannerEvidencePayload(1, "developer-report", "post-implementation", "developer",
+            plannerEvidence: new PlannerEvidencePayload(1, "developer-report", "post-implementation", owner,
                 "Deferred report", "Developer owns; Acceptance executes", null, null, null)).Request;
         return (workspace, kernel, goal, wait, candidate);
     }
