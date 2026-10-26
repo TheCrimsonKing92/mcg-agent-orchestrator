@@ -113,7 +113,7 @@ public sealed class ActivationRemoteLaneTailAdoptionScenarioTests
         ConductorBatchLoop.BuildLiveAcceptanceCensus([], new HashSet<string>(),
             new([new(RemoteRun.RunId, new HashSet<string> { RemoteRun.Goal, "peer" })]), occupants);
 
-    private sealed class Scenario : IAsyncDisposable
+    internal sealed class Scenario : IAsyncDisposable
     {
         internal readonly RecordingEvents Events = new();
         internal readonly VirtualDeadlines Clock = new();
@@ -274,7 +274,7 @@ public sealed class ActivationRemoteLaneTailAdoptionScenarioTests
         }
     }
 
-    private sealed class VirtualDeadlines : TimeProvider
+    internal sealed class VirtualDeadlines : TimeProvider
     {
         private readonly object _gate = new();
         private DateTimeOffset _now = new ManualRemoteLaneClock().GetUtcNow();
@@ -328,7 +328,7 @@ public sealed class ActivationRemoteLaneTailAdoptionScenarioTests
             }
         }
     }
-    private sealed class ScriptedHost(Func<ConductorSupervisorProcessRequest, int, CancellationToken, Task<ConductorSupervisorProcessResult>> step)
+    internal sealed class ScriptedHost(Func<ConductorSupervisorProcessRequest, int, CancellationToken, Task<ConductorSupervisorProcessResult>> step)
         : IConductorSupervisorProcessHost
     {
         internal List<ConductorSupervisorProcessRequest> Requests { get; } = [];
@@ -339,7 +339,7 @@ public sealed class ActivationRemoteLaneTailAdoptionScenarioTests
             return step(request, index, token);
         }
     }
-    private sealed class RecordingEvents : IRunEventStore
+    internal sealed class RecordingEvents : IRunEventStore
     {
         private readonly object _gate = new();
         private readonly List<RunEventAppend> _events = [];
