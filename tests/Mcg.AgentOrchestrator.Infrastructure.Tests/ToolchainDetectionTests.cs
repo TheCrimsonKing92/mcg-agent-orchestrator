@@ -94,6 +94,72 @@ public sealed class ToolchainDetectionTests
         Xunit.Assert.Equal(Toolchain.Go, result);
     }
 
+    [Xunit.Theory(DisplayName = "TargetToolchainDetector_detects_dotnet_from_root_level_marker")]
+    [Xunit.InlineData("MyApp.csproj")]
+    [Xunit.InlineData("MyApp.fsproj")]
+    [Xunit.InlineData("MyApp.vbproj")]
+    [Xunit.InlineData("MyApp.slnx")]
+    public void TargetToolchainDetectorDetectsDotnetFromRootLevelMarker(string marker)
+    {
+        var root = CreateTempDirectory();
+        File.WriteAllText(Path.Combine(root, marker), "");
+
+        var result = TargetToolchainDetector.Detect(root);
+
+        Xunit.Assert.Equal(Toolchain.Dotnet, result);
+    }
+
+    [Xunit.Fact(DisplayName = "TargetToolchainDetector_prefers_go_over_root_csproj")]
+    public void TargetToolchainDetectorPrefersGoOverRootCsproj()
+    {
+        var root = CreateTempDirectory();
+        File.WriteAllText(Path.Combine(root, "go.mod"), "module example.com/myapp\n\ngo 1.21\n");
+        File.WriteAllText(Path.Combine(root, "MyApp.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+
+        var result = TargetToolchainDetector.Detect(root);
+
+        Xunit.Assert.Equal(Toolchain.Go, result);
+    }
+
+    [Xunit.Fact(DisplayName = "TargetToolchainDetector_prefers_node_over_root_csproj")]
+    public void TargetToolchainDetectorPrefersNodeOverRootCsproj()
+    {
+        var root = CreateTempDirectory();
+        File.WriteAllText(Path.Combine(root, "package.json"), "{\"name\":\"my-app\"}");
+        File.WriteAllText(Path.Combine(root, "MyApp.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+
+        var result = TargetToolchainDetector.Detect(root);
+
+        Xunit.Assert.Equal(Toolchain.Node, result);
+    }
+
+    [Xunit.Fact(DisplayName = "TargetToolchainDetector_ignores_root_files_that_are_not_project_markers")]
+    public void TargetToolchainDetectorIgnoresRootFilesThatAreNotProjectMarkers()
+    {
+        var root = CreateTempDirectory();
+        File.WriteAllText(Path.Combine(root, "Directory.Build.props"), "<Project />");
+        File.WriteAllText(Path.Combine(root, "MyApp.csproj.user"), "<Project />");
+        File.WriteAllText(Path.Combine(root, "global.json"), "{}");
+        File.WriteAllText(Path.Combine(root, "README.md"), "# MyApp");
+
+        var result = TargetToolchainDetector.Detect(root);
+
+        Xunit.Assert.Equal(Toolchain.Unknown, result);
+    }
+
+    [Xunit.Fact(DisplayName = "TargetToolchainDetector_keeps_two_level_depth_bound")]
+    public void TargetToolchainDetectorKeepsTwoLevelDepthBound()
+    {
+        var root = CreateTempDirectory();
+        var deep = Path.Combine(root, "a", "b", "c");
+        Directory.CreateDirectory(deep);
+        File.WriteAllText(Path.Combine(deep, "Deep.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+
+        var result = TargetToolchainDetector.Detect(root);
+
+        Xunit.Assert.Equal(Toolchain.Unknown, result);
+    }
+
     [Xunit.Fact(DisplayName = "TargetToolchainDetector_go_extensions_include_dot_go")]
     public void TargetToolchainDetectorGoExtensionsIncludeDotGo()
     {
@@ -204,6 +270,44 @@ public sealed class ToolchainDetectionTests
         Xunit.Assert.Contains("subscription workers must not run raw `dotnet test`", verification, StringComparison.Ordinal);
         Xunit.Assert.DoesNotContain("raw `dotnet build`", verification, StringComparison.Ordinal);
         Xunit.Assert.Contains("does not run tests or spawn testhost", verification, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "WorkerContextArtifacts_deterministic_verification_requires_worker_build_check_for_root_only_csproj")]
+    public void WorkerContextArtifactsDeterministicVerificationRequiresWorkerBuildCheckForRootOnlyCsproj()
+    {
+        var root = CreateTempDirectory();
+        File.WriteAllText(Path.Combine(root, "MyApp.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+        File.WriteAllText(Path.Combine(root, ".git"), "gitdir: ../something");
+
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Fix tests in src/MyApp/MyApp.cs");
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        var task = goal.Tasks.First(t => t.RequiredRole == AgentRole.Developer);
+
+        var contextDir = WorkerContextArtifacts.Write(goal, task, root);
+        var verification = File.ReadAllText(Path.Combine(contextDir, "deterministic-verification.md"));
+
+        Xunit.Assert.Contains("## Worker Build Check", verification, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("Run the project's standard build and test commands.", verification, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "WorkerContextArtifacts_workflow_brokers_uses_build_only_for_root_only_csproj")]
+    public void WorkerContextArtifactsWorkflowBrokersUsesBuildOnlyForRootOnlyCsproj()
+    {
+        var root = CreateTempDirectory();
+        File.WriteAllText(Path.Combine(root, "MyApp.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+        File.WriteAllText(Path.Combine(root, ".git"), "gitdir: ../something");
+
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Fix tests in src/MyApp/MyApp.cs");
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        var task = goal.Tasks.First(t => t.RequiredRole == AgentRole.Developer);
+
+        var contextDir = WorkerContextArtifacts.Write(goal, task, root);
+        var brokers = File.ReadAllText(Path.Combine(contextDir, "workflow-brokers.md"));
+
+        Xunit.Assert.Contains("- build-only", brokers.ReplaceLineEndings("\n").Split('\n'));
+        Xunit.Assert.DoesNotContain("run the project's test suite", brokers, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "GoalObjectivePlanner_required_tools_does_not_leak_dotnet_script_for_generic_build_goal")]
