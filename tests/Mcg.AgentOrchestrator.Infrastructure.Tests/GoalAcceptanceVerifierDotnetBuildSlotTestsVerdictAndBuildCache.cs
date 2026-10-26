@@ -533,11 +533,122 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
         }
     }
 
+    private static void EnableBaseBuildCache(string root)
+    {
+        var manifestPath = Path.Combine(root, "config", "acceptance-manifest.json");
+        var manifest = JsonNode.Parse(File.ReadAllText(manifestPath))!.AsObject();
+        manifest["engine"]!["baseBuildCacheEnabled"] = true;
+        File.WriteAllText(manifestPath, manifest.ToJsonString());
+    }
+
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_slot_gate_skips_base_build_cache_when_switch_is_off")]
+    public async Task GoalAcceptanceVerifierSlotGateSkipsBaseBuildCacheWhenSwitchIsOff()
+    {
+        var calls = new List<string[]>();
+        var root = CreateCheckedInManifestShapeWorkspace();
+        var cacheRoot = Path.Combine(root, "base-cache");
+        var seedArtifacts = Path.Combine(root, "seed-artifacts");
+        var cache = new DotnetBaseBuildCache(cacheRoot);
+        File.WriteAllText(Path.Combine(root, "Mcg.AgentOrchestrator.sln"), string.Empty);
+        var mainSha = new string('a', 40);
+        var restoredProjects = CacheFixtureRestoreProjects("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ChaosGateNoWorkerResultTests.cs");
+        foreach (var project in restoredProjects)
+        {
+            WriteProjectArtifacts(seedArtifacts, project, $"cached:{project}");
+        }
+
+        cache.Publish(mainSha, seedArtifacts, restoredProjects, new("fixture-v1"));
+        var mainShaCalls = 0;
+        var identityCalls = 0;
+        TestOverrides.ResolveBaseBuildMainShaForTests = _ =>
+        {
+            Interlocked.Increment(ref mainShaCalls);
+            return mainSha;
+        };
+        TestOverrides.BaseBuildCacheForTests = cache;
+        TestOverrides.ResolveBaseBuildIdentityForTests = () =>
+        {
+            Interlocked.Increment(ref identityCalls);
+            return new("fixture-v1");
+        };
+        try
+        {
+            var verifier = new GoalAcceptanceVerifier(TestOverrides, (args, _, _) =>
+            {
+                calls.Add(args);
+                if (args.SequenceEqual(["dotnet", "build-server", "shutdown"]) ||
+                    args.Length > 0 && args[0] == "git")
+                {
+                    return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, ""));
+                }
+
+                if (args.Length >= 2 && args[0] == "dotnet" && args[1] == "build")
+                {
+                    var artifactsPath = GetArtifactsPath(args);
+                    Assert.DoesNotContain(cacheRoot, artifactsPath, StringComparison.OrdinalIgnoreCase);
+                    WriteProjectArtifacts(
+                        artifactsPath,
+                        "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
+                        "changed");
+                    return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Build succeeded."));
+                }
+
+                if (args.Length >= 2 && args[0] == "dotnet" && args[1] == "test")
+                {
+                    return Task.FromResult(CreatePassingVstestResult(args));
+                }
+
+                if (args.Contains("--report-trx-filename"))
+                {
+                    WriteMtpTrx(args, 1, ["GreenPartition.Passes"]);
+                    return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Passed: 1"));
+                }
+
+                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, ""));
+            });
+
+            AcceptanceVerificationResult? result = null;
+            var output = AsyncLocalConsoleRouter.Capture(() =>
+                result = verifier.RunAsync(
+                    root,
+                    new GoalId("12345678123456781234567812345678"),
+                    changedFiles: ["tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ChaosGateNoWorkerResultTests.cs"],
+                    stableSlotIndex: 0)
+                    .GetAwaiter()
+                    .GetResult());
+
+            Assert.NotNull(result);
+            Assert.True(result!.Passed, DescribeFailedChecks(result));
+            Assert.Equal(0, mainShaCalls);
+            Assert.Equal(0, identityCalls);
+            var buildCalls = calls
+                .Where(call => call.Length >= 2 && call[0] == "dotnet" && call[1] == "build")
+                .ToArray();
+            Assert.Single(buildCalls);
+            Assert.Contains("Mcg.AgentOrchestrator.sln", buildCalls[0], StringComparer.OrdinalIgnoreCase);
+            Assert.DoesNotContain("-p:BuildProjectReferences=false", buildCalls[0]);
+            var artifacts = GetArtifactsPath(buildCalls[0]);
+            Assert.False(File.Exists(Path.Combine(artifacts, "bin", "Mcg.AgentOrchestrator.Core", "debug_net10.0", "cache.txt")));
+            Assert.DoesNotContain("BASE_BUILD_CACHE", output, StringComparison.Ordinal);
+            Assert.DoesNotContain(result.Checks!, check =>
+                check.ResultSummary?.Contains("base-build-cache", StringComparison.Ordinal) == true);
+        }
+        finally
+        {
+            TestOverrides.ResolveBaseBuildMainShaForTests = null;
+            TestOverrides.BaseBuildCacheForTests = null;
+            TestOverrides.ResolveBaseBuildIdentityForTests = null;
+            TryDeleteStableSlotHeartbeat(0);
+            DeleteDirectoryWithRetry(root);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_slot_gate_uses_base_build_cache_for_unchanged_projects")]
     public async Task GoalAcceptanceVerifierSlotGateUsesBaseBuildCacheForUnchangedProjects()
     {
         var calls = new List<string[]>();
         var root = CreateCheckedInManifestShapeWorkspace();
+        EnableBaseBuildCache(root);
         var cacheRoot = Path.Combine(root, "base-cache");
         var seedArtifacts = Path.Combine(root, "seed-artifacts");
         var cache = new DotnetBaseBuildCache(cacheRoot);
@@ -642,6 +753,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
     {
         var calls = new List<string[]>();
         var root = CreateCheckedInManifestShapeWorkspace();
+        EnableBaseBuildCache(root);
         var cacheRoot = Path.Combine(root, "base-cache");
         var seedArtifacts = Path.Combine(root, "seed-artifacts");
         var cache = new DotnetBaseBuildCache(cacheRoot);
@@ -746,6 +858,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
     {
         var calls = new List<string[]>();
         var root = CreateCheckedInManifestShapeWorkspace();
+        EnableBaseBuildCache(root);
         var cacheRoot = Path.Combine(root, "base-cache");
         var cache = new DotnetBaseBuildCache(cacheRoot);
         File.WriteAllText(Path.Combine(root, "Mcg.AgentOrchestrator.sln"), string.Empty);

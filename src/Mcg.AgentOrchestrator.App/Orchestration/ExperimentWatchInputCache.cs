@@ -15,29 +15,50 @@ internal sealed class ExperimentWatchInputCache
 
     internal int LastHydratedGoalCount { get; private set; }
     internal int LastParsedJournalCount { get; private set; }
+    internal int RetainedGoalCount => _goals.Values.Count(entry => entry.Goal is not null);
+    internal IReadOnlyCollection<string> RetainedGoalIds => _goals.Where(entry => entry.Value.Goal is not null)
+        .Select(entry => entry.Key).ToArray();
 
-    internal IReadOnlyCollection<Goal> ReadGoals(string statePath, DateTimeOffset asOf)
+    internal void Clear()
     {
-        if (!File.Exists(statePath))
+        _goals.Clear();
+        _lastFullRead = null;
+        LastHydratedGoalCount = 0;
+    }
+
+    internal IReadOnlyCollection<Goal> ReadGoals(string statePath, DateTimeOffset asOf) =>
+        ReadGoals(statePath, asOf, ExperimentGoalScope.All);
+
+    internal IReadOnlyCollection<Goal> ReadGoals(string statePath, DateTimeOffset asOf, ExperimentGoalScope scope)
+    {
+        if (scope.IsEmpty || !File.Exists(statePath))
         {
-            _goals.Clear();
-            _lastFullRead = null;
-            LastHydratedGoalCount = 0;
+            Clear();
             return [];
         }
 
         var path = Path.GetFullPath(statePath);
         var repository = SqliteOrchestratorStateRepository.OpenReadOnly(statePath);
         // Capture versions before hydration so a concurrent save forces another load next tick.
-        var metadata = repository.ListGoalMetadataAsync().GetAwaiter().GetResult();
+        var metadata = repository.ListGoalMetadataAsync().GetAwaiter().GetResult()
+            .Where(row => scope.Includes(row.Id, row.UpdatedAt)).ToArray();
         var fullRead = _lastFullRead is null || _statePath != path ||
             asOf < _lastFullRead.Value || asOf - _lastFullRead.Value >= FullRefreshInterval;
         IReadOnlyCollection<Goal> loaded;
         int hydrated;
         if (fullRead)
         {
-            loaded = ExperimentGoals.Read(statePath);
-            hydrated = loaded.Count;
+            if (ReferenceEquals(scope, ExperimentGoalScope.All))
+            {
+                loaded = ExperimentGoals.Read(statePath);
+                hydrated = loaded.Count;
+            }
+            else
+            {
+                var ids = metadata.Select(row => new GoalId(row.Id)).ToArray();
+                loaded = ids.Length == 0 ? [] : repository.LoadGoalsAsync(ids).GetAwaiter().GetResult().Goals;
+                hydrated = ids.Length;
+            }
         }
         else
         {
