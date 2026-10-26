@@ -17,7 +17,8 @@ public sealed class ConductorAttemptDirectoryScopeTests
         var stale = Folder(goals[2].Id.Value, now.AddHours(-2));
         var unknown = Folder(new string('d', 32), now.AddHours(-2));
         var other = Folder("operator", now.AddHours(-2));
-        var uppercase = Folder(new string('A', 32), now.AddHours(-2));
+        // Use a distinct name even on case-insensitive filesystems (the live goal uses 'a').
+        var uppercase = Folder(new string('F', 32), now.AddHours(-2));
         var future = Folder(new string('e', 32), now.AddHours(1));
         var window = TimeSpan.FromMinutes(15);
         Assert.Equal(new[] { live, recent, other, uppercase, future }.Order(),
