@@ -463,7 +463,9 @@ try {
         "-maxcpucount:$(Get-BuildMaxCpuCount)",
         "-p:BuildInParallel=false",
         "-clp:ErrorsOnly",
-        "-tl:off"
+        "-tl:off",
+        "-p:RunAnalyzers=false",
+        "-p:EnforceCodeStyleInBuild=false"
     )
 
     $treeDigest = Get-WorktreeTreeDigest -Root $repositoryRoot -TemporaryRoot $processTempPath

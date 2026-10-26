@@ -9,6 +9,9 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 
 internal static class AcceptanceCheckCommandBuilder
 {
+    // Infrastructure.Tests used 574 s of analyzer thread time vs 222 s of Csc wall time; analyzer findings are never errors outside the gate.
+    internal static IReadOnlyList<string> AnalyzersOffBuildProperties { get; } = ["-p:RunAnalyzers=false", "-p:EnforceCodeStyleInBuild=false"];
+
     internal static bool IsDotnetCommand(string[] arguments) =>
         arguments.Length > 0 && arguments[0].Equals("dotnet", StringComparison.OrdinalIgnoreCase);
 

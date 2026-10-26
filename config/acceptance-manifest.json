@@ -128,7 +128,7 @@
       },
       {
         "name": "Goal acceptance build slots",
-        "filter": "FullyQualifiedName~GoalAcceptanceVerifierDotnetBuildSlotTests|FullyQualifiedName~FocusedEvidenceOverflowContinuationTests|FullyQualifiedName~StructuralCoverageVerifierPermitWaitTests",
+        "filter": "FullyQualifiedName~GoalAcceptanceVerifierDotnetBuildSlotTests|FullyQualifiedName~FocusedEvidenceOverflowContinuationTests|FullyQualifiedName~StructuralCoverageVerifierPermitWaitTests|FullyQualifiedName~GoalAcceptanceVerifierDotnetBuildSlotTestsAnalyzerAuthority",
         "estimatedSerialSeconds": 335.4,
         "exclusiveResourceKeys": [ "xunit:JobAccounting" ]
       },

@@ -42,6 +42,15 @@ internal sealed record AcceptanceDotnetBuildPhaseHooks(
 
 internal sealed class AcceptanceDotnetBuildPhase
 {
+    internal static DotnetTestBuildPhase WithoutAnalyzers(DotnetTestBuildPhase phase)
+    {
+        var arguments = new List<string>(phase.BuildArguments);
+        foreach (var property in AnalyzersOffBuildProperties)
+            if (!arguments.Contains(property, StringComparer.Ordinal))
+                arguments.Add(property);
+        return new DotnetTestBuildPhase([.. arguments], phase.CachePlan);
+    }
+
     internal static AcceptanceCheckResult FailureResult(
         BuildPhaseManifestCheck check, AcceptanceCheckResult buildResult, bool captureLimited)
     {
