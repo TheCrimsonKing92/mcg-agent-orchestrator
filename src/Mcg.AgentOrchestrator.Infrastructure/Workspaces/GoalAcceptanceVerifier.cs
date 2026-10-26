@@ -4538,7 +4538,6 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(repositoryRoot);
         environment.TryGetValue(NuGetPackagesVariable, out var nugetPackages);
-        var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
 
         var allowed = HermeticSystemDrive.WithResolvedSystemDrive(environment
             .Where(pair => IsInheritedHermeticVerificationEnvironmentVariable(pair.Key))
@@ -4558,9 +4557,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var dotnetCliHome = string.IsNullOrWhiteSpace(buildEnvironmentRoot)
             ? profileRoot : Path.Combine(buildEnvironmentRoot, "dotnet-cli-home");
         Directory.CreateDirectory(dotnetCliHome);
-        nugetPackages = string.IsNullOrWhiteSpace(nugetPackages)
-            ? DefaultNuGetGlobalPackagesFolder(string.IsNullOrWhiteSpace(userProfile) ? profileRoot : userProfile)
-            : nugetPackages;
+        nugetPackages = AcceptanceTempRootNames.ResolveNuGetPackagesFolder(nugetPackages);
         environment["HOME"] = profileRoot;
         environment["USERPROFILE"] = profileRoot;
         environment["DOTNET_CLI_HOME"] = dotnetCliHome;
