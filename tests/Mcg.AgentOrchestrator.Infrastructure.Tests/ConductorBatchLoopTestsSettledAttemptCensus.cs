@@ -30,6 +30,7 @@ public sealed class ConductorBatchLoopTestsSettledAttemptCensus(ITestOutputHelpe
             var reads = new List<string>();
             var historicalClassifications = 0;
             var launches = 0;
+            string? successorAttemptId = null;
             var holder = new SpawnProcessIdentity(2_000_000_003, now, "fixture-holder.exe");
             var lease = new AcceptanceHolderLease(utcNow: () => now,
                 classify: _ => SpawnTrackedProcessStatus.LiveMatch, attach: _ => new EmptyDisposable(),
@@ -38,6 +39,11 @@ public sealed class ConductorBatchLoopTestsSettledAttemptCensus(ITestOutputHelpe
                 utcNow: () => now, classifyHolder: attempt =>
                 {
                     if (attempt.AttemptId == legacy.AttemptId) return candidateStatus;
+                    if (attempt.AttemptId == successorAttemptId)
+                    {
+                        Assert.Equal(holder.ProcessId, attempt.OwnerProcessId);
+                        return SpawnTrackedProcessStatus.LiveMatch;
+                    }
                     historicalClassifications++;
                     Assert.Contains(attempt.MetadataPath, historicalPaths);
                     return SpawnTrackedProcessStatus.DeadOrRecycled;
@@ -49,6 +55,7 @@ public sealed class ConductorBatchLoopTestsSettledAttemptCensus(ITestOutputHelpe
                     Assert.Equal(SpawnTrackedProcessStatus.DeadOrRecycled, candidateStatus);
                     Assert.True(File.Exists(LegacyAcceptanceHolderSettlement.TerminalReceiptPath(AcceptanceHolderBinding.For(legacy))));
                     launches++;
+                    successorAttemptId = launch.Attempt.AttemptId;
                     using var claim = lease.Claim(AcceptanceHolderBinding.For(launch.Attempt), holder);
                     return new(holder.ProcessId, holder.StartedAt, holder.ImagePath);
                 });
@@ -95,6 +102,7 @@ public sealed class ConductorBatchLoopTestsSettledAttemptCensus(ITestOutputHelpe
             var successor = Assert.Single(coordinator.GetAllCapacityReservingAttempts());
             Assert.Equal(0, successor.SlotIndex);
             Assert.NotEqual(legacy.AttemptId, successor.AttemptId);
+            Assert.Equal(successorAttemptId, successor.AttemptId);
             Assert.Equal(1, launches);
 
             ConductorParallelAcceptanceAttempt WriteAttempt(string goalId, string id)
