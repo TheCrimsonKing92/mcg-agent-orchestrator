@@ -666,6 +666,17 @@ internal static partial class TerminalGoalSweep
 
             if (HasStandingTerminalDisposition(executionDirectory, goal, branchFacts))
             {
+                if (goal.Status == GoalStatus.Cancelled &&
+                    hasTerminalTaskDesync &&
+                    !TryBuildTerminalLiveDispatchBlocker(goal, prefix, out _, out _))
+                {
+                    CloseStaleTasksOnTerminalGoal(kernel, goal, prefix, desyncEvidence, repairs);
+                    if (repairs.Count > 0)
+                    {
+                        results.Add(new TerminalGoalSweepGoalResult(originalGoal.Id, prefix, repairs, blockers));
+                    }
+                }
+
                 continue;
             }
 

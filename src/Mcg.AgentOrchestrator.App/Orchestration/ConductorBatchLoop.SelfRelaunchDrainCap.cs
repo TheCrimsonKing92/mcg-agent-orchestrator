@@ -49,7 +49,7 @@ internal sealed partial class ConductorBatchLoop
                 {
                     if (process.ProcessIdentityStartedAt is null)
                         return new(false, false, " reason=identity-unproven");
-                    if (excludedGoals.Contains(goal.Id.Value) || IsTerminalGoal(goal) ||
+                    if (excludedGoals.Contains(goal.Id.Value) || ConductorWorkingSet.IsTerminalGoal(goal) ||
                         reapedGoals.Contains(goal.Id.Value))
                         return new(false, false, " reason=goal-ineligible");
                 }
