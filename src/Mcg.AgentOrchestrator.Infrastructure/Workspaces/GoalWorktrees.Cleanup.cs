@@ -243,7 +243,7 @@ public static partial class GoalWorktrees
             if (removal.ExitCode != 0 && IsRegisteredWorktree(executionDirectory, path, cleanupBudget.RemainingMilliseconds))
             {
                 var safetyFailure = "terminal cleanup was not authorized";
-                if (!forceTerminalCleanup ||
+                if (!(forceTerminalCleanup || CleanTerminalWorktreeFallback.Allows(path, kernel, goalId)) ||
                     !CanDirectDeleteTerminalWorktree(executionDirectory, path, kernel, out safetyFailure))
                 {
                     var failureReason = forceTerminalCleanup
@@ -767,7 +767,7 @@ public static partial class GoalWorktrees
         return true;
     }
 
-    private static bool IsTerminalCleanupStatus(GoalStatus status) =>
+    internal static bool IsTerminalCleanupStatus(GoalStatus status) =>
         status is GoalStatus.Completed or GoalStatus.Failed or GoalStatus.Cancelled or GoalStatus.Superseded;
 
     private static void ClearReadOnlyAttributes(string path)
