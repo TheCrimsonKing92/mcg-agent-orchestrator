@@ -9,7 +9,8 @@ internal sealed class OwnerConsoleViewModelBuilder(IOrchestratorStateQueries sta
     IOwnerQuestionSource questions, IConductorLiveness liveness, IOwnerGoalEpicLookup epics, TimeProvider clock,
     Func<OwnerConductEvent, OwnerActivityTestEvidence?>? testEvidence = null, Func<string, string?>? gateMotion = null,
     Func<DateTimeOffset?>? latestTick = null,
-    Func<IReadOnlyDictionary<string, string>, OwnerConsoleGateProgress?>? gateProgress = null)
+    Func<IReadOnlyDictionary<string, string>, OwnerConsoleGateProgress?>? gateProgress = null,
+    OwnerConsoleRefreshGoalSnapshots? snapshots = null)
 {
     internal const int MaxActivityItems = 100;
     internal const int RecentTerminalTitleRows = 200;
@@ -68,18 +69,19 @@ internal sealed class OwnerConsoleViewModelBuilder(IOrchestratorStateQueries sta
         var board = ImmutableArray.CreateBuilder<OwnerConsoleBoardRow>();
         if (ids.Length > 0)
         {
-            var kernel = await state.LoadGoalsAsync(ids, cancellationToken);
+            var loaded = snapshots is null ? (await state.LoadGoalsAsync(ids, cancellationToken)).Goals :
+                (await snapshots.LoadAsync(ids, cancellationToken)).Goals;
             // Retain roles for the tail's final read after a goal leaves the board.
             var roles = new Dictionary<string, AgentRole>(_roles);
-            foreach (var task in kernel.Goals.Where(goal => ids.Contains(goal.Id)).SelectMany(goal => goal.Tasks))
+            foreach (var task in loaded.Where(goal => ids.Contains(goal.Id)).SelectMany(goal => goal.Tasks))
                 roles[task.Id.Value] = task.RequiredRole;
             _roles = roles;
             var goals = new Dictionary<string, Goal>(_goals);
-            foreach (var goal in kernel.Goals) goals[goal.Id.Value] = goal;
+            foreach (var goal in loaded) goals[goal.Id.Value] = goal;
             _goals = goals;
             lock (_observationGate)
             {
-                foreach (var goal in kernel.Goals)
+                foreach (var goal in loaded)
                 {
                     var hasHold = goal.CurrentHold is not null;
                     if (_previousHolds.GetValueOrDefault(goal.Id.Value) && !hasHold)
@@ -87,7 +89,7 @@ internal sealed class OwnerConsoleViewModelBuilder(IOrchestratorStateQueries sta
                     _previousHolds[goal.Id.Value] = hasHold;
                 }
             }
-            var ranked = kernel.Goals.Where(goal => ids.Contains(goal.Id))
+            var ranked = loaded.Where(goal => ids.Contains(goal.Id))
                 .Select(goal => (Goal: goal, Key: OwnerConsoleBoardSortKey.For(goal)))
                 .Where(item => IsActive(item.Goal.Status) || item.Key.Rank == OwnerConsoleAttention.RecentTerminal &&
                     item.Key.Since is { } at && now - at <= TimeSpan.FromHours(24)).OrderBy(item => item.Key).ToArray();

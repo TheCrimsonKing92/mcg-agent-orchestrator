@@ -18,6 +18,7 @@ public sealed class CliCommandCapabilitiesTestsQueryRouteConvention
             ["goals"] = [["goals"], ["goals", "--epic", "Board"], ["goals", "--epic=Board"],
                 ["goals", "subscribe", "abc10000", "--once"], ["goals", "subscribe", "--goal-prefix", "abc10000", "--once"]],
             ["monitor-goal"] = [["monitor-goal", "abc10000", "--once"], ["monitor-goal", "abc10000", "--once", "--format", "ndjson"]],
+            ["monitor"] = [["monitor", "abc10000"], ["monitor"]],
             ["failure-clusters"] = [["failure-clusters"]],
             ["storage-health"] = [["storage-health"], ["storage-health", "--json"]],
             ["build-attribution"] = [["build-attribution"]],
