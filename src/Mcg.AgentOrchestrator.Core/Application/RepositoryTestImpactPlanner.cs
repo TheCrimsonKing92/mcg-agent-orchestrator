@@ -19,7 +19,8 @@ public enum RepositoryTestProject
     Acceptance,
     ProviderEnvironment,
     Cli,
-    StorageRetention
+    StorageRetention,
+    OwnerConsole
 }
 
 public enum ReverseDependencyDegradationKind
