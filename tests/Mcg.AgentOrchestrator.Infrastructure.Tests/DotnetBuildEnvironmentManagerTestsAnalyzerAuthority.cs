@@ -8,7 +8,7 @@ using ManifestCheck = Mcg.AgentOrchestrator.Infrastructure.GoalAcceptanceVerifie
 public sealed class DotnetBuildEnvironmentManagerTestsAnalyzerAuthority
 {
     [Xunit.Fact]
-    public void GateBuild_AnalyzerErrorBlocksUntilAnalyzersAreDisabled()
+    public void GateBuild_ArgumentsCarryAnalyzersOffToTheCompiler()
     {
         var root = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "analyzer-authority-" + Guid.NewGuid().ToString("N")));
         var repository = Path.TrimEndingDirectorySeparator(Path.GetFullPath(VerifiedRepositoryRoot.Find()));
@@ -34,16 +34,19 @@ public sealed class DotnetBuildEnvironmentManagerTestsAnalyzerAuthority
                 null, PolicyShardPlan.NotApplicable("analyzer negative control"), _ => null);
             Assert.Equal("dotnet", phase.BuildArguments[0]);
             Assert.Equal("build", phase.BuildArguments[1]);
+            foreach (var property in AcceptanceCheckCommandBuilder.AnalyzersOffBuildProperties)
+                Assert.Single(phase.BuildArguments, argument => argument == property);
 
             var gate = Build(phase, projectRoot, Path.Combine(root, "artifacts-gate"));
-            Assert.True(gate.ExitCode != 0, gate.Stdout + gate.Stderr);
-            Assert.Contains("error CA1050", gate.Stdout + gate.Stderr, StringComparison.Ordinal);
+            Assert.True(gate.ExitCode == 0, gate.Stdout + gate.Stderr);
+            Assert.DoesNotContain("CA1050", gate.Stdout + gate.Stderr, StringComparison.Ordinal);
 
-            var withoutAnalyzers = Build(AcceptanceDotnetBuildPhase.WithoutAnalyzers(phase),
-                projectRoot, Path.Combine(root, "artifacts-off"));
-            Assert.True(withoutAnalyzers.ExitCode == 0, withoutAnalyzers.Stdout + withoutAnalyzers.Stderr);
-            Assert.DoesNotContain("CA1050", withoutAnalyzers.Stdout + withoutAnalyzers.Stderr,
-                StringComparison.Ordinal);
+            var controlPhase = new DotnetTestBuildPhase([.. phase.BuildArguments.Where(argument =>
+                !AcceptanceCheckCommandBuilder.AnalyzersOffBuildProperties.Contains(argument, StringComparer.Ordinal))],
+                phase.CachePlan);
+            var control = Build(controlPhase, projectRoot, Path.Combine(root, "artifacts-control"));
+            Assert.True(control.ExitCode != 0, control.Stdout + control.Stderr);
+            Assert.Contains("error CA1050", control.Stdout + control.Stderr, StringComparison.Ordinal);
         }
         finally
         {
