@@ -26,12 +26,9 @@ public sealed class GoalSnapshotArchive(JsonSerializerOptions serializerOptions)
                 WHERE status IN ('{GoalStatus.Completed}', '{GoalStatus.Cancelled}', '{GoalStatus.Superseded}')
                   AND CASE WHEN json_valid(snapshot_json)
                       THEN COALESCE(json_extract(snapshot_json, '$.IsMetadataOnly'), 0) = 0
-                        AND json_extract(snapshot_json, '$.CurrentHold') IS NULL
-                        AND NOT EXISTS (
-                            SELECT 1 FROM json_each(goals.snapshot_json, '$.Tasks') AS task
-                            WHERE json_extract(task.value, '$.Status') NOT IN
-                                ('{WorkTaskStatus.Completed}', '{WorkTaskStatus.Cancelled}')
-                        )
+                        AND COALESCE(json_extract(snapshot_json, '$.CurrentHold.State') COLLATE NOCASE NOT IN
+                            ('steward-owner-question', 'author-owner-question'), 1)
+                        AND {TerminalOpenWorkIndex.OpenWorkFlagSql("status", "goals.snapshot_json")} = 0
                       ELSE 0 END
                   AND NOT EXISTS (SELECT 1 FROM goal_snapshot_archive WHERE goal_id = goals.id)
                 )

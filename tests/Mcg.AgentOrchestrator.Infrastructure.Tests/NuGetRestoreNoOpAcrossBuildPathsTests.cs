@@ -1,5 +1,6 @@
 // Parallel-safe: each fact owns its fixture, artifacts and child environments; the shared packages folder is never cleaned.
 using System.Diagnostics;
+using System.Xml.Linq;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -77,6 +78,122 @@ public sealed class NuGetRestoreNoOpAcrossBuildPathsTests(ITestOutputHelper outp
 
         Assert.Contains(Lines(changedGraph), line => line.Contains("Restored ", StringComparison.Ordinal));
         Assert.Contains("Lib", File.ReadAllText(RestoreFile("project.assets.json")), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void XunitExeBuiltUnderAnotherProfile_KeepsEntryPoint()
+    {
+        var sharedPackages = WorkerStartInfo().Environment["NUGET_PACKAGES"]!;
+        SeedXunitProject(sharedPackages);
+        // Leave room for long transitive package filenames under the isolated profile on Windows.
+        var workerProfile = Path.Combine(_root, "w");
+        var evidenceProfile = Path.Combine(_root, "evidence-profile");
+        Directory.CreateDirectory(evidenceProfile);
+        var worker = IsolatedWorkerStartInfo(workerProfile);
+        Run(worker);
+
+        var propsPath = RestoreFile("Fixture.csproj.nuget.g.props");
+        var originalProps = File.ReadAllBytes(propsPath);
+        var packageRoot = XDocument.Load(propsPath).Descendants()
+            .Single(element => element.Name.LocalName == "NuGetPackageRoot").Value;
+        Assert.StartsWith("$(UserProfile)", packageRoot, StringComparison.Ordinal);
+        Assert.False(Directory.Exists(Path.Combine(evidenceProfile, ".nuget")));
+
+        var sourcePath = Path.Combine(_root, "Fixture", "Value.cs");
+        File.WriteAllText(sourcePath, "public class Example { [Xunit.Fact] public void SecondBuild() { } }");
+        // Make compilation necessary even when the filesystem gives both writes the same timestamp.
+        File.SetLastWriteTimeUtc(sourcePath, File.GetLastWriteTimeUtc(IntermediateAssembly()).AddSeconds(1));
+        var evidence = EvidenceStartInfo(worker, worker.Environment["NUGET_PACKAGES"]);
+        evidence.Environment.Clear();
+        foreach (var (name, value) in worker.Environment) evidence.Environment[name] = value;
+        GoalAcceptanceVerifier.ConfigureHermeticVerificationEnvironment(
+            evidence.Environment, _root, Path.Combine(_root, "environment"));
+        evidence.Environment["USERPROFILE"] = evidenceProfile;
+        evidence.Environment["HOME"] = evidenceProfile;
+        var buildB = TestChildProcessCapture.Run(evidence, hangBound: TimeSpan.FromMinutes(3));
+        output.WriteLine($"{buildB.Stdout}\n{buildB.Stderr}");
+
+        Assert.True(buildB.ExitCode == 0, $"Second build exited {buildB.ExitCode}.\n{buildB.Stdout}\n{buildB.Stderr}");
+        Assert.DoesNotContain("CS5001", buildB.Stdout + buildB.Stderr, StringComparison.Ordinal);
+        Assert.DoesNotContain(Lines(buildB.Stdout), line => line.Contains("Restored ", StringComparison.Ordinal));
+        Assert.Equal(originalProps, File.ReadAllBytes(propsPath));
+
+        evidence.ArgumentList.Clear();
+        evidence.ArgumentList.Add("exec");
+        evidence.ArgumentList.Add(Path.Combine(Artifacts, "bin", "Fixture", "debug", "Fixture.dll"));
+        evidence.ArgumentList.Add("--list-tests");
+        var discovery = TestChildProcessCapture.Run(evidence, hangBound: TimeSpan.FromMinutes(3));
+        output.WriteLine($"{discovery.Stdout}\n{discovery.Stderr}");
+        Assert.True(discovery.ExitCode == 0, $"Entry point exited {discovery.ExitCode}.\n{discovery.Stdout}\n{discovery.Stderr}");
+        Assert.Contains("SecondBuild", discovery.Stdout, StringComparison.Ordinal);
+        Assert.DoesNotContain("FirstBuild", discovery.Stdout, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ExplicitNuGetPackageRoot_IsNotOverridden()
+    {
+        Seed();
+        var explicitRoot = Path.Combine(_root, "explicit-packages") + Path.DirectorySeparatorChar;
+        WriteRepositoryPropsImport(explicitRoot);
+        var evaluation = IsolatedWorkerStartInfo(Path.Combine(_root, "evaluation-profile"));
+        evaluation.Environment["NUGET_PACKAGES"] = Path.Combine(_root, "other-packages");
+        evaluation.ArgumentList.Clear();
+        foreach (var argument in new[] { "msbuild", FixtureProject, "--nologo", "-getProperty:NuGetPackageRoot" })
+            evaluation.ArgumentList.Add(argument);
+
+        Assert.Equal(explicitRoot, Run(evaluation).Trim());
+    }
+
+    private ProcessStartInfo IsolatedWorkerStartInfo(string profile)
+    {
+        Directory.CreateDirectory(profile);
+        var start = WorkerStartInfo();
+        start.Environment["USERPROFILE"] = profile;
+        start.Environment["HOME"] = profile;
+        start.Environment["DOTNET_CLI_HOME"] = Path.Combine(profile, "cli-home");
+        start.Environment["NUGET_PACKAGES"] = Path.Combine(profile, ".nuget", "packages");
+        start.Environment["DOTNET_ADD_GLOBAL_TOOLS_TO_PATH"] = "0";
+        start.Environment["DOTNET_GENERATE_ASPNET_CERTIFICATE"] = "false";
+        start.Environment["DOTNET_CLI_TELEMETRY_OPTOUT"] = "1";
+        start.Environment["DOTNET_NOLOGO"] = "1";
+        return start;
+    }
+
+    private void SeedXunitProject(string sharedPackages)
+    {
+        Seed();
+        WriteRepositoryPropsImport();
+        new XDocument(new XElement("configuration",
+            new XElement("packageSources", new XElement("clear"),
+                new XElement("add", new XAttribute("key", "shared-packages"), new XAttribute("value", sharedPackages)))))
+            .Save(Path.Combine(_root, "NuGet.Config"));
+        var repositoryProject = XDocument.Load(Path.Combine(VerifiedRepositoryRoot.Find(), "tests",
+            "Mcg.AgentOrchestrator.Infrastructure.Tests", "Mcg.AgentOrchestrator.Infrastructure.Tests.csproj"));
+        var version = repositoryProject.Descendants("PackageReference")
+            .Single(element => (string?)element.Attribute("Include") == "xunit.v3.mtp-v2")
+            .Attribute("Version")!.Value;
+        new XDocument(new XElement("Project", new XAttribute("Sdk", "Microsoft.NET.Sdk"),
+            new XElement("PropertyGroup",
+                new XElement("TargetFramework", "net10.0"),
+                new XElement("OutputType", "Exe"),
+                new XElement("IsTestProject", "true"),
+                new XElement("UseMicrosoftTestingPlatformRunner", "true"),
+                new XElement("NuGetAudit", "false")),
+            new XElement("ItemGroup", new XElement("PackageReference",
+                new XAttribute("Include", "xunit.v3.mtp-v2"), new XAttribute("Version", version)))))
+            .Save(FixtureProject);
+        File.WriteAllText(Path.Combine(_root, "Fixture", "Value.cs"),
+            "public class Example { [Xunit.Fact] public void FirstBuild() { } }");
+    }
+
+    private void WriteRepositoryPropsImport(string? explicitPackageRoot = null)
+    {
+        var project = new XElement("Project");
+        if (explicitPackageRoot is not null)
+            project.Add(new XElement("PropertyGroup", new XElement("NuGetPackageRoot", explicitPackageRoot)));
+        project.Add(new XElement("Import",
+            new XAttribute("Project", Path.Combine(VerifiedRepositoryRoot.Find(), "Directory.Build.props"))));
+        new XDocument(project).Save(Path.Combine(_root, "Directory.Build.props"));
     }
 
     private void Seed()

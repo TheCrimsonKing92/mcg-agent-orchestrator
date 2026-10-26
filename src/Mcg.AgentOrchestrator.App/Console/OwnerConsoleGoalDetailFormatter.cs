@@ -12,11 +12,12 @@ internal static class OwnerConsoleGoalDetailFormatter
 
     internal static async Task<Goal?> ComposeAsync(OwnerGoalDetailQuery query, string id,
         IOwnerConsoleOutput output, CancellationToken token, TimeZoneInfo? zone = null,
-        Func<OwnerConsoleGateProgress?>? gate = null)
+        Func<OwnerConsoleGateProgress?>? gate = null, string? priorityWarning = null)
     {
         var detail = await query.LoadAsync(id, token);
         if (detail is null) { output.WriteLine("goal state unavailable"); return null; }
         if (gate is not null) detail = detail.WithGate(gate());
+        detail = detail with { PriorityWarning = priorityWarning };
         Render(detail, output, zone ?? TimeZoneInfo.Local);
         return detail.Goal;
     }
@@ -26,11 +27,8 @@ internal static class OwnerConsoleGoalDetailFormatter
         var goal = detail.Goal;
         output.WriteLine(goal.Id.Value[..Math.Min(8, goal.Id.Value.Length)] + "  " + OwnerGoalTitle.From(goal.Objective));
         output.WriteLine("Status: " + goal.Status);
-        var priority = GoalEffectivePriorityIndex.StoredLevel(goal);
-        if (priority != GoalPriority.Normal)
-            output.WriteLine("Priority: " + GoalPriorities.Format(priority) +
-                (priority > goal.Priority && goal.PriorityScheduling?.InheritedFromGoalId is { } donor
-                    ? " (inherited from " + donor[..Math.Min(8, donor.Length)] + ")" : ""));
+        if (OwnerConsolePriorityText.DetailLine(goal) is { } priority) output.WriteLine(priority);
+        if (detail.PriorityWarning is { } warning) output.WriteLine("Priority warning: " + warning);
         if (goal.Isolation == GoalIsolation.Solo) output.WriteLine("Isolation: solo");
         if (goal.SourceBacklogItemId is { } source)
             output.WriteLine("Source: backlog " + source[..Math.Min(8, source.Length)] +

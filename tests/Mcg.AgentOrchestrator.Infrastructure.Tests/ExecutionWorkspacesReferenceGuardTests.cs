@@ -1,5 +1,4 @@
 using ArchUnitNET.Domain;
-using ArchUnitNET.Loader;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
@@ -11,7 +10,7 @@ public sealed class ExecutionWorkspacesReferenceGuardTests
     private const string InfrastructureSourceRoot = "src/Mcg.AgentOrchestrator.Execution/";
     private static readonly string[] ExecutionFolders = ["Processes", "Workers", "Persistence", "Verification"];
     private static readonly Lazy<Architecture> InfrastructureArchitecture = new(
-        () => new ArchLoader().LoadAssemblies(typeof(CohortAcceptanceStore).Assembly, typeof(GoalWorktrees).Assembly).Build(),
+        () => SharedArchitectureCache.Get(typeof(CohortAcceptanceStore).Assembly, typeof(GoalWorktrees).Assembly),
         LazyThreadSafetyMode.ExecutionAndPublication);
     private static readonly Lazy<IReadOnlyDictionary<string, string[]>> DeclarationIndex = new(
         BuildDeclarationIndex, LazyThreadSafetyMode.ExecutionAndPublication);

@@ -1,7 +1,6 @@
 using ArchUnitNET.Domain;
 using ArchUnitNET.Fluent;
 using ArchUnitNET.Fluent.Extensions;
-using ArchUnitNET.Loader;
 using Mcg.AgentOrchestrator.App.Cli;
 using static ArchUnitNET.Fluent.ArchRuleDefinition;
 
@@ -13,7 +12,7 @@ public sealed class ApplicationLayerArchitectureTests
 
     // Parallel-safe: immutable inputs and one published architecture; no mutable external state.
     private static readonly Lazy<Architecture> SharedArchitecture = new(
-        () => new ArchLoader().LoadAssemblies(typeof(GoalMonitoringQuery).Assembly).Build(),
+        () => SharedArchitectureCache.Get(typeof(GoalMonitoringQuery).Assembly),
         LazyThreadSafetyMode.ExecutionAndPublication);
 
     [Fact]

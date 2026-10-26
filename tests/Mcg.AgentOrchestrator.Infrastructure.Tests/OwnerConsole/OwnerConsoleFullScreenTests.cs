@@ -6,7 +6,7 @@ using Terminal.Gui.Input;
 public sealed class OwnerConsoleFullScreenTests
 {
     [Fact]
-    public async Task BoardRendersTheSixHeadersAndRedrawKeepsSelectedDecisionById()
+    public async Task BoardRendersTheSevenHeadersAndRedrawKeepsSelectedDecisionById()
     {
         var harness = Harness();
         var controller = Controller(harness, new Dialogs());
@@ -17,7 +17,7 @@ public sealed class OwnerConsoleFullScreenTests
         view.FocusDecisions();
         Assert.True(view.BoardPane.Style.ShowHeaders);
         Assert.True(view.BoardPane.Style.AlwaysShowHeaders);
-        Assert.Equal(["GOAL", "EPIC", "TITLE", "STATE", "STAGE", "AGE"],
+        Assert.Equal(["GOAL", "EPIC", "TITLE", "PRIORITY", "STATE", "STAGE", "AGE"],
             view.BoardPane.Table!.ColumnNames);
         await view.HandleKeyAsync(Key.CursorDown);
         Assert.Equal("q2", controller.SelectedDecisionId);

@@ -338,7 +338,7 @@ internal sealed partial class ConductorBatchLoop
     private static GoalId[] ResolveCheckpointGoalIds(AgentOrchestratorKernel kernel, string? onlyGoalId)
     {
         var goals = onlyGoalId is null
-            ? kernel.Goals.Where(goal => !IsTerminalGoal(goal))
+            ? kernel.Goals.Where(goal => !ConductorWorkingSet.IsTerminalGoal(goal))
             : kernel.Goals.Where(goal => goal.Id.Value == onlyGoalId);
         return goals.Select(goal => goal.Id).ToArray();
     }

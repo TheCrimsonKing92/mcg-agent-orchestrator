@@ -9,6 +9,10 @@
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
     <EnableSourceLink>false</EnableSourceLink>
   </PropertyGroup>
+  <!-- Restore output may record the root as $(UserProfile), and builds can run under a different profile. -->
+  <PropertyGroup>
+    <NuGetPackageRoot Condition="'$(NuGetPackageRoot)' == '' and '$(NUGET_PACKAGES)' != ''">$([MSBuild]::EnsureTrailingSlash('$(NUGET_PACKAGES)'))</NuGetPackageRoot>
+  </PropertyGroup>
   <PropertyGroup Condition="'$(AuditPipeline)' == 'true'">
     <NuGetAudit>true</NuGetAudit>
     <NuGetAuditMode>all</NuGetAuditMode>
