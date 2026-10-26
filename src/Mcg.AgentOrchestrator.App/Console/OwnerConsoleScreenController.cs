@@ -151,7 +151,8 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
     {
         var output = new OwnerConsoleCapturedOutput();
         var goal = await OwnerConsoleGoalDetailFormatter.ComposeAsync(_goalDetail, goalId, output, token,
-            clock.LocalTimeZone, () => Model?.Gate).ConfigureAwait(false);
+            clock.LocalTimeZone, () => Model?.Gate,
+            Model?.Board.FirstOrDefault(item => item.GoalId == goalId)?.PriorityWarning).ConfigureAwait(false);
         if (goal is null) return null;
         var resolved = resolutions is null ? [] : await resolutions.ListForGoalAsync(goalId, token).ConfigureAwait(false);
         var lines = output.Text.Replace("\r", "").TrimEnd('\n').Split('\n').ToList();

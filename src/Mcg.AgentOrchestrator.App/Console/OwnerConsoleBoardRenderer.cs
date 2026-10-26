@@ -7,20 +7,30 @@ namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 
 internal static class OwnerConsoleBoardRenderer
 {
+    private const int PriorityColumn = 3;
+
     internal static void Render(DataTable table, TableView view, IReadOnlyList<OwnerConsoleBoardRow> rows,
         int paneWidth, int titleWidth)
     {
         view.Style.RowColorGetter = args => args.RowIndex >= 0 && args.RowIndex < rows.Count && rows[args.RowIndex].Dimmed
             ? new Scheme(view.GetScheme().Disabled) : null;
-        var cells = rows.Select(row => new[] { row.GoalPrefix, row.Epic, row.Priority.Length == 0 ? row.Title : row.Priority + " " + row.Title, row.State, row.Stage, Age(row.Age) }).ToArray();
+        var cells = rows.Select(row => new[] { row.GoalPrefix, row.Epic, row.Title, row.Priority, row.State, row.Stage, Age(row.Age) }).ToArray();
+        var widestTitle = cells.Select(row => row[2].GetColumns()).DefaultIfEmpty().Max();
         var widths = Enumerable.Range(0, table.Columns.Count).Select(column =>
             Math.Max(table.Columns[column].ColumnName.GetColumns(), cells.Select(row => row[column].GetColumns()).DefaultIfEmpty().Max())).ToArray();
+        var showPriority = true;
         if (paneWidth > 0)
         {
             for (var column = 0; column < widths.Length; column++)
                 if (column != 2) widths[column] = Math.Min(widths[column], Math.Max(table.Columns[column].ColumnName.Length, paneWidth / 6));
             titleWidth = Math.Max(1, paneWidth - widths.Where((_, column) => column != 2).Sum() - widths.Length - 1);
+            if (titleWidth < Math.Min(OwnerConsoleLineFitter.MinimumTitleColumns, widestTitle))
+            {
+                showPriority = false;
+                titleWidth = Math.Max(1, paneWidth - widths.Where((_, column) => column != 2 && column != PriorityColumn).Sum() - 6 - 1);
+            }
         }
+        view.Style.GetOrCreateColumnStyle(PriorityColumn).Visible = showPriority;
         if (titleWidth > 0) widths[2] = Math.Min(widths[2], titleWidth);
         view.MaxCellWidth = Math.Max(1, widths.Max());
         for (var column = 0; column < widths.Length; column++)

@@ -7,16 +7,16 @@ using Terminal.Gui.Views;
 public sealed class OwnerConsolePriorityBadgeTests
 {
     [Theory]
-    [InlineData(GoalPriority.Critical, GoalPriority.Critical, false, "", "[C]")]
-    [InlineData(GoalPriority.High, GoalPriority.High, false, "", "[H]")]
-    [InlineData(GoalPriority.Low, GoalPriority.Low, false, "", "[L]")]
-    [InlineData(GoalPriority.Normal, GoalPriority.High, false, "", "[h]")]
-    [InlineData(GoalPriority.Normal, GoalPriority.Critical, false, "", "[c]")]
-    [InlineData(GoalPriority.High, GoalPriority.High, true, "", "[HS]")]
-    [InlineData(GoalPriority.High, GoalPriority.High, false, "PRIORITY_DILUTION", "[H!]")]
-    [InlineData(GoalPriority.High, GoalPriority.High, true, "PRIORITY_OVERLAP", "[HS!]")]
-    [InlineData(GoalPriority.Normal, GoalPriority.Normal, true, "", "[S]")]
-    [InlineData(GoalPriority.Normal, GoalPriority.Normal, false, "", "")]
+    [InlineData(GoalPriority.Critical, GoalPriority.Critical, false, "", "Critical")]
+    [InlineData(GoalPriority.High, GoalPriority.High, false, "", "High")]
+    [InlineData(GoalPriority.Low, GoalPriority.Low, false, "", "Low")]
+    [InlineData(GoalPriority.Normal, GoalPriority.High, false, "", "High")]
+    [InlineData(GoalPriority.Normal, GoalPriority.Critical, false, "", "Critical")]
+    [InlineData(GoalPriority.High, GoalPriority.High, true, "", "High")]
+    [InlineData(GoalPriority.High, GoalPriority.High, false, "PRIORITY_DILUTION", "High")]
+    [InlineData(GoalPriority.High, GoalPriority.High, true, "PRIORITY_OVERLAP", "High")]
+    [InlineData(GoalPriority.Normal, GoalPriority.Normal, true, "", "Normal")]
+    [InlineData(GoalPriority.Normal, GoalPriority.Normal, false, "", "Normal")]
     public async Task BuilderDecoratesBoardAndGateFromOwnInheritedIsolationAndRecentWarnings(
         GoalPriority own, GoalPriority effective, bool solo, string warning, string badge)
     {
@@ -34,14 +34,14 @@ public sealed class OwnerConsolePriorityBadgeTests
         var row = Assert.Single(model.Board);
         Assert.Equal(badge, row.Priority);
         Assert.Equal("Readable title", row.Title);
-        Assert.Equal(badge, Assert.Single(model.Gate!.Members).Priority);
-        Assert.Equal("11111111" + (badge.Length == 0 ? "" : " " + badge) + " Readable title",
+        Assert.Equal("11111111 Readable title",
             OwnerConsoleGateFormatter.Lines(model.Gate)[1]);
         using var table = new DataTable();
-        foreach (var column in new[] { "Goal", "Epic", "Title", "State", "Stage", "Age" }) table.Columns.Add(column);
+        foreach (var column in new[] { "GOAL", "EPIC", "TITLE", "PRIORITY", "STATE", "STAGE", "AGE" }) table.Columns.Add(column);
         using var view = new TableView { Table = new DataTableSource(table) };
         OwnerConsoleBoardRenderer.Render(table, view, model.Board, 0, 0);
-        Assert.Equal((badge.Length == 0 ? "" : badge + " ") + "Readable title", table.Rows[0][2]);
+        Assert.Equal("Readable title", table.Rows[0][2]);
+        Assert.Equal(badge, table.Rows[0][3]);
     }
 
     [Fact]
@@ -53,12 +53,15 @@ public sealed class OwnerConsolePriorityBadgeTests
         var events = new[] { new OwnerConductEvent(harness.Clock.GetUtcNow(), "priority", "22222222",
             "PRIORITY_OVERLAP goal=22222222 other=11111111") };
         var model = await builder.BuildAsync(new(harness.Clock.GetUtcNow(), null, events, 0));
-        Assert.Equal("", Assert.Single(model.Board).Priority);
+        Assert.Equal("Normal", Assert.Single(model.Board).Priority);
+        Assert.Null(Assert.Single(model.Board).PriorityWarning);
         events = [events[0] with { Detail = "PRIORITY_OVERLAP goal=11111111 other=22222222" }];
         model = builder.WithActivity(model, new(harness.Clock.GetUtcNow(), null, events, 0));
-        Assert.Equal("[!]", Assert.Single(model.Board).Priority);
+        Assert.Equal("Normal", Assert.Single(model.Board).Priority);
+        Assert.Equal("PRIORITY_OVERLAP goal=11111111 other=22222222", Assert.Single(model.Board).PriorityWarning);
         model = builder.WithActivity(model, new(harness.Clock.GetUtcNow(), null, [], 0));
-        Assert.Equal("", Assert.Single(model.Board).Priority);
+        Assert.Equal("Normal", Assert.Single(model.Board).Priority);
+        Assert.Null(Assert.Single(model.Board).PriorityWarning);
     }
 
     [Fact]
@@ -73,12 +76,10 @@ public sealed class OwnerConsolePriorityBadgeTests
         goal = WithStoredPriority(harness.Kernel, goal, GoalPriority.High);
         GoalIsolationCommands.Apply(harness.Kernel, goal.Id, GoalIsolation.Solo, "test", "setup");
         Assert.Equal(normal.Replace("Status: Draft" + Environment.NewLine,
-            "Status: Draft" + Environment.NewLine + "Priority: high (inherited from 22222222)" + Environment.NewLine +
+            "Status: Draft" + Environment.NewLine + "Priority: High (inherited from dependent goal 22222222; not set with goal-priority)" + Environment.NewLine +
             "Isolation: solo" + Environment.NewLine), Render(goal));
         var gate = Gate([new("11111111", "Readable title")]);
         Assert.Equal("11111111 Readable title", OwnerConsoleGateFormatter.Lines(gate)[1]);
-        Assert.Equal("11111111 [H] Readable title", OwnerConsoleGateFormatter.Lines(gate with
-            { Members = [new("11111111", "Readable title", "[H]")] })[1]);
     }
 
     private static string Render(Goal goal)
