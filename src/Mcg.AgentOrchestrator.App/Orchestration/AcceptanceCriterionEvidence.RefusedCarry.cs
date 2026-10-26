@@ -61,7 +61,7 @@ internal static partial class AcceptanceCriterionEvidence
         out CriterionEvidenceObligation[] eligible,
         out string[] oldHeads,
         out Dictionary<string, string> evidenceByHead,
-        out string? refusal)
+        out string? refusal, string? currentHeadSha = null)
     {
         refusal = null;
         eligible = goal.GetOutstandingCriterionEvidenceObligations(candidateSha)
@@ -105,6 +105,16 @@ internal static partial class AcceptanceCriterionEvidence
                         integrationBranch, GoalWorktrees.BranchName(goal.Id), out var drift))
                 {
                     evidenceByHead.Add(oldHead, drift);
+                    continue;
+                }
+                if (currentHeadSha is not null &&
+                    string.Equals(currentHeadSha, candidateSha, StringComparison.OrdinalIgnoreCase) &&
+                    eligibleBindings.Where(item => string.Equals(item.ExpectedCandidateSha, oldHead, StringComparison.OrdinalIgnoreCase))
+                        .All(item => item.Owner == CriterionEvidenceOwner.Acceptance && item.State == CriterionEvidenceState.Pending &&
+                            string.Equals(item.RequiredScope, CriterionEvidenceScopes.FullAcceptanceGate, StringComparison.Ordinal)) &&
+                    PassedHeadCandidateDrift.TryProve(executionDirectory, oldHead, candidateSha, integrationBranch, out var passedHead))
+                {
+                    evidenceByHead.Add(oldHead, passedHead);
                     continue;
                 }
                 refusal = eligible.Any(item => item.Owner == CriterionEvidenceOwner.Acceptance &&
