@@ -8,6 +8,7 @@ internal static class CliStatusQueryCommand
     internal static bool IsStatusQueryCommand(IReadOnlyList<string> args) =>
         CliStatusTasksOnlyForm.IsForm(args) ||
         (args.Count == 1 && args[0].Equals("status", StringComparison.OrdinalIgnoreCase)) ||
+        (args.Count == 1 && args[0].Equals("monitor", StringComparison.OrdinalIgnoreCase)) ||
         (args.Count == 2 &&
         (args[0].Equals("status", StringComparison.OrdinalIgnoreCase) ||
          args[0].Equals("monitor", StringComparison.OrdinalIgnoreCase)) &&
