@@ -81,6 +81,56 @@ public sealed class VerificationOutputCompactionTests
         Assert.Equal(output, Assert.Single(restored.VerificationHistory).AuthoritativeStandardOutput);
     }
 
+    [Theory]
+    [InlineData(true, false)]
+    [InlineData(false, false)]
+    [InlineData(true, true)]
+    [InlineData(false, true)]
+    public void RecordVerification_LongAuthorityWithoutFullCopy_PreservesBothStreams(
+        bool longOutput, bool compactOtherStream)
+    {
+        var longText = TextWithMarker("unbounded-middle", VerificationTextBounds.BoundThreshold + 5_000);
+        const string shortText = "short-stream";
+        var record = new TaskVerificationRecord(
+            "verify", "C:\\repo", 0,
+            longOutput ? longText : shortText,
+            longOutput ? shortText : longText,
+            CompletedAt,
+            FullStandardOutput: compactOtherStream && !longOutput ? shortText : null,
+            FullStandardError: compactOtherStream && longOutput ? shortText : null);
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Verify", AgentRole.Tester);
+        var goal = kernel.CreateGoal("Preserve unbounded authority", [task]);
+        Assert.DoesNotContain("unbounded-middle", longOutput ? record.StandardOutput : record.StandardError);
+        Assert.Equal(longText, longOutput ? record.AuthoritativeStandardOutput : record.AuthoritativeStandardError);
+
+        kernel.RecordTaskVerification(goal.Id, task.Id, record);
+
+        foreach (var retained in task.VerificationHistory.Prepend(task.LastVerification!))
+        {
+            Assert.Null(retained.FullStandardOutput);
+            Assert.Null(retained.FullStandardError);
+            Assert.Equal(record.AuthoritativeStandardOutput, retained.AuthoritativeStandardOutput);
+            Assert.Equal(record.AuthoritativeStandardError, retained.AuthoritativeStandardError);
+        }
+        var snapshot = kernel.ExportSnapshot();
+        var storedTask = SnapshotTask(snapshot);
+        foreach (var stored in storedTask.VerificationHistory!.Prepend(storedTask.LastVerification!))
+        {
+            Assert.Equal(longText, longOutput ? stored.AuthoritativeStandardOutput : stored.AuthoritativeStandardError);
+            Assert.Null(longOutput ? stored.AuthoritativeStandardOutputUnavailableReason : stored.AuthoritativeStandardErrorUnavailableReason);
+            Assert.Null(longOutput ? stored.AuthoritativeStandardError : stored.AuthoritativeStandardOutput);
+            Assert.Equal(VerificationSnapshotText.StoredAsBoundedText,
+                longOutput ? stored.AuthoritativeStandardErrorUnavailableReason : stored.AuthoritativeStandardOutputUnavailableReason);
+        }
+        var restored = Restore(snapshot);
+        foreach (var retained in restored.VerificationHistory.Prepend(restored.LastVerification!))
+        {
+            Assert.Equal(record.AuthoritativeStandardOutput, retained.AuthoritativeStandardOutput);
+            Assert.Equal(record.AuthoritativeStandardError, retained.AuthoritativeStandardError);
+        }
+    }
+
     [Fact]
     public void MissingFullOutput_RoundTrip_PreservesUnavailableReason()
     {

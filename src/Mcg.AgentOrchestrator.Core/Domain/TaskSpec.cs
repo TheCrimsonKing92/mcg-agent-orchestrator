@@ -204,10 +204,12 @@ public sealed partial class TaskSpec
         // Encode that shape without normalizing legacy duplicate records during export.
         var lastOutput = LastVerification is { FullStandardOutput: null, AuthoritativeStandardOutput: not null,
             FullStandardOutputUnavailableReason: null }
+            && string.Equals(LastVerification.AuthoritativeStandardOutput, lastStandardOutput, StringComparison.Ordinal)
             ? (Text: (string?)null, UnavailableReason: VerificationSnapshotText.StoredAsBoundedText)
             : (Text: LastVerification?.AuthoritativeStandardOutput, UnavailableReason: LastVerification?.FullStandardOutputUnavailableReason);
         var lastError = LastVerification is { FullStandardError: null, AuthoritativeStandardError: not null,
             FullStandardErrorUnavailableReason: null }
+            && string.Equals(LastVerification.AuthoritativeStandardError, lastStandardError, StringComparison.Ordinal)
             ? (Text: (string?)null, UnavailableReason: VerificationSnapshotText.StoredAsBoundedText)
             : (Text: LastVerification?.AuthoritativeStandardError, UnavailableReason: LastVerification?.FullStandardErrorUnavailableReason);
         return new TaskSnapshot(
@@ -278,10 +280,12 @@ public sealed partial class TaskSpec
                     var standardError = VerificationTextBounds.BoundText(verification.StandardError, verification.StandardErrorPath);
                     var output = verification is { FullStandardOutput: null, AuthoritativeStandardOutput: not null,
                         FullStandardOutputUnavailableReason: null }
+                        && string.Equals(verification.AuthoritativeStandardOutput, standardOutput, StringComparison.Ordinal)
                         ? (Text: (string?)null, UnavailableReason: VerificationSnapshotText.StoredAsBoundedText)
                         : (Text: verification.AuthoritativeStandardOutput, UnavailableReason: verification.FullStandardOutputUnavailableReason);
                     var error = verification is { FullStandardError: null, AuthoritativeStandardError: not null,
                         FullStandardErrorUnavailableReason: null }
+                        && string.Equals(verification.AuthoritativeStandardError, standardError, StringComparison.Ordinal)
                         ? (Text: (string?)null, UnavailableReason: VerificationSnapshotText.StoredAsBoundedText)
                         : (Text: verification.AuthoritativeStandardError, UnavailableReason: verification.FullStandardErrorUnavailableReason);
                     return new TaskVerificationSnapshot(
@@ -725,17 +729,17 @@ public sealed partial class TaskSpec
             verification.AuthoritativeStandardError, verification.FullStandardErrorUnavailableReason, verification.StandardError);
         var compactOutput = verification.AuthoritativeStandardOutput is not null && output.Text is null;
         var compactError = verification.AuthoritativeStandardError is not null && error.Text is null;
-        if (!ReferenceEquals(verification.FullStandardOutput, output.Text) ||
-            !ReferenceEquals(verification.FullStandardError, error.Text) ||
-            (compactOutput && (!ReferenceEquals(verification.AuthoritativeStandardOutput, verification.StandardOutput) ||
+        if ((compactOutput && (verification.FullStandardOutput is not null ||
+                !ReferenceEquals(verification.AuthoritativeStandardOutput, verification.StandardOutput) ||
                 !verification.StandardOutputIsAuthoritative)) ||
-            (compactError && (!ReferenceEquals(verification.AuthoritativeStandardError, verification.StandardError) ||
+            (compactError && (verification.FullStandardError is not null ||
+                !ReferenceEquals(verification.AuthoritativeStandardError, verification.StandardError) ||
                 !verification.StandardErrorIsAuthoritative)))
         {
             verification = verification with
             {
-                FullStandardOutput = output.Text,
-                FullStandardError = error.Text,
+                FullStandardOutput = compactOutput ? null : verification.FullStandardOutput,
+                FullStandardError = compactError ? null : verification.FullStandardError,
                 AuthoritativeStandardOutput = compactOutput
                     ? verification.StandardOutput : verification.AuthoritativeStandardOutput,
                 AuthoritativeStandardError = compactError
