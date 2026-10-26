@@ -292,12 +292,13 @@ public sealed class GoalSnapshotArchiveTests
         var beforeQuestions = await fixture.Repository.ListTerminalOwnerQuestionHoldsAsync(ids);
         Assert.Equal(ownerQuestion.Id, Assert.Single(beforeQuestions).GoalId);
 
-        Assert.Equal(1, await fixture.Repository.ArchiveTerminalGoalSnapshotsAsync(Cutoff));
+        Assert.Equal(2, await fixture.Repository.ArchiveTerminalGoalSnapshotsAsync(Cutoff));
 
-        Assert.Equal(eligible.Id, Assert.Single(fixture.ArchiveRows()).Key);
+        Assert.Equal(new[] { eligible.Id, otherHold.Id }.Order(StringComparer.Ordinal),
+            fixture.ArchiveRows().Keys.Order(StringComparer.Ordinal));
         var afterRows = fixture.GoalRows();
         Assert.Equal(beforeRows[ownerQuestion.Id], afterRows[ownerQuestion.Id]);
-        Assert.Equal(beforeRows[otherHold.Id], afterRows[otherHold.Id]);
+        Assert.Equal(beforeRows[otherHold.Id].Snapshot, fixture.ArchiveRows()[otherHold.Id].Snapshot);
         Assert.Equal(beforeQuestions, await fixture.Repository.ListTerminalOwnerQuestionHoldsAsync(ids));
     }
 

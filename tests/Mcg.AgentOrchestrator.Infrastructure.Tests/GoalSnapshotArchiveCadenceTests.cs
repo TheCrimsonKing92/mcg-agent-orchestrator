@@ -35,13 +35,13 @@ public sealed class GoalSnapshotArchiveCadenceTests
         }, now);
 
         Assert.Equal(1, calls);
-        Assert.Equal(now - TimeSpan.FromDays(14), observedCutoff);
+        Assert.Equal(now - TimeSpan.FromDays(2), observedCutoff);
         Assert.Equal(observedCutoff, result.Cutoff);
         Assert.Equal(17, result.Archived);
         Assert.Equal("completed", result.Status);
         Assert.Null(result.ExceptionType);
         Assert.Equal(
-            $"GOAL_SNAPSHOT_ARCHIVE status=completed archived=17 cutoff={result.Cutoff.ToString("O", CultureInfo.InvariantCulture)} ageDays=14",
+            $"GOAL_SNAPSHOT_ARCHIVE status=completed archived=17 cutoff={result.Cutoff.ToString("O", CultureInfo.InvariantCulture)} ageDays=2",
             GoalSnapshotArchiveCadence.Format(result));
     }
 
@@ -50,12 +50,12 @@ public sealed class GoalSnapshotArchiveCadenceTests
     {
         var result = GoalSnapshotArchiveCadence.Run(_ => throw new InvalidOperationException("fixture failure"), Now);
 
-        Assert.Equal(Now.AddDays(-14), result.Cutoff);
+        Assert.Equal(Now.AddDays(-2), result.Cutoff);
         Assert.Equal(0, result.Archived);
         Assert.Equal("failed", result.Status);
         Assert.Equal(nameof(InvalidOperationException), result.ExceptionType);
         Assert.Equal(
-            "GOAL_SNAPSHOT_ARCHIVE status=failed archived=0 cutoff=2020-02-16T12:00:00.0000000+00:00 ageDays=14 exception=InvalidOperationException",
+            "GOAL_SNAPSHOT_ARCHIVE status=failed archived=0 cutoff=2020-02-28T12:00:00.0000000+00:00 ageDays=2 exception=InvalidOperationException",
             GoalSnapshotArchiveCadence.Format(result));
     }
 
@@ -96,13 +96,13 @@ public sealed class GoalSnapshotArchiveCadenceTests
         Assert.True(result.Attempted);
         Assert.False(result.Failed);
         Assert.Equal(1, calls);
-        Assert.Equal(Now.AddDays(-14), observedCutoff);
+        Assert.Equal(Now.AddDays(-2), observedCutoff);
         Assert.NotNull(sweepAtArchiveCall);
         Assert.Equal(RunEventMaintenanceCadence.FormatArtifactRetentionReceipt(SuccessfulSweep), sweepAtArchiveCall.Detail);
         var line = Assert.Single(File.ReadAllLines(fixture.JournalPath), line => line.Contains("GOAL_SNAPSHOT_ARCHIVE"));
         using var record = JsonDocument.Parse(line);
         Assert.Equal("goal-snapshot-archive", record.RootElement.GetProperty("eventKind").GetString());
-        Assert.Equal("GOAL_SNAPSHOT_ARCHIVE status=completed archived=3 cutoff=2020-02-16T12:00:00.0000000+00:00 ageDays=14",
+        Assert.Equal("GOAL_SNAPSHOT_ARCHIVE status=completed archived=3 cutoff=2020-02-28T12:00:00.0000000+00:00 ageDays=2",
             record.RootElement.GetProperty("detail").GetString());
     }
 
@@ -199,7 +199,7 @@ public sealed class GoalSnapshotArchiveCadenceTests
         var line = Assert.Single(journal, line => line.Contains("GOAL_SNAPSHOT_ARCHIVE"));
         using var record = JsonDocument.Parse(line);
         Assert.Equal("goal-snapshot-archive", record.RootElement.GetProperty("eventKind").GetString());
-        Assert.Equal("GOAL_SNAPSHOT_ARCHIVE status=failed archived=0 cutoff=2020-02-16T12:00:00.0000000+00:00 ageDays=14 exception=InvalidOperationException",
+        Assert.Equal("GOAL_SNAPSHOT_ARCHIVE status=failed archived=0 cutoff=2020-02-28T12:00:00.0000000+00:00 ageDays=2 exception=InvalidOperationException",
             record.RootElement.GetProperty("detail").GetString());
         Assert.DoesNotContain(journal, line => line.Contains("RUN_EVENTS_MAINTENANCE_FAILED"));
     }
@@ -234,7 +234,7 @@ public sealed class GoalSnapshotArchiveCadenceTests
         recent = recent with
         {
             Timeline = [.. recent.Timeline, new ProgressEventSnapshot(recent.Id, null,
-                ProgressKind.GoalPolicyDecision, "Recent terminal evidence", Now.AddDays(-7))]
+                ProgressKind.GoalPolicyDecision, "Recent terminal evidence", Now.AddDays(-1))]
         };
         var active = MakeSnapshot(GoalStatus.Active);
         var unfinished = MakeSnapshot(GoalStatus.Completed);
@@ -246,7 +246,7 @@ public sealed class GoalSnapshotArchiveCadenceTests
         await fixture.Repository.SaveGoalSnapshotsAsync([old, recent, active, unfinished], Xunit.TestContext.Current.CancellationToken);
         foreach (var snapshot in new[] { old, active, unfinished })
             fixture.SetUpdatedAt(snapshot.Id, Now.AddDays(-30));
-        fixture.SetUpdatedAt(recent.Id, Now.AddDays(-7));
+        fixture.SetUpdatedAt(recent.Id, Now.AddDays(-1));
         var before = fixture.GoalRows();
         Assert.Equal(4, before.Count);
         Assert.All(before.Values, row => Assert.False(Deserialize(row.Snapshot).IsMetadataOnly));
