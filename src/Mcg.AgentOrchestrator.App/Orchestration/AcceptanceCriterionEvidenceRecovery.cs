@@ -199,7 +199,7 @@ internal static partial class AcceptanceCriterionEvidenceRecovery
         return false;
     }
 
-    private static bool IsAncestor(
+    internal static bool IsAncestor(
         string executionDirectory,
         string candidateSha,
         string mainSha,
