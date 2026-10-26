@@ -62,7 +62,6 @@ public sealed class CliInspectionReadOnlyRouteTests : CliTaskQueryTestSupport
     }
 
     [Xunit.Theory]
-    [Xunit.InlineData("goals", "subscribe")]
     [Xunit.InlineData("goals", "--unknown-flag")]
     [Xunit.InlineData("goals", "extra")]
     [Xunit.InlineData("model-outcomes", "extra")]

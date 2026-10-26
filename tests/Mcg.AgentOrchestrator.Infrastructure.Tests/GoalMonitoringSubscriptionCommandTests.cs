@@ -91,7 +91,7 @@ public sealed class GoalMonitoringSubscriptionCommandTests
     [Xunit.Fact(DisplayName = "Goals_subscribe_runs_outside_state_transaction")]
     public void GoalsSubscribeRunsOutsideStateTransaction()
     {
-        Assert.True(CliPersistentStateRunner.IsGoalSubscriptionCommand(["goals", "subscribe", "--goal-prefix", "abc123"]));
+        Assert.True(CliReadOnlyCommandRunner.IsReadOnlyCommand(["goals", "subscribe", "--goal-prefix", "abc123"]));
         Assert.False(CliPersistentStateRunner.IsMetadataOnlyListing(["goals", "subscribe", "--goal-prefix", "abc123"]));
     }
 

@@ -901,7 +901,7 @@ internal static class GoalMonitoringSubscriptionCommand
         return null;
     }
 
-    private const string Usage = "Usage: goals subscribe [<goal-id>|--goal-prefix <prefix>] [--since <event-id>|--from-cursor <cursor>] [--once] [--format ndjson|human] [--task <id>] [--event-kind <kind,...>] [--wait-terminal] [--timeout <duration>], monitor-goal <goal-id> [--since <event-id>|--from-cursor <cursor>] [--once] [--format sse|ndjson|human] [--goal-prefix <prefix>] [--task <id>] [--event-kind <kind,...>] [--wait-terminal] [--timeout <duration>]. --wait-terminal wakes on completed, failed, abandoned/cancelled, blocked, or awaiting-human-input states; timeout accepts TimeSpan, ms, s, or m.";
+    internal const string Usage = "Usage: goals subscribe [<goal-id>|--goal-prefix <prefix>] [--since <event-id>|--from-cursor <cursor>] [--once] [--format ndjson|human] [--task <id>] [--event-kind <kind,...>] [--wait-terminal] [--timeout <duration>], monitor-goal <goal-id> [--since <event-id>|--from-cursor <cursor>] [--once] [--format sse|ndjson|human] [--goal-prefix <prefix>] [--task <id>] [--event-kind <kind,...>] [--wait-terminal] [--timeout <duration>]. --wait-terminal wakes on completed, failed, abandoned/cancelled, blocked, or awaiting-human-input states; timeout accepts TimeSpan, ms, s, or m.";
 
     private sealed class TextWriterStream(TextWriter writer) : Stream
     {

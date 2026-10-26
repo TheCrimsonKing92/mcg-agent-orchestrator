@@ -5,25 +5,16 @@ namespace Mcg.AgentOrchestrator.App.Cli;
 
 internal static class CliMonitorGoalQueryCommand
 {
+    internal const string WriterPathRefusal = "monitor-goal and goals subscribe are served only by the read-only query route.";
+
     internal static bool IsMonitorGoalQueryCommand(IReadOnlyList<string> args)
     {
-        if (args.Count < 2 || CliCommandHelp.IsCommandSpecificHelp(args))
+        if (args.Count == 0 || CliCommandHelp.IsCommandSpecificHelp(args))
             return false;
 
-        if (!args[0].Equals("monitor-goal", StringComparison.OrdinalIgnoreCase) &&
-            !(args[0].Equals("goals", StringComparison.OrdinalIgnoreCase) &&
-              args[1].Equals("subscribe", StringComparison.OrdinalIgnoreCase)))
-            return false;
-
-        try
-        {
-            CliCommandHelp.ThrowIfInvalidFlags(args);
-            return !string.IsNullOrWhiteSpace(GoalMonitoringSubscriptionCommand.Parse(args).GoalId);
-        }
-        catch (ArgumentException)
-        {
-            return false;
-        }
+        return args[0].Equals("monitor-goal", StringComparison.OrdinalIgnoreCase) ||
+            (args.Count >= 2 && args[0].Equals("goals", StringComparison.OrdinalIgnoreCase) &&
+             args[1].Equals("subscribe", StringComparison.OrdinalIgnoreCase));
     }
 
     internal static void Execute(
@@ -36,7 +27,11 @@ internal static class CliMonitorGoalQueryCommand
         Func<TimeSpan, CancellationToken, Task>? delay = null,
         TextWriter? output = null)
     {
+        CliCommandHelp.ThrowIfInvalidFlags(args);
         var options = GoalMonitoringSubscriptionCommand.Parse(args);
+        if (string.IsNullOrWhiteSpace(options.GoalId))
+            throw new ArgumentException(GoalMonitoringSubscriptionCommand.Usage);
+
         AgentOrchestratorKernel Reload()
         {
             var statuses = stateQueries.ListGoalIdStatusesAsync().GetAwaiter().GetResult();
