@@ -1,5 +1,4 @@
 using ArchUnitNET.Domain;
-using ArchUnitNET.Loader;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Microsoft.CodeAnalysis.CSharp;
@@ -13,7 +12,7 @@ public class CanaryEngineSurfaceCoverageTests
 
     // Parallel-safe: read-only assembly/source inputs, each cached once; no shared mutations or writes.
     private static readonly Lazy<Architecture> InfrastructureArchitecture = new(
-        () => new ArchLoader().LoadAssemblies(typeof(GoalAcceptanceVerifier).Assembly).Build(),
+        () => SharedArchitectureCache.Get(typeof(GoalAcceptanceVerifier).Assembly),
         LazyThreadSafetyMode.ExecutionAndPublication);
     private static readonly Lazy<IReadOnlyDictionary<string, string[]>> DeclarationIndex = new(
         BuildDeclarationIndex, LazyThreadSafetyMode.ExecutionAndPublication);

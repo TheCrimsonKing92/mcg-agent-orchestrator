@@ -1,7 +1,7 @@
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 
-// A frozen file inventory with one lazily materialized text, line list and tree per file.
+// A frozen file inventory with one lazily materialized text, line index view and tree per file.
 internal sealed class RepositorySourceSnapshot
 {
     private readonly IReadOnlyDictionary<string, SourceFile> filesByPath;
@@ -68,13 +68,7 @@ internal sealed class RepositorySourceSnapshot
                 observer.OnTextRead(root, relativePath);
                 return text;
             }, LazyThreadSafetyMode.ExecutionAndPublication);
-            Lines = new Lazy<IReadOnlyList<string>>(() =>
-            {
-                using var reader = new StringReader(Text.Value);
-                var lines = new List<string>();
-                while (reader.ReadLine() is { } line) lines.Add(line);
-                return lines.AsReadOnly();
-            }, LazyThreadSafetyMode.ExecutionAndPublication);
+            Lines = new Lazy<IReadOnlyList<string>>(() => new SourceSnapshotLineView(Text.Value), LazyThreadSafetyMode.ExecutionAndPublication);
             Tree = new Lazy<SyntaxTree>(() =>
             {
                 var tree = CSharpSyntaxTree.ParseText(Text.Value, path: fullPath);

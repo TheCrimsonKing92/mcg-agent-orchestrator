@@ -2,7 +2,6 @@ using ArchUnitNET.Domain;
 using ArchUnitNET.Fluent;
 using ArchUnitNET.Fluent.Conditions;
 using ArchUnitNET.Fluent.Extensions;
-using ArchUnitNET.Loader;
 using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Architecture = ArchUnitNET.Domain.Architecture;
@@ -12,9 +11,9 @@ using static ArchUnitNET.Fluent.ArchRuleDefinition;
 public sealed class CliReadRouteCapabilityArchitectureTests
 {
     private static readonly Lazy<Architecture> SharedArchitecture = new(() =>
-        new ArchLoader().LoadAssemblies(
+        SharedArchitectureCache.Get(
             typeof(CliReadOnlyCommandRunner).Assembly,
-            typeof(IOrchestratorStateQueries).Assembly).Build(),
+            typeof(IOrchestratorStateQueries).Assembly),
         LazyThreadSafetyMode.ExecutionAndPublication);
 
     [Xunit.Fact]

@@ -37,7 +37,7 @@ internal sealed partial class ConductorBatchLoop
             ConductorSpeculativeUpstreamExclusionReason? reason = null;
             if (!eligibleIds.Contains(goal.Id))
             {
-                reason = preWalkIntentChangedGoalIds.Contains(goal.Id) || IsPreWalkExcludedGoal(goal) ?
+                reason = preWalkIntentChangedGoalIds.Contains(goal.Id) || ConductorWorkingSet.IsPreWalkExcludedGoal(goal) ?
                     ConductorSpeculativeUpstreamExclusionReason.OtherUpstreamFilter :
                     ConductorSpeculativeUpstreamExclusionReason.LifecycleRetired;
             }

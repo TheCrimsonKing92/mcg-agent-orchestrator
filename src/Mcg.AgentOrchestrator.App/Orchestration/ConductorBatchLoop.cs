@@ -351,7 +351,7 @@ internal sealed partial class ConductorBatchLoop
                          (onlyGoalId is null || entry.GoalId == onlyGoalId) &&
                          kernel.Goals.Any(goal =>
                              goal.Id.Value == entry.GoalId &&
-                             !IsTerminalGoal(goal))))
+                             !ConductorWorkingSet.IsTerminalGoal(goal))))
             {
                 var key = new RetryDiagnosticKey(
                     "BLOCKED_RECHECK_INTERVAL_CLAMPED",
@@ -823,13 +823,13 @@ internal sealed partial class ConductorBatchLoop
                 .Concat(intentBoundary.ChangedGoalIds.Except(intentBoundary.DurableGoalIds)).ToHashSet();
 
             var parkedExcludedCount = scopedGoals.Count(g => g.Status == GoalStatus.Parked);
-            var terminalExcludedCount = scopedGoals.Count(IsPreWalkExcludedTerminalGoal);
+            var terminalExcludedCount = scopedGoals.Count(ConductorWorkingSet.IsPreWalkExcludedTerminalGoal);
             var preWalkCandidates = scopedGoals
-                .Where(g => !IsPreWalkExcludedGoal(g))
+                .Where(g => !ConductorWorkingSet.IsPreWalkExcludedGoal(g))
                 .ToArray();
             var eligible = preWalkCandidates
                 .Where(g => !preWalkIntentChangedGoalIds.Contains(g.Id))
-                .Where(g => ConductorTickStepLedger.Measure("eligibility", () => IsLoopEligibleGoal(g, driver, goalProjectionCache)))
+                .Where(g => ConductorTickStepLedger.Measure("eligibility", () => ConductorWorkingSet.IsLoopEligibleGoal(g, driver, goalProjectionCache)))
                 .ToArray();
             ResetScopedGoalStallCounters(eligible, unscopedDispatchableTicks);
             preWalkClock.Stop();
@@ -938,7 +938,7 @@ internal sealed partial class ConductorBatchLoop
                 // must reach another sweep/recheck even for a non-daemon invocation; otherwise a transient
                 // escalation is indistinguishable from terminal completion and only a manual relaunch can
                 // recover it.
-                var recheckableBlockedGoals = CountRecheckableNonTerminalGoals(
+                var recheckableBlockedGoals = ConductorWorkingSet.CountRecheckableNonTerminalGoals(
                     kernel,
                     onlyGoalId,
                     setAsideGoals,
@@ -1033,7 +1033,7 @@ internal sealed partial class ConductorBatchLoop
 
                 var remainingNonTerminalGoals = kernel.Goals.Count(goal =>
                     (onlyGoalId is null || goal.Id.Value == onlyGoalId) &&
-                    !IsTerminalGoal(goal));
+                    !ConductorWorkingSet.IsTerminalGoal(goal));
                 foreach (var line in preTickTimingLines)
                 {
                     EmitProgress(line);
@@ -1591,7 +1591,7 @@ internal sealed partial class ConductorBatchLoop
             {
                 if (watchInterval is null)
                 {
-                    if (CountRecheckableNonTerminalGoals(
+                    if (ConductorWorkingSet.CountRecheckableNonTerminalGoals(
                             kernel,
                             onlyGoalId,
                             setAsideGoals,
@@ -1612,14 +1612,14 @@ internal sealed partial class ConductorBatchLoop
                     break;
                 }
 
-                var recheckableBlockedGoals = CountRecheckableNonTerminalGoals(
+                var recheckableBlockedGoals = ConductorWorkingSet.CountRecheckableNonTerminalGoals(
                     kernel,
                     onlyGoalId,
                     setAsideGoals,
                         transientRecheckableGoalIds: dispatchRecordWriteSkippedGoals.Concat(checkpointHeldGoals.Keys).ToHashSet(StringComparer.Ordinal));
                 var fallbackInterval = ConsumeWatchInterval(watchInterval.Value, recheckableBlockedGoals);
                 var sleepSeconds = (int)fallbackInterval.TotalSeconds;
-                if (CountRecheckableNonTerminalGoals(
+                if (ConductorWorkingSet.CountRecheckableNonTerminalGoals(
                         kernel,
                         onlyGoalId,
                         setAsideGoals,
@@ -2003,7 +2003,7 @@ internal sealed partial class ConductorBatchLoop
         }
 
         var active = kernel.Goals
-            .Where(goal => !IsTerminalGoal(goal))
+            .Where(goal => !ConductorWorkingSet.IsTerminalGoal(goal))
             .Select(goal => ShortGoalId(goal.Id.Value))
             .Take(4)
             .ToArray();
@@ -2415,7 +2415,7 @@ internal sealed partial class ConductorBatchLoop
                 continue;
             }
 
-            if (excludedGoals.Contains(goal.Id.Value) || IsTerminalGoal(goal))
+            if (excludedGoals.Contains(goal.Id.Value) || ConductorWorkingSet.IsTerminalGoal(goal))
             {
                 continue;
             }
@@ -2439,7 +2439,7 @@ internal sealed partial class ConductorBatchLoop
                 continue;
             }
 
-            if (excludedGoals.Contains(goal.Id.Value) || IsTerminalGoal(goal))
+            if (excludedGoals.Contains(goal.Id.Value) || ConductorWorkingSet.IsTerminalGoal(goal))
             {
                 continue;
             }
@@ -2457,82 +2457,6 @@ internal sealed partial class ConductorBatchLoop
 
         _detachGoalRunningDispatches(kernel, goal);
     }
-
-    private static bool IsTerminalGoal(Goal goal) =>
-        goal.Status is GoalStatus.Completed or GoalStatus.Failed or GoalStatus.Cancelled or GoalStatus.Superseded;
-
-    private static int CountParkedExcludedGoals(
-        AgentOrchestratorKernel kernel,
-        string? onlyGoalId,
-        HashSet<string> excludedGoals) =>
-        kernel.Goals.Count(goal =>
-            (onlyGoalId is null || goal.Id.Value == onlyGoalId)
-            && !excludedGoals.Contains(goal.Id.Value)
-            && goal.Status == GoalStatus.Parked);
-
-    private static int CountRecheckableNonTerminalGoals(
-        AgentOrchestratorKernel kernel,
-        string? onlyGoalId,
-        IReadOnlyDictionary<string, BatchSetAsideEntry> setAsideGoals,
-        BatchSetAsideCondition? condition = null,
-        IReadOnlySet<string>? transientRecheckableGoalIds = null) =>
-        kernel.Goals.Count(goal =>
-            (onlyGoalId is null || goal.Id.Value == onlyGoalId) &&
-            !IsTerminalGoal(goal) &&
-            ((setAsideGoals.TryGetValue(goal.Id.Value, out var entry) &&
-                (!condition.HasValue || entry.Condition == condition.Value)) ||
-             (!condition.HasValue && transientRecheckableGoalIds?.Contains(goal.Id.Value) == true)));
-
-    private static bool IsPreWalkExcludedGoal(Goal goal) =>
-        goal.Status == GoalStatus.Parked || IsPreWalkExcludedTerminalGoal(goal);
-
-    private static bool IsPreWalkExcludedTerminalGoal(Goal goal) =>
-        GoalStatusSemantics.ExcludesFromConductorWorkingSet(goal.Status)
-        || IsStaleTerminalGoalWithAssignedWork(goal);
-
-    private static bool IsLoopEligibleGoal(Goal goal, ConductorDriver driver, GoalProjectionCache goalProjectionCache)
-    {
-        if (IsPreWalkExcludedGoal(goal))
-        {
-            return false;
-        }
-
-        if (goal.Status == GoalStatus.Completed &&
-            !string.IsNullOrWhiteSpace(driver.ExecutionDirectory))
-        {
-            try
-            {
-                if (GoalOperationJournal.HasMergeEvidenceTerminalDisposition(
-                        GoalOperationJournal.Read(driver.ExecutionDirectory, goal.Id)))
-                {
-                    return false;
-                }
-            }
-            catch
-            {
-                // A transient journal read failure must not remove a goal from ordinary lifecycle evaluation.
-            }
-        }
-
-        if (goal.Status is GoalStatus.Verifying or GoalStatus.Verified or GoalStatus.Completed)
-        {
-            try
-            {
-                var state = goalProjectionCache.ResolveState(goal, driver);
-                return state != GoalLifecycleState.CleanedUp;
-            }
-            catch
-            {
-                return true;
-            }
-        }
-
-        return true;
-    }
-
-    private static bool IsStaleTerminalGoalWithAssignedWork(Goal goal) =>
-        (goal.Status is GoalStatus.Completed or GoalStatus.Cancelled or GoalStatus.Failed) &&
-        goal.Tasks.Any(task => task.Status is WorkTaskStatus.Assigned or WorkTaskStatus.Running or WorkTaskStatus.WaitingForHuman);
 
     private static bool IsStopRequested(string stopFilePath) =>
         !string.IsNullOrEmpty(stopFilePath) && File.Exists(stopFilePath);
@@ -2590,48 +2514,6 @@ internal enum WatchSleepResult
 internal sealed record ParallelLandingOutcome(ConductorAdvanceResult Result, int? SlotIndex);
 
 internal sealed record GoalWalkTiming(string Goal, string Result, TimeSpan Elapsed);
-
-internal sealed class GoalProjectionCache
-{
-    private readonly Dictionary<GoalId, GoalProjectionCacheEntry> _entries = [];
-
-    internal int Count => _entries.Count;
-
-    internal GoalLifecycleState ResolveState(Goal goal, ConductorDriver driver)
-    {
-        var fingerprint = BuildFingerprint(goal);
-        if (_entries.TryGetValue(goal.Id, out var entry)
-            && string.Equals(entry.Fingerprint, fingerprint, StringComparison.Ordinal))
-        {
-            return entry.State;
-        }
-
-        var state = GoalLifecycle.ResolveState(goal, driver.GetFacts(goal));
-        _entries[goal.Id] = new GoalProjectionCacheEntry(fingerprint, state);
-        return state;
-    }
-
-    internal void Invalidate(GoalId goalId) => _entries.Remove(goalId);
-
-    internal static string BuildFingerprint(Goal goal)
-    {
-        var taskParts = goal.Tasks
-            .OrderBy(task => task.Id.Value, StringComparer.Ordinal)
-            .Select(task =>
-                string.Join(
-                    ":",
-                    task.Id.Value,
-                    task.Status.ToString(),
-                    task.LastDispatch is null ? "dispatch=none" : $"dispatch={task.LastDispatch.DispatchedAt.UtcTicks}:{task.LastDispatch.WorkerName}",
-                    task.LastProcess is null ? "process=none" : $"process={task.LastProcess.IsRunning}:{task.LastProcess.CompletedAt?.UtcTicks}:{task.LastProcess.ExitCode}:{task.LastProcess.WasCancelled}",
-                    task.LastVerification is null ? "verification=none" : $"verification={task.LastVerification.Succeeded}:{task.LastVerification.ExitCode}:{task.LastVerification.CompletedAt.UtcTicks}",
-                    task.LastExecution is null ? "execution=none" : $"execution={task.LastExecution.StopReason}:{task.LastExecution.CompletedAt.UtcTicks}"));
-
-        return string.Join("|", new[] { goal.Status.ToString(), $"timeline={goal.Timeline.Count}" }.Concat(taskParts));
-    }
-}
-
-internal sealed record GoalProjectionCacheEntry(string Fingerprint, GoalLifecycleState State);
 
 public sealed record BatchLoopSummary(
     int Ticks,

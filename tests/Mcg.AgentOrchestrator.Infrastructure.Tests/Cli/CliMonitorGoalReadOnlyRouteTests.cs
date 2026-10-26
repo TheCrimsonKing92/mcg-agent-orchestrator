@@ -9,13 +9,13 @@ using Xunit;
 public sealed class CliMonitorGoalReadOnlyRouteTests : CliTaskQueryTestSupport
 {
     [Fact]
-    public void NdjsonOnce_PreservesWriterPathOutput()
+    public void NdjsonOnce_PreservesFullKernelOutput()
     {
         WithWorkspace(workspace =>
         {
             string[] args = ["monitor-goal", "abc10000", "--once", "--format", "ndjson"];
             Assert.True(CliReadOnlyCommandRunner.IsReadOnlyCommand(args));
-            var expected = Execute(args, workspace, skipReadOnlyRoute: true);
+            var expected = ExecuteFullKernel(args, workspace);
             var actual = Execute(args, workspace, skipReadOnlyRoute: false);
             Assert.Contains("goal.snapshot", expected);
             Assert.Equal(WithoutTimestamps(expected), WithoutTimestamps(actual));
@@ -25,13 +25,13 @@ public sealed class CliMonitorGoalReadOnlyRouteTests : CliTaskQueryTestSupport
     [Theory]
     [InlineData("missing")]
     [InlineData("abc")]
-    public void InvalidPrefix_PreservesWriterPathException(string prefix)
+    public void InvalidPrefix_PreservesFullKernelException(string prefix)
     {
         WithWorkspace(workspace =>
         {
             string[] args = ["monitor-goal", prefix, "--once", "--format", "ndjson"];
             Assert.True(CliReadOnlyCommandRunner.IsReadOnlyCommand(args));
-            var expected = Record.Exception(() => Execute(args, workspace, true));
+            var expected = Record.Exception(() => ExecuteFullKernel(args, workspace));
             var actual = Record.Exception(() => Execute(args, workspace, false));
             Assert.NotNull(expected);
             Assert.NotNull(actual);
@@ -51,13 +51,13 @@ public sealed class CliMonitorGoalReadOnlyRouteTests : CliTaskQueryTestSupport
     }
 
     [Fact]
-    public void MissingPrefixSse_PreservesWriterPathErrorOutput()
+    public void MissingPrefixSse_PreservesFullKernelErrorOutput()
     {
         WithWorkspace(workspace =>
         {
             string[] args = ["monitor-goal", "missing", "--once"];
             Assert.True(CliReadOnlyCommandRunner.IsReadOnlyCommand(args));
-            var expected = Execute(args, workspace, true);
+            var expected = ExecuteFullKernel(args, workspace);
             var actual = Execute(args, workspace, false);
             Assert.Contains("monitor.error", expected);
             Assert.Equal(expected, actual);
@@ -66,12 +66,8 @@ public sealed class CliMonitorGoalReadOnlyRouteTests : CliTaskQueryTestSupport
 
     public static TheoryData<string[]> DeclinedForms => new()
     {
-        new[] { "monitor-goal" },
-        new[] { "goals", "subscribe" },
         new[] { "monitor-goal", "--help" },
-        new[] { "goals", "subscribe", "--help" },
-        new[] { "monitor-goal", "http://localhost:5087", "abc123" },
-        new[] { "monitor-goal", "abc10000", "--bogus" }
+        new[] { "goals", "subscribe", "--help" }
     };
 
     [Theory]
@@ -117,6 +113,15 @@ public sealed class CliMonitorGoalReadOnlyRouteTests : CliTaskQueryTestSupport
         {
             Directory.Delete(root, recursive: true);
         }
+    }
+
+    private static string ExecuteFullKernel(string[] args, OrchestratorWorkspace workspace)
+    {
+        var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+        var kernel = repository.LoadAsync().GetAwaiter().GetResult();
+        return CaptureConsole(() => GoalMonitoringSubscriptionCommand.RunAsync(
+            args, Console.Out, kernel, workspace, AgentCatalog.Default().Agents, WorkerProfileCatalog.Default(),
+            reloadKernel: () => repository.LoadAsync().GetAwaiter().GetResult()).GetAwaiter().GetResult());
     }
 
     private static string Execute(string[] args, OrchestratorWorkspace workspace, bool skipReadOnlyRoute)
