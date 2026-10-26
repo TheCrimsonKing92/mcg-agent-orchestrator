@@ -71,6 +71,7 @@ public static class AgentOutputDirectives
         {
             lines.Add(
                 "Developer: set `assigned_scope_complete` to `true` only when your assigned implementation is complete; `false` requests bounded revision and excludes later Acceptance/operator evidence.");
+            lines.Add("Developer: if the build host returned a queue deadline, a compile deadline or an apparatus failure and printed no compiler error, that is not a code blocker; finish the edits, put the host message and invocation id in `commands`, keep `blockers: none`, and set `assigned_scope_complete` from the edits alone; the conductor then builds the candidate.");
         }
         else if (role == AgentRole.Planner)
         {

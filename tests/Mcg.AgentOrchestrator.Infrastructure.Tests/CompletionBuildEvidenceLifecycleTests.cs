@@ -6,6 +6,165 @@ using Mcg.AgentOrchestrator.Infrastructure;
 public sealed class CompletionBuildEvidenceLifecycleTests
 {
     [Fact]
+    public void Protocol1QueueDeadlineBuildsSameCandidateWithoutWorkerRetry()
+    {
+        var fixture = InfrastructureFixture();
+        var dispatches = fixture.Task.DispatchHistory.ToArray();
+        var runner = InfrastructureRunner(fixture);
+
+        runner.RefreshLatestProcess(fixture.Kernel, fixture.GoalId, fixture.TaskId);
+
+        Assert.True(fixture.Task.CompletionBuildEvidence!.IsPending);
+        Assert.Equal(fixture.Task.LastDispatch!.DispatchedAt, fixture.Task.CompletionBuildEvidence.DispatchAt);
+        Assert.Equal(1, fixture.Launches);
+        Assert.NotEqual(WorkTaskStatus.Failed, fixture.Task.Status);
+        Assert.Equal(dispatches, fixture.Task.DispatchHistory.ToArray());
+        Assert.Equal(0, fixture.Task.WorkerBuildCheckRecoveryCount);
+        Assert.Equal(0, fixture.Goal.AutomaticAcceptanceRetryCount);
+        Assert.Null(fixture.Task.LastVerification);
+
+        fixture.Release(CompletionBuildEvidencePhase.Success);
+        runner.RefreshLatestProcess(fixture.Kernel, fixture.GoalId, fixture.TaskId);
+
+        Assert.Equal(WorkTaskStatus.Completed, fixture.Task.Status);
+        Assert.True(fixture.Task.LastVerification!.Succeeded);
+        Assert.Equal(CompletionBuildEvidencePhase.Success, fixture.Task.CompletionBuildEvidence.Phase);
+        Assert.Equal(dispatches.Length, fixture.Task.DispatchHistory.Count);
+        Assert.Equal(dispatches.Select(dispatch => dispatch.DispatchedAt),
+            fixture.Task.DispatchHistory.Select(dispatch => dispatch.DispatchedAt));
+        Assert.Equal(1, fixture.Launches);
+        Assert.Equal(0, fixture.Task.WorkerBuildCheckRecoveryCount);
+        Assert.Equal(0, fixture.Goal.AutomaticAcceptanceRetryCount);
+        Assert.Contains("worker_build_infrastructure=QueueDeadline", fixture.Task.LastVerification.StandardError);
+    }
+
+    [Theory]
+    [InlineData(CompletionBuildEvidencePhase.CompilerFailure, DispatchFailureDiagnosticMarker.WorkerBuildCheckFailed)]
+    [InlineData(CompletionBuildEvidencePhase.TimedOut, DispatchFailureDiagnosticMarker.WorkerBuildEvidenceMissing)]
+    [InlineData(CompletionBuildEvidencePhase.ApparatusFailure, DispatchFailureDiagnosticMarker.WorkerBuildEvidenceMissing)]
+    public void Protocol1InfrastructureBuildTerminalOutcomePreservesFailureRoute(CompletionBuildEvidencePhase phase, string marker)
+    {
+        var fixture = InfrastructureFixture();
+        var runner = InfrastructureRunner(fixture);
+        runner.RefreshLatestProcess(fixture.Kernel, fixture.GoalId, fixture.TaskId);
+        Assert.True(fixture.Task.CompletionBuildEvidence!.IsPending);
+
+        fixture.Release(phase);
+        runner.RefreshLatestProcess(fixture.Kernel, fixture.GoalId, fixture.TaskId);
+
+        Assert.Equal(WorkTaskStatus.Failed, fixture.Task.Status);
+        Assert.Equal(phase, fixture.Task.CompletionBuildEvidence.Phase);
+        Assert.Contains(DispatchFailureDiagnosticMarker.Format(marker), fixture.Task.LastVerification!.StandardError);
+        Assert.Contains("worker_build_infrastructure=QueueDeadline", fixture.Task.LastVerification.StandardError);
+        Assert.Single(fixture.Task.DispatchHistory);
+        Assert.Equal(1, fixture.Launches);
+        Assert.Equal(0, fixture.Task.WorkerBuildCheckRecoveryCount);
+        Assert.Equal(0, fixture.Goal.AutomaticAcceptanceRetryCount);
+    }
+
+    [Fact]
+    public void Protocol1IncompleteScopeDoesNotLaunchCompletionBuild()
+    {
+        var fixture = InfrastructureFixture(scopeComplete: false);
+
+        InfrastructureRunner(fixture).RefreshLatestProcess(fixture.Kernel, fixture.GoalId, fixture.TaskId);
+
+        Assert.Equal(0, fixture.Launches);
+        Assert.Null(fixture.Task.CompletionBuildEvidence);
+        Assert.Equal(WorkTaskStatus.Failed, fixture.Task.Status);
+        Assert.False(fixture.Task.LastVerification!.AssignedScopeComplete);
+    }
+
+    [Fact]
+    public void Protocol1CompilerFailureVetoesQueueRequeueAndMatchesCompilerOnlyOutcome()
+    {
+        var fixture = InfrastructureFixture();
+        InfrastructureBuildBlockerClassifierTests.RecordInvocation(fixture.Kernel, fixture.Goal, fixture.Task, WorkerBuildOutcome.CompilerFailure);
+        var control = InfrastructureFixture(outcome: WorkerBuildOutcome.CompilerFailure);
+
+        InfrastructureRunner(fixture).RefreshLatestProcess(fixture.Kernel, fixture.GoalId, fixture.TaskId);
+        InfrastructureRunner(control).RefreshLatestProcess(control.Kernel, control.GoalId, control.TaskId);
+
+        Assert.Equal(0, fixture.Launches);
+        Assert.Equal(0, control.Launches);
+        Assert.Null(fixture.Task.CompletionBuildEvidence);
+        Assert.Null(control.Task.CompletionBuildEvidence);
+        Assert.Equal(WorkTaskStatus.Failed, fixture.Task.Status);
+        Assert.Equal(control.Task.Status, fixture.Task.Status);
+        Assert.Equal(control.Task.LastVerification!.ExitCode, fixture.Task.LastVerification!.ExitCode);
+        Assert.Equal(control.Task.LastVerification.Succeeded, fixture.Task.LastVerification.Succeeded);
+        var actual = DispatchFailureClassifier.Classify(fixture.Task, fixture.Task.LastVerification);
+        var expected = DispatchFailureClassifier.Classify(control.Task, control.Task.LastVerification);
+        Assert.Equal(expected.Kind, actual.Kind);
+        Assert.Equal(TaskOutcomeClassifier.TryExtractRule(expected.ClassifierReceipt), TaskOutcomeClassifier.TryExtractRule(actual.ClassifierReceipt));
+        Assert.Contains(DispatchFailureDiagnosticMarker.Format(DispatchFailureDiagnosticMarker.WorkerBuildCheckFailed),
+            fixture.Task.LastVerification.StandardError);
+    }
+
+    [Fact]
+    public void Protocol1ReceiptAloneCannotCertifyInfrastructureRound()
+    {
+        var fixture = InfrastructureFixture();
+        fixture.WriteReceipt(["src/Feature/Feature.csproj"]);
+
+        InfrastructureRunner(fixture).RefreshLatestProcess(fixture.Kernel, fixture.GoalId, fixture.TaskId);
+
+        Assert.Equal(0, fixture.Launches);
+        Assert.Null(fixture.Task.CompletionBuildEvidence);
+        Assert.Equal(WorkTaskStatus.Failed, fixture.Task.Status);
+        Assert.Contains(DispatchFailureDiagnosticMarker.Format(DispatchFailureDiagnosticMarker.WorkerBuildEvidenceMissing),
+            fixture.Task.LastVerification!.StandardError);
+    }
+
+    [Theory]
+    [InlineData(WorkerBuildOutcome.Interrupted)]
+    [InlineData(WorkerBuildOutcome.ApparatusFailure)]
+    [InlineData(WorkerBuildOutcome.TimeoutAfterStart)]
+    public void Protocol1OtherInfrastructureOutcomesAlsoUseCompletionBuild(WorkerBuildOutcome outcome)
+    {
+        var fixture = InfrastructureFixture(outcome: outcome);
+        var runner = InfrastructureRunner(fixture);
+        runner.RefreshLatestProcess(fixture.Kernel, fixture.GoalId, fixture.TaskId);
+        Assert.True(fixture.Task.CompletionBuildEvidence!.IsPending);
+        fixture.Release();
+        runner.RefreshLatestProcess(fixture.Kernel, fixture.GoalId, fixture.TaskId);
+        Assert.Equal(WorkTaskStatus.Completed, fixture.Task.Status);
+        Assert.Single(fixture.Task.DispatchHistory);
+        Assert.Equal(1, fixture.Launches);
+    }
+
+    private static CompletionBuildEvidenceFixture InfrastructureFixture(bool scopeComplete = true,
+        WorkerBuildOutcome outcome = WorkerBuildOutcome.CapacityBeforeStart)
+    {
+        var fixture = new CompletionBuildEvidenceFixture(workerBuildProtocol1: true);
+        var outputPath = fixture.Task.LastProcess!.StandardOutputPath!;
+        File.WriteAllText(outputPath, File.ReadAllText(outputPath).Replace("END_WORKER_RESULT",
+            $"assigned_scope_complete: {scopeComplete.ToString().ToLowerInvariant()}{Environment.NewLine}END_WORKER_RESULT", StringComparison.Ordinal));
+        InfrastructureBuildBlockerClassifierTests.RecordInvocation(fixture.Kernel, fixture.Goal, fixture.Task, outcome);
+        new SqliteOrchestratorStateRepository(fixture.StatePath).SaveAsync(fixture.Kernel).GetAwaiter().GetResult();
+        return fixture;
+    }
+
+    private static BackgroundDispatchRunner InfrastructureRunner(CompletionBuildEvidenceFixture fixture) => new(fixture.Clock,
+        isStillRunning: _ => false, completionBuildEvidence: fixture.Coordinator(), resolveWorkerBuildReceiptPath: _ => fixture.ReceiptPath)
+        { WorkerBuildInvocations = new MissingInfrastructureBuildEvidence() };
+
+    private sealed class MissingInfrastructureBuildEvidence : IWorkerBuildInvocationOperations
+    {
+        public WorkerBuildHostReference Prepare(AgentOrchestratorKernel kernel, GoalId goalId, TaskId taskId) =>
+            throw new InvalidOperationException("Completion must not dispatch another worker.");
+        public bool ReconcileOutstanding(AgentOrchestratorKernel kernel, GoalId goalId, TaskId taskId, bool cancelled = false) => true;
+        public WorkerBuildConsumption Consume(AgentOrchestratorKernel kernel, GoalId goalId, TaskId taskId,
+            IReadOnlyList<string> changedPaths, IReadOnlyList<string> dirtyPaths)
+        {
+            var task = kernel.GetTask(goalId, taskId);
+            var compilerFailed = task.WorkerBuildInvocations.Any(invocation =>
+                invocation.DispatchAt == task.LastDispatch!.DispatchedAt && invocation.Outcome == WorkerBuildOutcome.CompilerFailure);
+            return new(!compilerFailed, compilerFailed, "worker_build_host=missing-current-candidate-outcome");
+        }
+    }
+
+    [Fact]
     public void UnknownBuildChildIdentityCannotSilentlyCancelCurrentWorker()
     {
         var fixture = new CompletionBuildEvidenceFixture();
