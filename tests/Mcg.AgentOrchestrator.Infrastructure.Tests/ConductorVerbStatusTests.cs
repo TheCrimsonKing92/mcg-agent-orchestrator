@@ -33,9 +33,9 @@ public sealed class ConductorVerbStatusTests
             string.Join("\r\n", events.Select(item => JsonSerializer.Serialize(item))) + "\r\n");
         var lockFile = Path.Combine(workspace.OrchestratorDirectory, "conduct-loop.lock");
         File.WriteAllText(lockFile, "old lock");
-        Directory.CreateDirectory(workspace.GoalLifecycleEventsDirectory);
-        File.WriteAllText(Path.Combine(workspace.GoalLifecycleEventsDirectory, "landings.jsonl"),
-            JsonSerializer.Serialize(new { eventType = "GoalLanded", goalId = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", timestamp = start.AddMinutes(30) }) + "\r\n");
+        new SqliteOrchestratorStateRepository(workspace.SqliteStatePath).RecordPromotionFacts([
+            new GoalPromotionFact("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", new string('a', 40), new string('b', 40),
+                new string('c', 40), start.AddMinutes(30), GoalPromotionFact.MergeTrainProvenance)]);
         var original = new[] { workspace.SqliteStatePath, lockFile, workspace.ConductEventsLogPath }
             .ToDictionary(path => path, Hash);
 

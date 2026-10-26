@@ -1512,9 +1512,7 @@ public sealed partial class BackgroundDispatchRunner
                     DispatchFailureDiagnosticMarker.Format(DispatchFailureDiagnosticMarker.WorkerBuildCheckFailed));
             }
 
-            var buildEvidence = task.LastDispatch?.WorkerBuildProtocolVersion == 1
-                ? ResolveWorkerBuildInvocation(kernel, goalId, taskId, worktreeEvidence.ChangedPaths, worktreeEvidence.DirtyPaths, ref orchestratorFailureReason)
-                : CompletionBuildDispatchReconciliationPolicy.Resolve(
+            Func<OrchestratorBuildEvidenceResolution> reconcileBuild = () => CompletionBuildDispatchReconciliationPolicy.Resolve(
                 task, processRecord.WorkingDirectory,
                 worktreeEvidence.ChangedPaths, worktreeEvidence.DirtyPaths, failedWorkerBuildCheck,
                 () => _completionClassifier.EvaluateWorkerBuildReceipt(processRecord.WorkingDirectory, goal.Id, task),
@@ -1522,6 +1520,8 @@ public sealed partial class BackgroundDispatchRunner
                 _completionBuildEvidence is null ? null : request => _completionBuildEvidence.Reconcile(
                     kernel, goalId, taskId, request, processRecord with
                     { CompletedAt = processRecord.CompletedAt ?? _clock.UtcNow, ExitCode = observedExitCode }), goal.Id);
+            var buildEvidence = task.LastDispatch?.WorkerBuildProtocolVersion == 1
+                ? ResolveWorkerBuildInvocation(kernel, goalId, taskId, worktreeEvidence.ChangedPaths, worktreeEvidence.DirtyPaths, decisionStandardOutput + Environment.NewLine + decisionStandardError, reconcileBuild, ref orchestratorFailureReason) : reconcileBuild();
             if (buildEvidence.Pending)
                 return new DispatchRefreshOutcome(
                     processRecord with { CompletedAt = processRecord.CompletedAt ?? _clock.UtcNow, ExitCode = observedExitCode }, null,
