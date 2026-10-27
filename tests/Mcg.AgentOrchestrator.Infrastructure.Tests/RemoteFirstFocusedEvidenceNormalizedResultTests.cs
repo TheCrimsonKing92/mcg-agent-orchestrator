@@ -1,7 +1,7 @@
 using System.Xml.Linq;
 using Mcg.AgentOrchestrator.Infrastructure;
 
-[Collection("IsolatedProcessSpawning")]
+[Collection("IsolatedProcessSpawningRemainderB")]
 public sealed class RemoteFirstFocusedEvidenceNormalizedResultTests : RemoteFirstFocusedEvidenceFixture
 {
     [Theory]
