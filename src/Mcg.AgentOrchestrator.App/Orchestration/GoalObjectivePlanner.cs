@@ -1,5 +1,6 @@
 using System.Text.RegularExpressions;
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
@@ -222,7 +223,8 @@ internal static class GoalObjectivePlanner
     public static GoalObjectivePlan Build(
         string objective,
         GoalIntakePipeline? pipelineOverride = null,
-        IEnumerable<TaskDurationStatsRecord>? durationStats = null)
+        IEnumerable<TaskDurationStatsRecord>? durationStats = null,
+        Toolchain? targetStack = null)
     {
         var normalized = objective.Trim();
         var classificationText = BuildActionableClassificationText(normalized);
@@ -237,7 +239,7 @@ internal static class GoalObjectivePlanner
         var capabilityWarnings = BuildCapabilityWarnings(normalized);
         var pipelineDecision = SelectPipeline(riskLabels, fileScopes, pipelineOverride);
         var workflow = pipelineDecision.Workflow;
-        var requiredTools = BuildRequiredTools(fileScopes, tokens);
+        var requiredTools = BuildRequiredTools(fileScopes, tokens, targetStack);
         var requiredVerification = BuildRequiredVerification(fileScopes, tokens, estimated);
         var ambiguous = pipelineOverride is null && IsAmbiguous(normalized, tokens, fileScopes);
 
@@ -434,7 +436,7 @@ internal static class GoalObjectivePlanner
         }
     }
 
-    private static string[] BuildRequiredTools(string[] fileScopes, HashSet<string> tokens)
+    private static string[] BuildRequiredTools(string[] fileScopes, HashSet<string> tokens, Toolchain? targetStack)
     {
         var tools = new List<string> { "rg" };
         if (fileScopes.Any(scope => scope.StartsWith("src/", StringComparison.OrdinalIgnoreCase) ||
@@ -443,7 +445,9 @@ internal static class GoalObjectivePlanner
             tokens.Contains("test") ||
             tokens.Contains("dotnet"))
         {
-            tools.Add(InferBuildTestTool(fileScopes, tokens));
+            tools.Add(targetStack.HasValue
+                ? GoalIntakeTargetStack.BuildTestTool(targetStack.Value)
+                : InferBuildTestTool(fileScopes, tokens));
         }
 
         if (fileScopes.Any(scope => scope.StartsWith("docs/", StringComparison.OrdinalIgnoreCase)))

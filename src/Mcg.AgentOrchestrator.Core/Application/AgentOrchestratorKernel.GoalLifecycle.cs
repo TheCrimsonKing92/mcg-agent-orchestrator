@@ -1171,6 +1171,22 @@ public sealed partial class AgentOrchestratorKernel
         return task;
     }
 
+    public TaskSpec SubstituteCapabilityBlockedTaskAgent(GoalId goalId, TaskId taskId, AgentDefinition substitute,
+        string capabilityCode)
+    {
+        var goal = GetGoal(goalId);
+        var task = goal.FindTask(taskId);
+        if (goal.Timeline.Any(evt => evt.TaskId == taskId && evt.Kind == ProgressKind.ProviderCapabilitySubstituted))
+            throw new InvalidOperationException("A capability-blocked task may be substituted only once.");
+        var heldAgentId = task.AssignedAgentId?.Value ?? "none";
+        if (task.AssignedAgentId == substitute.Id)
+            throw new InvalidOperationException("A capability substitute must change the assigned agent.");
+        task = ReassignTaskAgent(goalId, taskId, substitute, "Provider capability substitution.");
+        Append(goal, taskId, ProgressKind.ProviderCapabilitySubstituted,
+            $"capability={capabilityCode}; held agent={heldAgentId}; substitute={substitute.Id.Value}");
+        return task;
+    }
+
     private void ReleaseCrossProviderSubscriptionDeferral(Goal goal, TaskSpec task, AgentDefinition newAgent)
     {
         if (!DispatchFailureClassifier.TryGetSubscriptionLimitRetryAfter(task, out var retryAfter))

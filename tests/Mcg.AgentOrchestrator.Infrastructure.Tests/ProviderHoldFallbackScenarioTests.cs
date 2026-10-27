@@ -283,7 +283,7 @@ public sealed class ProviderHoldFallbackScenarioTests
         Assert.DoesNotContain(goal.Timeline, evt => evt.Kind == ProgressKind.ProviderHoldSubstituted);
     }
 
-    private sealed class PreparationWorker : IDisposable
+    internal sealed class PreparationWorker : IDisposable
     {
         private Process? _process;
         private TestChildProcessCapture? _capture;

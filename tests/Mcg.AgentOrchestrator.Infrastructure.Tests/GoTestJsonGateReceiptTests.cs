@@ -175,7 +175,8 @@ public sealed class GoTestJsonGateReceiptTests
         Assert.Equal(built with
         {
             TestResultPaths = attached.TestResultPaths, ExecutedTestCount = attached.ExecutedTestCount,
-            FailingTestIdentities = attached.FailingTestIdentities, OutputTail = attached.OutputTail
+            FailingTestIdentities = attached.FailingTestIdentities, OutputTail = attached.OutputTail,
+            NormalizedTestResultPaths = attached.NormalizedTestResultPaths
         }, attached);
     }
 
