@@ -19,7 +19,12 @@ public sealed class BriefPlannedTestLaneReadinessTests
     [Theory]
     [InlineData("new test class BuildWidgetTests")]
     [InlineData("new test class Example.BuildWidgetTests")]
+    [InlineData("new test class Widget.Historical.BuildWidgetTests")]
+    [InlineData("new test class Existing+BuildWidgetTests")]
     [InlineData("new tests/Widget.Tests/BuildWidgetTests.cs")]
+    [InlineData("new tests/Example/BuildWidgetTests.cs")]
+    [InlineData(@"new tests\Example\BuildWidgetTests.cs")]
+    [InlineData("new tests/example-tests/BuildWidgetTests.cs")]
     [InlineData("`tests/Widget.Tests/BuildWidgetTests.cs` (new file)")]
     public void ExplicitCollision_ReadinessBlocksBothConfirmationStates(string declaration)
     {
@@ -44,13 +49,17 @@ public sealed class BriefPlannedTestLaneReadinessTests
     }
 
     [Theory]
-    [InlineData("profile")]
-    [InlineData("subscription")]
-    [InlineData("batch")]
-    [InlineData("start-ready")]
-    public void UnresolvedCollision_ApplicationRefusesDeveloperPreparation(string route)
+    [InlineData("profile", Name)]
+    [InlineData("subscription", Name)]
+    [InlineData("batch", Name)]
+    [InlineData("start-ready", Name)]
+    [InlineData("profile", "Example.BuildWidgetTests")]
+    [InlineData("subscription", "Example.BuildWidgetTests")]
+    [InlineData("batch", "Example.BuildWidgetTests")]
+    [InlineData("start-ready", "Example.BuildWidgetTests")]
+    public void UnresolvedCollision_ApplicationRefusesDeveloperPreparation(string route, string className)
     {
-        using var fixture = new Fixture("new test class " + Name);
+        using var fixture = new Fixture("new test class " + className);
         Assert.Equal(WorkTaskStatus.Assigned, fixture.Developer.Status);
         Assert.Empty(DispatchReadinessRules.BuildIncompleteEarlierStageDependencies(fixture.Goal, fixture.Developer));
         var homeCalls = 0;
@@ -91,7 +100,7 @@ public sealed class BriefPlannedTestLaneReadinessTests
         });
 
         Assert.Contains(LaneSubstringCollisionCheck.Rule, failure.Message);
-        Assert.Contains(Name, failure.Message);
+        Assert.Contains(className, failure.Message);
         Assert.Equal(0, homeCalls);
         Assert.Equal(0, launchCalls);
         Assert.Null(fixture.Developer.LastDispatch);
@@ -166,6 +175,11 @@ public sealed class BriefPlannedTestLaneReadinessTests
     [InlineData("existing test class BuildWidgetTests")]
     [InlineData("Update tests/Widget.Tests/BuildWidgetTests.cs")]
     [InlineData("Example: new test class BuildWidgetTests")]
+    [InlineData("Example: new test class Example.BuildWidgetTests")]
+    [InlineData("Example. new test class Example.BuildWidgetTests")]
+    [InlineData("Historical-evidence: new test class Example.BuildWidgetTests")]
+    [InlineData("Historical evidence: new test class Example.BuildWidgetTests")]
+    [InlineData("existing test class Example.BuildWidgetTests")]
     [InlineData("> new test class BuildWidgetTests")]
     [InlineData("\"new test class BuildWidgetTests\"")]
     [InlineData("Historical evidence: new test class BuildWidgetTests")]

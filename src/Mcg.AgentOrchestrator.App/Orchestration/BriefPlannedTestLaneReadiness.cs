@@ -12,6 +12,8 @@ internal static class BriefPlannedTestLaneReadiness
     internal const string ConfigurationKind = "test-lane-configuration";
     private const RegexOptions Options = RegexOptions.IgnoreCase | RegexOptions.CultureInvariant;
     private const string Identifier = @"[A-Za-z_]\w*(?:[.+][A-Za-z_]\w*)*";
+    private const string NewClass = @"\bnew\s+(?:test\s+class|class)\s+[`'""]?(?<name>" + Identifier + @")\b";
+    private const string TestSourcePath = @"(?<![\w./\\])tests[/\\][\w./\\-]+\.cs\b";
     private sealed record Declaration(string Name, string? Collection);
 
     internal static IReadOnlyList<GoalReadinessFinding> Evaluate(
@@ -70,8 +72,7 @@ internal static class BriefPlannedTestLaneReadiness
             var collectionMatch = Regex.Match(line,
                 "\\bcollection\\s*(?:\\(\\s*|[:=]\\s*)?[`'\"](?<name>[^`'\"]+)[`'\"]", Options);
             var collection = collectionMatch.Success ? collectionMatch.Groups["name"].Value : null;
-            foreach (Match match in Regex.Matches(line,
-                         @"(?<![\w./\\])tests[/\\][\w./\\-]+\.cs\b", RegexOptions.CultureInvariant))
+            foreach (Match match in Regex.Matches(line, TestSourcePath, RegexOptions.CultureInvariant))
             {
                 if (BriefScopeSectionSelector.IsEvidenceOnly(line, match.Index, match.Length) ||
                     !IsNew(line, match.Index, match.Length)) continue;
@@ -82,8 +83,7 @@ internal static class BriefPlannedTestLaneReadiness
                 if (Regex.IsMatch(name, @"^[A-Za-z_]\w*$", RegexOptions.CultureInvariant))
                     result.TryAdd(name, new Declaration(name, collection));
             }
-            foreach (Match match in Regex.Matches(line,
-                         @"\bnew\s+(?:test\s+class|class)\s+[`'""]?(?<name>" + Identifier + @")\b", Options))
+            foreach (Match match in Regex.Matches(line, NewClass, Options))
             {
                 var name = match.Groups["name"].Value;
                 if ((match.Value.Contains("test class", StringComparison.OrdinalIgnoreCase) || name.Contains("Tests", StringComparison.Ordinal)) &&
@@ -150,8 +150,11 @@ internal static class BriefPlannedTestLaneReadiness
             }
             if (scope is { } range ? !(index >= range.Start && index < range.End) && !inNewTests
                 : hasHeading && !inNewTests) continue;
+            // Scan prose separately so declaration names and paths cannot become evidence markers.
+            var prose = Regex.Replace(Regex.Replace(line, NewClass, "", Options),
+                TestSourcePath, "", RegexOptions.CultureInvariant);
             if (line.StartsWith('>') || line.StartsWith('"') || line.StartsWith('\'') ||
-                Regex.IsMatch(line, @"\b(?:example|illustrative|historical|history|previous|existing|regex|command|evidence)\b", Options) ||
+                Regex.IsMatch(prose, @"\b(?:example|illustrative|historical|history|previous|existing|regex|command|evidence)\b", Options) ||
                 Regex.IsMatch(line, @"\b(?:do not|don't|must not|will not|never|not adding|no new)\b", Options) ||
                 Regex.IsMatch(line, @"^(?:[-*]\s+)?(?:dotnet|rg|git|pwsh|powershell)\b", Options)) continue;
             yield return line;
