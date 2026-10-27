@@ -9,6 +9,40 @@ public sealed class GateOwnedCriterionRefinementTests
 {
     private const string Candidate = "candidate-c";
 
+    // Parallel-safe: revision and gate evaluation use only a scenario-local kernel.
+    [Xunit.Theory]
+    [Xunit.InlineData("Operator owns execution; Acceptance owns execution. TEST-VERIFIABLE.")]
+    [Xunit.InlineData("REAL-WORLD-DEPENDENT.")]
+    public void UnsafeRevision_RefinementGate_BlocksUntilAuthoritativeCorrection(string declaration)
+    {
+        const string original = "The result is computed. Developer owns; Developer executes. TEST-VERIFIABLE.";
+        var revised = $"The result is observed. {declaration}";
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal($"Brief.\n\n## Acceptance criteria\n1. {original}");
+        kernel.SetGoalRefinedSpec(goal.Id,
+            new RefinedSpec("Observe ownership", [original], VerificationClass.TestVerifiable, [], []));
+        Xunit.Assert.Equal(GoalRefinementReadiness.Ready,
+            GoalRefinementGate.Evaluate(goal, null, new GoalRefinementClarificationFacts([])).Readiness);
+
+        kernel.ReviseGoalBrief(goal.Id, $"Brief.\n\n## Acceptance criteria\n1. {revised}");
+
+        Xunit.Assert.Equal(GoalRefinementReadiness.AwaitingClarification,
+            GoalRefinementGate.Evaluate(goal, null, new GoalRefinementClarificationFacts([])).Readiness);
+        var restored = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot()).GetGoal(goal.Id);
+        Xunit.Assert.Equal(GoalRefinementReadiness.AwaitingClarification,
+            GoalRefinementGate.Evaluate(restored, null, new GoalRefinementClarificationFacts([])).Readiness);
+
+        const string corrected = "The result is observed. Reviewer owns source inspection; Acceptance owns execution. TEST-VERIFIABLE.";
+        kernel.ReviseGoalBrief(goal.Id, $"Brief.\n\n## Acceptance criteria\n1. {corrected}");
+
+        Xunit.Assert.Equal(GoalRefinementReadiness.Ready,
+            GoalRefinementGate.Evaluate(goal, null, new GoalRefinementClarificationFacts([])).Readiness);
+        var obligation = Xunit.Assert.Single(goal.CriterionEvidenceObligations);
+        Xunit.Assert.Equal(3, obligation.CriterionVersion);
+        Xunit.Assert.Equal(CriterionEvidenceOwner.Acceptance, obligation.Owner);
+        Xunit.Assert.Equal(CriterionEvidenceState.Pending, obligation.State);
+    }
+
     [Xunit.Theory]
     [Xunit.InlineData("Acceptance executes")]
     [Xunit.InlineData("ACCEPTANCE-GATE-OWNED")]
@@ -47,7 +81,7 @@ public sealed class GateOwnedCriterionRefinementTests
     }
 
     [Xunit.Fact]
-    public async Task MixedMarkersKeepOperatorOwnershipAndUnmarkedStaysWorkerOwned()
+    public async Task ConflictingExternalMarkersRequireClarificationWithoutAssigningOwners()
     {
         const string mixedCriterion =
             "The operator owns this criterion; Acceptance executes. TEST-VERIFIABLE.";
@@ -74,14 +108,19 @@ public sealed class GateOwnedCriterionRefinementTests
             """;
         var scenario = CreateRefinementScenario(response, objective);
 
-        await scenario.Service.RefineAsync(scenario.Kernel, scenario.Goal.Id);
+        var result = await scenario.Service.RefineAsync(scenario.Kernel, scenario.Goal.Id);
 
         var recorded = scenario.Kernel.GetGoal(scenario.Goal.Id);
-        Xunit.Assert.Equal([mixedCriterion], recorded.RefinedSpec!.OperatorOwnedAcceptanceCriteria);
+        Xunit.Assert.Equal(RefinementOutcome.AwaitingClarification, result.Outcome);
+        Xunit.Assert.Equal([mixedCriterion, unmarkedCriterion], recorded.RefinedSpec!.AcceptanceCriteria);
+        Xunit.Assert.Empty(recorded.RefinedSpec.OperatorOwnedAcceptanceCriteria);
         Xunit.Assert.Empty(recorded.RefinedSpec.AcceptanceGateOwnedAcceptanceCriteria);
-        var obligation = Xunit.Assert.Single(recorded.CriterionEvidenceObligations);
-        Xunit.Assert.Equal(0, obligation.CriterionIndex);
-        Xunit.Assert.Equal(CriterionEvidenceOwner.Operator, obligation.Owner);
+        Xunit.Assert.Empty(recorded.CriterionEvidenceObligations);
+        var question = Xunit.Assert.Single(recorded.RefinedSpec.OpenQuestions);
+        Xunit.Assert.Equal(mixedCriterion, question.Criterion);
+        Xunit.Assert.Contains("Declared criterion 1 claims both Operator and Acceptance evidence ownership",
+            question.Question, StringComparison.Ordinal);
+        Xunit.Assert.Single(scenario.Collaboration.Items);
     }
 
     [Xunit.Fact]
@@ -334,9 +373,10 @@ public sealed class GateOwnedCriterionRefinementTests
             """;
         var scenario = CreateRefinementScenario(response, objective);
 
-        await scenario.Service.RefineAsync(scenario.Kernel, scenario.Goal.Id);
+        var result = await scenario.Service.RefineAsync(scenario.Kernel, scenario.Goal.Id);
 
         var recorded = scenario.Kernel.GetGoal(scenario.Goal.Id);
+        Xunit.Assert.Equal(RefinementOutcome.AwaitingClarification, result.Outcome);
         Xunit.Assert.Equal([criterion], recorded.RefinedSpec!.OperatorOwnedAcceptanceCriteria);
         Xunit.Assert.Contains(recorded.Timeline, evt =>
             evt.Kind == ProgressKind.GoalPolicyDecision &&
@@ -346,7 +386,7 @@ public sealed class GateOwnedCriterionRefinementTests
     }
 
     [Xunit.Fact]
-    public async Task UnownedRealWorldCriterionDefaultsToOperatorWithDiagnostic()
+    public async Task UnownedRealWorldCriterionRequiresOwnershipClarification()
     {
         const string criterion = "The live deployment is observed. REAL-WORLD-DEPENDENT.";
         var objective = $"""
@@ -361,15 +401,61 @@ public sealed class GateOwnedCriterionRefinementTests
             """;
         var scenario = CreateRefinementScenario(response, objective);
 
-        await scenario.Service.RefineAsync(scenario.Kernel, scenario.Goal.Id);
+        var result = await scenario.Service.RefineAsync(scenario.Kernel, scenario.Goal.Id);
 
         var recorded = scenario.Kernel.GetGoal(scenario.Goal.Id);
-        Xunit.Assert.Equal([criterion], recorded.RefinedSpec!.OperatorOwnedAcceptanceCriteria);
-        Xunit.Assert.Contains(recorded.Timeline, evt =>
-            evt.Kind == ProgressKind.GoalPolicyDecision &&
-            evt.Message.Contains(
-                "declared criterion 1 is real-world-dependent with no declared owner, classified operator-owned",
-                StringComparison.Ordinal));
+        Xunit.Assert.Equal(RefinementOutcome.AwaitingClarification, result.Outcome);
+        Xunit.Assert.Empty(recorded.RefinedSpec!.OperatorOwnedAcceptanceCriteria);
+        Xunit.Assert.Empty(recorded.RefinedSpec.AcceptanceGateOwnedAcceptanceCriteria);
+        Xunit.Assert.Empty(recorded.CriterionEvidenceObligations);
+        var question = Xunit.Assert.Single(recorded.RefinedSpec.OpenQuestions);
+        Xunit.Assert.Equal(criterion, question.Criterion);
+        Xunit.Assert.Contains("without an authoritative evidence owner", question.Question, StringComparison.Ordinal);
+        Xunit.Assert.Single(scenario.Collaboration.Items);
+    }
+
+    [Xunit.Fact]
+    public async Task OwnershipAnswerCannotReplaceTypedRepair()
+    {
+        const string criterion = "The runtime result is observed. REAL-WORLD-DEPENDENT.";
+        var objective = $"Brief.\n\n## Acceptance criteria\n\n1. {criterion}";
+        var response = $$"""
+            {"behavioralContract":"Observe the runtime result.","acceptanceCriteria":[{{System.Text.Json.JsonSerializer.Serialize(criterion)}}],"verificationClass":"RealWorldDependent","decisions":[],"forks":[]}
+            """;
+        var scenario = CreateRefinementScenario(response, objective);
+        var result = await scenario.Service.RefineAsync(scenario.Kernel, scenario.Goal.Id);
+        Xunit.Assert.Equal(RefinementOutcome.AwaitingClarification, result.Outcome);
+        var question = Xunit.Assert.Single(scenario.Goal.RefinedSpec!.OpenQuestions);
+
+        Xunit.Assert.False(await scenario.Service.TryResolveOpenClarificationAsync(
+            scenario.Kernel, question.Id, "The ownership issue can be ignored."));
+        // The listener can resolve only the collaboration store; synchronization must
+        // still retain the specification's ownership block until authority is repaired.
+        Xunit.Assert.True(await scenario.Service.TryResolveOpenClarificationAsync(
+            question.Id, "The ownership issue can be ignored."));
+        await scenario.Service.SyncAnsweredClarificationsAsync(scenario.Kernel, scenario.Goal.Id);
+        Xunit.Assert.True(scenario.Goal.RefinedSpec!.HasOpenQuestions);
+        Xunit.Assert.Empty(scenario.Goal.CriterionEvidenceObligations);
+
+        var missingCandidate = Xunit.Assert.Throws<ArgumentException>(() =>
+            scenario.Kernel.MapCriterionEvidenceOwner(scenario.Goal.Id, 0,
+                scenario.Goal.AuthoritativeRefinedSpecVersion!.Version, CriterionEvidenceOwner.Operator,
+                "operator", "operator observation"));
+        Xunit.Assert.Equal("expectedCandidateSha", missingCandidate.ParamName);
+        Xunit.Assert.True(scenario.Goal.RefinedSpec!.HasOpenQuestions);
+        Xunit.Assert.Empty(scenario.Goal.CriterionEvidenceObligations);
+
+        scenario.Kernel.MapCriterionEvidenceOwner(scenario.Goal.Id, 0,
+            scenario.Goal.AuthoritativeRefinedSpecVersion!.Version, CriterionEvidenceOwner.Operator,
+            "operator", "operator observation", expectedCandidateSha: Candidate);
+        await scenario.Service.SyncAnsweredClarificationsAsync(scenario.Kernel, scenario.Goal.Id);
+
+        Xunit.Assert.False(scenario.Goal.RefinedSpec!.HasOpenQuestions);
+        var outstanding = Xunit.Assert.Single(scenario.Goal.OutstandingCriterionEvidenceObligations);
+        Xunit.Assert.Equal(CriterionEvidenceOwner.Operator, outstanding.Owner);
+        Xunit.Assert.Equal(CriterionEvidenceState.Pending, outstanding.State);
+        Xunit.Assert.Equal(Candidate, outstanding.ExpectedCandidateSha);
+        Xunit.Assert.Null(outstanding.ReceiptId);
     }
 
     [Xunit.Fact]
@@ -413,11 +499,14 @@ public sealed class GateOwnedCriterionRefinementTests
             """;
         var scenario = CreateRefinementScenario(response, objective);
 
-        await scenario.Service.RefineAsync(scenario.Kernel, scenario.Goal.Id);
+        var result = await scenario.Service.RefineAsync(scenario.Kernel, scenario.Goal.Id);
 
         var recorded = scenario.Kernel.GetGoal(scenario.Goal.Id);
+        Xunit.Assert.Equal(RefinementOutcome.AwaitingClarification, result.Outcome);
         Xunit.Assert.Empty(recorded.RefinedSpec!.AcceptanceGateOwnedAcceptanceCriteria);
         Xunit.Assert.Empty(recorded.RefinedSpec.OperatorOwnedAcceptanceCriteria);
+        Xunit.Assert.Contains("has no unique declared criterion",
+            Xunit.Assert.Single(recorded.RefinedSpec.OpenQuestions).Question, StringComparison.Ordinal);
         var decision = Xunit.Assert.Single(recorded.Timeline.Where(evt =>
             evt.Kind == ProgressKind.GoalPolicyDecision &&
             evt.Message.Contains("Spec refiner owner dropped", StringComparison.Ordinal)));
@@ -483,7 +572,7 @@ public sealed class GateOwnedCriterionRefinementTests
     }
 
     [Xunit.Fact]
-    public async Task DuplicateDeclaredOwnerClaimsKeepFirstAndRecordConflict()
+    public async Task ConflictingGeneratedOwnersRequireClarification()
     {
         const string objective = """
             Implement evidence-owner mapping.
@@ -497,11 +586,15 @@ public sealed class GateOwnedCriterionRefinementTests
             """;
         var scenario = CreateRefinementScenario(response, objective);
 
-        await scenario.Service.RefineAsync(scenario.Kernel, scenario.Goal.Id);
+        var result = await scenario.Service.RefineAsync(scenario.Kernel, scenario.Goal.Id);
 
         var recorded = scenario.Kernel.GetGoal(scenario.Goal.Id);
-        Xunit.Assert.Equal(["The focused test passes."], recorded.RefinedSpec!.AcceptanceGateOwnedAcceptanceCriteria);
+        Xunit.Assert.Equal(RefinementOutcome.AwaitingClarification, result.Outcome);
+        Xunit.Assert.Empty(recorded.RefinedSpec!.AcceptanceGateOwnedAcceptanceCriteria);
         Xunit.Assert.Empty(recorded.RefinedSpec.OperatorOwnedAcceptanceCriteria);
+        Xunit.Assert.Empty(recorded.CriterionEvidenceObligations);
+        Xunit.Assert.Contains("conflicting generated owners",
+            Xunit.Assert.Single(recorded.RefinedSpec.OpenQuestions).Question, StringComparison.Ordinal);
         Xunit.Assert.Single(recorded.Timeline.Where(evt =>
             evt.Kind == ProgressKind.GoalPolicyDecision &&
             evt.Message.Contains("Spec refiner owner conflict: operator for declared criterion 1 already owned by acceptance-gate", StringComparison.Ordinal)));

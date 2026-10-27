@@ -3,7 +3,7 @@ using Mcg.AgentOrchestrator.Core;
 public sealed class CriterionOwnershipDerivationTests
 {
     [Xunit.Fact]
-    public void OperatorPhraseOverridesPreservedGateOwnerAndGateMarker()
+    public void DeriveForRevision_ConflictingDeclaredOwners_ReportsCriterionIssue()
     {
         const string criterion = "The operator owns the check; Acceptance executes. TEST-VERIFIABLE.";
 
@@ -11,7 +11,11 @@ public sealed class CriterionOwnershipDerivationTests
             [criterion], [criterion], []);
 
         Xunit.Assert.Empty(result.AcceptanceGateOwned);
-        Xunit.Assert.Equal([criterion], result.OperatorOwned);
+        Xunit.Assert.Empty(result.OperatorOwned);
+        var issue = Xunit.Assert.Single(result.Issues);
+        Xunit.Assert.Equal(0, issue.CriterionIndex);
+        Xunit.Assert.Contains("Declared criterion 1 claims both Operator and Acceptance evidence ownership", issue.Diagnostic);
+        Xunit.Assert.Contains(criterion, issue.Diagnostic);
     }
 
     [Xunit.Fact]
