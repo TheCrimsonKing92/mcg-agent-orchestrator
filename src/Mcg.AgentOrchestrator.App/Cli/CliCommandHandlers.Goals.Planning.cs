@@ -248,7 +248,7 @@ private static bool HandlePlan(CliExecutionContext context, IReadOnlyList<string
         ? GoalObjectivePlanner.Build(
             direction,
             GoalIntakePipeline.WholeGoalReview,
-            context.Kernel.BuildTaskDurationStats())
+            context.Kernel.BuildTaskDurationStats(), GoalIntakeTargetStack.For(context.Workspace))
         : BuildGoalObjectivePlan(context, direction, simple: true);
     GoalObjectivePlanner.ThrowIfBlocked(objPlan);
     ConsoleViews.PrintGoalObjectivePlan(objPlan);

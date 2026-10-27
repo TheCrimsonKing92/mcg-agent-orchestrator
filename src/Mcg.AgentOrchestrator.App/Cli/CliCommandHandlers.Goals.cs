@@ -104,7 +104,7 @@ private static GoalObjectivePlan BuildGoalObjectivePlan(
         simple
             ? GoalIntakePipeline.DeveloperOnly
             : pipelineRequest?.ToPipelineOverride(),
-        context.Kernel.BuildTaskDurationStats());
+        context.Kernel.BuildTaskDurationStats(), GoalIntakeTargetStack.For(context.Workspace));
 
 private static GoalIntakePipelineRequest? ResolveGoalIntakePipelineRequest(IReadOnlyList<string> parts)
 {
