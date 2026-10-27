@@ -26,13 +26,15 @@ internal static class ReceiptTestFailureReader
             var trxPaths = check.TestResultPaths?.Where(path => !string.IsNullOrWhiteSpace(path)).ToArray();
             var normalizedPaths = check.NormalizedTestResultPaths?
                 .Where(path => !string.IsNullOrWhiteSpace(path)).ToArray();
-            if (trxPaths is not { Length: 1 } || normalizedPaths is not { Length: 1 })
+            var normalizedOnly = trxPaths is not { Length: > 0 } && check.CrosswalkDiagnostics is not null &&
+                !string.IsNullOrEmpty(check.TestResultAttemptId) && !check.TestResultIsExplicitCrossAttemptReuse;
+            if (normalizedPaths is not { Length: 1 } || (!normalizedOnly && trxPaths is not { Length: 1 }))
             {
                 return false;
             }
 
-            if (!string.Equals(Path.GetFullPath(normalizedPaths[0]),
-                Path.GetFullPath(NormalizedTestResultWriter.PathFor(trxPaths[0])),
+            if (!normalizedOnly && !string.Equals(Path.GetFullPath(normalizedPaths[0]),
+                Path.GetFullPath(NormalizedTestResultWriter.PathFor(trxPaths![0])),
                 StringComparison.OrdinalIgnoreCase))
             {
                 return false;
@@ -40,13 +42,13 @@ internal static class ReceiptTestFailureReader
 
             var result = new NormalizedTestResultSource().Read(normalizedPaths[0]);
             if (result.Status != TestResultReadStatus.Readable ||
-                result.Records.Any(record => record.Status is not (TestResultStatus.Passed or TestResultStatus.Failed)))
+                (!normalizedOnly && result.Records.Any(record => record.Status is not (TestResultStatus.Passed or TestResultStatus.Failed))))
             {
                 return false;
             }
 
             failures = result.Records
-                .Where(record => record.Status == TestResultStatus.Failed)
+                .Where(record => record.Status is TestResultStatus.Failed or TestResultStatus.Error)
                 .Select(record => new AcceptanceTrxFailure(record.Id, "Failed", record.Message, record.Trace))
                 .ToArray();
             return true;
