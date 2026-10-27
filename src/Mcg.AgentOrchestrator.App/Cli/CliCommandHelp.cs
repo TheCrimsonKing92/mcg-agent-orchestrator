@@ -318,6 +318,13 @@ internal static class CliCommandHelp
         "Replace an active goal's authoritative brief while retaining its version history.",
         ["--brief-file", "--text-file", "--reason", "--reason-file", "--supersede-answer", "--history", "--help", "-h"]);
 
+    public const string AskGoalUsage = "Usage: ask-goal [--goal <goal-prefix>] <question>";
+
+    private static readonly CommandHelpEntry AskGoal = new(
+        AskGoalUsage,
+        "Request human input for the selected goal, or the current goal when --goal is omitted.",
+        ["--goal", "--help", "-h"]);
+
     private static readonly CommandHelpEntry Answer = new(
         AnswerUsage,
         "Submit an answer to a human-input request.",
@@ -1178,6 +1185,12 @@ internal static class CliCommandHelp
         if (args[0].Equals("revise", StringComparison.OrdinalIgnoreCase))
         {
             entry = Revise;
+            return true;
+        }
+
+        if (args[0].Equals("ask-goal", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = AskGoal;
             return true;
         }
 
