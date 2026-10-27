@@ -12,6 +12,7 @@ internal static class FocusedEvidenceSiblingClassResolver
         string requestedClass)
         => ResolveSiblingTestClassNames(
             worktreePath, project, requestedClass,
+            FocusedEvidenceSiblingClassMemo.Shared,
             File.ReadAllText,
             (path, text) => CSharpSyntaxTree.ParseText(text, path: path));
 
@@ -19,12 +20,39 @@ internal static class FocusedEvidenceSiblingClassResolver
         string worktreePath,
         string project,
         string requestedClass,
+        FocusedEvidenceSiblingClassMemo memo,
         Func<string, string> readText,
         Func<string, string, SyntaxTree> parse)
     {
         try
         {
-            return ResolveSiblingTestClassNamesCore(worktreePath, project, requestedClass, readText, parse);
+            if (!TryGetProjectDirectory(worktreePath, project, out var projectDirectory))
+            {
+                return ResolveSiblingTestClassNamesCore(worktreePath, project, requestedClass, readText, parse);
+            }
+
+            return memo.GetOrCompute(worktreePath, project, requestedClass, projectDirectory,
+                () => ResolveSiblingTestClassNamesCore(worktreePath, project, requestedClass, readText, parse));
+        }
+        catch
+        {
+            // Keep failures outside the memo so a later call can retry.
+            return [];
+        }
+    }
+
+    internal static IReadOnlyList<string> ResolveSiblingTestClassNames(
+        string worktreePath,
+        string project,
+        string requestedClass,
+        Func<string, string> readText,
+        Func<string, string, SyntaxTree> parse,
+        bool parseEveryFamilyFile = false)
+    {
+        try
+        {
+            return ResolveSiblingTestClassNamesCore(
+                worktreePath, project, requestedClass, readText, parse, parseEveryFamilyFile);
         }
         catch
         {
@@ -38,7 +66,8 @@ internal static class FocusedEvidenceSiblingClassResolver
         string project,
         string requestedClass,
         Func<string, string> readText,
-        Func<string, string, SyntaxTree> parse)
+        Func<string, string, SyntaxTree> parse,
+        bool parseEveryFamilyFile = false)
     {
         var normalizedRequestedClass = requestedClass.Trim();
         if (normalizedRequestedClass.Length == 0)
@@ -46,17 +75,7 @@ internal static class FocusedEvidenceSiblingClassResolver
             return [];
         }
 
-        var rootPath = Path.GetFullPath(worktreePath);
-        var projectPath = Path.GetFullPath(Path.Combine(
-            rootPath,
-            project.Replace('/', Path.DirectorySeparatorChar)));
-        if (!IsWithinDirectory(projectPath, rootPath) || !File.Exists(projectPath))
-        {
-            return [];
-        }
-
-        var projectDirectory = Path.GetDirectoryName(projectPath);
-        if (string.IsNullOrWhiteSpace(projectDirectory) || !Directory.Exists(projectDirectory))
+        if (!TryGetProjectDirectory(worktreePath, project, out var projectDirectory))
         {
             return [];
         }
@@ -78,13 +97,18 @@ internal static class FocusedEvidenceSiblingClassResolver
                 !nestedProjectDirectories.Any(directory => IsWithinDirectory(path, directory)))
             .ToArray();
         var requestedDeclarations = new List<TypeDeclarationSyntax>();
+        var sourceTexts = new string[sourcePaths.Length];
+        var parsedRoots = new CompilationUnitSyntax?[sourcePaths.Length];
+        var attempted = new bool[sourcePaths.Length];
 
         // Deliberately mirrors GoalAcceptanceVerifier's source-discovery mechanism without
         // changing that verifier: resolve one declaration, then inspect its file and any
         // concrete test descendants of an abstract base declared beside it.
-        foreach (var path in sourcePaths)
+        for (var index = 0; index < sourcePaths.Length; index++)
         {
+            var path = sourcePaths[index];
             var source = readText(path);
+            sourceTexts[index] = source;
             if (!source.Contains(requestedSimpleName, StringComparison.Ordinal))
             {
                 continue;
@@ -98,6 +122,8 @@ internal static class FocusedEvidenceSiblingClassResolver
             }
 
             var root = syntaxTree.GetCompilationUnitRoot();
+            parsedRoots[index] = root;
+            attempted[index] = true;
             requestedDeclarations.AddRange(root.DescendantNodes()
                 .OfType<TypeDeclarationSyntax>()
                 .Where(declaration => IsTopLevel(declaration) && TypeMatches(declaration, normalizedRequestedClass)));
@@ -123,14 +149,66 @@ internal static class FocusedEvidenceSiblingClassResolver
         var sourceRoots = new List<CompilationUnitSyntax> { declaringRoot };
         if (familyBaseNames.Count > 0)
         {
-            foreach (var path in sourcePaths.Where(path =>
-                         !path.Equals(declaringRoot.SyntaxTree.FilePath, StringComparison.OrdinalIgnoreCase)))
+            if (parseEveryFamilyFile)
             {
-                var syntaxTree = parse(path, readText(path));
-                if (!syntaxTree.GetDiagnostics().Any(diagnostic =>
-                        diagnostic.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Error))
+                for (var index = 0; index < sourcePaths.Length; index++)
                 {
-                    sourceRoots.Add(syntaxTree.GetCompilationUnitRoot());
+                    if (sourcePaths[index].Equals(declaringRoot.SyntaxTree.FilePath, StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    var syntaxTree = parse(sourcePaths[index], sourceTexts[index]);
+                    parsedRoots[index] = syntaxTree.GetDiagnostics().Any(diagnostic =>
+                        diagnostic.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Error)
+                        ? null : syntaxTree.GetCompilationUnitRoot();
+                }
+            }
+            else
+            {
+                var familyNames = new HashSet<string>(familyBaseNames, StringComparer.Ordinal);
+                int previousNameCount;
+                do
+                {
+                    previousNameCount = familyNames.Count;
+                    // Include first-pass roots and revisit declarations when new base names appear.
+                    foreach (var root in parsedRoots)
+                    {
+                        if (root is not null)
+                        {
+                            AddFamilyNames(root, familyNames);
+                        }
+                    }
+
+                    for (var index = 0; index < sourcePaths.Length; index++)
+                    {
+                        if (attempted[index] || !familyNames.Any(name =>
+                                sourceTexts[index].Contains(name, StringComparison.Ordinal)))
+                        {
+                            continue;
+                        }
+
+                        attempted[index] = true;
+                        var syntaxTree = parse(sourcePaths[index], sourceTexts[index]);
+                        if (!syntaxTree.GetDiagnostics().Any(diagnostic =>
+                                diagnostic.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Error))
+                        {
+                            var root = syntaxTree.GetCompilationUnitRoot();
+                            parsedRoots[index] = root;
+                            AddFamilyNames(root, familyNames);
+                        }
+                    }
+                }
+                while (familyNames.Count != previousNameCount);
+            }
+
+            // Discovery order must not change the downstream declaration inventory.
+            for (var index = 0; index < sourcePaths.Length; index++)
+            {
+                if (parsedRoots[index] is { } root &&
+                    !sourcePaths[index].Equals(declaringRoot.SyntaxTree.FilePath, StringComparison.OrdinalIgnoreCase))
+                {
+                    sourceRoots.Add(root);
                 }
             }
         }
@@ -153,6 +231,39 @@ internal static class FocusedEvidenceSiblingClassResolver
             .Distinct(StringComparer.Ordinal)
             .Order(StringComparer.Ordinal)
             .ToArray();
+    }
+
+    private static void AddFamilyNames(CompilationUnitSyntax root, HashSet<string> familyNames)
+    {
+        foreach (var declaration in root.DescendantNodes().OfType<TypeDeclarationSyntax>().Where(IsTopLevel))
+        {
+            if (declaration.BaseList?.Types.Select(SimpleTypeName).Any(familyNames.Contains) == true)
+            {
+                familyNames.Add(declaration.Identifier.ValueText);
+            }
+        }
+    }
+
+    private static bool TryGetProjectDirectory(string worktreePath, string project, out string projectDirectory)
+    {
+        projectDirectory = string.Empty;
+        var rootPath = Path.GetFullPath(worktreePath);
+        var projectPath = Path.GetFullPath(Path.Combine(
+            rootPath,
+            project.Replace('/', Path.DirectorySeparatorChar)));
+        if (!IsWithinDirectory(projectPath, rootPath) || !File.Exists(projectPath))
+        {
+            return false;
+        }
+
+        var directory = Path.GetDirectoryName(projectPath);
+        if (string.IsNullOrWhiteSpace(directory) || !Directory.Exists(directory))
+        {
+            return false;
+        }
+
+        projectDirectory = directory;
+        return true;
     }
 
     private static bool DerivesFromFamily(
