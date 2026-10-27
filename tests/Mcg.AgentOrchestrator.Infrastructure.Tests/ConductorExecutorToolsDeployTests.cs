@@ -11,14 +11,14 @@ public sealed class ConductorExecutorToolsDeployTests
         using var fixture = new Fixture();
         var conductor = fixture.Create();
         await Run(conductor);
-        Assert.Equal(new[] { "read", "copy", "swap" }, fixture.Calls);
+        Assert.Equal(new[] { "read", "copy", "script", "swap", "cleanup" }, fixture.Calls);
         Assert.Equal(new[] { $"EXECUTOR_TOOLS_DEPLOY executor=one outcome=deployed old={Fixture.A} new={Fixture.B} main={Fixture.S[..12]} backup=tools.bak-20261006T000000Z" }, fixture.Events());
         var script = Assert.IsType<string>(fixture.Script);
         foreach (var text in new[] { "Get-ExecutorToolsDigest.ps1", "runner-state.json", "tools.bak-20261006T000000Z" }) Assert.Contains(text, script);
         fixture.AssertFree();
         fixture.Clock.Advance(TimeSpan.FromMinutes(2));
         await Run(conductor);
-        Assert.Equal(new[] { "read", "copy", "swap" }, fixture.Calls);
+        Assert.Equal(new[] { "read", "copy", "script", "swap", "cleanup" }, fixture.Calls);
         Assert.Single(fixture.Events());
     }
 
@@ -161,15 +161,21 @@ public sealed class ConductorExecutorToolsDeployTests
     {
         using var fixture = new Fixture { Failure = reason };
         var conductor = fixture.Create();
+        string ExpectedEvent() =>
+            $"EXECUTOR_TOOLS_DEPLOY executor=one outcome=failed reason={reason} old={Fixture.A} new={Fixture.B} main={Fixture.S[..12]}" +
+            (reason == "readback-mismatch" ? " backup=" + JsonSerializer.Serialize("tools.bak-" +
+                fixture.Clock.GetUtcNow().ToString("yyyyMMddTHHmmssZ", System.Globalization.CultureInfo.InvariantCulture)) : "");
+        var expected = ExpectedEvent();
         await Run(conductor);
-        var expected = $"EXECUTOR_TOOLS_DEPLOY executor=one outcome=failed reason={reason} old={Fixture.A} new={Fixture.B} main={Fixture.S[..12]}";
         Assert.Equal(new[] { expected }, fixture.Events());
-        Assert.Equal(new[] { "read", "copy", "swap" }, fixture.Calls);
+        Assert.Equal(new[] { "read", "copy", "script", "swap", "cleanup" }, fixture.Calls);
         fixture.AssertFree();
         fixture.Clock.Advance(TimeSpan.FromSeconds(elapsed));
+        var retryExpected = ExpectedEvent();
         await Run(conductor);
-        Assert.Equal(elapsed == 599 ? new[] { "read", "copy", "swap" } : new[] { "read", "copy", "swap", "read", "copy", "swap" }, fixture.Calls);
-        Assert.Equal(elapsed == 599 ? new[] { expected } : new[] { expected, expected }, fixture.Events());
+        Assert.Equal(elapsed == 599 ? new[] { "read", "copy", "script", "swap", "cleanup" } :
+            new[] { "read", "copy", "script", "swap", "cleanup", "read", "copy", "script", "swap", "cleanup" }, fixture.Calls);
+        Assert.Equal(elapsed == 599 ? new[] { expected } : new[] { expected, retryExpected }, fixture.Events());
         fixture.AssertFree();
     }
 
@@ -195,6 +201,34 @@ public sealed class ConductorExecutorToolsDeployTests
         Assert.Equal("outcome", ConductEventOperatorClassifier.Classify("executor-tools-deploy", "EXECUTOR_TOOLS_DEPLOY executor=one outcome=deployed"));
         Assert.Null(ConductEventOperatorClassifier.Classify("executor-tools-deploy", "EXECUTOR_TOOLS_DEPLOY executor=one"));
         Assert.Contains(OrchestratorArtifactRegistry.Entries, entry => entry.Pattern == "executor-tools-deploy");
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task DurableFailureDetailDistinguishesCommandLimitWithoutCommandPayload(bool commandLimit)
+    {
+        using var fixture = new Fixture();
+        const string secret = "SECRET -EncodedCommand sensitive-script-and-credential";
+        var conductor = fixture.Create((args, directory, bound, token) => args.Contains("-File")
+            ? commandLimit
+                ? throw new CommandLineTooLongException(8371, 8191, secret)
+                : Task.FromResult(new GoalAcceptanceVerifier.CommandResult(255, "") { Stderr = secret + "\r\nnetwork unreachable" })
+            : fixture.Transport(args, directory, bound, token));
+        await Run(conductor);
+        var detail = Assert.Single(fixture.Events());
+        Assert.Contains(commandLimit ? "reason=transport-error" : "reason=unreachable", detail);
+        Assert.Contains(commandLimit ? "command-line-too-long length=8371 limit=8191" : "remote-stderr-present", detail);
+        Assert.Contains("old=" + Fixture.A, detail);
+        Assert.DoesNotContain(secret, detail);
+        Assert.DoesNotContain("-EncodedCommand", detail);
+        Assert.DoesNotContain("sensitive-script", detail);
+        if (!commandLimit) Assert.DoesNotContain("8371", detail);
+        fixture.AssertFree();
+        fixture.Clock.Advance(TimeSpan.FromMinutes(10));
+        await Run(conductor);
+        Assert.Equal(2, fixture.Calls.Count(call => call == "read"));
+        Assert.All(fixture.Events(), item => Assert.Contains("old=" + Fixture.A, item));
     }
 
     private static async Task Run(ConductorExecutorToolsDeploy conductor)
@@ -241,7 +275,7 @@ public sealed class ConductorExecutorToolsDeployTests
         internal Task<GoalAcceptanceVerifier.CommandResult> Transport(string[] args, string directory, TimeSpan bound, CancellationToken token)
         {
             Assert.Equal(CancellationToken.None, token);
-            if (args[0] == SshRemoteLaneExecutor.ScpPath && !args.Contains("-r"))
+            if (args[0] == SshRemoteLaneExecutor.ScpPath && args[^1] == "tools-digest.json")
             {
                 Calls.Add("read");
                 Assert.Equal(new[] { SshRemoteLaneExecutor.ScpPath, "-o", "BatchMode=yes", "admin-one:D:/runner/tools-digest.json", "tools-digest.json" }, args);
@@ -250,7 +284,7 @@ public sealed class ConductorExecutorToolsDeployTests
             }
             else
             {
-                Assert.Equal(TimeSpan.FromMinutes(2), bound);
+                Assert.Equal(args.Contains("-EncodedCommand") ? TimeSpan.FromSeconds(30) : TimeSpan.FromMinutes(2), bound);
                 Assert.True(RemoteExecutorOccupancy.IsOccupied(Root, "one"));
                 for (var slot = 0; slot < 2; slot++)
                 {
@@ -259,15 +293,29 @@ public sealed class ConductorExecutorToolsDeployTests
                 }
                 if (args[0] == SshRemoteLaneExecutor.ScpPath)
                 {
-                    Calls.Add("copy");
-                    Assert.Equal(new[] { SshRemoteLaneExecutor.ScpPath, "-o", "BatchMode=yes", "-r", "tools-staging-" + Source!.Digest[..12], "admin-one:D:/runner/" }, args);
+                    if (args.Contains("-r"))
+                    {
+                        Calls.Add("copy");
+                        Assert.Equal(Source!.Folder, args[^2]);
+                        Assert.StartsWith("admin-one:D:/runner/tools-deploy-", args[^1]);
+                        Assert.EndsWith(".staging", args[^1]);
+                    }
+                    else
+                    {
+                        Calls.Add("script");
+                        Script = File.ReadAllText(Path.Combine(directory, args[^2]));
+                        Assert.Equal("admin-one:D:/runner/" + args[^2], args[^1]);
+                    }
                 }
+                else if (args.Contains("-EncodedCommand")) Calls.Add("cleanup");
                 else
                 {
                     Calls.Add("swap");
                     Assert.Equal("admin-one", args[5]);
-                    Assert.Equal("-EncodedCommand", args[^2]);
-                    Script = Encoding.Unicode.GetString(Convert.FromBase64String(args[^1]));
+                    Assert.Equal("-File", args[^2]);
+                    Assert.Contains("-ExecutionPolicy", args);
+                    Assert.Contains("Bypass", args);
+                    Assert.NotNull(Script);
                     var backup = "tools.bak-" + Clock.GetUtcNow().ToString("yyyyMMddTHHmmssZ", System.Globalization.CultureInfo.InvariantCulture);
                     var result = Failure switch
                     {
