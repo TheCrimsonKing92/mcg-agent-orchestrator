@@ -251,7 +251,7 @@ internal sealed partial class OperatorIntentCoordinator
                 continue;
             }
 
-            if (appliedVerbs.Count > 0 && !OperatorIntentBatchPolicy.CanShareTick(intent.Verb))
+            if (!OperatorIntentBatchPolicy.CanJoinPass(appliedVerbs, intent))
             {
                 // Keep the claim for the next tick, after this batch is durable.
                 break;
@@ -300,9 +300,11 @@ internal sealed partial class OperatorIntentCoordinator
                 AddPendingCompletion(goal.Id.Value, intent.Id, outcome);
                 lines.Add($"OPERATOR_INTENT id={intent.Id} verb={intent.Verb} goal={goal.Id.Value[..8]} result={(retryClarification == RetryClarificationHandling.Resumed ? "retry-resumed-pending-commit" : "applied-pending-commit")}");
                 mutated = true;
-                preserveOwnerQuestionHold = OwnerQuestionAnswerHoldPreservation.ShouldPreserve(goal.CurrentHold, intent);
+                preserveOwnerQuestionHold = (appliedVerbs.Count == 0 || preserveOwnerQuestionHold) &&
+                    OwnerQuestionAnswerHoldPreservation.ShouldPreserve(goal.CurrentHold, intent);
                 appliedVerbs.Add(intent.Verb);
-                if (!OperatorIntentBatchPolicy.CanShareTick(intent.Verb))
+                if (!OperatorIntentBatchPolicy.CanShareTick(intent.Verb) &&
+                    !OperatorIntentBatchPolicy.IsClarificationAnswer(intent))
                 {
                     break;
                 }
@@ -310,7 +312,8 @@ internal sealed partial class OperatorIntentCoordinator
             catch (AnswerApplicationRetryException ex) when (intent.Verb == OperatorIntentVerbs.Answer)
             {
                 mutated = true;
-                preserveOwnerQuestionHold = OwnerQuestionAnswerHoldPreservation.ShouldPreserve(goal.CurrentHold, intent);
+                preserveOwnerQuestionHold = (appliedVerbs.Count == 0 || preserveOwnerQuestionHold) &&
+                    OwnerQuestionAnswerHoldPreservation.ShouldPreserve(goal.CurrentHold, intent);
                 lines.Add($"OPERATOR_INTENT id={intent.Id} verb=answer goal={goal.Id.Value[..8]} result=retryable reason={Sanitize(ex.Message)}");
                 break;
             }

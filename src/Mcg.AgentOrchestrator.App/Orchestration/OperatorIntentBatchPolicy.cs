@@ -1,4 +1,6 @@
+using System.Text.Json;
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
@@ -9,7 +11,26 @@ public static class OperatorIntentBatchPolicy
         OperatorIntentVerbs.CriterionEvidenceRecord or
         OperatorIntentVerbs.CriterionEvidenceRepair;
 
-    // answer and approve-policy-change write decision stores; answer also resolves human input.
+    internal static bool IsClarificationAnswer(OperatorIntentRecord intent)
+    {
+        if (intent.Verb != OperatorIntentVerbs.Answer)
+            return false;
+
+        try
+        {
+            return JsonSerializer.Deserialize<AnswerOperatorIntentPayload>(intent.PayloadJson, OperatorIntentJson.Options)
+                ?.TargetKind == OperatorAnswerTargetKind.Clarification;
+        }
+        catch (JsonException) { return false; }
+        catch (NotSupportedException) { return false; }
+    }
+
+    internal static bool CanJoinPass(IReadOnlyList<string> appliedVerbs, OperatorIntentRecord intent) =>
+        appliedVerbs.Count == 0 ||
+        (CanShareTick(intent.Verb) && appliedVerbs.All(CanShareTick)) ||
+        (IsClarificationAnswer(intent) && appliedVerbs.All(verb => verb == OperatorIntentVerbs.Answer));
+
+    // Clarification answers may share a pass because each writes rows keyed by its own item or intent.
     // retry reads retry-cause clarification and task lifecycle state changed by sibling intents.
     // adjudicate checks preconditions against the persisted goal version and writes decisions.
     // cancel-dispatch stops a process outside the goal snapshot.

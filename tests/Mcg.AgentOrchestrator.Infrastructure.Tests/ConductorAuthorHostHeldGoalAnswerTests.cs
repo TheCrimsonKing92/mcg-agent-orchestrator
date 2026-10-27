@@ -73,20 +73,18 @@ public sealed class ConductorAuthorHostHeldGoalAnswerTests
         AssertAnswerTargets(await fixture.Intents.ListForGoalAsync(goal.Id.Value).WaitAsync(Bound), answers);
 
         var coordinator = fixture.Coordinator();
-        foreach (var _ in answers)
-        {
-            var result = fixture.ApplyPending(goal, coordinator).Result;
-            Xunit.Assert.True(result.MutatedGoalState);
-            Xunit.Assert.True(result.PreserveGoalHold);
-            AssertHold(hold, goal);
-            // A following tick before persistence must retain the same hold as well.
-            var waiting = fixture.ApplyPending(goal, coordinator).Result;
-            Xunit.Assert.True(waiting.PreserveGoalHold);
-            Xunit.Assert.Contains(waiting.ProgressLines, line => line.Contains("waiting-for-state-commit"));
-            AssertHold(hold, goal);
-            coordinator.CompletePersisted([goal.Id]);
-            Xunit.Assert.Equal(CollaborationItemStatus.Raised, (await fixture.Reload(goal, owner)).Status);
-        }
+        var result = fixture.ApplyPending(goal, coordinator).Result;
+        Xunit.Assert.True(result.MutatedGoalState);
+        Xunit.Assert.Equal(answers.Count, result.ProgressLines.Count);
+        Xunit.Assert.True(result.PreserveGoalHold);
+        AssertHold(hold, goal);
+        // A following tick before persistence must retain the same hold as well.
+        var waiting = fixture.ApplyPending(goal, coordinator).Result;
+        Xunit.Assert.True(waiting.PreserveGoalHold);
+        Xunit.Assert.Contains(waiting.ProgressLines, line => line.Contains("waiting-for-state-commit"));
+        AssertHold(hold, goal);
+        coordinator.CompletePersisted([goal.Id]);
+        Xunit.Assert.Equal(CollaborationItemStatus.Raised, (await fixture.Reload(goal, owner)).Status);
         foreach (var answer in answers)
             Xunit.Assert.Equal(CollaborationItemStatus.Resolved, (await fixture.Reload(goal, answer)).Status);
 
@@ -158,19 +156,18 @@ public sealed class ConductorAuthorHostHeldGoalAnswerTests
 
         var coordinator = fixture.Coordinator();
         // Exercise the named coordinator seam; the production tick wrapper has a separate operator check.
-        for (var i = 0; i < 3; i++)
-        {
-            Xunit.Assert.True(coordinator.ExecutePending(fixture.Kernel, goal).MutatedGoalState);
-            coordinator.CompletePersisted([goal.Id]);
-            fixture.Host.ServiceTick(fixture.Kernel);
-            AssertHold(hold, goal);
-            Xunit.Assert.Equal(CollaborationItemStatus.Raised, (await fixture.Reload(goal, owner)).Status);
-            var planner = Xunit.Assert.Single(goal.Tasks);
-            Xunit.Assert.Equal(WorkTaskStatus.Assigned, planner.Status);
-            Xunit.Assert.Null(planner.LastProcess);
-            Xunit.Assert.Empty(fixture.Host.CurrentRounds);
-            Xunit.Assert.Empty(fixture.Events("owner-question-hold-reconciled"));
-        }
+        var result = coordinator.ExecutePending(fixture.Kernel, goal);
+        Xunit.Assert.True(result.MutatedGoalState);
+        Xunit.Assert.Equal(answers.Count, result.ProgressLines.Count);
+        coordinator.CompletePersisted([goal.Id]);
+        fixture.Host.ServiceTick(fixture.Kernel);
+        AssertHold(hold, goal);
+        Xunit.Assert.Equal(CollaborationItemStatus.Raised, (await fixture.Reload(goal, owner)).Status);
+        var planner = Xunit.Assert.Single(goal.Tasks);
+        Xunit.Assert.Equal(WorkTaskStatus.Assigned, planner.Status);
+        Xunit.Assert.Null(planner.LastProcess);
+        Xunit.Assert.Empty(fixture.Host.CurrentRounds);
+        Xunit.Assert.Empty(fixture.Events("owner-question-hold-reconciled"));
         foreach (var intent in intents)
             Xunit.Assert.Equal(OperatorIntentStatus.Applied,
                 (await fixture.Intents.GetAsync(intent.Id).WaitAsync(Bound))!.Status);
