@@ -82,7 +82,7 @@ public sealed class AcceptanceHermeticGitConfigurationTests
     {
         var root = VerifiedRepositoryRoot.Find();
         var workspaces = Path.Combine(root, "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces");
-        var verifier = File.ReadAllText(Path.Combine(workspaces, "GoalAcceptanceVerifier.cs"));
+        var verifier = File.ReadAllText(Path.Combine(workspaces, "AcceptanceHermeticEnvironment.cs"));
         Assert.Contains("AcceptanceHermeticGitConfiguration.Configure", verifier);
         Assert.False(File.Exists(Path.Combine(workspaces, "GoalAcceptanceVerifier.HermeticGitConfiguration.cs")));
         var owner = Path.GetFullPath(Path.Combine(workspaces, "AcceptanceHermeticGitConfiguration.cs"));

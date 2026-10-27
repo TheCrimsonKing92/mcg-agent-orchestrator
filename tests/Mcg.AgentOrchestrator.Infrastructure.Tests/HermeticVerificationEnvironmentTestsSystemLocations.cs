@@ -16,11 +16,11 @@ public sealed class HermeticVerificationEnvironmentTestsSystemLocations : GoalAc
         foreach (var name in SystemLocations)
             environment[name] = @"Q:\probe-" + name;
 
-        GoalAcceptanceVerifier.ConfigureHermeticVerificationEnvironment(environment, Path.GetTempPath());
+        AcceptanceHermeticEnvironment.ConfigureHermeticVerificationEnvironment(environment, Path.GetTempPath());
 
         foreach (var name in SystemLocations)
         {
-            Assert.True(GoalAcceptanceVerifier.IsHermeticVerificationEnvironmentVariable(name), name);
+            Assert.True(AcceptanceHermeticEnvironment.IsHermeticVerificationEnvironmentVariable(name), name);
             Assert.Equal(@"Q:\probe-" + name, environment[name]);
         }
     }
@@ -79,11 +79,11 @@ public sealed class HermeticVerificationEnvironmentTestsSystemLocations : GoalAc
             if (supplied is not null)
                 environment["systemdrive"] = supplied;
 
-            GoalAcceptanceVerifier.ConfigureHermeticVerificationEnvironment(environment, Path.GetTempPath());
+            AcceptanceHermeticEnvironment.ConfigureHermeticVerificationEnvironment(environment, Path.GetTempPath());
 
             Assert.Equal(supplied == "Q:" ? "Q:" : expectedDrive, environment["SystemDrive"]);
             var resolvedDrive = environment["SystemDrive"];
-            GoalAcceptanceVerifier.ConfigureHermeticVerificationEnvironment(environment, Path.GetTempPath());
+            AcceptanceHermeticEnvironment.ConfigureHermeticVerificationEnvironment(environment, Path.GetTempPath());
             Assert.Equal(resolvedDrive, environment["SystemDrive"]);
         }
     }

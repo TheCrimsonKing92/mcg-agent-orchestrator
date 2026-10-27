@@ -1416,7 +1416,7 @@ internal static partial class CliCommandHandlers
             RedirectStandardError = true,
             WorkingDirectory = workingDirectory
         };
-        GoalAcceptanceVerifier.ConfigureHermeticVerificationEnvironment(startInfo.Environment, workingDirectory);
+        AcceptanceHermeticEnvironment.ConfigureHermeticVerificationEnvironment(startInfo.Environment, workingDirectory);
         if (configureDotnetEnvironment)
         {
             startInfo.Environment["DOTNET_CLI_USE_MSBUILD_SERVER"] = "0";

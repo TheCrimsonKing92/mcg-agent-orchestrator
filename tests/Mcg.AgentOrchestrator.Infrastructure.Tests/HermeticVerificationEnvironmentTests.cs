@@ -47,7 +47,7 @@ public sealed class HermeticVerificationEnvironmentTests : GoalAcceptanceVerifie
         };
 
         var repositoryRoot = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "mcg-hermetic-repo"));
-        GoalAcceptanceVerifier.ConfigureHermeticVerificationEnvironment(environment, repositoryRoot);
+        AcceptanceHermeticEnvironment.ConfigureHermeticVerificationEnvironment(environment, repositoryRoot);
 
         Assert.DoesNotContain(environment.Keys, name => name.StartsWith("MCG_", StringComparison.OrdinalIgnoreCase) &&
             !name.Equals("MCG_ORCHESTRATOR_REPOSITORY_ROOT", StringComparison.OrdinalIgnoreCase));
@@ -79,9 +79,9 @@ public sealed class HermeticVerificationEnvironmentTests : GoalAcceptanceVerifie
             Assert.True(Directory.Exists(Path.GetDirectoryName(expectedCache)!));
         }
         Assert.All(environment.Keys, name => Assert.True(
-            GoalAcceptanceVerifier.IsHermeticVerificationEnvironmentVariable(name),
+            AcceptanceHermeticEnvironment.IsHermeticVerificationEnvironmentVariable(name),
             $"Unexpected verification environment variable survived: {name}"));
-        Assert.True(GoalAcceptanceVerifier.IsHermeticVerificationEnvironmentVariable(
+        Assert.True(AcceptanceHermeticEnvironment.IsHermeticVerificationEnvironmentVariable(
             GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable));
     }
 
@@ -103,11 +103,11 @@ public sealed class HermeticVerificationEnvironmentTests : GoalAcceptanceVerifie
             };
             var second = new Dictionary<string, string?>(first, StringComparer.OrdinalIgnoreCase);
 
-            GoalAcceptanceVerifier.ConfigureHermeticVerificationEnvironment(
+            AcceptanceHermeticEnvironment.ConfigureHermeticVerificationEnvironment(
                 first,
                 Path.GetTempPath(),
                 firstRoot);
-            GoalAcceptanceVerifier.ConfigureHermeticVerificationEnvironment(
+            AcceptanceHermeticEnvironment.ConfigureHermeticVerificationEnvironment(
                 second,
                 Path.GetTempPath(),
                 secondRoot);

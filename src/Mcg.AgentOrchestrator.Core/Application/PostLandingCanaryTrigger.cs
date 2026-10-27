@@ -31,7 +31,11 @@ public static class AcceptanceEngineSurfaceRegistry
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceSharedApparatusInvalidation",
             "src/Mcg.AgentOrchestrator.Execution/Processes/AcceptanceTempRootNames",
             "src/Mcg.AgentOrchestrator.Execution/Verification/AcceptanceTrxOutcomeTaxonomy",
-            "src/Mcg.AgentOrchestrator.Execution/Verification/AcceptanceTrxTestIdentityResolver"
+            "src/Mcg.AgentOrchestrator.Execution/Verification/AcceptanceTrxTestIdentityResolver",
+            // These helpers are reached only through the hermetic environment owner.
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceHermeticGitConfiguration",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/HermeticSystemDrive",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/HermeticToolCacheEnvironment"
         ]),
         new("test-impact-planner", ["src/Mcg.AgentOrchestrator.Core/Application/RepositoryTestImpactPlanner"]),
         new("reverse-dependency-index", [
@@ -65,7 +69,7 @@ public static class AcceptanceEngineSurfaceRegistry
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceGateLaneProgress",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceGatePhaseAccounting",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceGitTextResolver",
-            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceHermeticGitConfiguration",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceHermeticEnvironment",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceIdenticalTreeReuseRule",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceLaneDurationStore",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceLaneEarlyStop",
@@ -112,8 +116,6 @@ public static class AcceptanceEngineSurfaceRegistry
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GateShardWaiterMarkers",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoPackageFocusedEvidence",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoTestJsonGateReceipt",
-            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/HermeticSystemDrive",
-            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/HermeticToolCacheEnvironment",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/MainBaselineDiscoveryCache",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/MemberDeclaredTestRemovals",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/MissingAcceptanceManifestException",

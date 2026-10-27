@@ -80,7 +80,7 @@ internal static class AcceptanceCheckProcessInvoker
         var registrationReleased = false;
         var processDisposed = false;
 
-        ConfigureHermeticVerificationEnvironment(
+        AcceptanceHermeticEnvironment.ConfigureHermeticVerificationEnvironment(
             startInfo.Environment,
             workingDirectory,
             heartbeatContext?.BuildEnvironmentRoot);
