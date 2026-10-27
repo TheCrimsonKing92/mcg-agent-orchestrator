@@ -32,7 +32,7 @@ internal sealed class RemoteExecutorToolsDeploy(
     {
         // The source is a reusable committed-main cache. Only these new paths belong to this attempt.
         var attempt = "tools-deploy-" + Guid.NewGuid().ToString("N");
-        var local = Path.Combine(Path.GetTempPath(), attempt);
+        var local = Path.Combine(OrchestratorTempRoot.GetParent(), attempt);
         var remoteTouched = false;
         var localCleanupFailed = false;
         ExecutorToolsDeployResult result;

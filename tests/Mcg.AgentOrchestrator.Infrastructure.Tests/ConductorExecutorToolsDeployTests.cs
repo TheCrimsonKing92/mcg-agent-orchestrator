@@ -161,16 +161,21 @@ public sealed class ConductorExecutorToolsDeployTests
     {
         using var fixture = new Fixture { Failure = reason };
         var conductor = fixture.Create();
+        string ExpectedEvent() =>
+            $"EXECUTOR_TOOLS_DEPLOY executor=one outcome=failed reason={reason} old={Fixture.A} new={Fixture.B} main={Fixture.S[..12]}" +
+            (reason == "readback-mismatch" ? " backup=" + JsonSerializer.Serialize("tools.bak-" +
+                fixture.Clock.GetUtcNow().ToString("yyyyMMddTHHmmssZ", System.Globalization.CultureInfo.InvariantCulture)) : "");
+        var expected = ExpectedEvent();
         await Run(conductor);
-        var expected = $"EXECUTOR_TOOLS_DEPLOY executor=one outcome=failed reason={reason} old={Fixture.A} new={Fixture.B} main={Fixture.S[..12]}";
         Assert.Equal(new[] { expected }, fixture.Events());
         Assert.Equal(new[] { "read", "copy", "script", "swap", "cleanup" }, fixture.Calls);
         fixture.AssertFree();
         fixture.Clock.Advance(TimeSpan.FromSeconds(elapsed));
+        var retryExpected = ExpectedEvent();
         await Run(conductor);
         Assert.Equal(elapsed == 599 ? new[] { "read", "copy", "script", "swap", "cleanup" } :
             new[] { "read", "copy", "script", "swap", "cleanup", "read", "copy", "script", "swap", "cleanup" }, fixture.Calls);
-        Assert.Equal(elapsed == 599 ? new[] { expected } : new[] { expected, expected }, fixture.Events());
+        Assert.Equal(elapsed == 599 ? new[] { expected } : new[] { expected, retryExpected }, fixture.Events());
         fixture.AssertFree();
     }
 
