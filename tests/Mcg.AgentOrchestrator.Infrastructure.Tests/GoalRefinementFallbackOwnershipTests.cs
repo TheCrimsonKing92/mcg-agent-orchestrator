@@ -12,6 +12,44 @@ public sealed class GoalRefinementFallbackOwnershipTests
         "The live widget export is observed. REAL-WORLD-DEPENDENT; OPERATOR owns live execution.";
     private const string UnclassifiedCriterion = "The widget label is readable.";
 
+    [Xunit.Theory]
+    [Xunit.InlineData("Operator owns execution; Acceptance owns execution. TEST-VERIFIABLE.", "both Operator and Acceptance")]
+    [Xunit.InlineData("OPERATOR-OWNED; ACCEPTANCE-GATE-OWNED. TEST-VERIFIABLE.", "both Operator and Acceptance")]
+    [Xunit.InlineData("Operator owns execution; ACCEPTANCE-GATE-OWNED. TEST-VERIFIABLE.", "both Operator and Acceptance")]
+    [Xunit.InlineData("OPERATOR-OWNED; Acceptance owns execution. TEST-VERIFIABLE.", "both Operator and Acceptance")]
+    [Xunit.InlineData("Operator owns execution. executed by the acceptance gate. TEST-VERIFIABLE.", "both Operator and Acceptance")]
+    [Xunit.InlineData("REAL-WORLD-DEPENDENT.", "without an authoritative evidence owner")]
+    public async Task InvalidOutputRequiresClarificationForUnsafeOwnership(string declarations, string diagnostic)
+    {
+        var criterion = $"The runtime result is observed. {declarations}";
+        var objective = $"Show widget information.\n\n## Acceptance criteria\n- {criterion}";
+        var (service, kernel, goalId) = CreateScenario(objective);
+
+        var result = await service.RefineAsync(kernel, goalId);
+
+        Xunit.Assert.Equal(RefinementDisposition.Fallback, result.Disposition);
+        Xunit.Assert.NotNull(result.Failure);
+        Xunit.Assert.Equal(RefinementOutcome.AwaitingClarification, result.Outcome);
+        var goal = kernel.GetGoal(goalId);
+        var spec = goal.RefinedSpec!;
+        Xunit.Assert.Equal([criterion], spec.AcceptanceCriteria);
+        Xunit.Assert.Empty(spec.OperatorOwnedAcceptanceCriteria);
+        Xunit.Assert.Empty(spec.AcceptanceGateOwnedAcceptanceCriteria);
+        Xunit.Assert.Empty(goal.CriterionEvidenceObligations);
+        var question = Xunit.Assert.Single(spec.OpenQuestions);
+        Xunit.Assert.Equal(criterion, question.Criterion);
+        Xunit.Assert.Equal("ownership-lifecycle", question.ForkKind);
+        Xunit.Assert.Equal("Open", question.Status);
+        Xunit.Assert.Contains(diagnostic, question.Question, StringComparison.Ordinal);
+        Xunit.Assert.Contains("Revise the versioned criterion", question.Question, StringComparison.Ordinal);
+        Xunit.Assert.Contains("criterion-evidence-map", question.Question, StringComparison.Ordinal);
+
+        // Repeated invalid output must retain the same unresolved authority issue.
+        var repeated = await service.RefineAsync(kernel, goalId);
+        Xunit.Assert.Equal(RefinementOutcome.AwaitingClarification, repeated.Outcome);
+        Xunit.Assert.Equal(question, Xunit.Assert.Single(repeated.Spec.OpenQuestions));
+    }
+
     [Xunit.Fact]
     public async Task InvalidOutputDerivesGateOperatorAndUnclassifiedCriteria()
     {
