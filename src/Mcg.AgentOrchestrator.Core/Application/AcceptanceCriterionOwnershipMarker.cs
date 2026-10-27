@@ -71,7 +71,10 @@ public static partial class AcceptanceCriterionOwnershipMarker
         !string.IsNullOrWhiteSpace(text) && OperatorOwnershipRegex().IsMatch(text);
 
     public static bool HasAcceptanceGateOwnershipMarker(string? text) =>
-        !string.IsNullOrWhiteSpace(text) && AcceptanceGateOwnershipRegex().IsMatch(text);
+        !string.IsNullOrWhiteSpace(text) &&
+        (AcceptanceGateOwnershipRegex().IsMatch(text) ||
+         ExtractTrailingSentences(text).Any(sentence => ExplicitOwnerSentenceRegex().Matches(sentence)
+             .Cast<Match>().Any(match => IsAcceptanceOwner(match.Groups["owner"].Value))));
 
     public static string ExtractTrailingRegion(string? criterion) =>
         string.Join(" ", ExtractTrailingSentences(criterion));
@@ -110,7 +113,7 @@ public static partial class AcceptanceCriterionOwnershipMarker
     private static partial Regex SentenceBoundaryRegex();
 
     [GeneratedRegex(
-        @"\b(?:owns?|owned)\b|TEST-VERIFIABLE|REAL-WORLD-DEPENDENT",
+        @"\b(?:owns?|owned|executes)\b|TEST-VERIFIABLE|REAL-WORLD-DEPENDENT",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex TrailingRegionSignalRegex();
 

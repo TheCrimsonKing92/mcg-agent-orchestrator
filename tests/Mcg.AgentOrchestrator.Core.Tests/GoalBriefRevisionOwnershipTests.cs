@@ -2,11 +2,14 @@ using Mcg.AgentOrchestrator.Core;
 
 public sealed class GoalBriefRevisionOwnershipTests
 {
-    [Xunit.Fact]
-    public void RewordedMarkerCriterionKeepsAcceptanceOwnership()
+    [Xunit.Theory]
+    [Xunit.InlineData("Developer owns; Acceptance executes.")]
+    [Xunit.InlineData("Acceptance owns execution.")]
+    [Xunit.InlineData("Reviewer owns source inspection; Acceptance owns execution.")]
+    public void RewordedMarkerCriterionKeepsAcceptanceOwnership(string declaration)
     {
         const string original = "A test asserts X. Developer owns; Acceptance executes. TEST-VERIFIABLE.";
-        const string revised = "A test asserts X and Y. Developer owns; Acceptance executes. TEST-VERIFIABLE.";
+        var revised = $"A test asserts X and Y. {declaration} TEST-VERIFIABLE.";
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal(Brief(original));
         kernel.SetGoalRefinedSpec(goal.Id, Spec([original], [original]));

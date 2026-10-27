@@ -35,8 +35,25 @@ public static partial class AcceptanceCriterionOwnershipMarker
             return DeclaredEvidenceOwner.None;
         }
 
-        return AcceptanceGateOwnershipRegex().IsMatch(string.Join(" ", trailingSentences))
+        // An explicit Acceptance declaration is authority in its own right. Source-role
+        // ownership in the same criterion does not replace its execution-evidence owner.
+        return explicitOwners.Any(match => IsAcceptanceOwner(match.Groups["owner"].Value)) ||
+               AcceptanceGateOwnershipRegex().IsMatch(string.Join(" ", trailingSentences))
             ? new(DeclaredEvidenceOwnerKind.AcceptanceGate, null)
             : new(DeclaredEvidenceOwnerKind.Worker, explicitOwners[0].Groups["owner"].Value);
+    }
+
+    private static bool IsAcceptanceOwner(string owner) =>
+        owner.Equals("gate", StringComparison.OrdinalIgnoreCase) ||
+        owner.StartsWith("acceptance", StringComparison.OrdinalIgnoreCase);
+
+    public static bool HasConflictingDeclaredEvidenceOwners(string? criterion)
+    {
+        var owners = ExtractTrailingSentences(criterion)
+            .SelectMany(sentence => ExplicitOwnerSentenceRegex().Matches(sentence).Cast<Match>())
+            .Select(match => match.Groups["owner"].Value)
+            .ToArray();
+        return owners.Any(IsAcceptanceOwner) &&
+               owners.Any(owner => owner.Equals("operator", StringComparison.OrdinalIgnoreCase));
     }
 }

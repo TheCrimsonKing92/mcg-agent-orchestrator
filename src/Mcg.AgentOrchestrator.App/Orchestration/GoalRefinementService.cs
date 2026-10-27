@@ -195,6 +195,9 @@ internal sealed partial class GoalRefinementService
             acceptanceCriteria,
             operatorOwnedCriteria,
             resolvedClarifications);
+        var ownershipIssues = FindDeclaredOwnershipIssues(
+            goal, rawDeclaredCriteria, acceptanceCriteria, output.CriterionOwnerships,
+            operatorOwnedCriteria, acceptanceGateOwnedCriteria);
         acceptanceGateOwnedCriteria.RemoveAll(criterion =>
             operatorOwnedCriteria.Contains(criterion, StringComparer.OrdinalIgnoreCase));
         var feasibilityFindings = AcceptanceCriterionFeasibility
@@ -256,6 +259,35 @@ internal sealed partial class GoalRefinementService
                 NormalizedQuestionKey: normalizedQuestionKey,
                 Criterion: finding.Criterion,
                 BlastRadius: AcceptanceCriterionFeasibility.FixedBlastRadius));
+        }
+
+        foreach (var issue in ownershipIssues)
+        {
+            const string forkKind = "ownership-lifecycle";
+            var questionText = $"{issue.Diagnostic} Revise the versioned criterion or its declared_index to resolve this ownership issue. For an existing criterion, an explicit criterion-evidence-map repair may declare its evidence owner.";
+            var normalizedKey = BuildNormalizedQuestionKey(forkKind, questionText);
+            var topicKey = $"ownership-v{goal.AuthoritativeBrief.Version}-{normalizedKey[^16..]}";
+            var existingOpen = existingOpenQuestions.FirstOrDefault(question =>
+                string.Equals(ResolveQuestionTopicKey(question), topicKey, StringComparison.OrdinalIgnoreCase));
+            if (existingOpen is not null)
+            {
+                AddOpenQuestionIfMissing(openQuestions, existingOpen);
+                continue;
+            }
+
+            // A prior answer or a generic precedent cannot waive a still-present
+            // contradictory or unmatched declaration in the current specification.
+            var correlationKey = BuildCorrelationKey(goalId, topicKey);
+            await _raiseCollaborationItem(
+                CollaborationItemType.Clarification, goalId.Value,
+                BuildClarificationSubject(topicKey),
+                $"Question: {questionText}\nFork kind: {forkKind}\nTopic key: {topicKey}\nCriterion: {issue.Criterion}",
+                correlationKey, cancellationToken);
+            raisedClarificationRound = true;
+            openQuestions.Add(new RefinedSpecOpenQuestion(
+                correlationKey, questionText, forkKind, "Open",
+                TopicKey: topicKey, NormalizedQuestionKey: normalizedKey,
+                Criterion: issue.Criterion, BlastRadius: "high"));
         }
 
         foreach (var fork in output.Forks)
@@ -625,6 +657,8 @@ internal sealed partial class GoalRefinementService
 
         var matchedQuestion = spec.OpenQuestions.FirstOrDefault(question =>
             string.Equals(question.Id, correlationKey, StringComparison.Ordinal));
+        if (matchedQuestion is not null && !CanResolveDeclaredOwnershipQuestion(goal, matchedQuestion))
+            return false;
         if (matchedQuestion is not null &&
             string.Equals(matchedQuestion.ForkKind, AcceptanceCriterionFeasibility.ForkKind, StringComparison.OrdinalIgnoreCase) &&
             !AcceptanceCriterionFeasibility.TryParseDisposition(answer, out _))
@@ -719,6 +753,8 @@ internal sealed partial class GoalRefinementService
         var questions = spec.OpenQuestions
             .Select(question =>
             {
+                if (!CanResolveDeclaredOwnershipQuestion(goal, question))
+                    return question;
                 if (string.Equals(question.ForkKind, AcceptanceCriterionFeasibility.ForkKind, StringComparison.OrdinalIgnoreCase))
                     return question;
 
@@ -1614,9 +1650,7 @@ internal sealed partial class GoalRefinementService
         {
             var criterion = acceptanceCriteria[criterionIndex];
             var marker = AcceptanceCriterionOwnershipMarker.Classify(criterion);
-            if (marker.Classification is not (
-                    AcceptanceCriterionOwnershipClassification.OperatorOwned or
-                    AcceptanceCriterionOwnershipClassification.OperatorOwnedWeakSignal))
+            if (marker.Classification != AcceptanceCriterionOwnershipClassification.OperatorOwned)
             {
                 if (marker.TrailingRegion.Length == 0 &&
                     AcceptanceCriterionOwnershipMarker.HasOperatorOwnershipPhrase(criterion))
@@ -1632,12 +1666,7 @@ internal sealed partial class GoalRefinementService
             if (!operatorOwnedCriteria.Contains(criterion, StringComparer.OrdinalIgnoreCase))
                 operatorOwnedCriteria.Add(criterion);
 
-            if (marker.Classification == AcceptanceCriterionOwnershipClassification.OperatorOwnedWeakSignal)
-            {
-                diagnostics.Add(
-                    $"Spec refiner owner defaulted: declared criterion {criterionIndex + 1} is real-world-dependent with no declared owner, classified operator-owned");
-            }
-            else if (marker.ConflictingDeclaredOwner is { } conflictingOwner)
+            if (marker.ConflictingDeclaredOwner is { } conflictingOwner)
             {
                 diagnostics.Add(
                     $"Spec refiner owner conflict: text marker claims operator for declared criterion {criterionIndex + 1}, declared text claims {conflictingOwner}");
@@ -1646,13 +1675,15 @@ internal sealed partial class GoalRefinementService
 
         var overriddenIndexes = new HashSet<int>();
         foreach (var requested in requestedOwners.Where(item =>
-                     item.Owner is "acceptance-gate" or "operator"))
+                     item.Owner is "acceptance-gate" or "operator" or "worker"))
         {
             var criterionIndex = requested.DeclaredIndex is { } declaredIndex
                 ? declaredIndex - 1
                 : FindCriterionIndex(acceptanceCriteria, requested.Text);
             if (criterionIndex < 0 || criterionIndex >= acceptanceCriteria.Count)
             {
+                if (requested.Owner == "worker")
+                    continue;
                 diagnostics.Add(
                     $"Spec refiner owner dropped: {requested.Owner} for '{PreviewCriterion(requested.Text)}' matched no declared criterion");
                 continue;
@@ -1664,6 +1695,8 @@ internal sealed partial class GoalRefinementService
 
             if (claimedOwners.TryGetValue(criterionIndex, out var existingOwner))
             {
+                if (requested.Owner == existingOwner)
+                    continue;
                 if (textMarkerIndexes.Contains(criterionIndex))
                 {
                     if (requested.Owner == "operator")
@@ -1693,7 +1726,7 @@ internal sealed partial class GoalRefinementService
                 if (!operatorOwnedCriteria.Contains(criterion, StringComparer.OrdinalIgnoreCase))
                     operatorOwnedCriteria.Add(criterion);
             }
-            else
+            else if (requested.Owner == "acceptance-gate")
             {
                 acceptanceGateOwnedCriteria.Add(criterion);
             }

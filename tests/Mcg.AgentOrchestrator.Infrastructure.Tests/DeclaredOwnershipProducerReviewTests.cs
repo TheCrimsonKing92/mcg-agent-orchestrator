@@ -93,7 +93,70 @@ public sealed class DeclaredOwnershipProducerReviewTests
             item.Kind == ProgressKind.TaskFailed && item.Message.Contains("attestation rejected", StringComparison.Ordinal));
     }
 
-    private static async Task<Scenario> Refine(string criterion)
+    [Xunit.Fact]
+    public async Task OwnerEvidenceDischargesOnlyItsBoundObligation()
+    {
+        var first = $"{Fallback} Acceptance owns execution. TEST-VERIFIABLE.";
+        var second = $"{Windows} Acceptance owns execution. TEST-VERIFIABLE.";
+        using var scenario = await Refine(first, second);
+        RecordReview(scenario, workerVerdict: "not-verifiable");
+        Xunit.Assert.Equal(WorkTaskStatus.Completed, scenario.Reviewer.Status);
+        var obligations = scenario.Goal.GetOutstandingCriterionEvidenceObligations(Candidate)
+            .OrderBy(item => item.CriterionIndex).ToArray();
+        Xunit.Assert.Equal(2, obligations.Length);
+        Xunit.Assert.All(obligations, item =>
+        {
+            Xunit.Assert.Equal(CriterionEvidenceOwner.Acceptance, item.Owner);
+            Xunit.Assert.Equal(Candidate, item.ExpectedCandidateSha);
+        });
+
+        var selected = obligations[0];
+        Xunit.Assert.Throws<InvalidOperationException>(() => scenario.Kernel.RecordCriterionEvidence(
+            scenario.Goal.Id, selected.Id, CriterionEvidenceOwner.Operator,
+            Candidate, "wrong-owner", selected.RequiredScope, true, "Cannot replace Acceptance"));
+        Xunit.Assert.Throws<InvalidOperationException>(() => scenario.Kernel.RecordCriterionEvidence(
+            scenario.Goal.Id, selected.Id, CriterionEvidenceOwner.Acceptance,
+            "other-candidate", "wrong-candidate", selected.RequiredScope, true, "Different candidate"));
+        scenario.Kernel.RecordCriterionEvidence(scenario.Goal.Id, selected.Id, selected.Owner,
+            Candidate, "failed-execution", selected.RequiredScope, false, "Execution failed");
+        Xunit.Assert.Equal(2, scenario.Goal.GetOutstandingCriterionEvidenceObligations(Candidate).Count);
+        scenario.Kernel.RecordCriterionEvidence(scenario.Goal.Id, selected.Id, selected.Owner,
+            Candidate, "valid-execution", selected.RequiredScope, true, "Execution passed");
+
+        var outstanding = Xunit.Assert.Single(scenario.Goal.GetOutstandingCriterionEvidenceObligations(Candidate));
+        Xunit.Assert.Equal(obligations[1], outstanding);
+        Xunit.Assert.Equal(CriterionEvidenceState.Pending, outstanding.State);
+        Xunit.Assert.Throws<InvalidOperationException>(() =>
+            scenario.Kernel.CompleteGoal(scenario.Goal.Id, "Second execution remains outstanding."));
+    }
+
+    [Xunit.Fact]
+    public async Task BriefRevisionDoesNotReuseHistoricalExecutionEvidence()
+    {
+        var original = $"{Fallback} Acceptance owns execution. TEST-VERIFIABLE.";
+        using var scenario = await Refine(original);
+        RecordReview(scenario);
+        var old = Xunit.Assert.Single(scenario.Goal.CriterionEvidenceObligations);
+        scenario.Kernel.RecordCriterionEvidence(scenario.Goal.Id, old.Id, old.Owner,
+            Candidate, "original-execution", old.RequiredScope, true, "Original requirement passed");
+        var revised = "Local fallback behavior and error reporting remain unchanged. Acceptance owns execution. TEST-VERIFIABLE.";
+
+        scenario.Kernel.ReviseGoalBrief(scenario.Goal.Id,
+            $"Brief.\n\n## Acceptance criteria\n\n1. {revised}\n2. {WorkerCriterion}");
+
+        var current = Xunit.Assert.Single(scenario.Goal.GetOutstandingCriterionEvidenceObligations(Candidate));
+        Xunit.Assert.Equal(revised, current.Criterion);
+        Xunit.Assert.Equal(old.CriterionVersion + 1, current.CriterionVersion);
+        Xunit.Assert.Equal(CriterionEvidenceOwner.Acceptance, current.Owner);
+        Xunit.Assert.Equal(CriterionEvidenceState.Pending, current.State);
+        Xunit.Assert.Null(current.ExpectedCandidateSha);
+        Xunit.Assert.Null(current.CandidateSha);
+        Xunit.Assert.Null(current.ReceiptId);
+        Xunit.Assert.Equal(CriterionEvidenceState.Satisfied,
+            Xunit.Assert.Single(scenario.Goal.CriterionEvidenceObligations, item => item.Id == old.Id).State);
+    }
+
+    private static async Task<Scenario> Refine(string criterion, string secondCriterion = WorkerCriterion)
     {
         var objective = $"""
             Preserve behavior through source review and acceptance.
@@ -101,7 +164,7 @@ public sealed class DeclaredOwnershipProducerReviewTests
             ## Acceptance criteria
 
             1. {criterion}
-            2. {WorkerCriterion}
+            2. {secondCriterion}
             """;
         // Omit model ownership claims: the producer must translate the actual brief declaration.
         // Indexed paraphrases must retain the original declared criterion identity.
@@ -110,7 +173,7 @@ public sealed class DeclaredOwnershipProducerReviewTests
               "behavioralContract": "Preserve behavior through source review and acceptance.",
               "acceptanceCriteria": [
                 {"text": "Preserve the execution behavior.", "declared_index": 1},
-                {"text": {{JsonSerializer.Serialize(WorkerCriterion)}}, "declared_index": 2}
+                {"text": {{JsonSerializer.Serialize(secondCriterion)}}, "declared_index": 2}
               ],
               "verificationClass": "TestVerifiable",
               "decisions": [],
@@ -143,7 +206,7 @@ public sealed class DeclaredOwnershipProducerReviewTests
             Xunit.Assert.NotNull(provider.LastRequest);
             Xunit.Assert.Equal(RefinementOutcome.AutoRefined, result.Outcome);
             Xunit.Assert.NotNull(goal.RefinedSpec);
-            Xunit.Assert.Equal([criterion, WorkerCriterion], goal.RefinedSpec.AcceptanceCriteria);
+            Xunit.Assert.Equal([criterion, secondCriterion], goal.RefinedSpec.AcceptanceCriteria);
             Xunit.Assert.Empty(goal.RefinedSpec.OpenQuestions);
             kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
             kernel.RecordTaskDispatch(goal.Id, reviewer.Id, new TaskDispatchRecord(

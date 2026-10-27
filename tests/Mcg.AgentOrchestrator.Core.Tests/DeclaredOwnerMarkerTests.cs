@@ -2,6 +2,42 @@ using Mcg.AgentOrchestrator.Core;
 
 public sealed class DeclaredOwnerMarkerTests
 {
+    [Xunit.Theory]
+    [Xunit.InlineData("Acceptance owns execution.")]
+    [Xunit.InlineData("Reviewer owns source inspection; Acceptance owns execution.")]
+    [Xunit.InlineData("Acceptance gate owns execution.")]
+    [Xunit.InlineData("Gate owns execution.")]
+    [Xunit.InlineData("Acceptance executes.")]
+    public void ExplicitAcceptanceOwnerDoesNotRequireSeparateExecutionMarker(string declaration)
+    {
+        var criterion = $"The fallback is preserved. {declaration} TEST-VERIFIABLE.";
+
+        var owner = AcceptanceCriterionOwnershipMarker.ResolveDeclaredEvidenceOwner(criterion);
+
+        Xunit.Assert.Equal(DeclaredEvidenceOwnerKind.AcceptanceGate, owner.Kind);
+        Xunit.Assert.True(AcceptanceCriterionOwnershipMarker.HasAcceptanceGateOwnershipMarker(criterion));
+        Xunit.Assert.False(AcceptanceCriterionOwnershipMarker.HasConflictingDeclaredEvidenceOwners(criterion));
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("The report mentions Acceptance owns execution. TEST-VERIFIABLE.")]
+    [Xunit.InlineData("The UI displays 'Acceptance owns execution'. TEST-VERIFIABLE.")]
+    public void DescriptiveAcceptanceMentionDoesNotDeclareOwner(string criterion)
+    {
+        Xunit.Assert.Equal(DeclaredEvidenceOwnerKind.None,
+            AcceptanceCriterionOwnershipMarker.ResolveDeclaredEvidenceOwner(criterion).Kind);
+        Xunit.Assert.False(AcceptanceCriterionOwnershipMarker.HasAcceptanceGateOwnershipMarker(criterion));
+    }
+
+    [Xunit.Fact]
+    public void IndependentExternalDeclarationsAreConflicting()
+    {
+        Xunit.Assert.True(AcceptanceCriterionOwnershipMarker.HasConflictingDeclaredEvidenceOwners(
+            "The runtime behavior is verified. Operator owns execution; Acceptance owns execution. TEST-VERIFIABLE."));
+        Xunit.Assert.False(AcceptanceCriterionOwnershipMarker.HasConflictingDeclaredEvidenceOwners(
+            "The report describes acceptance-gate-owned findings. Operator owns execution. TEST-VERIFIABLE."));
+    }
+
     [Xunit.Fact]
     public void AcceptanceExecutionDeclaresGateOwner()
     {
