@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.Json;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
@@ -88,7 +89,9 @@ internal sealed class ConductorExecutorToolsDeploy(
                     else
                     {
                         _failures[(entry.Id, source.Digest)] = clock.GetUtcNow();
-                        Append($"{prefix} reason={result.Reason} old={result.Previous ?? read.Digest ?? "none"} new={source.Digest} main={main}");
+                        var detail = result.Detail is null ? "" : " detail=" + JsonSerializer.Serialize(result.Detail);
+                        var recovery = result.Backup is null ? "" : " backup=" + JsonSerializer.Serialize(result.Backup);
+                        Append($"{prefix} reason={result.Reason} old={result.Previous ?? read.Digest ?? "none"} new={source.Digest} main={main}{detail}{recovery}");
                     }
                 }
                 finally

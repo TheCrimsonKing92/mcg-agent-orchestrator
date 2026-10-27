@@ -25,6 +25,15 @@ internal sealed class OwnerConsoleTextDialog : Dialog
         Format(60, 15);
     }
 
+    internal void AddConditionalButton(Button button)
+    {
+        AddButton(button);
+        var alignment = button.X;
+        // Terminal.Gui includes invisible Pos.Align views in the button row's width.
+        button.VisibleChanged += (_, _) => button.X = button.Visible ? alignment : Pos.Absolute(0);
+        if (!button.Visible) button.X = Pos.Absolute(0);
+    }
+
     internal void Format(int width, int height)
     {
         if (_formatting) return;
