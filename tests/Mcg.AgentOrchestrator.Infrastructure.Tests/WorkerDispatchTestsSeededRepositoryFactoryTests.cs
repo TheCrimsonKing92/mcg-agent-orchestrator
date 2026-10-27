@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Text.Json;
+using System.Text.RegularExpressions;
 
 // Parallel-safe: each test injects an explicit unique root, and every Git child receives a
 // hermetic environment. No verdict observes a shared temp root, process list, clock, or schedule.
@@ -1194,8 +1196,31 @@ public sealed class WorkerDispatchTestsSeededRepositoryFactoryTests
         Xunit.Assert.Contains($"probeOrdinal={git.ProbeOrdinal}", failure.Message, StringComparison.Ordinal);
         Xunit.Assert.Contains(git.ChildIdentity, failure.Message, StringComparison.Ordinal);
         Xunit.Assert.Contains($"exitCode={git.ExitCode?.ToString() ?? "null"}", failure.Message, StringComparison.Ordinal);
-        Xunit.Assert.True(AcceptanceFailureCauseReceiptCodec.TryParse(failure.Message, out var receipt), failure.Message);
+        // TryParse also applies Acceptance's environmental-apparatus routing policy, which
+        // requires empty stdout for observation failures. Retained SHA output must not widen
+        // that policy. Decode the emitted wire receipt independently to check its actual facts.
+        var marker = Xunit.Assert.Single(Regex.Matches(failure.Message,
+            Regex.Escape(AcceptanceFailureCauseReceiptCodec.Prefix) + "(?<payload>[A-Za-z0-9+/=]+)"));
+        var receipt = JsonSerializer.Deserialize<AcceptanceFailureCauseReceiptV1>(
+            Convert.FromBase64String(marker.Groups["payload"].Value),
+            new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        Xunit.Assert.NotNull(receipt);
+        Xunit.Assert.Equal(1, receipt.ContractVersion);
+        Xunit.Assert.Equal("seeded-dispatch-repository-git-probe", receipt.Kind);
+        Xunit.Assert.Equal(diagnostic.Owner.ToString(), receipt.Owner);
         Xunit.Assert.Equal("ProcessObservationFailure", receipt.ProbeClassification);
+        Xunit.Assert.Equal(git.ProcessStarted, receipt.ProcessStarted);
+        Xunit.Assert.Equal(git.ExitCode, receipt.ExitCode);
+        Xunit.Assert.Equal(41, receipt.StandardOutputByteCount);
+        Xunit.Assert.Equal(git.StandardErrorByteCount, receipt.StandardErrorByteCount);
+        Xunit.Assert.False(receipt.TimedOut);
+        Xunit.Assert.False(receipt.DrainTimedOut);
+        Xunit.Assert.False(receipt.DrainFailed);
+        Xunit.Assert.Equal(diagnostic.FileSystem.HeadState.ToString(), receipt.RepositoryHeadState);
+        Xunit.Assert.Equal(diagnostic.Check.ToString(), receipt.Check);
+        Xunit.Assert.Equal(git.FixtureAttemptId, receipt.FixtureAttemptId);
+        Xunit.Assert.Equal(git.ProbeOrdinal, receipt.ProbeOrdinal);
+        Xunit.Assert.False(AcceptanceFailureCauseReceiptCodec.TryParse(failure.Message, out _));
         // Initial template rejection precedes staging allocation. The fixture still owns its template.
         Xunit.Assert.Empty(diagnostic.Cleanup);
         Xunit.Assert.Null(diagnostic.StagingPath);
