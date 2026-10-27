@@ -4,7 +4,7 @@ using static GoalAcceptanceVerifierDotnetBuildSlotTestsTrustedBaselineDiscovery;
 
 // Serial: the verifier uses build slots, the attempt-prefix environment variable and lock attribution hooks.
 [Xunit.Collection(TestCollections.JobAccounting)]
-public sealed class GoalAcceptanceVerifierTestsNormalizedTrxResult : GoalAcceptanceVerifierDotnetBuildSlotTests
+public sealed class DotnetNormalizedTrxReceiptTests : GoalAcceptanceVerifierDotnetBuildSlotTests
 {
     [Theory]
     [InlineData("mtp", false)]
