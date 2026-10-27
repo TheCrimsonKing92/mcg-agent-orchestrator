@@ -6,6 +6,9 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 public static class ProjectStackResolver
 {
     public static Toolchain Resolve(string workingDirectory, string? projectHomeDirectory)
+        => Resolve(workingDirectory, projectHomeDirectory, CrosswalkShadowDetect.Shared);
+
+    internal static Toolchain Resolve(string workingDirectory, string? projectHomeDirectory, CrosswalkShadowDetect shadow)
     {
         if (!string.IsNullOrWhiteSpace(projectHomeDirectory))
         {
@@ -30,7 +33,7 @@ public static class ProjectStackResolver
             }
         }
 
-        return TargetToolchainDetector.Detect(workingDirectory);
+        return shadow.Observe(workingDirectory, projectHomeDirectory, TargetToolchainDetector.Detect(workingDirectory));
     }
 
     internal static ProjectStack? GuidanceStack(Toolchain toolchain, bool isOrchestratorHome) => toolchain switch
