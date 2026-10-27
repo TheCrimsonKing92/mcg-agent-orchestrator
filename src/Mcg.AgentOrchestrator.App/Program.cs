@@ -107,6 +107,8 @@ try
     {
         return 0;
     }
+    if (CliArgumentParser.IsAskGoal(startupArgs))
+        _ = CliArgumentParser.ParseAskGoalArgs(startupArgs);
 }
 catch (ArgumentException ex)
 {
@@ -175,6 +177,7 @@ try
 {
     workspace = ResolveSelectedWorkspace(activeProject);
     invocationBinding.Verify(workspace);
+    CliPersistentStateRunner.ValidateAskGoalStartupArguments(startupArgs, workspace);
     GateHeartbeatOwner.Bind(workspace.OrchestratorDirectory);
     HostLedgerStateDirectory.InstallRoute(host => HostLedgerStateDirectoryLocator.Resolve(host, projectRegistry));
 }
@@ -532,6 +535,7 @@ try
     if (!isConductLoop && !defersStateUpgrade) ProgramStartupLifecycle.EnsureStateDbInitialized(startupArgs, workspace);
 
     if (!defersStateUpgrade && commandCapability == CliCommandCapability.Execution &&
+        !CliArgumentParser.IsAskGoal(startupArgs) &&
         !CliAttentionQueryCommand.IsAttentionQueryCommand(startupArgs))
     {
         ProgramStartupLifecycle.InitializeWorkerProcessTracking(

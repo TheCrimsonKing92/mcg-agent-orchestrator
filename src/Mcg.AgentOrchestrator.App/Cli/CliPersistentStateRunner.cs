@@ -68,6 +68,8 @@ internal static partial class CliPersistentStateRunner
         ConductorLoopLeaseController? startupLoopLease = null,
         Func<AgentOrchestratorKernel, Action<AgentOrchestratorKernel>, CliExecutionContext>? createLifecycleContext = null)
     {
+        if (CliArgumentParser.IsAskGoal(args))
+            return ExecuteAskGoal(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel);
         if (!skipReadOnlyRoute && CliReadOnlyCommandRunner.TryExecute(args, stateRepository, workspace, providers, channel, ref agents, ref workerProfiles, ref currentGoal, out var readOnlyResult))
             return readOnlyResult;
         if (CliEpicOutcomeCommands.IsMutation(args))

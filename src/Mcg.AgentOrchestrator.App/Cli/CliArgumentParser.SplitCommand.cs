@@ -82,7 +82,7 @@ public static IReadOnlyList<string> SplitCommand(string line)
 
     if (command.Equals("ask-goal", StringComparison.OrdinalIgnoreCase))
     {
-        return [command, remainder];
+        return [command, .. TokenizeQuotedArguments(remainder)];
     }
 
     if (command.Equals("gate-satisfied", StringComparison.OrdinalIgnoreCase))

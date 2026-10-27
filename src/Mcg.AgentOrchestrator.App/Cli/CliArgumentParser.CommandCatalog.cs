@@ -4,6 +4,7 @@ internal static partial class CliArgumentParser
 {
 internal static IReadOnlyList<string> RecognizedCommands { get; } =
 [
+    "ask-goal",
     "attention",
     "console",
     "goals",
