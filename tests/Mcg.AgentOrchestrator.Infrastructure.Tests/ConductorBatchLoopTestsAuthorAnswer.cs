@@ -209,7 +209,7 @@ public sealed class ConductorBatchLoopTestsAuthorAnswer
     }
 
     [Xunit.Fact]
-    public async Task Owner_question_preempts_another_completed_answer_on_same_goal()
+    public async Task Owner_question_hold_allows_ready_answer_without_new_author_rounds()
     {
         using var harness = new AuthorHarness(Answer);
         var goal = harness.Kernel.CreateGoal("Choose runtime");
@@ -226,10 +226,18 @@ public sealed class ConductorBatchLoopTestsAuthorAnswer
 
         Xunit.Assert.Equal(2, model.Calls);
         Xunit.Assert.Equal("author-owner-question", goal.CurrentHold?.State);
-        Xunit.Assert.Empty(await harness.Intents.ListForGoalAsync(goal.Id.Value).WaitAsync(Bound));
+        var hold = goal.CurrentHold;
+        var intent = Xunit.Assert.Single(await harness.Intents.ListForGoalAsync(goal.Id.Value).WaitAsync(Bound));
+        Xunit.Assert.Equal(OperatorIntentVerbs.Answer, intent.Verb);
+        Xunit.Assert.Equal("author", intent.Actor);
+        Xunit.Assert.Empty(host.CurrentRounds);
         host.ServiceTick(harness.Kernel);
         Xunit.Assert.Equal("author-owner-question", goal.CurrentHold?.State);
-        Xunit.Assert.Empty(await harness.Intents.ListForGoalAsync(goal.Id.Value).WaitAsync(Bound));
+        Xunit.Assert.Equal(hold, goal.CurrentHold);
+        Xunit.Assert.Equal(intent.Id,
+            Xunit.Assert.Single(await harness.Intents.ListForGoalAsync(goal.Id.Value).WaitAsync(Bound)).Id);
+        Xunit.Assert.Equal(2, model.Calls);
+        Xunit.Assert.Empty(host.CurrentRounds);
         host.Stop();
     }
 
@@ -250,7 +258,7 @@ public sealed class ConductorBatchLoopTestsAuthorAnswer
     }
 
     [Xunit.Fact]
-    public async Task Steward_owner_hold_preserves_completed_author_round_without_submitting_answer()
+    public async Task Steward_owner_hold_allows_ready_answer_without_new_author_rounds()
     {
         using var harness = new AuthorHarness(Answer);
         var goal = harness.Kernel.CreateGoal("Choose runtime");
@@ -261,13 +269,18 @@ public sealed class ConductorBatchLoopTestsAuthorAnswer
         await delayed.Started.Task.WaitAsync(Bound);
         harness.Kernel.ObserveGoalHold(goal.Id, "steward-owner-question", "Await owner",
             DateTimeOffset.UtcNow, TimeSpan.MaxValue, "steward-owner-question:test");
+        var hold = goal.CurrentHold;
         delayed.Release.TrySetResult(Answer);
         await Task.WhenAll(host.CurrentRounds).WaitAsync(Bound);
 
         host.ServiceTick(harness.Kernel);
 
         Xunit.Assert.Equal("steward-owner-question", goal.CurrentHold?.State);
-        Xunit.Assert.Empty(await harness.Intents.ListForGoalAsync(goal.Id.Value).WaitAsync(Bound));
+        Xunit.Assert.Equal(hold, goal.CurrentHold);
+        var intent = Xunit.Assert.Single(await harness.Intents.ListForGoalAsync(goal.Id.Value).WaitAsync(Bound));
+        Xunit.Assert.Equal(OperatorIntentVerbs.Answer, intent.Verb);
+        Xunit.Assert.Equal("author", intent.Actor);
+        Xunit.Assert.Empty(host.CurrentRounds);
         host.Stop();
     }
 
