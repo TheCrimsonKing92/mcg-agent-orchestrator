@@ -366,7 +366,7 @@ public static class DotnetBuildEnvironmentManager
         DateTimeOffset? waitStartedAt = null;
         var waitingReported = false;
         using var queue = BuildPermitWaitQueue.CreateWaiter(claimant, storageRoot, clock,
-            IsExecutionLockHeld, path => TryReadExecutionLeaseMetadata(path)?.LeaseId);
+            IsExecutionLockHeld, path => DotnetBuildLeaseInspection.TryReadExecutionLeaseMetadata(path)?.LeaseId);
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -509,7 +509,7 @@ public static class DotnetBuildEnvironmentManager
         var artifactsPath = TryReadArtifactsPath(metadataPath) ?? GoalArtifactsPath(goalId, storageRoot);
         var artifactsExist = Directory.Exists(artifactsPath);
         var ownerProcessId = metadataExists ? TryReadOwnerProcessId(metadataPath) : null;
-        var ownerAlive = ownerProcessId is not null && IsProcessRunning(ownerProcessId.Value);
+        var ownerAlive = ownerProcessId is not null && DotnetBuildLeaseInspection.IsProcessRunning(ownerProcessId.Value);
         var canCleanup = rootExists && !ownerAlive;
         var detail = !rootExists
             ? "goal build lease is missing"
@@ -873,7 +873,7 @@ public static class DotnetBuildEnvironmentManager
         var priorityReservations = new FileStream?[BuildConcurrencySlotCount];
         using var queue = claimant is null ? null : BuildPermitWaitQueue.CreateWaiter(claimant,
             new DotnetBuildStorageRoot(Path.GetDirectoryName(Path.GetDirectoryName(Path.GetFullPath(environment.ExecutionLockPath)))!),
-            clock, IsExecutionLockHeld, path => TryReadExecutionLeaseMetadata(path)?.LeaseId);
+            clock, IsExecutionLockHeld, path => DotnetBuildLeaseInspection.TryReadExecutionLeaseMetadata(path)?.LeaseId);
         try
         {
             while (true)
@@ -961,7 +961,7 @@ public static class DotnetBuildEnvironmentManager
         for (var slot = 0; slot < slotCount; slot++)
         {
             var environment = CreateStableSlotEnvironment(slot, storageRoot, createArtifactsDirectory: false);
-            var marker = TryReadExecutionLeaseMetadata(environment.ExecutionLockPath);
+            var marker = DotnetBuildLeaseInspection.TryReadExecutionLeaseMetadata(environment.ExecutionLockPath);
             var acquiredAt = marker?.AcquiredAt ?? DateTimeOffset.MinValue;
             if (acquiredAt < oldest.LastAcquiredAt)
             {
@@ -1294,7 +1294,7 @@ public static class DotnetBuildEnvironmentManager
         for (var slot = 0; slot < BuildConcurrencySlotCount; slot++)
         {
             var path = BuildSlotExecutionLockPath(slot, storageRoot);
-            if (IsExecutionLockHeld(path) && TryReadExecutionLeaseMetadata(path)?.HolderLabel is { } label &&
+            if (IsExecutionLockHeld(path) && DotnetBuildLeaseInspection.TryReadExecutionLeaseMetadata(path)?.HolderLabel is { } label &&
                 !string.IsNullOrWhiteSpace(label)) labels.Add(label);
         }
         return labels;
@@ -1419,7 +1419,7 @@ public static class DotnetBuildEnvironmentManager
         out bool held)
     {
         held = IsExecutionLockHeld(environment.ExecutionLockPath);
-        var metadata = TryReadExecutionLeaseMetadata(environment.ExecutionLockPath);
+        var metadata = DotnetBuildLeaseInspection.TryReadExecutionLeaseMetadata(environment.ExecutionLockPath);
         var snapshot = processSnapshot ?? CreateSlotCandidateProcessSnapshot();
         var ownerProcessId = TryFindActiveSlotArtifactConsumer(environment, snapshot)?.ProcessId ??
             (held ? metadata?.OwnerProcessId : null);
@@ -1668,7 +1668,7 @@ public static class DotnetBuildEnvironmentManager
     private static bool IsTransientNoHolderSlotArtifactLock(
         DotnetBuildEnvironment environment,
         BuildLockAttribution attribution) =>
-        PathIsUnderDirectory(attribution.Path, environment.ArtifactsPath) &&
+        DotnetBuildLeaseInspection.PathIsUnderDirectory(attribution.Path, environment.ArtifactsPath) &&
         HasNoActionableHolder(attribution);
 
     private static bool HasNoActionableHolder(BuildLockAttribution attribution) =>
@@ -1688,7 +1688,7 @@ public static class DotnetBuildEnvironmentManager
             FindUnavailableSlotCandidate(
                 environment,
                 snapshot,
-                TryReadExecutionLeaseMetadata(environment.ExecutionLockPath)) is not null ||
+                DotnetBuildLeaseInspection.TryReadExecutionLeaseMetadata(environment.ExecutionLockPath)) is not null ||
             snapshot.Failure is not null;
     }
 
@@ -1720,12 +1720,12 @@ public static class DotnetBuildEnvironmentManager
             }
 
             if (!CommandLineUsesSlotArtifacts(record.CommandLine, artifactsPath) ||
-                !IsProcessRunning(pair.Key, queryProcessLiveness))
+                !DotnetBuildLeaseInspection.IsProcessRunning(pair.Key, queryProcessLiveness))
             {
                 continue;
             }
 
-            return CreateProcessHolder(pair.Key, record.CommandLine, isOrchestratorOwned: true);
+            return DotnetBuildLeaseInspection.CreateProcessHolder(pair.Key, record.CommandLine, isOrchestratorOwned: true);
         }
 
         return null;
@@ -1734,7 +1734,7 @@ public static class DotnetBuildEnvironmentManager
     private static ProcessInspectionRecord? FindUnavailableSlotCandidate(
         DotnetBuildEnvironment environment,
         ProcessCommandLineSnapshot snapshot,
-        ExecutionLeaseMetadata? metadata)
+        DotnetBuildLeaseInspection.ExecutionLeaseMetadata? metadata)
     {
         if (metadata is null ||
             metadata.OwnerProcessId == Environment.ProcessId ||
@@ -1745,7 +1745,7 @@ public static class DotnetBuildEnvironmentManager
             (!string.IsNullOrWhiteSpace(metadata.MachineName) &&
                 !metadata.MachineName.Equals(Environment.MachineName, StringComparison.OrdinalIgnoreCase)) ||
             !snapshot.Records.TryGetValue(metadata.OwnerProcessId, out var record) ||
-            !IsProcessRunning(metadata.OwnerProcessId))
+            !DotnetBuildLeaseInspection.IsProcessRunning(metadata.OwnerProcessId))
         {
             return null;
         }
@@ -2034,7 +2034,7 @@ public static class DotnetBuildEnvironmentManager
         bool currentProcessOwnsExecutionLease)
     {
         var landingFixtureDisposition = GetLandingFixtureDisposition(attribution.Path);
-        if (!PathIsUnderDirectory(attribution.Path, environment.ArtifactsPath) &&
+        if (!DotnetBuildLeaseInspection.PathIsUnderDirectory(attribution.Path, environment.ArtifactsPath) &&
             landingFixtureDisposition is not LandingFixtureLockDisposition.CurrentTransient and not LandingFixtureLockDisposition.StaleDebris)
         {
             return false;
@@ -2060,7 +2060,7 @@ public static class DotnetBuildEnvironmentManager
             return true;
         }
 
-        var metadata = TryReadExecutionLeaseMetadata(environment.ExecutionLockPath);
+        var metadata = DotnetBuildLeaseInspection.TryReadExecutionLeaseMetadata(environment.ExecutionLockPath);
         return metadata?.OwnerProcessId == Environment.ProcessId;
     }
 
@@ -2100,7 +2100,7 @@ public static class DotnetBuildEnvironmentManager
 
         attribution = new BuildLockAttribution(
             path,
-            [CreateProcessHolder(Environment.ProcessId, "current landing fixture root", false)],
+            [DotnetBuildLeaseInspection.CreateProcessHolder(Environment.ProcessId, "current landing fixture root", false)],
             "landing-fixture-registration",
             "artifact-prep",
             "prepare-artifacts");
@@ -2113,36 +2113,6 @@ public static class DotnetBuildEnvironmentManager
             "landing-test-fixture",
             $"landing fixture purpose={marker.Purpose} machine={marker.MachineName} createdAt={marker.CreatedAt:O}",
             false);
-
-    private static BuildLockHolder CreateProcessHolder(int processId, string commandLine, bool isOrchestratorOwned)
-    {
-        try
-        {
-            using var process = Process.GetProcessById(processId);
-            return new BuildLockHolder(
-                processId,
-                process.ProcessName,
-                commandLine,
-                isOrchestratorOwned,
-                TryGetProcessStartTime(process));
-        }
-        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception)
-        {
-            return new BuildLockHolder(processId, "unknown", commandLine, isOrchestratorOwned);
-        }
-    }
-
-    private static DateTimeOffset? TryGetProcessStartTime(Process process)
-    {
-        try
-        {
-            return process.StartTime.ToUniversalTime();
-        }
-        catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception)
-        {
-            return null;
-        }
-    }
 
     internal static void RegisterCurrentLandingTestFixtureRoot(string path)
     {
@@ -2236,7 +2206,7 @@ public static class DotnetBuildEnvironmentManager
 
     private static bool IsLandingFixtureMarkerStale(LandingTestFixtureMarker marker) =>
         DateTimeOffset.UtcNow - marker.CreatedAt >= LandingFixtureMarkerStaleAge &&
-        !IsProcessRunning(marker.CreatorProcessId);
+        !DotnetBuildLeaseInspection.IsProcessRunning(marker.CreatorProcessId);
 
     private static bool TryGetLandingTestFixtureRoot(string path, out string fixtureRoot)
     {
@@ -2246,7 +2216,7 @@ public static class DotnetBuildEnvironmentManager
             var landingTestsRoot = Path.GetFullPath(Path.Combine(Path.GetTempPath(), LandingTestsRootDirectoryName))
                 .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
             var fullPath = Path.GetFullPath(path);
-            if (!PathIsUnderDirectory(fullPath, landingTestsRoot))
+            if (!DotnetBuildLeaseInspection.PathIsUnderDirectory(fullPath, landingTestsRoot))
             {
                 return false;
             }
@@ -2276,26 +2246,10 @@ public static class DotnetBuildEnvironmentManager
         }
     }
 
-    private static bool PathIsUnderDirectory(string path, string directory)
-    {
-        try
-        {
-            var fullPath = Path.GetFullPath(path);
-            var fullDirectory = Path.GetFullPath(directory).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-            return fullPath.Equals(fullDirectory, StringComparison.OrdinalIgnoreCase) ||
-                fullPath.StartsWith(fullDirectory + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) ||
-                fullPath.StartsWith(fullDirectory + Path.AltDirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
-        }
-        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
-        {
-            return false;
-        }
-    }
-
     private static StaleExecutionLeaseReclaim TryReclaimStaleExecutionLease(DotnetBuildEnvironment environment)
     {
-        var metadata = TryReadExecutionLeaseMetadata(environment.ExecutionLockPath);
-        if (metadata?.OwnerProcessId is not { } processId || IsProcessRunning(processId))
+        var metadata = DotnetBuildLeaseInspection.TryReadExecutionLeaseMetadata(environment.ExecutionLockPath);
+        if (metadata?.OwnerProcessId is not { } processId || DotnetBuildLeaseInspection.IsProcessRunning(processId))
         {
             return StaleExecutionLeaseReclaim.None;
         }
@@ -2566,46 +2520,9 @@ public static class DotnetBuildEnvironmentManager
         File.Move(journalPath, rotatedPath);
     }
 
-    private static ExecutionLeaseMetadata? TryReadExecutionLeaseMetadata(string path)
-    {
-        var metadataPath = ExecutionLeaseMetadataPath(path);
-        var sourcePath = File.Exists(metadataPath) ? metadataPath : path;
-        if (!File.Exists(sourcePath))
-        {
-            return null;
-        }
-
-        try
-        {
-            var text = File.ReadAllText(sourcePath).Trim();
-            if (string.IsNullOrWhiteSpace(text))
-            {
-                return null;
-            }
-
-            if (int.TryParse(text, out var legacyProcessId))
-            {
-                return new ExecutionLeaseMetadata(
-                    0,
-                    "legacy",
-                    null,
-                    null,
-                    legacyProcessId,
-                    null,
-                    DateTimeOffset.MinValue);
-            }
-
-            return JsonSerializer.Deserialize<ExecutionLeaseMetadata>(text, JsonOptions);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
-        {
-            return null;
-        }
-    }
-
     private static void WriteExecutionLeaseMetadata(FileStream stream, DotnetBuildEnvironment environment)
     {
-        var metadata = new ExecutionLeaseMetadata(
+        var metadata = new DotnetBuildLeaseInspection.ExecutionLeaseMetadata(
             1,
             environment.LeaseId,
             environment.SlotOwnerToken,
@@ -2614,7 +2531,7 @@ public static class DotnetBuildEnvironmentManager
             Environment.MachineName,
             DateTimeOffset.UtcNow,
             environment.HolderLabel);
-        var serialized = JsonSerializer.Serialize(metadata, JsonOptions);
+        var serialized = JsonSerializer.Serialize(metadata, DotnetBuildLeaseInspection.LeaseMetadataJsonOptions);
         stream.SetLength(0);
         stream.Position = 0;
         using var writer = new StreamWriter(stream, leaveOpen: true);
@@ -2623,17 +2540,14 @@ public static class DotnetBuildEnvironmentManager
         writer.Flush();
         stream.Flush(flushToDisk: true);
         stream.Position = 0;
-        File.WriteAllText(ExecutionLeaseMetadataPath(environment.ExecutionLockPath), serialized);
+        File.WriteAllText(DotnetBuildLeaseInspection.ExecutionLeaseMetadataPath(environment.ExecutionLockPath), serialized);
     }
-
-    private static string ExecutionLeaseMetadataPath(string executionLockPath) =>
-        $"{executionLockPath}.owner.json";
 
     private static void TryDeleteExecutionLeaseMetadata(string executionLockPath)
     {
         try
         {
-            File.Delete(ExecutionLeaseMetadataPath(executionLockPath));
+            File.Delete(DotnetBuildLeaseInspection.ExecutionLeaseMetadataPath(executionLockPath));
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -2676,7 +2590,7 @@ public static class DotnetBuildEnvironmentManager
         if (int.TryParse(text, out var processId))
         {
             reclaimedProcessId = processId;
-            if (IsProcessRunning(processId))
+            if (DotnetBuildLeaseInspection.IsProcessRunning(processId))
             {
                 return false;
             }
@@ -2694,36 +2608,6 @@ public static class DotnetBuildEnvironmentManager
         catch (UnauthorizedAccessException)
         {
             return false;
-        }
-    }
-
-    private static bool IsProcessRunning(
-        int processId,
-        Func<int, bool>? queryProcessLiveness = null)
-    {
-        try
-        {
-            if (queryProcessLiveness is not null)
-            {
-                return queryProcessLiveness(processId);
-            }
-
-            using var process = Process.GetProcessById(processId);
-            return !process.HasExited;
-        }
-        catch (ArgumentException)
-        {
-            return false;
-        }
-        catch (InvalidOperationException)
-        {
-            return false;
-        }
-        catch (System.ComponentModel.Win32Exception)
-        {
-            // A lower-integrity caller may be unable to query a live owner. Preserve the lease
-            // until the byte-range lock and process identity can be observed authoritatively.
-            return true;
         }
     }
 
@@ -2811,16 +2695,6 @@ public static class DotnetBuildEnvironmentManager
         string Decision,
         string Reason,
         string TriggerPath);
-
-    private sealed record ExecutionLeaseMetadata(
-        int Version,
-        string LeaseId,
-        string? SlotOwnerToken,
-        string? ArtifactsPath,
-        int OwnerProcessId,
-        string? MachineName,
-        DateTimeOffset AcquiredAt,
-        string? HolderLabel = null);
 
     private sealed record LandingTestFixtureMarker(
         int Version,
