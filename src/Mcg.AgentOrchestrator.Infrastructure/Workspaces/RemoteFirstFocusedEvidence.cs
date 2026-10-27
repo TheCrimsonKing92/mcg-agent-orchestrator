@@ -223,6 +223,25 @@ internal static class RemoteFirstFocusedEvidence
                 TestResultPaths: paths, TestResultAttemptId: owner.RunId, ExecutedTestCount: retained.ExecutedTestCount,
                 DiscoveredTestCount: retained.DiscoveredTestCount, CompletionDecision: retainedDecision,
                 TestProjectPath: run.Check.Project, FailingTestIdentities: retainedFailures);
+            // Normalize only retained evidence; conversion cannot change the source verdict.
+            var normalizedPaths = new List<string>();
+            NormalizedTestResultWriteFailure? conversionFailure = null;
+            foreach (var path in paths)
+            {
+                var normalized = NormalizedGateResultStep.Apply(verdict, path, NormalizedGateResultStep.TrxSourceLabel);
+                if (normalized.NormalizedTestResultPaths is { } written) normalizedPaths.AddRange(written);
+                if (normalized.NormalizedTestResultWriteFailure is not { } failure) continue;
+                conversionFailure = conversionFailure is null ? failure : conversionFailure with
+                {
+                    Detail = conversionFailure.Detail + Environment.NewLine +
+                        $"TargetPath={failure.TargetPath}; Reason={failure.Reason}; Detail={failure.Detail}"
+                };
+            }
+            verdict = verdict with
+            {
+                NormalizedTestResultPaths = normalizedPaths.ToArray(),
+                NormalizedTestResultWriteFailure = conversionFailure
+            };
             Finish(run, code, reason, result, verdict);
         }
 
