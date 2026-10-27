@@ -11,6 +11,43 @@ public sealed record CriterionOwnershipDerivationIssue(int CriterionIndex, strin
 
 public static class CriterionOwnershipDerivation
 {
+    internal static RefinedSpec DeriveSpecForRevision(
+        GoalId goalId,
+        int briefVersion,
+        RefinedSpec currentSpec,
+        IReadOnlyList<string> declaredCriteria)
+    {
+        var ownership = DeriveForRevision(
+            declaredCriteria,
+            currentSpec.AcceptanceGateOwnedAcceptanceCriteria,
+            currentSpec.OperatorOwnedAcceptanceCriteria);
+        // Re-evaluate only revision-derived ownership questions against current
+        // authority. Other unresolved specification questions remain blocking.
+        var questions = currentSpec.OpenQuestions
+            .Where(question => question.NormalizedQuestionKey?.StartsWith(
+                "ownership-revision:", StringComparison.Ordinal) != true)
+            .ToList();
+        foreach (var issue in ownership.Issues)
+        {
+            var topicKey = $"ownership-v{briefVersion}-revision-{issue.CriterionIndex}";
+            questions.Add(new RefinedSpecOpenQuestion(
+                $"spec-clarification:{goalId.Value}:{topicKey}",
+                $"{issue.Diagnostic} Revise the versioned criterion to declare one authoritative evidence owner. " +
+                "For an existing criterion, an explicit criterion-evidence-map repair may declare its evidence owner.",
+                "ownership-lifecycle", "Open", TopicKey: topicKey,
+                NormalizedQuestionKey: $"ownership-revision:{issue.CriterionIndex}",
+                Criterion: declaredCriteria[issue.CriterionIndex], BlastRadius: "high"));
+        }
+
+        return currentSpec with
+        {
+            AcceptanceCriteria = declaredCriteria.ToArray(),
+            AcceptanceGateOwnedAcceptanceCriteria = ownership.AcceptanceGateOwned,
+            OperatorOwnedAcceptanceCriteria = ownership.OperatorOwned,
+            OpenQuestions = questions
+        };
+    }
+
     public static CriterionOwnershipDerivationResult DeriveForRevision(
         IReadOnlyList<string> newCriteria,
         IReadOnlyList<string> priorGateOwned,
