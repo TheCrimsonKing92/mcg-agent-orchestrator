@@ -345,6 +345,131 @@ public sealed class BacklogSelectiveGoalReadTests(ITestOutputHelper output) : Cl
         Assert.Empty(actualError); // Archive corruption throws; it must not become a quarantine/skip.
     }
 
+    public static IEnumerable<object[]> InvalidSimilarityMembers()
+    {
+        string[][] cases =
+        [
+            ["SourceBacklogItemId", "42", "$.SourceBacklogItemId"],
+            ["DependsOn", "[42]", "$.DependsOn[0]"],
+            ["AutomaticAcceptanceRetryCount", "\"invalid\"", "$.AutomaticAcceptanceRetryCount"],
+            ["RefinedSpec", "{\"BehavioralContract\":42}", "$.RefinedSpec.BehavioralContract"],
+            ["Timeline", "{}", "$.Timeline"],
+            ["Timeline", "42", "$.Timeline"],
+            ["Timeline", "[42]", "$.Timeline[0]"],
+            ["Timeline", "[{\"Message\":42}]", "$.Timeline[0].Message"],
+            ["Timeline", "[{\"GoalId\":42}]", "$.Timeline[0].GoalId"],
+            ["Timeline", "[{\"TaskId\":42}]", "$.Timeline[0].TaskId"],
+            ["Timeline", "[{\"Kind\":\"invalid-kind\"}]", "$.Timeline[0].Kind"],
+            ["Timeline", "[{\"RequeueSkipped\":42}]", "$.Timeline[0].RequeueSkipped"],
+            ["Timeline", "[{\"OccurredAt\":\"invalid-time\"}]", "$.Timeline[0].OccurredAt"],
+            ["Timeline", "[{\"OccurredAt\":42}]", "$.Timeline[0].OccurredAt"]
+        ];
+        foreach (var archive in new[] { false, true })
+        foreach (var entry in cases)
+            yield return [archive, entry[0], entry[1], entry[2]];
+    }
+
+    [Theory]
+    [MemberData(nameof(InvalidSimilarityMembers))]
+    public async Task Similarity_InvalidMembers_PreservesHydrationDiagnostics(
+        bool archive, string member, string value, string path)
+    {
+        using var fixture = await Fixture.Create(4, 256);
+        const string validId = "55555555555555555555555555555555";
+        await fixture.AddSimilarityTwin(validId);
+        if (archive) await fixture.MakeTerminalAndArchive(CompletedId);
+        string[] args = ["backlog-similar", "quartz", "--excerpt", "--limit", "100"];
+        var before = Run(args, fixture.Workspace, false);
+        Assert.Contains($"kind=goal id={CompletedId[..8]}", before.Text);
+        Assert.Equal(2, before.Count("similarity-projected"));
+        fixture.ReplaceSnapshotMember(CompletedId, member, value, archive);
+
+        if (archive)
+        {
+            JsonException expected = null!, actual = null!;
+            var expectedError = AsyncLocalConsoleRouter.CaptureError(() => expected = Assert.Throws<JsonException>(
+                () => Run(args, fixture.Workspace, true)));
+            var actualError = AsyncLocalConsoleRouter.CaptureError(() => actual = Assert.Throws<JsonException>(
+                () => Run(args, fixture.Workspace, false)));
+            Assert.Equal(path, expected.Path);
+            Assert.Equal(expected.GetType(), actual.GetType());
+            Assert.Equal(expected.Message, actual.Message);
+            Assert.Equal(expected.Path, actual.Path);
+            Assert.Equal(expected.LineNumber, actual.LineNumber);
+            Assert.Equal(expected.BytePositionInLine, actual.BytePositionInLine);
+            Assert.Empty(expectedError);
+            Assert.Empty(actualError);
+        }
+        else
+        {
+            Receipt baseline = null!, candidate = null!;
+            var expectedError = AsyncLocalConsoleRouter.CaptureError(() => baseline = Run(args, fixture.Workspace, true));
+            var actualError = AsyncLocalConsoleRouter.CaptureError(() => candidate = Run(args, fixture.Workspace, false));
+            Assert.Contains($"QUARANTINED goal {CompletedId[..8]}: JsonException:", expectedError);
+            Assert.Contains(path, expectedError);
+            Assert.Equal(expectedError, actualError);
+            Assert.Equal(baseline.Text, candidate.Text);
+            Assert.DoesNotContain($"kind=goal id={CompletedId[..8]}", candidate.Text);
+            Assert.Contains($"kind=goal id={validId[..8]}", candidate.Text);
+            Assert.Equal(1, candidate.Count("similarity-projected"));
+            Assert.Empty(candidate.Requested);
+            Assert.Empty(candidate.Deserialized);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Similarity_EmptyTasks_PreservesReconstructionFailure(bool archive)
+    {
+        using var fixture = await Fixture.Create(4, 256);
+        if (archive) await fixture.MakeTerminalAndArchive(CompletedId);
+        string[] args = ["backlog-similar", "quartz"];
+        Assert.Contains($"kind=goal id={CompletedId[..8]}", Run(args, fixture.Workspace, false).Text);
+        fixture.ReplaceTasks(CompletedId, "[]", archive);
+
+        ArgumentException expected = null!, actual = null!;
+        var expectedError = AsyncLocalConsoleRouter.CaptureError(() => expected = Assert.Throws<ArgumentException>(
+            () => Run(args, fixture.Workspace, true)));
+        var actualError = AsyncLocalConsoleRouter.CaptureError(() => actual = Assert.Throws<ArgumentException>(
+            () => Run(args, fixture.Workspace, false)));
+        Assert.Equal("tasks", expected.ParamName);
+        Assert.Contains("A goal must have at least one task.", expected.Message);
+        Assert.Equal(expected.Message, actual.Message);
+        Assert.Equal(expected.ParamName, actual.ParamName);
+        Assert.Empty(expectedError);
+        Assert.Empty(actualError); // Domain failures must escape the hot quarantine boundary too.
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Similarity_EqualTimelineInstants_PreservesLastOffsetDate(bool archive)
+    {
+        using var fixture = await Fixture.Create(4, 256);
+        if (archive) await fixture.MakeTerminalAndArchive(CompletedId);
+        var first = DateTimeOffset.Parse("2026-09-01T00:30:00+00:00", CultureInfo.InvariantCulture);
+        var last = DateTimeOffset.Parse("2026-08-31T19:30:00-05:00", CultureInfo.InvariantCulture);
+        Assert.Equal(first, last);
+        Assert.NotEqual(first.Date, last.Date);
+        fixture.ReplaceSnapshotMember(CompletedId, "Timeline", JsonSerializer.Serialize(new[]
+        {
+            new ProgressEventSnapshot(CompletedId, null, ProgressKind.GoalCreated, "first", first),
+            new ProgressEventSnapshot(CompletedId, null, ProgressKind.GoalCreated, "last", last)
+        }), archive);
+
+        string[] args = ["backlog-similar", "quartz", "--excerpt", "--limit", "100"];
+        var baseline = Run(args, fixture.Workspace, true);
+        var candidate = Run(args, fixture.Workspace, false);
+        Assert.Equal(baseline.Text, candidate.Text);
+        var match = Assert.Single(candidate.Text.Split('\n'), line => line.Contains($"kind=goal id={CompletedId[..8]}"));
+        Assert.Contains("2026-08-31", match);
+        Assert.DoesNotContain("2026-09-01", match);
+        Assert.Empty(candidate.Requested);
+        Assert.Empty(candidate.Deserialized);
+        Assert.Equal(1, candidate.Count("similarity-projected"));
+    }
+
     private static Receipt Run(string[] args, OrchestratorWorkspace workspace, bool baseline)
     {
         var events = new List<GoalSnapshotReadObservation>();
@@ -469,6 +594,9 @@ public sealed class BacklogSelectiveGoalReadTests(ITestOutputHelper output) : Cl
         }
 
         internal void ReplaceTasks(string id, string tasks, bool archive = false)
+            => ReplaceSnapshotMember(id, "Tasks", tasks, archive);
+
+        internal void ReplaceSnapshotMember(string id, string member, string value, bool archive = false)
         {
             using var connection = Open(workspace.SqliteStatePath);
             using var read = connection.CreateCommand();
@@ -480,8 +608,8 @@ public sealed class BacklogSelectiveGoalReadTests(ITestOutputHelper output) : Cl
             Assert.NotNull(stored);
             var node = JsonNode.Parse(archive ? GoalSnapshotArchiveCodec.Decode(stored)! : (string)stored)!;
             Assert.Equal("Completed", node["Status"]!.GetValue<string>());
-            Assert.IsType<JsonArray>(node["Tasks"]);
-            node["Tasks"] = JsonNode.Parse(tasks);
+            if (member == "Tasks") Assert.IsType<JsonArray>(node[member]);
+            node[member] = JsonNode.Parse(value);
             var json = node.ToJsonString();
             if (archive)
                 ReplaceArchive(id, GoalSnapshotArchiveCodec.Encode(json));

@@ -56,6 +56,7 @@ public sealed partial class SqliteOrchestratorStateRepository
                 Console.Error.WriteLine($"QUARANTINED goal {ShortGoalId(id)}: {ex.GetType().Name}: {ex.Message}");
                 continue;
             }
+            ValidateSimilarityTaskCount(fields);
             if (fields is { IsMetadataOnly: true })
             {
                 using var archive = connection.CreateCommand();
@@ -68,6 +69,7 @@ public sealed partial class SqliteOrchestratorStateRepository
                 using var stream = GoalSnapshotArchiveCodec.OpenDecodedStream(value);
                 if (stream is not null)
                     fields = ReadGoalSimilarityFields(stream, () => GoalSnapshotArchiveCodec.OpenDecodedStream(value)!);
+                ValidateSimilarityTaskCount(fields);
             }
             if (fields is not { Status: GoalStatus.Completed }) continue;
             var objective = fields.Objective.Trim();
@@ -94,44 +96,96 @@ public sealed partial class SqliteOrchestratorStateRepository
     {
         try
         {
-            return JsonSerializer.Deserialize<GoalSimilarityFields>(stream, SerializerOptions);
+            return JsonSerializer.Deserialize<GoalSimilarityFields>(stream, SimilarityJson.Options);
         }
-        catch (InvalidSimilarityTaskShapeException)
+        catch (InvalidSimilarityShapeException)
         {
-            // Let the standard collection converter produce its original type, path and
-            // byte location from the original document. An empty JsonException thrown by
-            // our converter instead names GoalSimilarityFields, changing the diagnostic.
-            // Replay only malformed task shapes/members; valid payloads stay on the projection path.
+            // Replay only malformed payloads with the original contract, preserving the
+            // exception type, nested member path and byte location of full hydration.
             using var diagnosticStream = reopenStream();
-            _ = JsonSerializer.Deserialize<SimilarityTaskShapeDiagnostic>(diagnosticStream, SerializerOptions);
-            throw new InvalidOperationException("Malformed task shape unexpectedly passed standard deserialization.");
+            _ = JsonSerializer.Deserialize<GoalSnapshot>(diagnosticStream, SerializerOptions);
+            throw new InvalidOperationException("Malformed snapshot unexpectedly passed standard deserialization.");
         }
     }
 
-    private sealed record SimilarityTaskShapeDiagnostic(IReadOnlyList<TaskSnapshot>? Tasks);
-    private sealed class InvalidSimilarityTaskShapeException : Exception { }
+    private static void ValidateSimilarityTaskCount(GoalSimilarityFields? fields)
+    {
+        // Reconstruction runs after hot deserialization/quarantine, so this domain
+        // failure must escape for both hot and archived full goals.
+        if (fields is { IsMetadataOnly: false, Tasks.Count: 0 })
+            throw new ArgumentException("A goal must have at least one task.", "tasks");
+    }
+
+    private sealed class InvalidSimilarityShapeException : Exception { }
+
+    private static class SimilarityJson
+    {
+        internal static readonly JsonSerializerOptions Options = CreateOptions();
+
+        private static JsonSerializerOptions CreateOptions()
+        {
+            var resolver = new DefaultJsonTypeInfoResolver();
+            resolver.Modifiers.Add(contract =>
+            {
+                if (contract.Type != typeof(GoalSimilarityFields)) return;
+                // The persisted contract owns all member types, including fields the scorer
+                // does not use. Validate those fields without retaining their payloads.
+                foreach (var member in contract.Options.GetTypeInfo(typeof(GoalSnapshot)).Properties)
+                {
+                    if (contract.Properties.Any(property => property.Name == member.Name)) continue;
+                    var discarded = contract.CreateJsonPropertyInfo(typeof(object), member.Name);
+                    discarded.CustomConverter = new DiscardedSimilarityValueConverter(member.PropertyType);
+                    discarded.Set = (_, _) => { };
+                    contract.Properties.Add(discarded);
+                }
+            });
+            return new(SerializerOptions) { TypeInfoResolver = resolver };
+        }
+    }
+
+    private sealed class DiscardedSimilarityValueConverter(Type valueType) : JsonConverter<object>
+    {
+        public override bool HandleNull => true;
+
+        public override object? Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+        {
+            try { SimilarityTaskShapeConverter.ValidateTaskValue(ref reader, valueType, options); }
+            catch (Exception ex) when (IsSnapshotDeserializeException(ex))
+            {
+                throw new InvalidSimilarityShapeException();
+            }
+            return null;
+        }
+
+        public override void Write(Utf8JsonWriter writer, object value, JsonSerializerOptions options) =>
+            throw new NotSupportedException();
+    }
 
     // Validate the task collection and typed members without retaining valid payloads. A malformed hot
     // collection must still be quarantined; the same corruption in an archive must throw.
     // No GoalSnapshot, task or timeline collection is created on the valid projection path.
     private sealed record GoalSimilarityFields(string Id, string Objective, GoalStatus Status,
         bool IsMetadataOnly, DateTimeOffset? CreatedAt, DateTimeOffset? TerminatedAt,
-        [property: JsonConverter(typeof(SimilarityTaskShapeConverter))] IReadOnlyList<TaskSnapshot>? Tasks,
+        [property: JsonConverter(typeof(SimilarityTaskShapeConverter))] SimilarityTaskShape? Tasks,
         [property: JsonConverter(typeof(TimelineLatestConverter))] TimelineLatest? Timeline);
 
-    private sealed class SimilarityTaskShapeConverter : JsonConverter<IReadOnlyList<TaskSnapshot>>
+    private sealed record SimilarityTaskShape(int Count);
+
+    private sealed class SimilarityTaskShapeConverter : JsonConverter<SimilarityTaskShape>
     {
         public SimilarityTaskShapeConverter() { }
 
-        public override IReadOnlyList<TaskSnapshot> Read(
+        public override SimilarityTaskShape Read(
             ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
         {
             if (reader.TokenType != JsonTokenType.StartArray)
-                throw new InvalidSimilarityTaskShapeException();
+                throw new InvalidSimilarityShapeException();
+            var count = 0;
             while (reader.Read() && reader.TokenType != JsonTokenType.EndArray)
             {
+                count++;
                 if (reader.TokenType is not (JsonTokenType.StartObject or JsonTokenType.Null))
-                    throw new InvalidSimilarityTaskShapeException();
+                    throw new InvalidSimilarityShapeException();
                 try
                 {
                     ValidateTaskValue(ref reader, typeof(TaskSnapshot), options);
@@ -140,13 +194,13 @@ public sealed partial class SqliteOrchestratorStateRepository
                 {
                     // Replay the original document to retain the standard member path,
                     // exception type and byte position, including nested task members.
-                    throw new InvalidSimilarityTaskShapeException();
+                    throw new InvalidSimilarityShapeException();
                 }
             }
-            return Array.Empty<TaskSnapshot>();
+            return new(count);
         }
 
-        private static void ValidateTaskValue(ref Utf8JsonReader reader, Type type, JsonSerializerOptions options)
+        internal static void ValidateTaskValue(ref Utf8JsonReader reader, Type type, JsonSerializerOptions options)
         {
             // The serializer contract owns member types. Do not maintain a second task schema
             // here, or decode unused descriptions, outputs and collection contents into a DOM.
@@ -183,7 +237,7 @@ public sealed partial class SqliteOrchestratorStateRepository
             _ = JsonSerializer.Deserialize(ref reader, type, options);
         }
 
-        public override void Write(Utf8JsonWriter writer, IReadOnlyList<TaskSnapshot> value,
+        public override void Write(Utf8JsonWriter writer, SimilarityTaskShape value,
             JsonSerializerOptions options) => throw new NotSupportedException();
     }
 
@@ -195,11 +249,20 @@ public sealed partial class SqliteOrchestratorStateRepository
 
         public override TimelineLatest Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
         {
-            if (reader.TokenType != JsonTokenType.StartArray) throw new JsonException("Expected timeline array.");
+            if (reader.TokenType != JsonTokenType.StartArray) throw new InvalidSimilarityShapeException();
             DateTimeOffset? latest = null;
             while (reader.Read() && reader.TokenType != JsonTokenType.EndArray)
             {
-                if (reader.TokenType != JsonTokenType.StartObject) throw new JsonException("Expected timeline event.");
+                if (reader.TokenType != JsonTokenType.StartObject) throw new InvalidSimilarityShapeException();
+                var validationReader = reader;
+                try
+                {
+                    SimilarityTaskShapeConverter.ValidateTaskValue(ref validationReader, typeof(ProgressEventSnapshot), options);
+                }
+                catch (Exception ex) when (IsSnapshotDeserializeException(ex))
+                {
+                    throw new InvalidSimilarityShapeException();
+                }
                 var occurredAt = DateTimeOffset.MinValue;
                 while (reader.Read() && reader.TokenType != JsonTokenType.EndObject)
                 {
@@ -208,7 +271,9 @@ public sealed partial class SqliteOrchestratorStateRepository
                     if (isTime) occurredAt = reader.GetDateTimeOffset();
                     else reader.Skip();
                 }
-                if (latest is null || occurredAt > latest) latest = occurredAt;
+                // Stable OrderBy(...).LastOrDefault() keeps the last equal instant,
+                // including its original offset (which affects the rendered date).
+                if (latest is null || occurredAt >= latest) latest = occurredAt;
             }
             return new(latest);
         }
