@@ -26,41 +26,7 @@ internal static class GoTestJsonGateReceipt
             return built;
 
         var decoded = new StringBuilder();
-        var positions = new Dictionary<(string Package, string Test), int>();
-        var rows = new List<(string Package, string Test, bool Failed)>();
-        foreach (var (line, terminator) in Lines(result.Output))
-        {
-            try
-            {
-                using var document = JsonDocument.Parse(line);
-                var value = document.RootElement;
-                if (value.ValueKind != JsonValueKind.Object)
-                {
-                    decoded.Append(line).Append(terminator);
-                    continue;
-                }
-                decoded.Append(StringProperty(value, "Output"));
-                var package = StringProperty(value, "Package");
-                var test = StringProperty(value, "Test");
-                var action = StringProperty(value, "Action");
-                if (string.IsNullOrEmpty(package) || string.IsNullOrEmpty(test) || test.Contains('/') ||
-                    action is not ("pass" or "fail"))
-                    continue;
-
-                var key = (package, test);
-                if (positions.TryGetValue(key, out var index))
-                    rows[index] = (package, test, rows[index].Failed || action == "fail");
-                else
-                {
-                    positions.Add(key, rows.Count);
-                    rows.Add((package, test, action == "fail"));
-                }
-            }
-            catch (JsonException)
-            {
-                decoded.Append(line).Append(terminator);
-            }
-        }
+        var rows = ReadTopLevelRows(result.Output, decoded);
         if (rows.Count == 0)
             return built;
 
@@ -100,6 +66,47 @@ internal static class GoTestJsonGateReceipt
             FailingTestIdentities = rows.Where(row => row.Failed).Select(row => $"{row.Package}.{row.Test}").ToArray(),
             OutputTail = built.OutputTail is null ? null : tail(decoded.ToString())
         };
+    }
+
+    internal static IReadOnlyList<(string Package, string Test, bool Failed)> ReadTopLevelRows(
+        string output, StringBuilder? decoded)
+    {
+        var positions = new Dictionary<(string Package, string Test), int>();
+        var rows = new List<(string Package, string Test, bool Failed)>();
+        foreach (var (line, terminator) in Lines(output))
+        {
+            try
+            {
+                using var document = JsonDocument.Parse(line);
+                var value = document.RootElement;
+                if (value.ValueKind != JsonValueKind.Object)
+                {
+                    decoded?.Append(line).Append(terminator);
+                    continue;
+                }
+                decoded?.Append(StringProperty(value, "Output"));
+                var package = StringProperty(value, "Package");
+                var test = StringProperty(value, "Test");
+                var action = StringProperty(value, "Action");
+                if (string.IsNullOrEmpty(package) || string.IsNullOrEmpty(test) || test.Contains('/') ||
+                    action is not ("pass" or "fail"))
+                    continue;
+
+                var key = (package, test);
+                if (positions.TryGetValue(key, out var index))
+                    rows[index] = (package, test, rows[index].Failed || action == "fail");
+                else
+                {
+                    positions.Add(key, rows.Count);
+                    rows.Add((package, test, action == "fail"));
+                }
+            }
+            catch (JsonException)
+            {
+                decoded?.Append(line).Append(terminator);
+            }
+        }
+        return rows;
     }
 
     private static bool IsEligible(AcceptanceManifestCheck check, string? resultsPrefix) =>

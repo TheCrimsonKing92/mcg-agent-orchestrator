@@ -1,0 +1,43 @@
+{
+  "reportFormat": "CTRF",
+  "schemaVersion": "mcg-test-result/1",
+  "results": {
+    "tool": { "name": "pytest-junit" },
+    "tests": [
+      {
+        "testId": "tests/test_parse.py::test_ok",
+        "name": "test_ok",
+        "status": "passed",
+        "duration": 12,
+        "filePath": "tests/test_parse.py",
+        "suite": ["tests/test_parse.py"]
+      },
+      {
+        "testId": "tests/test_parse.py::test_case[x1-y2]",
+        "name": "test_case[x1-y2]",
+        "status": "failed",
+        "filePath": "tests/test_parse.py",
+        "message": "Expected x1, received y2",
+        "trace": "tests/test_parse.py:18: AssertionError"
+      },
+      {
+        "testId": "tests/test_parse.py::test_case[x2-y3]",
+        "name": "test_case[x2-y3]",
+        "status": "passed",
+        "filePath": "tests/test_parse.py"
+      },
+      {
+        "testId": "tests/test_slow.py::test_big",
+        "name": "test_big",
+        "status": "skipped",
+        "filePath": "tests/test_slow.py"
+      },
+      {
+        "testId": "tests/test_io.py::test_crash",
+        "name": "test_crash",
+        "status": "error",
+        "filePath": "tests/test_io.py"
+      }
+    ]
+  }
+}
