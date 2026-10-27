@@ -1407,7 +1407,11 @@ public sealed partial class TaskSpec
                 var removableIndex = FindIndex(
                     0,
                     role == AgentRole.Tester ? Count - 2 : Count - 1,
-                    candidate => !MustPreserveStructuredOutcome(role, candidate));
+                    // An active reset receipt remains provider authority after reassignment.
+                    candidate => !MustPreserveStructuredOutcome(role, candidate) &&
+                        !(DispatchFailureClassifier.IsRecoverableSubscriptionLimitFailure(candidate) &&
+                          DispatchFailureClassifier.TryGetSubscriptionLimitRetryAfter(candidate, out var reset) &&
+                          reset > item.CompletedAt));
                 if (removableIndex < 0)
                 {
                     break;

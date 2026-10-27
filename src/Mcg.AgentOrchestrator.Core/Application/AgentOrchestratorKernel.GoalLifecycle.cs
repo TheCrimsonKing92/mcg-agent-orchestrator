@@ -1159,7 +1159,7 @@ public sealed partial class AgentOrchestratorKernel
     }
 
     public TaskSpec SubstituteProviderHeldTaskAgent(GoalId goalId, TaskId taskId, AgentDefinition substitute,
-        string heldBindingKey, string evidenceReceipt)
+        string heldBindingKey, string evidenceReceipt, ProviderSubscriptionCooldown? subscriptionCooldown = null)
     {
         var goal = GetGoal(goalId);
         var task = goal.FindTask(taskId);
@@ -1168,9 +1168,12 @@ public sealed partial class AgentOrchestratorKernel
         var heldAgentId = task.AssignedAgentId?.Value ?? "none";
         if (task.AssignedAgentId == substitute.Id)
             throw new InvalidOperationException("A provider hold substitute must change the assigned agent.");
-        task = ReassignTaskAgent(goalId, taskId, substitute, "Provider budget hold substitution.");
+        task = ReassignTaskAgent(goalId, taskId, substitute, subscriptionCooldown is null
+            ? "Provider budget hold substitution." : "Provider subscription cooldown substitution.");
         Append(goal, taskId, ProgressKind.ProviderHoldSubstituted,
-            $"held binding={heldBindingKey}; held agent={heldAgentId}; substitute={substitute.Id.Value}; receipt={(string.IsNullOrWhiteSpace(evidenceReceipt) ? "none" : evidenceReceipt)}");
+            $"held binding={heldBindingKey}; held agent={heldAgentId}; substitute={substitute.Id.Value}; receipt={(string.IsNullOrWhiteSpace(evidenceReceipt) ? "none" : evidenceReceipt)}" +
+            (subscriptionCooldown is null ? "" :
+                $"; reason=subscription-cooldown; source task={subscriptionCooldown.SourceTaskId.Value}; source dispatch={subscriptionCooldown.DispatchStartedAt:O}; reset={subscriptionCooldown.RetryAfter:O}"));
         return task;
     }
 
