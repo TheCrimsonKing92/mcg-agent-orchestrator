@@ -109,6 +109,45 @@ public sealed class BriefPlannedTestLaneReadinessTests
     }
 
     [Theory]
+    [InlineData("existing-purpose")]
+    [InlineData("separate-collection")]
+    [InlineData("separate-path-collection")]
+    public void DeclarationContext_UnownedClassBlocksDeveloperPreparation(string kind)
+    {
+        var scope = kind switch
+        {
+            "existing-purpose" => "Add new test class BuildWidgetTests to cover existing widget behavior.",
+            "separate-collection" => "new test class BuildWidgetTests. Add new test class QuokkaTests in collection 'BuildCollection'.",
+            "separate-path-collection" => "new tests/Widget.Tests/BuildWidgetTests.cs. Add new test class QuokkaTests in collection 'BuildCollection'.",
+            _ => throw new ArgumentException(kind)
+        };
+        using var fixture = new Fixture(scope);
+        Assert.Equal(WorkTaskStatus.Assigned, fixture.Developer.Status);
+        Assert.Empty(DispatchReadinessRules.BuildIncompleteEarlierStageDependencies(fixture.Goal, fixture.Developer));
+        var report = fixture.Readiness();
+        var finding = Assert.Single(report.Findings, item => item.Kind == LaneSubstringCollisionCheck.Rule);
+        Assert.Contains(Name, finding.Message);
+        Assert.DoesNotContain("QuokkaTests", finding.Message);
+        Assert.False(report.AllowsStart(true));
+        var preparationCalls = 0;
+        var operations = new GoalDispatchOperations(resolveHome: _ =>
+        {
+            preparationCalls++;
+            throw new InvalidOperationException("Unexpected preparation.");
+        });
+
+        var failure = Assert.Throws<InvalidOperationException>(() => operations.ProfileDispatchTask(
+            fixture.Kernel, fixture.Workspace, fixture.Goal, fixture.Developer, fixture.Profile));
+
+        Assert.Contains(LaneSubstringCollisionCheck.Rule, failure.Message);
+        Assert.Contains(Name, failure.Message);
+        Assert.Equal(0, preparationCalls);
+        Assert.Null(fixture.Developer.LastDispatch);
+        Assert.Null(fixture.Developer.LastProcess);
+        Assert.False(File.Exists(fixture.ProposedPath));
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public void RecordedCollision_ApplicationRefusesLaunchBeforeRefresh(bool refresh)
@@ -186,6 +225,8 @@ public sealed class BriefPlannedTestLaneReadinessTests
     [InlineData("Regex: new test class BuildWidgetTests")]
     [InlineData("dotnet test --filter new test class BuildWidgetTests")]
     [InlineData("Run `dotnet test --filter new test class BuildWidgetTests`.")]
+    [InlineData("Run `echo \"new test class BuildWidgetTests\"`.")]
+    [InlineData("Run `Write-Output 'new test class BuildWidgetTests'`.")]
     [InlineData("Do not add new test class BuildWidgetTests")]
     [InlineData("No new test class BuildWidgetTests is required")]
     [InlineData("BuildWidgetTests is cited for reference")]
@@ -237,6 +278,23 @@ public sealed class BriefPlannedTestLaneReadinessTests
         Assert.Single(fixture.Readiness().Findings, item => item.Kind == LaneSubstringCollisionCheck.Rule);
     }
 
+    [Theory]
+    [InlineData("=")]
+    [InlineData("!=")]
+    public void UnsupportedSourceSelector_PlacementPlanRemainsBlocking(string selector)
+    {
+        using var fixture = new Fixture("new test class " + Name + ". " +
+            Plan.Replace("FullyQualifiedName~", "FullyQualifiedName" + selector));
+        var before = File.ReadAllBytes(fixture.ManifestPath);
+        var report = fixture.Readiness();
+
+        Assert.False(report.AllowsStart(true));
+        Assert.Single(report.Findings, item => item.Kind == LaneSubstringCollisionCheck.Rule);
+        Assert.DoesNotContain(report.Findings,
+            item => item.Kind is BriefPlannedTestLaneReadiness.PendingKind or BriefPlannedTestLaneReadiness.ConfigurationKind);
+        Assert.Equal(before, File.ReadAllBytes(fixture.ManifestPath));
+    }
+
     [Fact]
     public void MultipleSelectingLanes_OnePlanDoesNotHideOtherCollision()
     {
@@ -282,6 +340,7 @@ public sealed class BriefPlannedTestLaneReadinessTests
     [InlineData("missing")]
     [InlineData("invalid-json")]
     [InlineData("invalid-filter")]
+    [InlineData("duplicate-lane")]
     [InlineData("unreadable")]
     public void InvalidTargetConfiguration_BlocksWithoutHomeSubstitution(string kind)
     {
@@ -294,12 +353,17 @@ public sealed class BriefPlannedTestLaneReadinessTests
         if (kind == "invalid-json") File.WriteAllText(manifestPath, "{ malformed");
         if (kind == "invalid-filter") File.WriteAllText(manifestPath,
             Manifest.Replace("FullyQualifiedName~Build", "UnsupportedFilter=Build"));
+        if (kind == "duplicate-lane") File.WriteAllText(manifestPath,
+            Manifest.Replace("\"name\": \"Remainder\"", "\"name\": \"Build lane\""));
         if (kind == "unreadable") File.WriteAllText(manifestPath, Manifest);
         using var locked = kind == "unreadable"
             ? new FileStream(manifestPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None) : null;
         var report = fixture.Readiness(projectHome);
         Assert.False(report.AllowsStart(true));
         var failure = Assert.Single(report.Findings, item => item.Kind == BriefPlannedTestLaneReadiness.ConfigurationKind);
+        Assert.Equal(GoalReadinessSeverity.Blocker, failure.Severity);
+        Assert.False(failure.CanOverride);
+        if (kind == "duplicate-lane") Assert.Contains("duplicated", failure.Message);
         Assert.Contains(projectHome, failure.Message);
         Assert.DoesNotContain(report.Findings, item => item.Kind == LaneSubstringCollisionCheck.Rule);
     }

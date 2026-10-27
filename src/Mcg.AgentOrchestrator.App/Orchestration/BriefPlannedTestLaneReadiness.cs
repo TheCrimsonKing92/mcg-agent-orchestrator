@@ -56,7 +56,7 @@ internal static class BriefPlannedTestLaneReadiness
             }
             return findings;
         }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or
+        catch (Exception exception) when (exception is IOException or InvalidDataException or UnauthorizedAccessException or
                                           JsonException or InvalidOperationException or ArgumentException)
         {
             return [new GoalReadinessFinding(GoalReadinessSeverity.Blocker, ConfigurationKind,
@@ -69,28 +69,50 @@ internal static class BriefPlannedTestLaneReadiness
         var result = new Dictionary<string, Declaration>(StringComparer.Ordinal);
         foreach (var line in lines)
         {
-            var collectionMatch = Regex.Match(line,
-                "\\bcollection\\s*(?:\\(\\s*|[:=]\\s*)?[`'\"](?<name>[^`'\"]+)[`'\"]", Options);
-            var collection = collectionMatch.Success ? collectionMatch.Groups["name"].Value : null;
+            var declarations = Regex.Matches(line, NewClass, Options).Cast<Match>()
+                .Concat(Regex.Matches(line, TestSourcePath, RegexOptions.CultureInvariant).Cast<Match>())
+                .OrderBy(match => match.Index).ToArray();
             foreach (Match match in Regex.Matches(line, TestSourcePath, RegexOptions.CultureInvariant))
             {
-                if (BriefScopeSectionSelector.IsEvidenceOnly(line, match.Index, match.Length) ||
+                if (!IsDeclarationContext(line, match.Index) ||
+                    BriefScopeSectionSelector.IsEvidenceOnly(line, match.Index, match.Length) ||
                     !IsNew(line, match.Index, match.Length)) continue;
                 var path = match.Value.Replace('\\', '/');
                 if (path.Split('/').Any(part => part is "." or ".." or "bin" or "obj") ||
                     File.Exists(Path.Combine(root, path))) continue;
                 var name = Path.GetFileNameWithoutExtension(path);
                 if (Regex.IsMatch(name, @"^[A-Za-z_]\w*$", RegexOptions.CultureInvariant))
-                    result.TryAdd(name, new Declaration(name, collection));
+                    result.TryAdd(name, new Declaration(name, CollectionFor(match)));
             }
             foreach (Match match in Regex.Matches(line, NewClass, Options))
             {
                 var name = match.Groups["name"].Value;
-                if ((match.Value.Contains("test class", StringComparison.OrdinalIgnoreCase) || name.Contains("Tests", StringComparison.Ordinal)) &&
-                    !ExistingClass(root, name)) result.TryAdd(name, new Declaration(name, collection));
+                if (IsDeclarationContext(line, match.Index) &&
+                    (match.Value.Contains("test class", StringComparison.OrdinalIgnoreCase) || name.Contains("Tests", StringComparison.Ordinal)) &&
+                    !ExistingClass(root, name)) result.TryAdd(name, new Declaration(name, CollectionFor(match)));
+            }
+
+            string? CollectionFor(Match declaration)
+            {
+                var end = declarations.FirstOrDefault(next => next.Index > declaration.Index)?.Index ?? line.Length;
+                // Ownership belongs to this declaration, not to another class or sentence on the same line.
+                var tail = Regex.Split(line[(declaration.Index + declaration.Length)..end], @"[.!?;]\s+", Options)[0];
+                var collection = Regex.Match(tail,
+                    "\\bcollection\\s*(?:\\(\\s*|[:=]\\s*)?[`'\"](?<name>[^`'\"]+)[`'\"]", Options);
+                return collection.Success ? collection.Groups["name"].Value : null;
             }
         }
         return result.Values.ToArray();
+    }
+
+    private static bool IsDeclarationContext(string line, int index)
+    {
+        // Classify the context introducing the declaration. Its purpose may legitimately mention
+        // existing behavior or historical inputs after the name without making it an evidence citation.
+        var context = Regex.Replace(Regex.Replace(line[..index], NewClass, "", Options),
+            TestSourcePath, "", RegexOptions.CultureInvariant);
+        return !Regex.IsMatch(context,
+            @"\b(?:example|illustrative|historical|history|previous|existing|regex|command|evidence)\b", Options);
     }
 
     private static bool IsNew(string line, int index, int length) =>
@@ -119,6 +141,9 @@ internal static class BriefPlannedTestLaneReadiness
             var filter = match.Value;
             if (!filter.EndsWith(name, StringComparison.Ordinal) &&
                 !filter.EndsWith(name.Split('.', '+').Last(), StringComparison.Ordinal)) continue;
+            // Source manifests reject exact selectors, even though resolved owned-collection filters allow them.
+            try { _ = AcceptanceCheckCommandBuilder.TranslateMtpFilter(filter).ToArray(); }
+            catch (InvalidOperationException) { continue; }
             var planned = lane with { Filter = filter };
             var selected = AcceptanceLaneMembership.LanesIncluding([planned], name).Count > 0;
             if (filter.Contains('!') ? !selected : selected) return true;
@@ -138,10 +163,12 @@ internal static class BriefPlannedTestLaneReadiness
             var line = Regex.Replace(lines[index].Trim(), @"^(?:[-*+]\s+|\d+\.\s+)", "");
             if (line.StartsWith("```") || line.StartsWith("~~~")) { fenced = !fenced; continue; }
             if (fenced) continue;
-            // Inline shell examples are evidence, while backticked identifiers and paths remain declarations.
+            // Keep inline identifiers, paths and selectors; arbitrary command contents cannot declare a class.
             line = Regex.Replace(line, @"`([^`]*)`", match =>
-                Regex.IsMatch(match.Groups[1].Value, @"^(?:dotnet|rg|git|pwsh|powershell|cmd)\b", Options)
-                    ? "" : match.Value);
+                Regex.IsMatch(line[..match.Index], @"\b(?:lane|collection)\s*(?:\(\s*|[:=]\s*)?$", Options) ||
+                Regex.IsMatch(match.Groups[1].Value, "^(?:" + Identifier + "|" + TestSourcePath +
+                    @"|FullyQualifiedName(?:!~|~|!=|=)" + Identifier + ")$", RegexOptions.CultureInvariant)
+                    ? match.Value : "");
             if (line.StartsWith('#'))
             {
                 hasHeading = true;
@@ -150,11 +177,7 @@ internal static class BriefPlannedTestLaneReadiness
             }
             if (scope is { } range ? !(index >= range.Start && index < range.End) && !inNewTests
                 : hasHeading && !inNewTests) continue;
-            // Scan prose separately so declaration names and paths cannot become evidence markers.
-            var prose = Regex.Replace(Regex.Replace(line, NewClass, "", Options),
-                TestSourcePath, "", RegexOptions.CultureInvariant);
             if (line.StartsWith('>') || line.StartsWith('"') || line.StartsWith('\'') ||
-                Regex.IsMatch(prose, @"\b(?:example|illustrative|historical|history|previous|existing|regex|command|evidence)\b", Options) ||
                 Regex.IsMatch(line, @"\b(?:do not|don't|must not|will not|never|not adding|no new)\b", Options) ||
                 Regex.IsMatch(line, @"^(?:[-*]\s+)?(?:dotnet|rg|git|pwsh|powershell)\b", Options)) continue;
             yield return line;
