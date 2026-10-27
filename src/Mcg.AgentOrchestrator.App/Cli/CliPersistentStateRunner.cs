@@ -6,21 +6,6 @@ using Microsoft.Data.Sqlite;
 
 namespace Mcg.AgentOrchestrator.App.Cli;
 
-internal sealed record TransientSqliteLoadHold(
-    int SqliteErrorCode,
-    int SqliteExtendedErrorCode,
-    string AttemptCount,
-    string ElapsedMilliseconds,
-    string Operation)
-{
-    internal static TransientSqliteLoadHold From(SqliteException exception, string operation) => new(
-        exception.SqliteErrorCode,
-        exception.SqliteExtendedErrorCode,
-        exception.Data["Mcg.AttemptCount"]?.ToString() ?? "unknown",
-        exception.Data["Mcg.ElapsedMilliseconds"]?.ToString() ?? "unknown",
-        operation);
-}
-
 internal static partial class CliPersistentStateRunner
 {
     internal enum OperatorIntentSubmissionSource
@@ -69,7 +54,7 @@ internal static partial class CliPersistentStateRunner
         Func<AgentOrchestratorKernel, Action<AgentOrchestratorKernel>, CliExecutionContext>? createLifecycleContext = null)
     {
         if (CliArgumentParser.IsAskGoal(args))
-            return ExecuteAskGoal(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel);
+            return CliAskGoalCommand.Execute(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel);
         if (!skipReadOnlyRoute && CliReadOnlyCommandRunner.TryExecute(args, stateRepository, workspace, providers, channel, ref agents, ref workerProfiles, ref currentGoal, out var readOnlyResult))
             return readOnlyResult;
         if (CliEpicOutcomeCommands.IsMutation(args))

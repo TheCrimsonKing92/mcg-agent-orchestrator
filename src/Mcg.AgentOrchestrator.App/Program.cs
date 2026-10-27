@@ -177,7 +177,7 @@ try
 {
     workspace = ResolveSelectedWorkspace(activeProject);
     invocationBinding.Verify(workspace);
-    CliPersistentStateRunner.ValidateAskGoalStartupArguments(startupArgs, workspace);
+    CliAskGoalCommand.ValidateStartupArguments(startupArgs, workspace);
     GateHeartbeatOwner.Bind(workspace.OrchestratorDirectory);
     HostLedgerStateDirectory.InstallRoute(host => HostLedgerStateDirectoryLocator.Resolve(host, projectRegistry));
 }

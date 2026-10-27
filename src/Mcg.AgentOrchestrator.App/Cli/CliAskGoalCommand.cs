@@ -4,9 +4,9 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Cli;
 
-internal static partial class CliPersistentStateRunner
+internal static class CliAskGoalCommand
 {
-    internal static void ValidateAskGoalStartupArguments(IReadOnlyList<string> args, OrchestratorWorkspace workspace)
+    internal static void ValidateStartupArguments(IReadOnlyList<string> args, OrchestratorWorkspace workspace)
     {
         if (!CliArgumentParser.IsAskGoal(args)) return;
         var invocation = CliArgumentParser.ParseAskGoalArgs(args);
@@ -16,7 +16,7 @@ internal static partial class CliPersistentStateRunner
         _ = CliArgumentParser.ResolveAskGoalTarget(invocation, kernel, OrchestratorEntityResolver.GetLatestGoal(kernel));
     }
 
-    private static bool ExecuteAskGoal(
+    internal static bool Execute(
         IReadOnlyList<string> args,
         ITransactionalOrchestratorStateRepository stateRepository,
         OrchestratorWorkspace workspace,
