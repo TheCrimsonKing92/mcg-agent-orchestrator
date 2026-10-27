@@ -121,7 +121,7 @@ internal sealed partial class GoalDispatchOperations
             paidRoute: subscriptionMetadata?.PaidRoute ?? PaidRouteClassification.Unknown,
             shadowRecorder: DispatchShadowRecorder.Default,
             orchestratorSkillDirectory: ResolveOrchestratorSkillDirectory(home), integrationBranch: workspace.IntegrationBranch,
-            targetHome: new WorkerTargetHome(home.IsHome(workspace), WorkerAcceptanceManifestResolver.For(workspace)),
+            targetHome: WorkerTargetHomeFactory.For(home, workspace),
             deferredEvidenceResolver: CreateDeferredEvidenceResolver(workspace));
         intentStore.BindPreparedAdmission(intentAdmission, prepared.Task.LastDispatch!.DispatchedAt);
         return prepared;
@@ -458,7 +458,7 @@ internal sealed partial class GoalDispatchOperations
             cascadeTesterCheapFirst: ResolveCascadeTesterCheapFirst(workspace, cascadeTesterCheapFirst, conductorPolicy),
             cascadeCheapModelAlias: ResolveCascadeCheapModelAlias(workspace, cascadeCheapModelAlias, conductorPolicy), cascadeMechanicalReworkCheap: ResolveCascadeMechanicalReworkCheap(workspace, cascadeMechanicalReworkCheap, conductorPolicy),
             orchestratorSkillDirectory: ResolveOrchestratorSkillDirectory(home), integrationBranch: workspace.IntegrationBranch,
-            targetHome: new WorkerTargetHome(home.IsHome(workspace), WorkerAcceptanceManifestResolver.For(workspace)),
+            targetHome: WorkerTargetHomeFactory.For(home, workspace),
             deferredEvidenceResolver: CreateDeferredEvidenceResolver(workspace));
         foreach (var prepared in batch.Dispatches)
             intentStore.BindPreparedAdmission(intentAdmissions[prepared.Task.Id], prepared.Task.LastDispatch!.DispatchedAt);
@@ -503,7 +503,7 @@ internal sealed partial class GoalDispatchOperations
             cascadeTesterCheapFirst: ResolveCascadeTesterCheapFirst(workspace, cascadeTesterCheapFirst, conductorPolicy),
             cascadeCheapModelAlias: ResolveCascadeCheapModelAlias(workspace, cascadeCheapModelAlias, conductorPolicy), cascadeMechanicalReworkCheap: ResolveCascadeMechanicalReworkCheap(workspace, cascadeMechanicalReworkCheap, conductorPolicy),
             orchestratorSkillDirectory: ResolveOrchestratorSkillDirectory(home), integrationBranch: workspace.IntegrationBranch,
-            targetHome: new WorkerTargetHome(home.IsHome(workspace), WorkerAcceptanceManifestResolver.For(workspace)),
+            targetHome: WorkerTargetHomeFactory.For(home, workspace),
             deferredEvidenceResolver: CreateDeferredEvidenceResolver(workspace));
         intentStore.BindPreparedAdmission(intentAdmission, prepared.Task.LastDispatch!.DispatchedAt);
         return prepared;
