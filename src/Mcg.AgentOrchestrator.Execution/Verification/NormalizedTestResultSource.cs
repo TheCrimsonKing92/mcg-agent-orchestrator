@@ -21,14 +21,7 @@ internal sealed class NormalizedTestResultSource : ITestResultSource
     {
         try
         {
-            using var document = JsonDocument.Parse(File.ReadAllText(reportPath));
-            if (ValidateReport(document.RootElement) is { } pointer)
-                return new(reportPath, TestResultReadStatus.Invalid, Array.Empty<TestResult>(), pointer);
-
-            var results = document.RootElement.GetProperty("results");
-            var tool = results.GetProperty("tool").GetProperty("name").GetString()!;
-            var records = results.GetProperty("tests").EnumerateArray().Select(test => ReadTest(test, tool)).ToArray();
-            return new(reportPath, TestResultReadStatus.Readable, records, null);
+            return ReadJson(File.ReadAllText(reportPath), reportPath);
         }
         catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
         {
@@ -38,9 +31,24 @@ internal sealed class NormalizedTestResultSource : ITestResultSource
         {
             return Failure(reportPath, TestResultReadStatus.Unreadable, ex);
         }
+    }
+
+    internal TestResultReadResult ReadJson(string json, string sourcePath = "")
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(json);
+            if (ValidateReport(document.RootElement) is { } pointer)
+                return new(sourcePath, TestResultReadStatus.Invalid, Array.Empty<TestResult>(), pointer);
+
+            var results = document.RootElement.GetProperty("results");
+            var tool = results.GetProperty("tool").GetProperty("name").GetString()!;
+            var records = results.GetProperty("tests").EnumerateArray().Select(test => ReadTest(test, tool)).ToArray();
+            return new(sourcePath, TestResultReadStatus.Readable, records, null);
+        }
         catch (JsonException ex)
         {
-            return Failure(reportPath, TestResultReadStatus.Unparseable, ex);
+            return Failure(sourcePath, TestResultReadStatus.Unparseable, ex);
         }
     }
 

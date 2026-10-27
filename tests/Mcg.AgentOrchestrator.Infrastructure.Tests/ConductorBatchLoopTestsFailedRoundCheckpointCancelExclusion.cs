@@ -50,8 +50,8 @@ public sealed class ConductorBatchLoopTestsFailedRoundCheckpointCancelExclusion 
         Assert.All(f.Worker.DispatchHistory, dispatch => Assert.Null(dispatch.FailedRoundCheckpointReceipt));
         Assert.All(f.Worker.DispatchHistory, dispatch => Assert.Null(dispatch.FailedRoundCheckpointDecision));
         Assert.Equal(before, FailedRoundCheckpointFixture.Git(f.Worktree, "rev-parse", "HEAD"));
-        Assert.DoesNotContain("checkpoint: preserved uncommitted edits from failed dispatch",
-            FailedRoundCheckpointFixture.Git(f.Worktree, "log", "--all", "--format=%s"));
+        Assert.Empty(FailedRoundCheckpointFixture.Git(f.Worktree, "log", "--all", "--format=%H",
+            $"--grep=^Dispatch: {f.DispatchId}$"));
         var disposition = Assert.Single(f.Goal.Timeline, evt => evt.TaskId == f.Worker.Id &&
             evt.Kind == ProgressKind.TaskNote && evt.Message.StartsWith("CANCEL_DISPOSITION", StringComparison.Ordinal));
         Assert.StartsWith("CANCEL_DISPOSITION task_status=Cancelled redispatch=awaits-operator-retry preservation=preserved=",
