@@ -5,7 +5,11 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal static class AuthorBriefDraftPrompt
 {
-    internal static string Render(BacklogItem item, ConductorLessonSelection lessons, string mainHead) => $$"""
+    internal static string Render(BacklogItem item, ConductorLessonSelection lessons, string mainHead,
+        Toolchain? stack = null)
+    {
+        var stackCriteria = AuthorBriefDraftStackCriteria.For(stack);
+        return $$"""
         You are the Author drafting one checked goal brief from a backlog item.
         Inspect the repository source at current main HEAD {{mainHead}} in this repository root.
         Verify every premise against source at that HEAD and cite repository-relative `path:line` references.
@@ -21,6 +25,8 @@ internal static class AuthorBriefDraftPrompt
         A step that happens after the goal lands belongs in prose outside the numbered criteria, never as a numbered criterion.
         A new class goes in a separately named type in its own file, never in a new partial file of an existing class.
         A criterion that needs a test to fail against the pre-change code is never assigned to Acceptance, because focused evidence runs only on the candidate; the pre-change half belongs to a Reviewer reading or to a committed negative-control test that runs on the candidate.
+        A step observed by a person after the goal lands, including a check on a particular operating system, goes in prose outside the numbered criteria, and no criterion is owned by the Operator for such a step.
+        Every criterion asks for evidence only from files in the target repository, so a Reviewer criterion never asks for a comparison against source outside the worktree.
         End EVERY acceptance criterion with an owner sentence of the form "X owns; Y executes."
         followed by TEST-VERIFIABLE or REAL-WORLD-DEPENDENT.
         The owner sentence is the last sentence of its criterion and is exactly one of these four lines, copied character for character with nothing after it:
@@ -32,8 +38,8 @@ internal static class AuthorBriefDraftPrompt
         Say the same thing in other words, and describe a file in prose instead of citing its path when the path contains one of those words.
         Cite every file by its full repository-relative path on every mention, never by bare file name, and cite a line range as path:start-end.
         In the Measured premise section put only repository files in code spans; name runtime files and stores in plain text.
-        The last two acceptance criteria are the following house Developer deferred-tests criterion, copied character for character, followed by one single-sentence Reviewer criterion:
-        The Developer reports `tests: deferred - ` followed, directly after the hyphen and comma-separated, by every test class it touched or added. The Tester's evidence_request runs them. Developer owns; Acceptance executes. TEST-VERIFIABLE.
+        {{stackCriteria.Introduction}}
+        {{stackCriteria.Criterion}}{{(stackCriteria.WorkerNote is { } note ? Environment.NewLine + note : "")}}
         Keep What to build to at most four numbered items.
         When the backlog item needs more, draft only the first slice and list the remaining slices under Scope in a line beginning `Follow-up slices:`.
         Keep scope concrete and name integration and evidence owners. Do not create a goal or change any files.
@@ -47,4 +53,5 @@ internal static class AuthorBriefDraftPrompt
         Operator lessons:
         {{ConductorLessonSelector.Render(lessons)}}
         """;
+    }
 }
