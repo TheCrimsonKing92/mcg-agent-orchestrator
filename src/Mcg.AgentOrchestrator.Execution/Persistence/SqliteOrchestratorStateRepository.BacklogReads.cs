@@ -48,7 +48,7 @@ public sealed partial class SqliteOrchestratorStateRepository
             try
             {
                 using var stream = reader.GetStream(1);
-                fields = JsonSerializer.Deserialize<GoalSimilarityFields>(stream, SerializerOptions);
+                fields = ReadGoalSimilarityFields(stream, () => reader.GetStream(1));
             }
             catch (Exception ex) when (IsSnapshotDeserializeException(ex))
             {
@@ -66,7 +66,7 @@ public sealed partial class SqliteOrchestratorStateRepository
                     ex.Message.Contains("no such table: goal_snapshot_archive", StringComparison.OrdinalIgnoreCase)) { }
                 using var stream = GoalSnapshotArchiveCodec.OpenDecodedStream(value);
                 if (stream is not null)
-                    fields = JsonSerializer.Deserialize<GoalSimilarityFields>(stream, SerializerOptions);
+                    fields = ReadGoalSimilarityFields(stream, () => GoalSnapshotArchiveCodec.OpenDecodedStream(value)!);
             }
             if (fields is not { Status: GoalStatus.Completed }) continue;
             var objective = fields.Objective.Trim();
@@ -89,9 +89,30 @@ public sealed partial class SqliteOrchestratorStateRepository
         return documents;
     }
 
-    // Validate the task collection's shape without retaining its payload. A malformed hot
+    private static GoalSimilarityFields? ReadGoalSimilarityFields(Stream stream, Func<Stream> reopenStream)
+    {
+        try
+        {
+            return JsonSerializer.Deserialize<GoalSimilarityFields>(stream, SerializerOptions);
+        }
+        catch (InvalidSimilarityTaskShapeException)
+        {
+            // Let the standard collection converter produce its original type, path and
+            // byte location from the original document. An empty JsonException thrown by
+            // our converter instead names GoalSimilarityFields, changing the diagnostic.
+            // Replay only malformed task shapes; valid payloads stay on the projection path.
+            using var diagnosticStream = reopenStream();
+            _ = JsonSerializer.Deserialize<SimilarityTaskShapeDiagnostic>(diagnosticStream, SerializerOptions);
+            throw new InvalidOperationException("Malformed task shape unexpectedly passed standard deserialization.");
+        }
+    }
+
+    private sealed record SimilarityTaskShapeDiagnostic(IReadOnlyList<TaskSnapshot>? Tasks);
+    private sealed class InvalidSimilarityTaskShapeException : Exception { }
+
+    // Validate the task collection's shape without retaining valid payloads. A malformed hot
     // collection must still be quarantined; the same corruption in an archive must throw.
-    // No GoalSnapshot, task or timeline collection is created.
+    // No GoalSnapshot, task or timeline collection is created on the valid projection path.
     private sealed record GoalSimilarityFields(string Id, string Objective, GoalStatus Status,
         bool IsMetadataOnly, DateTimeOffset? CreatedAt, DateTimeOffset? TerminatedAt,
         [property: JsonConverter(typeof(SimilarityTaskShapeConverter))] IReadOnlyList<TaskSnapshot>? Tasks,
@@ -104,15 +125,12 @@ public sealed partial class SqliteOrchestratorStateRepository
         public override IReadOnlyList<TaskSnapshot> Read(
             ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
         {
-            // An empty message lets the enclosing serializer generate the collection-type
-            // error with the original $.Tasks path and location, as full hydration does.
-            // A custom message suppresses that diagnostic suffix.
             if (reader.TokenType != JsonTokenType.StartArray)
-                throw new JsonException();
+                throw new InvalidSimilarityTaskShapeException();
             while (reader.Read() && reader.TokenType != JsonTokenType.EndArray)
             {
                 if (reader.TokenType is not (JsonTokenType.StartObject or JsonTokenType.Null))
-                    _ = JsonSerializer.Deserialize<TaskSnapshot>(ref reader, options);
+                    throw new InvalidSimilarityTaskShapeException();
                 else
                     reader.Skip();
             }

@@ -285,6 +285,8 @@ public sealed class BacklogSelectiveGoalReadTests(ITestOutputHelper output) : Cl
     [Theory]
     [InlineData("\"invalid\"")]
     [InlineData("{}")]
+    [InlineData("42")]
+    [InlineData("[\"invalid\"]")]
     public async Task Similarity_InvalidHotTasks_QuarantinesLikeFullHydration(string tasks)
     {
         using var fixture = await Fixture.Create(4, 256);
@@ -298,7 +300,7 @@ public sealed class BacklogSelectiveGoalReadTests(ITestOutputHelper output) : Cl
         var expectedError = AsyncLocalConsoleRouter.CaptureError(() => baseline = Run(args, fixture.Workspace, true));
         var actualError = AsyncLocalConsoleRouter.CaptureError(() => candidate = Run(args, fixture.Workspace, false));
         Assert.Contains($"QUARANTINED goal {CompletedId[..8]}: JsonException:", expectedError);
-        Assert.Contains("$.Tasks", expectedError);
+        Assert.Contains(tasks.StartsWith('[') ? "$.Tasks[0]" : "$.Tasks", expectedError);
         Assert.Equal(expectedError, actualError);
         Assert.Equal(baseline.Text, candidate.Text);
         Assert.DoesNotContain($"kind=goal id={CompletedId[..8]}", candidate.Text);
@@ -311,6 +313,8 @@ public sealed class BacklogSelectiveGoalReadTests(ITestOutputHelper output) : Cl
     [Theory]
     [InlineData("\"invalid\"")]
     [InlineData("{}")]
+    [InlineData("42")]
+    [InlineData("[\"invalid\"]")]
     public async Task Similarity_InvalidArchivedTasks_ThrowsLikeFullHydration(string tasks)
     {
         using var fixture = await Fixture.Create(4, 256);
@@ -324,7 +328,7 @@ public sealed class BacklogSelectiveGoalReadTests(ITestOutputHelper output) : Cl
             () => Run(args, fixture.Workspace, true)));
         var actualError = AsyncLocalConsoleRouter.CaptureError(() => actual = Assert.Throws<JsonException>(
             () => Run(args, fixture.Workspace, false)));
-        Assert.Equal("$.Tasks", expected.Path);
+        Assert.Equal(tasks.StartsWith('[') ? "$.Tasks[0]" : "$.Tasks", expected.Path);
         Assert.Equal(expected.Path, actual.Path);
         Assert.Equal(expected.Message, actual.Message);
         Assert.Empty(expectedError);
