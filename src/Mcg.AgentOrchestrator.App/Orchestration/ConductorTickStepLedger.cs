@@ -23,6 +23,10 @@ internal sealed class ConductorTickStepLedger
         "reconcile-remediation", "host-health", "maintenance", "state-log-check", "failure-clusters",
         "remote-git-mirror", "goal-refinement", "program-health"
     });
+    internal static readonly IReadOnlyList<string> AdmissionNames = Array.AsReadOnly(new[]
+    {
+        "attempt-census", "attempt-reconcile", "grouped-admission-prep", "merge-train", "pair-cohort", "solo-admission"
+    });
     private static readonly AsyncLocal<ConductorTickStepLedger?> Current = new();
     private readonly Func<TimeSpan> _cpu;
     private readonly Action<string>? _probe;
