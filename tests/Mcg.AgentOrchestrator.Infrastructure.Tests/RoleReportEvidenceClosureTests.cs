@@ -55,7 +55,8 @@ public sealed class RoleReportEvidenceClosureTests
         Assert.False(request.IsCompleted);
         Assert.Null(request.Answer);
         Assert.Empty(request.AnswerHistory);
-        Assert.Same(request, Assert.Single(scenario.Kernel.GetPendingHumanInput(scenario.Goal.Id)));
+        // Future-version waits remain stored but are excluded from GetPendingHumanInput.
+        Assert.Same(request, Assert.Single(scenario.Kernel.HumanInputRequests));
         Assert.DoesNotContain(scenario.Goal.Timeline, item => item.Kind == ProgressKind.HumanInputReceived);
     }
 

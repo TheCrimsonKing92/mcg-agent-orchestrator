@@ -39,11 +39,12 @@ public sealed class GroupedAdmissionLandingHoldTests
     [InlineData("not-report")]
     public void Apply_RevisedBriefWithoutReportPrerequisite_KeepsLandingHold(string failure)
     {
-        var (kernel, goal, wait) = ReportSetup("developer",
+        var (_, goal, wait) = ReportSetup("developer",
             failure == "no-classes" ? "deferred - " : "deferred - AlphaTests", reviseBrief: true,
             criterion: failure == "not-report" ? "The Developer implements the change." : RoleReportEvidenceClosureTests.ReportCriterion,
             waitVersion: failure == "newer-wait" ? 3 : 2);
-        var pending = kernel.GetPendingHumanInput(goal.Id);
+        // Supply the wait directly: GetPendingHumanInput filters out future brief versions.
+        HumanInputRequest[] pending = [wait];
 
         var excluded = Assert.IsType<GateReadyCandidateProjectionResult.Excluded>(
             GroupedAdmissionLandingHold.Apply(Ready(goal.Id), pending, goal));
