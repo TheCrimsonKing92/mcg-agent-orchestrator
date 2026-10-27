@@ -142,6 +142,8 @@ public sealed class SubscriptionCooldownSubstitutionScenarioTests
         scenario.Agents = [..scenario.Agents, researcher];
         var ready = scenario.Kernel.AddTask(goal.Id, AgentRole.Researcher, "Research first.", [researcher]);
         Assert.Equal(WorkTaskStatus.Assigned, ready.Status);
+        Assert.Equal(ready.Id.Value, Assert.Single(
+            DispatchReadinessRules.BuildIncompleteEarlierStageDependencies(goal, task)));
         var launches = 0;
         using var worker = new ProviderHoldFallbackScenarioTests.PreparationWorker();
         var result = Start(scenario, goal, requested =>
@@ -156,7 +158,11 @@ public sealed class SubscriptionCooldownSubstitutionScenarioTests
         Assert.NotNull(task.SubscriptionRetryAfter);
         Assert.DoesNotContain(goal.Timeline, evt => evt.Kind == ProgressKind.ProviderHoldSubstituted);
         Assert.DoesNotContain(goal.Timeline, evt => evt.Message.Contains(OfflineAssignedAgentRedelegation.Marker, StringComparison.Ordinal));
-        Assert.Contains(result.BlockedDiagnostics, diagnostic => diagnostic.Reason == "unmet-dependency");
+        // The ready predecessor can be scheduled, so the Planner belongs to a later batch.
+        Assert.Contains(result.BlockedDiagnostics, diagnostic =>
+            diagnostic.TaskId == task.Id.Value &&
+            diagnostic.Reason == "parallel-serialized" &&
+            diagnostic.Details?.Contains("waits for dependency completion") == true);
     }
 
     [Xunit.Theory]
