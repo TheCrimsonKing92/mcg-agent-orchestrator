@@ -35,7 +35,7 @@ public sealed class RuntimeAssemblyArchitectureTests
 
     private static readonly SanctionedCaller[] ProcessStartAllowlist =
     [
-        new("Mcg.AgentOrchestrator.App.Cli.CliCommandHandlers", "Stable-slot child for CLI verbs", "src/Mcg.AgentOrchestrator.App/Cli/CliCommandHandlers.System.cs:1567"),
+        new("Mcg.AgentOrchestrator.App.Cli.CliStableSlotDotnetCommand", "Stable-slot child for CLI verbs", "src/Mcg.AgentOrchestrator.App/Cli/CliStableSlotDotnetCommand.cs:225"),
         new("Mcg.AgentOrchestrator.App.Cli.SystemConductorProcessLauncher", "Conductor start script behind IConductorProcessLauncher", "src/Mcg.AgentOrchestrator.App/Cli/CliConductorSeams.cs:38"),
         new("Mcg.AgentOrchestrator.App.Orchestration.SystemConductorSupervisorProcessHost", "Supervised conductor child", "src/Mcg.AgentOrchestrator.App/Orchestration/ConductorContinuitySupervisor.cs:839"),
         new("Mcg.AgentOrchestrator.App.Orchestration.DotnetDumpConductorDiagnosticDumpCapture", "dotnet-dump capture of a frozen conductor", "src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDiagnosticDumpCapture.cs:90"),

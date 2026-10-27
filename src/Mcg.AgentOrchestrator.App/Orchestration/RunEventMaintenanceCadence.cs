@@ -29,7 +29,9 @@ internal static class RunEventMaintenanceCadence
         Func<OrchestratorWorkspace, IReadOnlyCollection<StorageRetentionGoal>, DateTimeOffset, string?, StorageRetentionResult>?
             artifactRetentionOperation = null,
         Func<DateTimeOffset, int>? goalSnapshotArchiveOperation = null,
-        GoalSnapshotArchiveDrain? goalSnapshotArchiveDrain = null)
+        GoalSnapshotArchiveDrain? goalSnapshotArchiveDrain = null,
+        Func<long, GoalSnapshotArchiveRecompressionResult>? archivedSnapshotCompressionOperation = null,
+        bool? archivedSnapshotCompressionEnabled = null)
     {
         var now = (utcNow ?? (() => DateTimeOffset.UtcNow))();
         var cadenceKey = Path.GetFullPath(runEventStorePath);
@@ -144,13 +146,21 @@ internal static class RunEventMaintenanceCadence
                     throw;
                 }
 
+                var compressionEnabled = archivedSnapshotCompressionEnabled ?? ArchivedSnapshotCompressionCadence.IsEnabledFromEnvironment();
                 var archiveResult = GoalSnapshotArchiveCadence.Run(
                     goalSnapshotArchiveOperation ?? (cutoff =>
                         (goalSnapshotArchiveDrain ?? GoalSnapshotArchiveDrain.Default).Run(bytes =>
-                            stateRepository!.ArchiveTerminalGoalSnapshotsAsync(cutoff, bytes).GetAwaiter().GetResult())), now);
+                            stateRepository!.ArchiveTerminalGoalSnapshotsAsync(cutoff, bytes, compressSnapshots: compressionEnabled).GetAwaiter().GetResult())), now);
                 var archiveLine = GoalSnapshotArchiveCadence.Format(archiveResult);
                 Console.WriteLine(archiveLine);
                 TryAppendJournal(journal, "goal-snapshot-archive", archiveLine, now);
+                var compressionResult = compressionEnabled
+                    ? ArchivedSnapshotCompressionCadence.Run(archivedSnapshotCompressionOperation ?? (bytes =>
+                        stateRepository!.RecompressArchivedGoalSnapshotsAsync(bytes).GetAwaiter().GetResult()))
+                    : ArchivedSnapshotCompressionCadence.Disabled;
+                var compressionLine = ArchivedSnapshotCompressionCadence.Format(compressionResult);
+                Console.WriteLine(compressionLine);
+                TryAppendJournal(journal, "archived-snapshot-compression", compressionLine, now);
             }
             if (result.Disposition != SqliteMaintenanceDisposition.Deferred)
             {

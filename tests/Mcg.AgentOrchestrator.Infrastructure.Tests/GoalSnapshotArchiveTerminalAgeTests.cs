@@ -322,7 +322,7 @@ public sealed class GoalSnapshotArchiveTerminalAgeTests
             command.CommandText = "SELECT goal_id, snapshot_json FROM goal_snapshot_archive ORDER BY goal_id";
             using var reader = command.ExecuteReader();
             var rows = new Dictionary<string, string>();
-            while (reader.Read()) rows.Add(reader.GetString(0), reader.GetString(1));
+            while (reader.Read()) rows.Add(reader.GetString(0), GoalSnapshotArchiveCodec.Decode(reader.GetValue(1))!);
             return rows;
         }
 

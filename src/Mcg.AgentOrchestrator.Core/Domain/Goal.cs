@@ -807,6 +807,15 @@ public sealed class Goal
             }
 
             var criterion = RequireText(replacement.Spec.AcceptanceCriteria[index], nameof(replacement));
+            var declared = AcceptanceCriterionOwnershipMarker.ResolveDeclaredEvidenceOwner(criterion);
+            if (declared.Kind == DeclaredEvidenceOwnerKind.Worker)
+            {
+                _refinementOwnershipDiagnostics.Add(new RefinementOwnershipDiagnostic(
+                    replacement.Version, index, superseded.Version, priorOwner.Owner,
+                    $"Criterion {index} previously had owner {priorOwner.Owner}; index carry skipped because the replacement criterion declares worker owner {declared.Role}."));
+                continue;
+            }
+
             _criterionEvidenceObligations.Add(new CriterionEvidenceObligation(
                 id, index, replacement.Version, criterion, CriterionEvidenceOwner.Unknown,
                 CriterionEvidenceState.Pending, "ownership mapping required",
