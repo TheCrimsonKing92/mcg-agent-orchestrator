@@ -50,6 +50,78 @@ public sealed class ConductorAuthorHostHeldGoalAnswerTests
         Xunit.Assert.Equal(CollaborationItemStatus.Raised, (await fixture.Reload(goal, owner)).Status);
     }
 
+    [Xunit.Theory]
+    [Xunit.InlineData("author-owner-question")]
+    [Xunit.InlineData("steward-owner-question")]
+    public async Task ApplyPending_unrelated_answers_preserves_hold_until_owner_answer(string state)
+    {
+        using var fixture = new Fixture();
+        var goal = fixture.CreateGoal();
+        var owner = await fixture.Raise(goal, "owner", OwnerQuestion);
+        var hold = fixture.Hold(goal, owner, state);
+        var answers = new List<CollaborationItem>();
+        for (var i = 0; i < 3; i++)
+        {
+            var answer = await fixture.Raise(goal, $"plain-{i}", PlainQuestion);
+            fixture.Ready(goal, answer, PlainQuestion, PlainOutput);
+            answers.Add(answer);
+        }
+        fixture.Kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(Brief, [Standing],
+            VerificationClass.TestVerifiable, [], answers.Append(owner).Select(item =>
+                new RefinedSpecOpenQuestion(item.CorrelationKey!, item.Body, "runtime", "Open")).ToArray()));
+        fixture.Host.ServiceTick(fixture.Kernel);
+        AssertAnswerTargets(await fixture.Intents.ListForGoalAsync(goal.Id.Value).WaitAsync(Bound), answers);
+
+        var coordinator = fixture.Coordinator();
+        foreach (var _ in answers)
+        {
+            var result = fixture.ApplyPending(goal, coordinator).Result;
+            Xunit.Assert.True(result.MutatedGoalState);
+            Xunit.Assert.True(result.PreserveGoalHold);
+            AssertHold(hold, goal);
+            // A following tick before persistence must retain the same hold as well.
+            var waiting = fixture.ApplyPending(goal, coordinator).Result;
+            Xunit.Assert.True(waiting.PreserveGoalHold);
+            Xunit.Assert.Contains(waiting.ProgressLines, line => line.Contains("waiting-for-state-commit"));
+            AssertHold(hold, goal);
+            coordinator.CompletePersisted([goal.Id]);
+            Xunit.Assert.Equal(CollaborationItemStatus.Raised, (await fixture.Reload(goal, owner)).Status);
+        }
+        foreach (var answer in answers)
+            Xunit.Assert.Equal(CollaborationItemStatus.Resolved, (await fixture.Reload(goal, answer)).Status);
+
+        await fixture.EnqueueOwnerAnswer(goal, owner);
+        var ownerResult = fixture.ApplyPending(goal, coordinator).Result;
+        Xunit.Assert.True(ownerResult.MutatedGoalState);
+        Xunit.Assert.False(ownerResult.PreserveGoalHold);
+        Xunit.Assert.Null(goal.CurrentHold);
+        coordinator.CompletePersisted([goal.Id]);
+        Xunit.Assert.Equal(CollaborationItemStatus.Resolved, (await fixture.Reload(goal, owner)).Status);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("author-owner-question")]
+    [Xunit.InlineData("steward-owner-question")]
+    public async Task ApplyPending_non_answer_mutation_clears_owner_hold(string state)
+    {
+        using var fixture = new Fixture();
+        var goal = fixture.CreateGoal();
+        var owner = await fixture.Raise(goal, "owner", OwnerQuestion);
+        fixture.Hold(goal, owner, state);
+        var task = Xunit.Assert.Single(goal.Tasks);
+        await fixture.EnqueueProgress(goal, task.Id);
+
+        var coordinator = fixture.Coordinator();
+        var result = fixture.ApplyPending(goal, coordinator).Result;
+
+        Xunit.Assert.True(result.MutatedGoalState);
+        Xunit.Assert.False(result.PreserveGoalHold);
+        Xunit.Assert.Equal(WorkTaskStatus.Running, task.Status);
+        Xunit.Assert.Null(goal.CurrentHold);
+        coordinator.CompletePersisted([goal.Id]);
+        Xunit.Assert.Equal(CollaborationItemStatus.Raised, (await fixture.Reload(goal, owner)).Status);
+    }
+
     [Xunit.Fact]
     public async Task Mixed_batch_applies_three_answers_and_only_owner_resolution_releases_hold()
     {
@@ -341,6 +413,21 @@ public sealed class ConductorAuthorHostHeldGoalAnswerTests
             goalStateVersionResolver: _ => 0,
             clarificationAnswers: (correlation, text, version) =>
                 _refinement.TryResolveOpenClarificationAsync(correlation, text, version));
+
+        internal OperatorIntentGoalApplicationResult ApplyPending(Goal goal, OperatorIntentCoordinator coordinator) =>
+            OperatorIntentGoalApplication.ApplyPending(Kernel, goal, coordinator,
+                new ConductorParallelAcceptanceAttemptCoordinator(
+                    Path.Combine(_workspace.OrchestratorDirectory, "acceptance-gate-attempts"),
+                    TrunkBranchName.Default, _workspace.ExecutionDirectory));
+
+        internal async Task EnqueueProgress(Goal goal, TaskId taskId)
+        {
+            var payload = new ProgressOperatorIntentPayload(WorkTaskStatus.Running, "Continue planning.");
+            await Intents.EnqueueAsync(new OperatorIntentRecord(Guid.NewGuid().ToString("N"),
+                Guid.NewGuid().ToString("N"), OperatorIntentVerbs.Progress, goal.Id.Value, taskId.Value,
+                JsonSerializer.Serialize(payload, OperatorIntentJson.Options), [], "owner", "cli",
+                "local-process", Now)).WaitAsync(Bound);
+        }
 
         internal async Task EnqueueOwnerAnswer(Goal goal, CollaborationItem owner)
         {
