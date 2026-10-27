@@ -32,10 +32,10 @@ public sealed class FailedRoundCheckpointPreDispatchTests
 
         Assert.IsType<ConductorAdvanceOutcome.Executed>(advance.Outcome);
         Assert.Equal(1, starts);
-        var sha = FailedRoundCheckpointFixture.Git(f.Worktree, "log", "--format=%H", "--fixed-strings",
-            "--grep=checkpoint: preserved uncommitted edits from failed dispatch " + receipt.DispatchId);
+        var sha = FailedRoundCheckpointFixture.Git(f.Worktree, "log", "--format=%H",
+            $"--grep=^Dispatch: {receipt.DispatchId}$");
         Assert.Equal(40, sha.Length);
-        Assert.Equal("checkpoint: preserved uncommitted edits from failed dispatch " + receipt.DispatchId,
+        Assert.StartsWith($"Developer({f.Goal.Id.Value[..8]}): ",
             FailedRoundCheckpointFixture.Git(f.Worktree, "show", "-s", "--format=%s", sha));
         var history = f.Worker.DispatchHistory.Single(d => d.DispatchedAt == f.DispatchedAt);
         Assert.Null(history.FailedRoundCheckpointReceipt);
@@ -174,7 +174,7 @@ public sealed class FailedRoundCheckpointPreDispatchTests
         foreach (var path in paths) Assert.Contains(path, reason);
         Assert.Equal(before, FailedRoundCheckpointFixture.Git(f.Worktree, "rev-parse", "HEAD"));
         Assert.Empty(FailedRoundCheckpointFixture.Git(f.Worktree, "log", "--format=%H",
-            "--grep=checkpoint: preserved uncommitted edits from failed dispatch"));
+            $"--grep=^Dispatch: {f.DispatchId}$"));
         return reason;
     }
 }
