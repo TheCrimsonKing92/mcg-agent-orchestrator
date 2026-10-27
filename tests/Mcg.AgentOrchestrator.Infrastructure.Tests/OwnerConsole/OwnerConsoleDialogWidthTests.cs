@@ -1,6 +1,7 @@
 using System.Drawing;
 using Mcg.AgentOrchestrator.App.OwnerConsole;
 using Terminal.Gui.ViewBase;
+using Terminal.Gui.Views;
 
 // Per-test views without application/driver/global configuration; safe in parallel.
 public sealed class OwnerConsoleDialogWidthTests
@@ -35,5 +36,38 @@ public sealed class OwnerConsoleDialogWidthTests
         dialog.Layout(new Size(screen, 40));
         Assert.True(dialog.Body.Viewport.Width > 0);
         Assert.Equal(OwnerConsoleDialogWidth.TextColumns(screen), dialog.Body.Viewport.Width);
+    }
+
+    [Theory]
+    [InlineData(80)]
+    [InlineData(100)]
+    [InlineData(120)]
+    public void GoalActions_HiddenButtonsDoNotPushCloseOutsideDialog(int screen)
+    {
+        using var dialog = new OwnerConsoleTextDialog("Goal", "Active goal");
+        var close = new Button { Text = "Close", IsDefault = true };
+        dialog.AddButton(close);
+        var actions = OwnerConsoleDialogBindings.GoalDetail.Where(row => row.Command != "quit")
+            .ToDictionary(row => row.Key!.Value, row => new Button { Text = OwnerConsoleDialogBindings.Label(row) });
+        foreach (var button in actions.Values) dialog.AddConditionalButton(button);
+        foreach (var (key, button) in actions) button.Visible = key == 'e';
+
+        AssertVisibleButtonsFit(screen);
+        actions['d'].Visible = true;
+        AssertVisibleButtonsFit(screen);
+        actions['d'].Visible = false;
+        AssertVisibleButtonsFit(80);
+        Assert.Equal(actions.Count + 1, dialog.Buttons.Length);
+
+        void AssertVisibleButtonsFit(int columns)
+        {
+            dialog.Layout(new Size(columns, 40));
+            foreach (var button in dialog.Buttons.Where(button => button.Visible))
+            {
+                Assert.True(button.Frame.X >= 0, $"{button.Text} starts outside the dialog: {button.Frame}");
+                Assert.True(button.Frame.Right <= button.SuperView!.Viewport.Width,
+                    $"{button.Text} extends past the dialog: {button.Frame}");
+            }
+        }
     }
 }
