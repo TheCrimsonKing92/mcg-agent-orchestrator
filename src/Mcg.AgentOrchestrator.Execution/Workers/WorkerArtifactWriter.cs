@@ -93,7 +93,7 @@ internal sealed partial class WorkerArtifactWriter
             Path.Combine(contextDirectory, "prior-goal-evidence.md"),
             citedPriorEvidence);
         var changedFiles = _gitContext.ReadChangedFilesForTestImpact(workingDirectory);
-        var testImpactPlan = RepositoryTestImpactPlanner.Plan(changedFiles, workingDirectory);
+        var testImpactPlan = WorkerTestImpactPlanSelection.For(changedFiles, workingDirectory, _targetHome);
         WriteText(
             Path.Combine(contextDirectory, "deterministic-verification.md"),
             BuildDeterministicVerification(goal, task, workingDirectory, changedFiles, testImpactPlan));
