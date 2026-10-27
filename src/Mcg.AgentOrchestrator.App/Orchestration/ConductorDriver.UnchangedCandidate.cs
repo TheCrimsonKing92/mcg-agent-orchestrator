@@ -42,7 +42,8 @@ internal sealed partial class ConductorDriver
         var current = _resolveCandidateIdentity(goal).Identity;
         if (current is null) return new HashSet<TaskId>();
         return ReadyCandidateTasks(goal)
-            .Where(task => UnchangedCandidateRule.Evaluate(goal, task, current) is not null)
+            .Where(task => FindingEvidenceContinuationInvalid(goal, task) ||
+                UnchangedCandidateRule.Evaluate(goal, task, current) is not null)
             .Select(task => task.Id).ToHashSet();
     }
 
@@ -51,9 +52,23 @@ internal sealed partial class ConductorDriver
         GoalLifecycleState fromState, out ConductorAdvanceResult result)
     {
         result = null!;
+        if (goal.Tasks.Any(task => task.LastDispatch?.FindingEvidenceReviewContinuation is not null &&
+            task.LastProcess is null && task.Status == WorkTaskStatus.Running && FindingEvidenceContinuationInvalid(goal, task)))
+        {
+            result = MakeResult(goal.Id.Value, goalPrefix, policy, new ConductorAdvanceOutcome.Held(fromState,
+                "Finding evidence continuation held: prepared dispatch evidence no longer qualifies."));
+            return true;
+        }
         if (fromState != GoalLifecycleState.WorkspaceReady) { ResetUnchangedCandidateHold(goal.Id); return false; }
+        PrepareReadyFindingEvidenceContinuations(goal, policy);
         var ready = ReadyCandidateTasks(goal);
         if (ready.Length == 0) { ResetUnchangedCandidateHold(goal.Id); return false; }
+        if (ready.Any(task => FindingEvidenceContinuationInvalid(goal, task)))
+        {
+            result = MakeResult(goal.Id.Value, goalPrefix, policy, new ConductorAdvanceOutcome.Held(fromState,
+                "Finding evidence continuation held: selected evidence no longer qualifies for the recorded review decision."));
+            return true;
+        }
         var (identity, failure) = _resolveCandidateIdentity(goal);
         if (identity is null)
         {

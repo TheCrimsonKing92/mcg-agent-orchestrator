@@ -341,7 +341,9 @@ public sealed record TaskDispatchRecord(
     IReadOnlyList<string>? SelectedSkills = null,
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     WorkerBuildScopeIdentity? WorkerBuildScope = null,
-    int WorkerBuildProtocolVersion = 0)
+    int WorkerBuildProtocolVersion = 0,
+    FindingEvidenceReviewContext? FindingEvidenceReviewContext = null,
+    FindingEvidenceReviewContinuation? FindingEvidenceReviewContinuation = null)
 {
     public int BriefVersion { get; internal set; } = BriefVersion;
 

@@ -66,6 +66,6 @@ internal sealed partial class ConductorDriver
                 BuildFailedGoalAttemptIdentity);
         }
 
-        return BuildCappedFindingEvidenceDeliveryRetry(goal, task, candidateSha, findings, receiptIds, summary);
+        return BuildQualifiedFindingEvidenceDeliveryRetry(goal, task, candidateSha, findings, receiptIds, summary);
     }
 }

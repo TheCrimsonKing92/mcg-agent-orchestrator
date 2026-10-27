@@ -86,7 +86,8 @@ public sealed record RetryAdmissionReceipt(
     IReadOnlyList<string>? EvidenceIdentities = null,
     string? RequiredTaskChangeId = null,
     bool EvidenceIdentitiesTruncated = false,
-    DateTimeOffset? ReservationReleasedAt = null);
+    DateTimeOffset? ReservationReleasedAt = null,
+    FindingEvidenceReviewContinuation? FindingEvidenceReviewContinuation = null);
 
 public sealed record RetryAdmissionResult(
     RetryAdmissionDecision Decision,
@@ -126,6 +127,14 @@ public static class RetryAdmissionSnapshotReservation
         ArgumentNullException.ThrowIfNull(snapshot);
         var goal = Goal.FromSnapshot(snapshot);
         var task = goal.FindTask(taskId);
+        if (preparedDispatch.FindingEvidenceReviewContinuation is { } continuation)
+        {
+            var prior = task.VerificationHistory.LastOrDefault();
+            if (cause != RetryCause.NewTestFinding || task.RequiredRole != AgentRole.Reviewer || prior is null ||
+                !continuation.AppliesTo(goal, task, prior, preparedDispatch.CandidateIdentity ?? continuation.CandidateIdentity))
+                throw new InvalidOperationException("Prepared evidence continuation lost its held review decision.");
+            task.RecordFindingEvidenceReviewContinuation(continuation);
+        }
         var result = RetryAdmissionPolicy.Evaluate(
             task,
             fingerprint,
@@ -178,6 +187,19 @@ public static class RetryAdmissionReceiptContext
             .Distinct(StringComparer.Ordinal)
             .OrderBy(id => id, StringComparer.Ordinal)
             .ToArray();
+        if (preparedDispatch.FindingEvidenceReviewContinuation is { } continuation)
+            return result with
+            {
+                Receipt = result.Receipt with
+                {
+                    CandidateSha = continuation.CandidateSha,
+                    StableFindingIds = continuation.Selections.Select(selection => selection.FindingId).Distinct().Order(StringComparer.Ordinal).ToArray(),
+                    EvidenceIdentities = continuation.Selections.Select(selection => selection.ReceiptId).Distinct().Order(StringComparer.Ordinal).ToArray(),
+                    RequiredTaskChangeId = heldTask.Id.Value,
+                    FindingEvidenceReviewContinuation = continuation,
+                    EvidenceIdentitiesTruncated = false
+                }
+            };
         return result with
         {
             Receipt = result.Receipt with

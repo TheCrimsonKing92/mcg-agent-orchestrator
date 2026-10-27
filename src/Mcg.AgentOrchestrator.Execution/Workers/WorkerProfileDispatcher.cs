@@ -320,6 +320,12 @@ public static partial class WorkerProfileDispatcher
             targetContext?.HeadCommit ?? priorDispatch?.BaseCommit,
             currentMainIdentity);
         WorkerBuildScopeDispatchPreparation.Prepare(goal, task, workingDirectory, integrationBranch);
+        var reviewEvidenceContext = task.RequiredRole == AgentRole.Reviewer && targetContext?.HeadCommit is { } reviewCandidate
+            ? FindingEvidenceReviewContext.Capture(goal, task, reviewCandidate, dispatchedAt, includePeerEvidence: usesTypedContextPackage) : null;
+        var evidenceContinuation = task.PendingRetryCause == RetryCause.NewTestFinding
+            ? task.FindingEvidenceReviewContinuation : null;
+        if (evidenceContinuation is not null)
+            retryContextFingerprint = new RetryContextFingerprint(RetryContextFingerprint.CurrentSchemaVersion, evidenceContinuation.Key);
         kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
             profile.Name,
             preparation.Command,
@@ -346,6 +352,8 @@ public static partial class WorkerProfileDispatcher
             PaidRoute: paidRoute,
             ClaudeCredentialSourceDirectory: claudeCredentialSelection?.DirectoryPath,
             ClaudeCredentialSourceIsExplicit: claudeCredentialSelection?.IsExplicitSource ?? false,
+            FindingEvidenceReviewContext: reviewEvidenceContext,
+            FindingEvidenceReviewContinuation: evidenceContinuation,
             ShadowDecision: shadowRecorder?.Record(task.RequiredRole, goal.Objective, task.Description, reviewerScopeChangedFiles, providerName, modelName, reasoningEffort)),
             allowPendingRecordedDispatchRefresh);
         ReviewerChangedExistingTestScope.RecordConductEvent(goal, task, changedExistingTests, promptRoot, dispatchedAt, allowPendingRecordedDispatchRefresh);

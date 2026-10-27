@@ -247,6 +247,21 @@ public sealed partial class AgentOrchestratorKernel
             string.Empty
         };
         headerLines.AddRange(BuildAccumulatedRetryFeedbackBriefBlock(goal, task, workingDirectory, targetBranchName, targetHeadCommit));
+        if (task.RequiredRole == AgentRole.Reviewer && task.PendingRetryCause == RetryCause.NewTestFinding &&
+            task.FindingEvidenceReviewContinuation is { } continuation)
+        {
+            headerLines.Add(continuation.Render());
+            foreach (var evidenceSelection in continuation.Selections.DistinctBy(item => item.ReceiptId))
+            {
+                var receipt = goal.Tasks.Single(source => source.Id.Value == evidenceSelection.SourceTaskId)
+                    .VerificationHistory.Where(record => record.CompletedAt == evidenceSelection.SourceVerificationAt)
+                    .SelectMany(record => record.FindingEvidenceReceipts ?? [])
+                    .LastOrDefault(receipt => receipt.ReceiptId == evidenceSelection.ReceiptId &&
+                        FindingEvidenceReviewContext.ExecutionIdentity(receipt) == evidenceSelection.ExecutionIdentity)
+                    ?? throw new InvalidOperationException("Selected continuation receipt is unavailable during Reviewer context preparation.");
+                headerLines.Add($"evidence_receipt: {JsonSerializer.Serialize(receipt)}");
+            }
+        }
         headerLines.AddRange(PreTesterEvidenceIndexLines.ForTester(goal, task, targetHeadCommit));
         headerLines.AddRange(BuildDeveloperPreReviewRepeatBriefBlock(goal, task));
         headerLines.AddRange(BuildEffectiveAcceptanceCriteriaCorrectionsBriefBlock(goal, task));

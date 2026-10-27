@@ -83,7 +83,8 @@ public sealed record FailedGoalFindingObservation(
     RetryCause? ObservedCause = null,
     string? WarningMessage = null,
     string Attribution = "structured-finding-routing",
-    ImmutableArray<FailedGoalPendingNote> PendingNotes = default, Conductor.ConductorHoldOwner HoldOwner = default)
+    ImmutableArray<FailedGoalPendingNote> PendingNotes = default, Conductor.ConductorHoldOwner HoldOwner = default,
+    FindingEvidenceReviewContinuation? EvidenceContinuation = null)
 {
     public static FailedGoalFindingObservation None { get; } = new(
         FailedGoalFindingObservationKind.None,

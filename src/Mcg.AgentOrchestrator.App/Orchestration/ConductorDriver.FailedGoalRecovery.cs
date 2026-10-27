@@ -124,6 +124,12 @@ internal sealed partial class ConductorDriver
         ApplyPendingFailedGoalNotes(goal, pendingNotes);
         var targetTaskId = decision.Identity.TaskId ??
             throw new InvalidOperationException($"Recovery action {decision.Action} must identify a target task.");
+        if (verifyingFindingObservation?.EvidenceContinuation is { } continuation &&
+            targetTaskId.Value == continuation.TaskId && decision.RetryCause == RetryCause.NewTestFinding)
+        {
+            (_cohortKernel ?? _conductorTickKernel ?? throw new InvalidOperationException("Continuation requires conductor state ownership."))
+                .RecordFindingEvidenceReviewContinuation(goal.Id, targetTaskId, continuation);
+        }
         var conflictMessage = FailedGoalRetryApplicationExecutor.Apply(
             goal.Id,
             targetTaskId,

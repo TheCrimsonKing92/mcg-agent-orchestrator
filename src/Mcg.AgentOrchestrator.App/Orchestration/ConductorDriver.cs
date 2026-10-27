@@ -399,7 +399,7 @@ internal sealed partial class ConductorDriver
                     profiles,
                     providers ?? new InMemoryModelProviderRegistry([]),
                     approveHighRiskOwnership: policy.AllowsAutonomousHighRiskOwnership,
-                    checkpointBeforeWorkerStart: dispatchCheckpoint?.BeforeWorkerStart,
+                    checkpointBeforeWorkerStart: FindingEvidenceDispatchCheckpoint(dispatchCheckpoint),
                     readCurrentInterruptedDispatchState: readCurrentInterruptedDispatchState,
                     conductorPolicy: policy,
                     recordDurableGoalBaseline: recordDurableGoalBaseline,
@@ -465,7 +465,7 @@ internal sealed partial class ConductorDriver
                     kernel,
                     workspace,
                     goal,
-                    checkpointBeforeWorkerStart: dispatchCheckpoint?.BeforeWorkerStart,
+                    checkpointBeforeWorkerStart: FindingEvidenceDispatchCheckpoint(dispatchCheckpoint),
                     readCurrentInterruptedDispatchState: readCurrentInterruptedDispatchState,
                     conductorPolicy: policy,
                     recordDurableGoalBaseline: recordDurableGoalBaseline);

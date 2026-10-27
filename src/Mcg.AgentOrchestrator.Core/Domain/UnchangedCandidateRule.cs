@@ -56,6 +56,9 @@ public static class UnchangedCandidateRule
 
     private static bool HasNewInput(Goal goal, TaskSpec task, TaskVerificationRecord verdict)
     {
+        if (task.RequiredRole == AgentRole.Reviewer && task.PendingRetryCause == RetryCause.NewTestFinding &&
+            task.FindingEvidenceReviewContinuation is { } continuation)
+            return verdict.CandidateIdentity is { } identity && continuation.AppliesTo(goal, task, verdict, identity);
         var verdictAt = verdict.CompletedAt;
         if (task.AcceptedRetryFeedback?.AcceptedAt > verdictAt ||
             goal.Timeline.Any(evt => evt.Kind == ProgressKind.HumanInputReceived && evt.OccurredAt > verdictAt))
@@ -63,13 +66,14 @@ public static class UnchangedCandidateRule
         if (task.LatestRoleInputRetryAt > verdictAt)
             return true;
         if (task.RequiredRole == AgentRole.Reviewer &&
+            !(verdict.MergedReviewFindings ?? []).Any(finding => finding.State == ReviewFindingState.Open && finding.EvidenceRequest is not null) &&
             task.PreReviewEvidenceHistory.Any(receipt => receipt.RecordedAt > verdictAt))
             return true;
         foreach (var peer in goal.Tasks.Where(peer => peer.RequiredRole != task.RequiredRole))
         {
             foreach (var later in peer.VerificationHistory.Where(verification => verification.CompletedAt > verdictAt))
             {
-                if (later.FindingEvidenceReceipts is { Count: > 0 }) return true;
+                if (task.RequiredRole != AgentRole.Reviewer && later.FindingEvidenceReceipts is { Count: > 0 }) return true;
                 if (task.RequiredRole is AgentRole.Tester or AgentRole.Reviewer &&
                     peer.RequiredRole == AgentRole.Developer &&
                     later.CompletionVerdictRule == TaskOutcomeRules.DeferredNoChangeRound.Token &&
