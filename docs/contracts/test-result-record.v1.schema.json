@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "MCG test result records v1 (CTRF-shaped)",
+  "description": "An MCG contract using CTRF field names, without requiring CTRF summary or pending/other statuses. This does not claim validation against the CTRF schema.",
+  "type": "object",
+  "required": ["reportFormat", "schemaVersion", "results"],
+  "properties": {
+    "reportFormat": { "const": "CTRF" },
+    "schemaVersion": { "const": "mcg-test-result/1" },
+    "results": {
+      "type": "object",
+      "required": ["tool", "tests"],
+      "properties": {
+        "tool": {
+          "type": "object",
+          "required": ["name"],
+          "properties": {
+            "name": { "type": "string", "minLength": 1 }
+          }
+        },
+        "tests": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["testId", "name", "status"],
+            "properties": {
+              "testId": { "type": "string", "minLength": 1 },
+              "name": { "type": "string", "minLength": 1 },
+              "status": { "enum": ["passed", "failed", "skipped", "error"] },
+              "duration": { "type": "number", "minimum": 0, "description": "Milliseconds" },
+              "filePath": { "type": "string" },
+              "suite": { "type": "array", "items": { "type": "string" } },
+              "message": { "type": "string" },
+              "trace": { "type": "string" },
+              "retryAttempts": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": ["status"],
+                  "properties": {
+                    "status": { "enum": ["passed", "failed", "skipped", "error"] },
+                    "duration": { "type": "number", "minimum": 0 },
+                    "message": { "type": "string" },
+                    "trace": { "type": "string" }
+                  }
+                }
+              },
+              "extra": {
+                "type": "object",
+                "properties": {
+                  "seed": { "type": "string" },
+                  "outputRef": { "type": "string" },
+                  "reportedBy": { "type": "string", "description": "Defaults to results.tool.name when absent." }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
