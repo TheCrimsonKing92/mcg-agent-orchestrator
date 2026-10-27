@@ -103,6 +103,22 @@ public sealed class NormalizedTestResultSourceTests
     }
 
     [Theory]
+    [InlineData("{\"testId\":\"id\",\"name\":\"first\",\"name\":\"second\",\"status\":\"passed\"}", "name")]
+    [InlineData("{\"testId\":\"id\",\"name\":\"test\",\"status\":\"passed\",\"extra\":{\"seed\":\"1\",\"seed\":\"2\"}}", "extra/seed")]
+    [InlineData("{\"testId\":\"id\",\"name\":\"test\",\"status\":\"passed\",\"retryAttempts\":[{\"status\":\"failed\",\"status\":\"passed\"}]}", "retryAttempts/0/status")]
+    [InlineData("{\"testId\":\"id\",\"status\":\"passed\",\"x\":{\"a\":1,\"a\":2}}", "x/a")]
+    [InlineData("{\"testId\":\"id\",\"name\":\"test\",\"status\":\"passed\",\"x\":[[{\"a\":1,\"a\":2}]]}", "x/0/0/a")]
+    [InlineData("{\"testId\":\"id\",\"name\":\"test\",\"status\":\"passed\",\"x\":{\"b\":{\"a\":1,\"a\":2},\"b\":0}}", "x/b")]
+    [InlineData("{\"x\":{\"a\":1,\"a\":2},\"trace\":\"first\",\"trace\":\"second\"}", "trace")]
+    [InlineData("{\"testId\":\"id\",\"name\":\"test\",\"status\":\"passed\",\"a/b~c\":1,\"a/b~c\":2}", "a~1b~0c")]
+    [InlineData("{\"testId\":\"id\",\"name\":\"test\",\"\\u006eame\":\"second\",\"status\":\"passed\"}", "name")]
+    public void Read_DuplicateMember_ReportsPointerAndNoPartialRecords(string test, string pointer)
+    {
+        WithReport(Report(test), path => AssertInvalid(new NormalizedTestResultSource().Read(path),
+            "/results/tests/0/" + pointer));
+    }
+
+    [Theory]
     [InlineData("\"testId\":\"\"", "testId")]
     [InlineData("\"name\":null", "name")]
     [InlineData("\"status\":\"other\"", "status")]
@@ -128,8 +144,9 @@ public sealed class NormalizedTestResultSourceTests
     [InlineData("\"extra\":{\"reportedBy\":null}", "extra/reportedBy")]
     public void Read_InvalidKnownProperty_ReportsMemberPointer(string member, string pointer)
     {
-        // Last-occurrence semantics allow this table to replace a required property too.
-        var test = "{\"testId\":\"id\",\"name\":\"test\",\"status\":\"passed\"," + member + "}";
+        var required = new[] { "\"testId\":\"id\"", "\"name\":\"test\"", "\"status\":\"passed\"" }
+            .Where(property => !member.StartsWith(property[..(property.IndexOf(':') + 1)], StringComparison.Ordinal));
+        var test = "{" + string.Join(",", required.Append(member)) + "}";
         WithReport(Report(test), path => AssertInvalid(new NormalizedTestResultSource().Read(path),
             "/results/tests/0/" + pointer));
     }
