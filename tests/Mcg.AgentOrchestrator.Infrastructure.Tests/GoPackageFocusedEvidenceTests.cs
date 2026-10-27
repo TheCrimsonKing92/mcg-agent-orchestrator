@@ -15,6 +15,7 @@ public sealed class GoPackageFocusedEvidenceTests
     private const string PassingOutput = "--- PASS: TestExtraColumn (0.00s)\n--- PASS: TestMissingColumn (0.01s)";
     private const string FailingOutput = "--- PASS: TestExtraColumn (0.00s)\n--- FAIL: TestMissingColumn (0.01s)";
     private const string EmptyOutput = "testing: warning: no tests to run\nPASS";
+    private const string SkippedOutput = "=== RUN   TestOptIn\n    opt-in integration disabled\n--- SKIP: TestOptIn (0.00s)\nPASS";
 
     [Theory]
     [InlineData(false)]
@@ -188,6 +189,142 @@ public sealed class GoPackageFocusedEvidenceTests
         }
     }
 
+    [Fact]
+    public void Annotation_PassAndSkip_DemonstratesBothSelectors()
+    {
+        using var fixture = new Fixture();
+        var checks = fixture.Build("internal/drift:TestExtraColumn;internal/drift:TestOptIn", out var coverage);
+        Assert.Equal(2, checks.Count);
+        var results = GoPackageFocusedEvidence.AnnotateResults(checks,
+            [new(checks[0].Name, true, 0, "--- PASS: TestExtraColumn (0.00s)"),
+             new(checks[1].Name, true, 0, SkippedOutput)]);
+
+        Assert.Equal([1, 1], results.Select(result => result.ExecutedTestCount));
+        Assert.Null(results[0].SkippedTestIdentities);
+        Assert.Equal(["internal/drift.TestOptIn"], results[1].SkippedTestIdentities);
+        Assert.All(results, result => Assert.Empty(result.FailingTestIdentities!));
+        var notRun = FocusedEvidenceNotRunPlan.Compare(checks, results, coverage, true);
+        Assert.Empty(notRun.Checks);
+        Assert.Empty(notRun.Selections);
+        Assert.Equal(["internal/drift.TestOptIn"], notRun.Skipped);
+        Assert.Contains("internal/drift.TestOptIn", JsonSerializer.Serialize(results), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Arm_PassAndSkip_IsGreenWithSkippedSummary()
+    {
+        using var fixture = new Fixture();
+        var checks = fixture.Build("internal/drift:TestExtraColumn;internal/drift:TestOptIn", out var coverage);
+        Assert.Equal(2, checks.Count);
+        var arm = await fixture.RunArmAsync(checks, coverage,
+            [new(checks[0].Name, true, 0, "--- PASS: TestExtraColumn (0.00s)"),
+             new(checks[1].Name, true, 0, SkippedOutput)]);
+
+        Assert.Equal(FindingEvidenceArmDisposition.Green, arm.Disposition);
+        Assert.True(arm.Passed);
+        Assert.Empty(arm.NotRunSelections!);
+        Assert.NotEqual(FindingEvidenceOutcomeReason.CandidateInconclusive,
+            FocusedEvidenceExecution.ClassifyFocusedEvidenceExperiment(arm, arm));
+        Assert.Contains("skipped: internal/drift.TestOptIn", arm.Summary.Split(Environment.NewLine));
+    }
+
+    [Fact]
+    public void Annotation_NoMarkers_RemainsNotRun()
+    {
+        using var fixture = new Fixture();
+        var checks = fixture.Build("internal/drift:TestOptIn", out var coverage);
+        var result = Assert.Single(GoPackageFocusedEvidence.AnnotateResults(checks,
+            [new(checks[0].Name, true, 0, EmptyOutput)]));
+
+        Assert.Equal(0, result.ExecutedTestCount);
+        Assert.Null(result.SkippedTestIdentities);
+        Assert.Empty(result.FailingTestIdentities!);
+        var missing = Assert.Single(FocusedEvidenceNotRunPlan.Compare(checks, [result], coverage, true).Checks);
+        Assert.Equal("not-run:execution-not-demonstrated", missing.Reason);
+        Assert.Equal(new FindingEvidenceSelection("internal/drift", "TestOptIn"), Assert.Single(missing.Selections));
+    }
+
+    [Fact]
+    public async Task Arm_FailBesideSkip_RemainsRed()
+    {
+        using var fixture = new Fixture();
+        var checks = fixture.Build("internal/drift:TestMissingColumn|TestOptIn", out var coverage);
+        var arm = await fixture.RunArmAsync(checks, coverage,
+            [new(checks[0].Name, false, 1, "--- FAIL: TestMissingColumn (0.01s)\n" + SkippedOutput)]);
+
+        Assert.Equal(FindingEvidenceArmDisposition.Red, arm.Disposition);
+        Assert.False(arm.Passed);
+        var result = Assert.Single(arm.Checks);
+        Assert.Equal(2, result.ExecutedTestCount);
+        Assert.Equal(["internal/drift.TestMissingColumn"], result.FailingTestIdentities);
+        Assert.Equal(["internal/drift.TestOptIn"], result.SkippedTestIdentities);
+        Assert.Contains("skipped: internal/drift.TestOptIn", arm.Summary.Split(Environment.NewLine));
+        Assert.Equal(FindingEvidenceOutcomeReason.CandidateRed,
+            FocusedEvidenceExecution.ClassifyFocusedEvidenceExperiment(arm, arm));
+    }
+
+    [Fact]
+    public async Task Arm_NoExecution_NamesEachSelectorAndKeepsCheckFallback()
+    {
+        using var fixture = new Fixture();
+        var checks = fixture.Build("internal/drift:TestAlpha|TestBeta;internal/drift", out var coverage);
+        Assert.Equal(2, checks.Count);
+        var arm = await fixture.RunArmAsync(checks, coverage,
+            checks.Select(check => new AcceptanceCheckResult(check.Name, true, 0, EmptyOutput)).ToArray());
+
+        Assert.Equal(FindingEvidenceArmDisposition.Inconclusive, arm.Disposition);
+        var lines = arm.Summary.Split(Environment.NewLine);
+        Assert.Contains("undemonstrated internal/drift:TestAlpha not-run:execution-not-demonstrated", lines);
+        Assert.Contains("undemonstrated internal/drift:TestBeta not-run:execution-not-demonstrated", lines);
+        Assert.Contains("go focused evidence: internal/drift not-run:execution-not-demonstrated", lines);
+        Assert.Equal(new FindingEvidenceSelection("internal/drift", "TestAlpha|TestBeta"),
+            Assert.Single(arm.NotRunSelections!));
+    }
+
+    [Fact]
+    public void Summary_PartialResults_ListsOnlyUndemonstratedSelectors()
+    {
+        using var fixture = new Fixture();
+        var checks = fixture.Build("internal/drift:TestExtraColumn|TestOptIn|TestMissing", out var coverage);
+        var results = GoPackageFocusedEvidence.AnnotateResults(checks,
+            [new(checks[0].Name, true, 0, "--- PASS: TestExtraColumn (0.00s)\n" + SkippedOutput),
+             new(checks[0].Name, true, 0, EmptyOutput)]);
+        var notRun = FocusedEvidenceNotRunPlan.Compare(checks, results, coverage, true);
+        Assert.Single(notRun.Checks);
+        var diagnosticLines = notRun.AppendSummary("").Split(Environment.NewLine)
+            .Where(line => line.StartsWith("undemonstrated ", StringComparison.Ordinal)).ToArray();
+
+        Assert.Equal(["undemonstrated internal/drift:TestMissing not-run:execution-not-demonstrated"], diagnosticLines);
+        Assert.Equal(["internal/drift.TestOptIn"], notRun.Skipped);
+    }
+
+    [Theory]
+    [InlineData("internal/drift:TestOptIn", "internal/drift.TestOptIn/subcase")]
+    [InlineData("missing:TestOptIn", "TestOptIn/subcase")]
+    public void Annotation_SubtestSkips_PreservesIdentityAndDuplicateConventions(string request, string identity)
+    {
+        using var fixture = new Fixture();
+        var checks = fixture.Build(request, out _);
+        var result = Assert.Single(GoPackageFocusedEvidence.AnnotateResults(checks,
+            [new(checks[0].Name, true, 0, "    --- SKIP: TestOptIn/subcase (0.00s)\n    --- SKIP: TestOptIn/subcase (0.00s)")]));
+
+        Assert.Equal(2, result.ExecutedTestCount);
+        Assert.Equal([identity, identity], result.SkippedTestIdentities);
+        Assert.Empty(result.FailingTestIdentities!);
+    }
+
+    [Fact]
+    public void CheckReceipt_AbsentSkips_RoundTripsWithoutAddingAField()
+    {
+        var original = new AcceptanceCheckResult("check", true, 0, null);
+        var json = JsonSerializer.Serialize(original);
+        Assert.DoesNotContain("SkippedTestIdentities", json, StringComparison.Ordinal);
+        Assert.Null(JsonSerializer.Deserialize<AcceptanceCheckResult>(json)!.SkippedTestIdentities);
+        var skipped = original with { SkippedTestIdentities = ["internal/drift.TestOptIn"] };
+        Assert.Equal(skipped.SkippedTestIdentities,
+            JsonSerializer.Deserialize<AcceptanceCheckResult>(JsonSerializer.Serialize(skipped))!.SkippedTestIdentities);
+    }
+
     [Theory]
     [InlineData("go")]
     [InlineData("/usr/local/bin/GO")]
@@ -235,6 +372,25 @@ public sealed class GoPackageFocusedEvidenceTests
             Assert.True(GoalAcceptanceVerifier.TryBuildFocusedEvidenceChecks(request, settings ?? Settings, Root,
                 out var checks, out coverage, out var rejection), rejection.Detail);
             return checks;
+        }
+
+        internal async Task<FocusedEvidenceArmRunResult> RunArmAsync(
+            IReadOnlyList<AcceptanceManifestCheck> checks, FocusedEvidenceCoverage coverage,
+            IReadOnlyList<AcceptanceCheckResult> results)
+        {
+            var calls = 0;
+            var arm = await FocusedEvidenceExecution.RunFocusedEvidenceArmAsync(
+                _ => throw new InvalidOperationException("No scoped runner expected."),
+                (_, planned, _, _, _, _, _, _, _) =>
+                {
+                    calls++;
+                    Assert.Same(checks, planned);
+                    return Task.FromResult(results);
+                },
+                _ => "", FindingEvidenceArm.Candidate, "candidate", Root, null, checks, coverage,
+                null, null, null, CancellationToken.None);
+            Assert.Equal(1, calls);
+            return arm;
         }
 
         public void Dispose() => Directory.Delete(Root, recursive: true);
