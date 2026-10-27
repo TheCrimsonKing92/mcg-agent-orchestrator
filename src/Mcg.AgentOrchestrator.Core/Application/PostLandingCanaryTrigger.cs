@@ -81,6 +81,7 @@ public static class AcceptanceEngineSurfaceRegistry
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceLaunchLockSummary",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceManifestLocator",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceManifestPartitionEquivalence",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceNormalizedTestResultEvidence",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceOverlappedCheckRunner",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceOwnerProtectedFingerprint",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptancePartitionVerdictCache",
