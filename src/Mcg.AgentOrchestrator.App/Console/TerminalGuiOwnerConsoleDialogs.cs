@@ -91,7 +91,7 @@ internal sealed class TerminalGuiOwnerConsoleDialogs(IApplication app, Cancellat
             var binding = OwnerConsoleBindings.ForDialogKey(OwnerConsoleScope.GoalDetail, key, row.Ctrl)!;
             var button = new Button { Text = OwnerConsoleDialogBindings.Label(binding) };
             button.Accepting += async (_, args) => { args.Handled = true; await ActAsync(() => goal.HandleKeyAsync(key)); };
-            buttons.Add(key, button); dialog.AddButton(button);
+            buttons.Add(key, button); dialog.AddConditionalButton(button);
         }
         void Refresh()
         {

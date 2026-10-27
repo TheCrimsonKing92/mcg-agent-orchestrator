@@ -77,6 +77,38 @@ public sealed class NormalizedGateResultStepTests
         });
     }
 
+    [Fact]
+    public void Apply_MixedOutcomes_RetainsPathsAndEveryFailureDiagnostic()
+    {
+        WithReceipt((receipt, path) =>
+        {
+            File.WriteAllText(path, Trx);
+            var first = NormalizedGateResultStep.Apply(receipt, path, "trx");
+            var missing = Path.Combine(Path.GetDirectoryName(path)!, "missing.trx");
+            var failed = NormalizedGateResultStep.Apply(first, missing, "trx");
+            var firstFailure = Assert.IsType<NormalizedTestResultWriteFailure>(failed.NormalizedTestResultWriteFailure);
+            var blocked = Path.Combine(Path.GetDirectoryName(path)!, "blocked.trx");
+            File.WriteAllText(blocked, Trx);
+            Directory.CreateDirectory(NormalizedTestResultWriter.PathFor(blocked));
+            var secondFailure = NormalizedGateResultStep.Apply(receipt, blocked, "trx").NormalizedTestResultWriteFailure!;
+            failed = NormalizedGateResultStep.Apply(failed, blocked, "trx");
+            var last = Path.Combine(Path.GetDirectoryName(path)!, "last.trx");
+            File.WriteAllText(last, Trx);
+
+            var updated = NormalizedGateResultStep.Apply(failed, last, "trx");
+
+            Assert.Equal(new[] { NormalizedTestResultWriter.PathFor(path), NormalizedTestResultWriter.PathFor(last) },
+                updated.NormalizedTestResultPaths);
+            var failure = Assert.IsType<NormalizedTestResultWriteFailure>(updated.NormalizedTestResultWriteFailure);
+            Assert.Equal(firstFailure.TargetPath, failure.TargetPath);
+            Assert.Equal(firstFailure.Reason, failure.Reason);
+            Assert.StartsWith(firstFailure.Detail, failure.Detail);
+            Assert.Contains($"TargetPath={secondFailure.TargetPath}; Reason={secondFailure.Reason}; Detail={secondFailure.Detail}",
+                failure.Detail);
+            Assert.Equal(receipt, updated with { NormalizedTestResultPaths = null, NormalizedTestResultWriteFailure = null });
+        });
+    }
+
     internal const string Trx = """
         <TestRun>
           <TestDefinitions>
