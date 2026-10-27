@@ -6,7 +6,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 // own conduct-loop gate builds take CS2012 or a compiler crash mid-compile - so THE VICTIM'S VERDICT FLIPS,
 // NOT THE PERPETRATOR'S. No lane scheduling can fix that, which is why it has to be seamed off here.
 //
-// `DotnetBuildEnvironmentManager.ShutdownBuildServersForTests` is null by default, and null means "run the
+// `DotnetBuildServerRecovery.ShutdownBuildServersForTests` is null by default, and null means "run the
 // real thing", so every lease disposal in a test that forgets to stub it fires a session-wide shutdown.
 // Invert that default for the whole assembly: tests get the no-op unless they deliberately opt out.
 //
@@ -20,6 +20,6 @@ internal static class AssemblyBuildServerShutdownIsolation
     [ModuleInitializer]
     internal static void Install()
     {
-        DotnetBuildEnvironmentManager.ShutdownBuildServersForTests = SafeDefault;
+        DotnetBuildServerRecovery.ShutdownBuildServersForTests = SafeDefault;
     }
 }

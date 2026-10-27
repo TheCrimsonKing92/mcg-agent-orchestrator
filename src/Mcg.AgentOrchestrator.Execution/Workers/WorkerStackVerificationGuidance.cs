@@ -15,7 +15,7 @@ internal static class WorkerStackVerificationGuidance
                 "## Build/Test Verification",
                 "- Run `go build ./...`, `go vet ./...` and `go test ./...` from the worktree root before WORKER_RESULT; use `go test ./<package> -run '<TestRegex>'` while iterating.",
                 "- Report each result in WORKER_RESULT `tests`, for example `tests: pass - go build, go vet, go test ./... ok` or `tests: fail - <package>: <first failing test or build error>`.",
-                "- Do not run the .NET worker build helper or any `dotnet` command.",
+                "- Do not build or test with `dotnet` or the .NET worker build helper; the orchestrator's `Submit-WorkerResult.ps1` submission command is required and is not a project build.",
                 "- The acceptance gate re-runs the Go checks and decides the verdict."
             ];
         }

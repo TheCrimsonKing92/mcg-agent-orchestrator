@@ -1186,7 +1186,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
         var root = CreateRunnerWorkspace();
         var events = new List<string>();
         var buildAttempts = 0;
-        DotnetBuildEnvironmentManager.ShutdownBuildServersForTests = () => events.Add("shutdown");
+        DotnetBuildServerRecovery.ShutdownBuildServersForTests = () => events.Add("shutdown");
 
         try
         {
@@ -1222,7 +1222,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
         }
         finally
         {
-            DotnetBuildEnvironmentManager.ShutdownBuildServersForTests =
+            DotnetBuildServerRecovery.ShutdownBuildServersForTests =
                 AssemblyBuildServerShutdownIsolation.SafeDefault;
         }
     }

@@ -181,7 +181,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsLeasePermitsStaleRecovery 
     {
         var environment = RootedDotnetBuildEnvironmentManager.CreateStableSlotAttempt(StorageRoot, 0);
         var shutdowns = 0;
-        DotnetBuildEnvironmentManager.ShutdownBuildServersForTests = () => Interlocked.Increment(ref shutdowns);
+        DotnetBuildServerRecovery.ShutdownBuildServersForTests = () => Interlocked.Increment(ref shutdowns);
         try
         {
             using var lease = Assert.IsType<DotnetBuildLeaseAcquisition.Acquired>(
@@ -195,7 +195,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsLeasePermitsStaleRecovery 
         }
         finally
         {
-            DotnetBuildEnvironmentManager.ShutdownBuildServersForTests =
+            DotnetBuildServerRecovery.ShutdownBuildServersForTests =
                 AssemblyBuildServerShutdownIsolation.SafeDefault;
         }
     }
@@ -206,7 +206,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsLeasePermitsStaleRecovery 
         var environment = RootedDotnetBuildEnvironmentManager.CreateStableSlotAttempt(StorageRoot, 0);
         var notifications = 0;
         bool? permitAvailableDuringNotification = null;
-        DotnetBuildEnvironmentManager.ShutdownBuildServersForTests = () => { };
+        DotnetBuildServerRecovery.ShutdownBuildServersForTests = () => { };
         try
         {
             var lease = Assert.IsType<DotnetBuildLeaseAcquisition.Acquired>(
@@ -227,7 +227,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsLeasePermitsStaleRecovery 
         }
         finally
         {
-            DotnetBuildEnvironmentManager.ShutdownBuildServersForTests =
+            DotnetBuildServerRecovery.ShutdownBuildServersForTests =
                 AssemblyBuildServerShutdownIsolation.SafeDefault;
         }
     }
@@ -236,7 +236,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsLeasePermitsStaleRecovery 
     public void DotnetBuildEnvironmentManagerExecutionLockReleaseObserverIsAdvisory()
     {
         var environment = RootedDotnetBuildEnvironmentManager.CreateStableSlotAttempt(StorageRoot, 0);
-        DotnetBuildEnvironmentManager.ShutdownBuildServersForTests = () => { };
+        DotnetBuildServerRecovery.ShutdownBuildServersForTests = () => { };
         try
         {
             var lease = Assert.IsType<DotnetBuildLeaseAcquisition.Acquired>(
@@ -250,7 +250,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsLeasePermitsStaleRecovery 
         }
         finally
         {
-            DotnetBuildEnvironmentManager.ShutdownBuildServersForTests =
+            DotnetBuildServerRecovery.ShutdownBuildServersForTests =
                 AssemblyBuildServerShutdownIsolation.SafeDefault;
         }
     }
@@ -260,7 +260,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsLeasePermitsStaleRecovery 
     {
         var environment = RootedDotnetBuildEnvironmentManager.CreateStableSlotAttempt(StorageRoot, 0);
         bool? permitAvailableDuringShutdown = null;
-        DotnetBuildEnvironmentManager.ShutdownBuildServersForTests = () =>
+        DotnetBuildServerRecovery.ShutdownBuildServersForTests = () =>
             permitAvailableDuringShutdown =
                 RootedDotnetBuildEnvironmentManager.IsStableSlotExecutionLeaseAvailable(StorageRoot, 0);
         try
@@ -276,7 +276,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsLeasePermitsStaleRecovery 
         }
         finally
         {
-            DotnetBuildEnvironmentManager.ShutdownBuildServersForTests =
+            DotnetBuildServerRecovery.ShutdownBuildServersForTests =
                 AssemblyBuildServerShutdownIsolation.SafeDefault;
         }
     }

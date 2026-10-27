@@ -615,7 +615,8 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
     }
 
     public async Task<int> ArchiveTerminalGoalSnapshotsAsync(
-        DateTimeOffset cutoff, long maxSnapshotBytes = 134_217_728, CancellationToken cancellationToken = default)
+        DateTimeOffset cutoff, long maxSnapshotBytes = 134_217_728, CancellationToken cancellationToken = default,
+        bool compressSnapshots = false)
     {
         var write = await BeginWriteAsync(ResolveOperationTag(nameof(ArchiveTerminalGoalSnapshotsAsync)), cancellationToken);
         await using var conn = write.Connection;
@@ -623,10 +624,31 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
         {
             // Already-migrated databases do not replay the core schema migration.
             await RunNonQueryAsync(conn, GoalSnapshotArchiveSchemaSql, cancellationToken);
-            var count = await SnapshotArchive.ArchiveAsync(conn, cutoff, maxSnapshotBytes, cancellationToken);
+            var count = await SnapshotArchive.ArchiveAsync(conn, cutoff, maxSnapshotBytes, cancellationToken, compressSnapshots);
             await RunNonQueryAsync(conn, "COMMIT", cancellationToken);
             write.Telemetry.Emit("commit");
             return count;
+        }
+        catch (Exception ex)
+        {
+            try { await RunNonQueryAsync(conn, "ROLLBACK", CancellationToken.None); } catch { }
+            write.Telemetry.Emit("rollback", ex);
+            throw;
+        }
+    }
+
+    public async Task<GoalSnapshotArchiveRecompressionResult> RecompressArchivedGoalSnapshotsAsync(
+        long maxSourceBytes = 67_108_864, CancellationToken cancellationToken = default)
+    {
+        var write = await BeginWriteAsync(ResolveOperationTag(nameof(RecompressArchivedGoalSnapshotsAsync)), cancellationToken);
+        await using var conn = write.Connection;
+        try
+        {
+            await RunNonQueryAsync(conn, GoalSnapshotArchiveSchemaSql, cancellationToken);
+            var result = await GoalSnapshotArchiveRecompression.RecompressAsync(conn, maxSourceBytes, cancellationToken);
+            await RunNonQueryAsync(conn, "COMMIT", cancellationToken);
+            write.Telemetry.Emit("commit");
+            return result;
         }
         catch (Exception ex)
         {

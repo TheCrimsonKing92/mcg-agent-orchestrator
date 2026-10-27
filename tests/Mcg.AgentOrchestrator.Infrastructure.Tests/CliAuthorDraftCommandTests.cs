@@ -266,6 +266,7 @@ public sealed class CliAuthorDraftCommandTests
         internal Fixture()
         {
             Directory.CreateDirectory(_root);
+            File.WriteAllText(Path.Combine(_root, "App.sln"), "");
             Workspace = OrchestratorWorkspace.ForDirectory(_root);
             Store = new BacklogStore(Workspace.BacklogStorePath);
             Item = Store.AddAsync("Author draft title", "Author draft body").GetAwaiter().GetResult();
