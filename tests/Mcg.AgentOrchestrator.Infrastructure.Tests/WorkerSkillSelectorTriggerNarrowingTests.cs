@@ -126,6 +126,7 @@ public sealed class WorkerSkillSelectorTriggerNarrowingTests : IDisposable
     public void NonHomeKeepsOnlyTheWorktreeProvidedSkill(string name)
     {
         var target = CreateEmptyTarget();
+        File.WriteAllText(Path.Combine(target, "Fixture.csproj"), string.Empty);
         var (goal, task) = CreateDeveloper("Run dogfood-log for the parser.");
         var localPath = Path.Combine(target, ".agents", "skills", name, "SKILL.md");
         Directory.CreateDirectory(Path.GetDirectoryName(localPath)!);
@@ -152,6 +153,7 @@ public sealed class WorkerSkillSelectorTriggerNarrowingTests : IDisposable
     [Xunit.Fact]
     public void NonHomeLocalDogfoodStillRequiresKeywordTrigger()
     {
+        File.WriteAllText(Path.Combine(workingDirectory, "Fixture.csproj"), string.Empty);
         var (goal, task) = CreateDeveloper("Improve the parser.");
         var requirements = WorkerContextArtifacts.SelectSkillRequirements(goal, task, workingDirectory,
             targetHome: WorkerTargetHome.NotHome);

@@ -50,7 +50,8 @@ internal sealed partial class WorkerArtifactWriter
         var scratchRoot = Path.Combine(workingDirectory, ".orchestrator-context");
         var contextDirectory = Path.Combine(scratchRoot, goal.Id.Value);
         Directory.CreateDirectory(contextDirectory);
-        WorkerStandingRules.WriteContextArtifact(task.RequiredRole, contextDirectory, WorkerSkillSelector.ProjectStackFor(workingDirectory));
+        WorkerStandingRules.WriteContextArtifact(task.RequiredRole, contextDirectory, ProjectStackResolver.GuidanceStack(
+            ProjectStackResolver.Resolve(workingDirectory, _targetHome.ProjectHomeDirectory), _targetHome.IsOrchestratorHome));
 
         // Self-ignore the scratch tree so it never dirties repositories whose root
         // .gitignore lacks the tracked orchestrator rule.
@@ -67,7 +68,8 @@ internal sealed partial class WorkerArtifactWriter
             CriteriaSelfCheckPromptContext.BuildArtifact(task.RequiredRole));
         WriteText(
             Path.Combine(contextDirectory, "current-task.md"),
-            BuildCurrentTask(task, workingDirectory, preserveCompleteArtifacts,
+            BuildCurrentTask(task, workingDirectory, ProjectStackResolver.GuidanceStack(
+                ProjectStackResolver.Resolve(workingDirectory, _targetHome.ProjectHomeDirectory), _targetHome.IsOrchestratorHome), preserveCompleteArtifacts,
                 task.RequiredRole == AgentRole.Tester ? WorkerResultSubmission.PathFor(workingDirectory, goal.Id) : null));
         var durablePlannerPlans = ResolveDurablePlannerPlans(goal.Tasks, task.Id);
         var durableResearch = ResolveLatestDurableResearch(goal.Tasks, task.Id);
@@ -325,6 +327,7 @@ internal sealed partial class WorkerArtifactWriter
     private static string BuildCurrentTask(
         TaskSpec task,
         string workingDirectory,
+        ProjectStack? stack,
         bool preserveCompleteArtifacts,
         string? submissionPath)
     {
@@ -343,7 +346,7 @@ internal sealed partial class WorkerArtifactWriter
 
         if (task.RequiredRole is AgentRole.Developer or AgentRole.Tester)
         {
-            if (WorkerSkillSelector.ProjectStackFor(workingDirectory) == ProjectStack.Go)
+            if (stack == ProjectStack.Go)
             {
                 lines.InsertRange(6,
                 [
@@ -354,6 +357,10 @@ internal sealed partial class WorkerArtifactWriter
                     "- Do not run the .NET worker build helper or any `dotnet` command.",
                     "- The acceptance gate re-runs the Go checks and decides the verdict."
                 ]);
+            }
+            else if (stack is null)
+            {
+                lines.InsertRange(6, [string.Empty, "## Build/Test Verification", .. WorkerNeutralStackGuidance.BuildTestLines]);
             }
             else
             {
@@ -469,7 +476,7 @@ internal sealed partial class WorkerArtifactWriter
 
         if (task.RequiredRole is AgentRole.Developer or AgentRole.Tester)
         {
-            var toolchain = TargetToolchainDetector.Detect(workingDirectory);
+            var toolchain = ProjectStackResolver.Resolve(workingDirectory, _targetHome.ProjectHomeDirectory);
             lines.Add(string.Empty);
             if (toolchain == Toolchain.Dotnet)
             {
@@ -609,7 +616,7 @@ internal sealed partial class WorkerArtifactWriter
             .ToArray();
         var goalPrefix = goal.Id.Value.Length <= 8 ? goal.Id.Value : goal.Id.Value[..8];
         var attemptName = $"{task.RequiredRole.ToString().ToLowerInvariant()}-{task.Id.Value[..8]}";
-        var toolchain = TargetToolchainDetector.Detect(workingDirectory);
+        var toolchain = ProjectStackResolver.Resolve(workingDirectory, _targetHome.ProjectHomeDirectory);
         var brokerNote = TargetToolchainDetector.GetBrokerBuildTestNote(toolchain);
         var brokerCommandHint = TargetToolchainDetector.GetBrokerCommandHint(toolchain, goalPrefix, attemptName);
         var developerBuildOnly = toolchain == Toolchain.Dotnet && task.RequiredRole == AgentRole.Developer &&

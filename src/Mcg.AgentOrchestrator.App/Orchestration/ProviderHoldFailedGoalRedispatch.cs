@@ -92,7 +92,7 @@ internal sealed class ProviderHoldFailedGoalRedispatch(
                 cascadeMechanicalReworkCheap: policy.CascadeMechanicalReworkCheap,
                 orchestratorSkillDirectory: Path.Combine(home.InstallRootDirectory, ".agents", "skills"),
                 integrationBranch: workspace.IntegrationBranch,
-                targetHome: new WorkerTargetHome(home.IsHome(workspace), WorkerAcceptanceManifestResolver.For(workspace)))),
+                targetHome: WorkerTargetHomeFactory.For(home, workspace))),
             retryOnHeldBinding: true);
     }
 }
