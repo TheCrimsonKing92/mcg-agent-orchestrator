@@ -282,6 +282,55 @@ public sealed class BacklogSelectiveGoalReadTests(ITestOutputHelper output) : Cl
         Assert.Equal(expected.Message, actual.Message);
     }
 
+    [Theory]
+    [InlineData("\"invalid\"")]
+    [InlineData("{}")]
+    public async Task Similarity_InvalidHotTasks_QuarantinesLikeFullHydration(string tasks)
+    {
+        using var fixture = await Fixture.Create(4, 256);
+        string[] args = ["backlog-similar", "quartz", "--excerpt", "--limit", "100"];
+        const string validId = "55555555555555555555555555555555";
+        await fixture.AddSimilarityTwin(validId);
+        Assert.Contains($"kind=goal id={CompletedId[..8]}", Run(args, fixture.Workspace, false).Text);
+        fixture.ReplaceTasks(CompletedId, tasks);
+
+        Receipt baseline = null!, candidate = null!;
+        var expectedError = AsyncLocalConsoleRouter.CaptureError(() => baseline = Run(args, fixture.Workspace, true));
+        var actualError = AsyncLocalConsoleRouter.CaptureError(() => candidate = Run(args, fixture.Workspace, false));
+        Assert.Contains($"QUARANTINED goal {CompletedId[..8]}: JsonException:", expectedError);
+        Assert.Contains("$.Tasks", expectedError);
+        Assert.Equal(expectedError, actualError);
+        Assert.Equal(baseline.Text, candidate.Text);
+        Assert.DoesNotContain($"kind=goal id={CompletedId[..8]}", candidate.Text);
+        Assert.Contains($"kind=goal id={validId[..8]}", candidate.Text);
+        Assert.Equal(1, candidate.Count("similarity-projected"));
+        Assert.Empty(candidate.Requested);
+        Assert.Empty(candidate.Deserialized);
+    }
+
+    [Theory]
+    [InlineData("\"invalid\"")]
+    [InlineData("{}")]
+    public async Task Similarity_InvalidArchivedTasks_ThrowsLikeFullHydration(string tasks)
+    {
+        using var fixture = await Fixture.Create(4, 256);
+        await fixture.MakeTerminalAndArchive(CompletedId);
+        string[] args = ["backlog-similar", "quartz", "--excerpt", "--limit", "100"];
+        Assert.Contains($"kind=goal id={CompletedId[..8]}", Run(args, fixture.Workspace, false).Text);
+        fixture.ReplaceTasks(CompletedId, tasks, archive: true);
+
+        JsonException expected = null!, actual = null!;
+        var expectedError = AsyncLocalConsoleRouter.CaptureError(() => expected = Assert.Throws<JsonException>(
+            () => Run(args, fixture.Workspace, true)));
+        var actualError = AsyncLocalConsoleRouter.CaptureError(() => actual = Assert.Throws<JsonException>(
+            () => Run(args, fixture.Workspace, false)));
+        Assert.Equal("$.Tasks", expected.Path);
+        Assert.Equal(expected.Path, actual.Path);
+        Assert.Equal(expected.Message, actual.Message);
+        Assert.Empty(expectedError);
+        Assert.Empty(actualError); // Archive corruption throws; it must not become a quarantine/skip.
+    }
+
     private static Receipt Run(string[] args, OrchestratorWorkspace workspace, bool baseline)
     {
         var events = new List<GoalSnapshotReadObservation>();
@@ -392,6 +441,44 @@ public sealed class BacklogSelectiveGoalReadTests(ITestOutputHelper output) : Cl
                 Timeline = goal.Timeline.Select(evt => evt with { OccurredAt = Stamp.AddDays(-2) }).ToArray()
             }).ToArray());
             Assert.Equal(ids.Length, await repository.ArchiveTerminalGoalSnapshotsAsync(Stamp, compressSnapshots: true));
+        }
+
+        internal async Task AddSimilarityTwin(string id)
+        {
+            var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+            var original = (await repository.LoadGoalsAsync([new GoalId(CompletedId)])).ExportSnapshot().Goals.Single();
+            await repository.SaveGoalSnapshotsAsync([original with
+            {
+                Id = id,
+                Timeline = original.Timeline.Select(evt => evt with { GoalId = id }).ToArray()
+            }]);
+        }
+
+        internal void ReplaceTasks(string id, string tasks, bool archive = false)
+        {
+            using var connection = Open(workspace.SqliteStatePath);
+            using var read = connection.CreateCommand();
+            read.CommandText = archive
+                ? "SELECT snapshot_json FROM goal_snapshot_archive WHERE goal_id = $id"
+                : "SELECT snapshot_json FROM goals WHERE id = $id";
+            read.Parameters.AddWithValue("$id", id);
+            var stored = read.ExecuteScalar();
+            Assert.NotNull(stored);
+            var node = JsonNode.Parse(archive ? GoalSnapshotArchiveCodec.Decode(stored)! : (string)stored)!;
+            Assert.Equal("Completed", node["Status"]!.GetValue<string>());
+            Assert.IsType<JsonArray>(node["Tasks"]);
+            node["Tasks"] = JsonNode.Parse(tasks);
+            var json = node.ToJsonString();
+            if (archive)
+                ReplaceArchive(id, GoalSnapshotArchiveCodec.Encode(json));
+            else
+            {
+                using var update = connection.CreateCommand();
+                update.CommandText = "UPDATE goals SET snapshot_json = $json WHERE id = $id";
+                update.Parameters.AddWithValue("$id", id);
+                update.Parameters.AddWithValue("$json", json);
+                Assert.Equal(1, update.ExecuteNonQuery());
+            }
         }
 
         internal void ExecuteBacklog(string sql)

@@ -89,10 +89,37 @@ public sealed partial class SqliteOrchestratorStateRepository
         return documents;
     }
 
-    // JsonSerializer skips all other fields; no GoalSnapshot, task or timeline collection is created.
+    // Validate the task collection's shape without retaining its payload. A malformed hot
+    // collection must still be quarantined; the same corruption in an archive must throw.
+    // No GoalSnapshot, task or timeline collection is created.
     private sealed record GoalSimilarityFields(string Id, string Objective, GoalStatus Status,
         bool IsMetadataOnly, DateTimeOffset? CreatedAt, DateTimeOffset? TerminatedAt,
+        [property: JsonConverter(typeof(SimilarityTaskShapeConverter))] IReadOnlyList<TaskSnapshot>? Tasks,
         [property: JsonConverter(typeof(TimelineLatestConverter))] TimelineLatest? Timeline);
+
+    private sealed class SimilarityTaskShapeConverter : JsonConverter<IReadOnlyList<TaskSnapshot>>
+    {
+        public SimilarityTaskShapeConverter() { }
+
+        public override IReadOnlyList<TaskSnapshot> Read(
+            ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+        {
+            // Let the enclosing serializer append the original $.Tasks path and location.
+            if (reader.TokenType != JsonTokenType.StartArray)
+                throw new JsonException($"The JSON value could not be converted to {typeToConvert}.");
+            while (reader.Read() && reader.TokenType != JsonTokenType.EndArray)
+            {
+                if (reader.TokenType is not (JsonTokenType.StartObject or JsonTokenType.Null))
+                    _ = JsonSerializer.Deserialize<TaskSnapshot>(ref reader, options);
+                else
+                    reader.Skip();
+            }
+            return Array.Empty<TaskSnapshot>();
+        }
+
+        public override void Write(Utf8JsonWriter writer, IReadOnlyList<TaskSnapshot> value,
+            JsonSerializerOptions options) => throw new NotSupportedException();
+    }
 
     private sealed record TimelineLatest(DateTimeOffset? Latest);
 
