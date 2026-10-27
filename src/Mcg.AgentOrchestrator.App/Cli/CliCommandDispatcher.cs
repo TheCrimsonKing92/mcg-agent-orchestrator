@@ -49,6 +49,12 @@ public static bool ExecuteCommand(
     Action<Action>? registerPostCommitAction = null,
     Func<IReadOnlyCollection<GoalId>, AgentOrchestratorKernel>? loadOperatorIntentTargets = null)
 {
+    if (CliArgumentParser.IsAskGoal(parts))
+    {
+        if (CliCommandHelp.TryPrintStartupHelp(parts)) return false;
+        var askGoalArgs = CliArgumentParser.ParseAskGoalArgs(parts);
+        _ = CliArgumentParser.ResolveAskGoalTarget(askGoalArgs, kernel, currentGoal);
+    }
     eventWriter ??= new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory, kernel: kernel, integrationBranch: workspace.IntegrationBranch);
     kernel.SetEventWriter(eventWriter);
     var operationCleanupContext = cleanupContext ?? WorktreeCleanupContext.Load(
