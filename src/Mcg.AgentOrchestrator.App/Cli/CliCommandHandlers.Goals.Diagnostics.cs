@@ -96,7 +96,8 @@ private static void PrintNextFullDetail(CliExecutionContext context, AutonomyPol
         context.Workspace.ExecutionDirectory,
         context.WorkerProfiles,
         context.Worktrees.TryResolve,
-        context.Kernel.Goals));
+        context.Kernel.Goals,
+        projectHomeDirectory: context.Workspace.ProjectHomeDirectoryOrNull));
     ConsoleViews.PrintEvidenceSummary(goal, context.Kernel.BuildGoalEvidenceSummary(goal.Id));
     ConsoleViews.PrintStageReadinessReport(goal, context.Kernel.BuildStageReadinessReport(goal.Id), context.Agents);
     ConsoleViews.PrintVerificationGate(goal, context.Kernel.BuildVerificationGate(goal.Id));

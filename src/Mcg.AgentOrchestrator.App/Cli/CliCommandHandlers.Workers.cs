@@ -321,7 +321,8 @@ private static bool? TryExecuteWorkerCommand(string command, IReadOnlyList<strin
                 context.Workspace.ExecutionDirectory,
                 context.WorkerProfiles,
                 context.Worktrees.TryResolve,
-                context.Kernel.Goals);
+                context.Kernel.Goals,
+                projectHomeDirectory: context.Workspace.ProjectHomeDirectoryOrNull);
             if (!readiness.AllowsStart(HasCliConfirmation(parts, "--confirm-readiness-risk")))
             {
                 ReadyBlockedDiagnosticsEmitter.EmitForAssigned(context.CurrentGoal, context.Agents, context.WorkerProfiles, context.Kernel.Goals, "start-gate");

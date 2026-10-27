@@ -350,7 +350,8 @@ internal static void EnsureGoalReadinessAllowsStart(CliExecutionContext context,
         context.Workspace.ExecutionDirectory,
         context.WorkerProfiles,
         context.Worktrees.TryResolve,
-        context.Kernel.Goals);
+        context.Kernel.Goals,
+        projectHomeDirectory: context.Workspace.ProjectHomeDirectoryOrNull);
     if (!readiness.AllowsStart(confirmed))
     {
         ConsoleViews.PrintGoalReadinessPreflight(readiness);

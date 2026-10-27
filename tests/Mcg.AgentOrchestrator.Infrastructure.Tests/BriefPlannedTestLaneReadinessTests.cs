@@ -1,0 +1,349 @@
+using Mcg.AgentOrchestrator.App.Application;
+using Mcg.AgentOrchestrator.App.Orchestration;
+using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Infrastructure;
+
+// Parallel-safe: private trees, kernels and SQLite stores; process launch is injected and forbidden.
+public sealed class BriefPlannedTestLaneReadinessTests
+{
+    private const string Name = "BuildWidgetTests";
+    private const string Manifest = """
+        { "version": 1, "engine": { "infrastructureTestLanes": [
+          { "name": "Build lane", "filter": "FullyQualifiedName~Build", "ownedCollections": ["BuildCollection"] },
+          { "name": "Remainder", "filter": "FullyQualifiedName!~Build" }
+        ] } }
+        """;
+    private const string Plan = "Plan lane 'Build lane': change filter in config/acceptance-manifest.json " +
+        "to FullyQualifiedName~BuildWidgetTests and update the pinned membership test.";
+
+    [Theory]
+    [InlineData("new test class BuildWidgetTests")]
+    [InlineData("new test class Example.BuildWidgetTests")]
+    [InlineData("new tests/Widget.Tests/BuildWidgetTests.cs")]
+    [InlineData("`tests/Widget.Tests/BuildWidgetTests.cs` (new file)")]
+    public void ExplicitCollision_ReadinessBlocksBothConfirmationStates(string declaration)
+    {
+        using var fixture = new Fixture(declaration);
+        var before = File.ReadAllBytes(fixture.ManifestPath);
+        var report = fixture.Readiness();
+
+        var finding = Assert.Single(report.Findings, item => item.Kind == LaneSubstringCollisionCheck.Rule);
+        Assert.Equal(GoalReadinessSeverity.Blocker, finding.Severity);
+        Assert.False(finding.CanOverride);
+        Assert.Contains(Name, finding.Message);
+        Assert.Contains("Build lane", finding.Message);
+        Assert.Contains("FullyQualifiedName~Build", finding.Message);
+        Assert.Contains("Rename", finding.Message);
+        Assert.Contains("manifest/filter and pinned membership test", finding.Message);
+        Assert.True(report.HasHardBlockers);
+        Assert.False(report.AllowsStart(false));
+        Assert.False(report.AllowsStart(true));
+        Assert.Throws<InvalidOperationException>(() => GoalReadinessPreflight.ThrowIfStartBlocked(report, true));
+        Assert.Equal(before, File.ReadAllBytes(fixture.ManifestPath));
+        Assert.False(File.Exists(fixture.ProposedPath));
+    }
+
+    [Theory]
+    [InlineData("profile")]
+    [InlineData("subscription")]
+    [InlineData("batch")]
+    [InlineData("start-ready")]
+    public void UnresolvedCollision_ApplicationRefusesDeveloperPreparation(string route)
+    {
+        using var fixture = new Fixture("new test class " + Name);
+        Assert.Equal(WorkTaskStatus.Assigned, fixture.Developer.Status);
+        Assert.Empty(DispatchReadinessRules.BuildIncompleteEarlierStageDependencies(fixture.Goal, fixture.Developer));
+        var homeCalls = 0;
+        var operations = new GoalDispatchOperations(resolveHome: _ =>
+        {
+            homeCalls++;
+            throw new InvalidOperationException("Preparation reached home resolution.");
+        });
+        var launchCalls = 0;
+        var runner = new BackgroundDispatchRunner(startProcess: _ =>
+        {
+            launchCalls++;
+            throw new InvalidOperationException("Unexpected worker launch.");
+        });
+        var profiles = new WorkerProfileCatalog([fixture.Profile]);
+        var failure = Assert.Throws<InvalidOperationException>(() =>
+        {
+            switch (route)
+            {
+                case "profile":
+                    operations.ProfileDispatchTask(fixture.Kernel, fixture.Workspace, fixture.Goal,
+                        fixture.Developer, fixture.Profile);
+                    break;
+                case "subscription":
+                    operations.SubscriptionDispatchTask(fixture.Kernel, fixture.Workspace, fixture.Goal,
+                        fixture.Developer, fixture.Agents, profiles);
+                    break;
+                case "batch":
+                    operations.SubscriptionDispatchReadyBatch(fixture.Kernel, fixture.Workspace, fixture.Goal,
+                        fixture.Agents, profiles);
+                    break;
+                case "start-ready":
+                    operations.StartSubscriptionReadyTasks(fixture.Kernel, fixture.Workspace, fixture.Goal,
+                        fixture.Agents, profiles, runner: runner);
+                    break;
+                default: throw new ArgumentException(route);
+            }
+        });
+
+        Assert.Contains(LaneSubstringCollisionCheck.Rule, failure.Message);
+        Assert.Contains(Name, failure.Message);
+        Assert.Equal(0, homeCalls);
+        Assert.Equal(0, launchCalls);
+        Assert.Null(fixture.Developer.LastDispatch);
+        Assert.Null(fixture.Developer.LastProcess);
+        Assert.False(File.Exists(fixture.ProposedPath));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void RecordedCollision_ApplicationRefusesLaunchBeforeRefresh(bool refresh)
+    {
+        using var fixture = new Fixture("new test class " + Name);
+        fixture.Kernel.RecordTaskDispatch(fixture.Goal.Id, fixture.Developer.Id,
+            new TaskDispatchRecord("fixture", "worker", fixture.Root, DateTimeOffset.UtcNow));
+        Assert.Contains(fixture.Kernel.BuildProcessBatchPlan(fixture.Goal.Id, ProcessBatchActionKind.StartDispatches).Items,
+            item => item.TaskId == fixture.Developer.Id && item.Status == ProcessBatchItemStatus.Ready);
+        var launchCalls = 0;
+        var runner = new BackgroundDispatchRunner(startProcess: _ =>
+        {
+            launchCalls++;
+            throw new InvalidOperationException("Unexpected worker launch.");
+        });
+        var result = new GoalDispatchOperations().StartDispatches(fixture.Kernel, fixture.Workspace,
+            fixture.Goal, refreshBeforeStart: refresh, runner: runner);
+
+        Assert.Contains(LaneSubstringCollisionCheck.Rule, Assert.Single(result.StartRefusals!).Reason);
+        Assert.Empty(result.Tasks);
+        Assert.Empty(result.StartFailures!);
+        Assert.Equal(0, launchCalls);
+        Assert.Null(fixture.Developer.LastProcess);
+        Assert.False(File.Exists(fixture.ProposedPath));
+    }
+
+    [Fact]
+    public void ScoutSequence_PlannerCanPrepareWhileDeveloperRemainsBlocked()
+    {
+        using var fixture = new Fixture("new test class " + Name, scout: true);
+        var planner = Assert.Single(fixture.Goal.Tasks, task => task.RequiredRole == AgentRole.Planner);
+        var report = fixture.Readiness();
+        Assert.True(report.AllowsStart(false));
+        Assert.Equal(GoalReadinessSeverity.Warning,
+            Assert.Single(report.Findings, item => item.Kind == LaneSubstringCollisionCheck.Rule).Severity);
+        var operations = new GoalDispatchOperations(resolveHome: _ =>
+            OrchestratorHome.ResolveForLaunch(VerifiedRepositoryRoot.Find(), _ => null));
+        var prepared = operations.ProfileDispatchTask(fixture.Kernel, fixture.Workspace, fixture.Goal,
+            planner, fixture.Profile, sandboxOptions: new WorkerSandboxOptions(false,
+                WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget));
+        Assert.True(File.Exists(prepared.PromptPath));
+        Assert.NotNull(planner.LastDispatch);
+        fixture.Kernel.ReportTaskProgress(fixture.Goal.Id, planner.Id, WorkTaskStatus.Completed, "Planning finished.");
+        Assert.False(fixture.Readiness().AllowsStart(true));
+        var failure = Assert.Throws<InvalidOperationException>(() => operations.ProfileDispatchTask(
+            fixture.Kernel, fixture.Workspace, fixture.Goal, fixture.Developer, fixture.Profile));
+        Assert.Contains(LaneSubstringCollisionCheck.Rule, failure.Message);
+        Assert.Null(fixture.Developer.LastDispatch);
+    }
+
+    [Theory]
+    [InlineData("new test class QuokkaHarborTests")]
+    [InlineData("new test class BuildWidgetTests in collection 'BuildCollection'")]
+    [InlineData("new test class BuildWidgetTests with [Collection(\"BuildCollection\")]")]
+    public void ConsistentPlacement_ReadinessAllowsStart(string declaration)
+    {
+        using var fixture = new Fixture(declaration);
+        var report = fixture.Readiness();
+        Assert.True(report.AllowsStart(false));
+        Assert.DoesNotContain(report.Findings, finding => finding.Kind == LaneSubstringCollisionCheck.Rule);
+    }
+
+    [Theory]
+    [InlineData("existing test class BuildWidgetTests")]
+    [InlineData("Update tests/Widget.Tests/BuildWidgetTests.cs")]
+    [InlineData("Example: new test class BuildWidgetTests")]
+    [InlineData("> new test class BuildWidgetTests")]
+    [InlineData("\"new test class BuildWidgetTests\"")]
+    [InlineData("Historical evidence: new test class BuildWidgetTests")]
+    [InlineData("Regex: new test class BuildWidgetTests")]
+    [InlineData("dotnet test --filter new test class BuildWidgetTests")]
+    [InlineData("Run `dotnet test --filter new test class BuildWidgetTests`.")]
+    [InlineData("Do not add new test class BuildWidgetTests")]
+    [InlineData("No new test class BuildWidgetTests is required")]
+    [InlineData("BuildWidgetTests is cited for reference")]
+    [InlineData("```text\nnew test class BuildWidgetTests\n```")]
+    public void IncidentalMentions_DoNotFabricateDeclarations(string text)
+    {
+        using var fixture = new Fixture(text);
+        Assert.True(fixture.Readiness().AllowsStart(false));
+        Assert.DoesNotContain(fixture.Readiness().Findings,
+            finding => finding.Kind is LaneSubstringCollisionCheck.Rule or BriefPlannedTestLaneReadiness.PendingKind);
+    }
+
+    [Fact]
+    public void ExistingSourceAndHistoricalSection_DoNotDeclareNewClasses()
+    {
+        using var fixture = new Fixture("new tests/Widget.Tests/BuildWidgetTests.cs\n" +
+            "## Historical evidence\nnew test class BuildHistoryTests");
+        Directory.CreateDirectory(Path.GetDirectoryName(fixture.ProposedPath)!);
+        File.WriteAllText(fixture.ProposedPath, "// An existing test file.");
+        Assert.True(fixture.Readiness().AllowsStart(false));
+    }
+
+    [Fact]
+    public void ConcretePlacementPlan_IsPendingAndDoesNotBypassCompletion()
+    {
+        using var fixture = new Fixture("new test class " + Name + ". " + Plan);
+        var before = File.ReadAllBytes(fixture.ManifestPath);
+        var report = fixture.Readiness();
+        Assert.True(report.AllowsStart(false));
+        var pending = Assert.Single(report.Findings, item => item.Kind == BriefPlannedTestLaneReadiness.PendingKind);
+        Assert.Equal(GoalReadinessSeverity.Info, pending.Severity);
+        Assert.Contains("owner-approved where required", pending.Message);
+        Assert.Contains("completion and acceptance gates", pending.Message);
+        var lanes = AcceptanceGateEngineSettings.Parse(Manifest).InfrastructureTestLanes;
+        Assert.Single(LaneSubstringCollisionCheck.Find(lanes, lanes,
+            [new AcceptanceTestClassDescriptor(Name, null)], "+public sealed " + "class " + Name));
+        Assert.Equal(before, File.ReadAllBytes(fixture.ManifestPath));
+    }
+
+    [Theory]
+    [InlineData("Plan to update the manifest.")]
+    [InlineData("Plan lane 'Other lane': change filter in acceptance-manifest.json to FullyQualifiedName~BuildWidgetTests and update the pinned membership test.")]
+    [InlineData("Plan lane 'Build lane': change filter in acceptance-manifest.json to FullyQualifiedName~UnrelatedTests and update the pinned membership test.")]
+    [InlineData("Plan lane 'Build lane': change filter in acceptance-manifest.json to FullyQualifiedName~BuildWidgetTests.")]
+    public void IncompletePlacementPlan_RemainsBlocking(string plan)
+    {
+        using var fixture = new Fixture("new test class " + Name + ". " + plan);
+        Assert.False(fixture.Readiness().AllowsStart(true));
+        Assert.Single(fixture.Readiness().Findings, item => item.Kind == LaneSubstringCollisionCheck.Rule);
+    }
+
+    [Fact]
+    public void MultipleSelectingLanes_OnePlanDoesNotHideOtherCollision()
+    {
+        using var fixture = new Fixture("new test class " + Name + ". " + Plan);
+        fixture.WriteManifest(Manifest.Replace("{ \"name\": \"Remainder\"",
+            "{ \"name\": \"Widget lane\", \"filter\": \"FullyQualifiedName~Widget\" }, { \"name\": \"Remainder\""));
+        var report = fixture.Readiness();
+        Assert.Single(report.Findings, item => item.Kind == BriefPlannedTestLaneReadiness.PendingKind);
+        Assert.Contains("Widget lane", Assert.Single(report.Findings,
+            item => item.Kind == LaneSubstringCollisionCheck.Rule).Message);
+        Assert.False(report.AllowsStart(true));
+    }
+
+    [Fact]
+    public void ConfiguredProjectManifest_WinsOverTargetAndHome()
+    {
+        using var fixture = new Fixture("new test class " + Name);
+        var home = Path.Combine(fixture.Root, "install-home");
+        Directory.CreateDirectory(Path.Combine(home, "config"));
+        File.WriteAllText(Path.Combine(home, "config", "acceptance-manifest.json"), Manifest);
+        var projectHome = Path.Combine(fixture.Root, "project-home");
+        Directory.CreateDirectory(projectHome);
+        var projectManifest = Manifest.Replace("FullyQualifiedName~Build", "FullyQualifiedName~Quokka")
+            .Replace("FullyQualifiedName!~Build", "FullyQualifiedName!~Quokka");
+        File.WriteAllText(Path.Combine(projectHome, "acceptance-manifest.json"), projectManifest);
+        Assert.False(fixture.Readiness().AllowsStart(true));
+        Assert.True(fixture.Readiness(projectHome).AllowsStart(false));
+        // Target workspace and project context are the only inputs to the real application consumer.
+        var workspace = fixture.Workspace with { IsProjectScoped = true, OrchestratorDirectory = projectHome };
+        var reachedPreparation = false;
+        var operations = new GoalDispatchOperations(resolveHome: _ =>
+        {
+            reachedPreparation = true;
+            throw new InvalidOperationException("Admitted to preparation.");
+        });
+        var failure = Assert.Throws<InvalidOperationException>(() => operations.ProfileDispatchTask(
+            fixture.Kernel, workspace, fixture.Goal, fixture.Developer, fixture.Profile));
+        Assert.True(reachedPreparation);
+        Assert.Equal("Admitted to preparation.", failure.Message);
+    }
+
+    [Theory]
+    [InlineData("missing")]
+    [InlineData("invalid-json")]
+    [InlineData("invalid-filter")]
+    [InlineData("unreadable")]
+    public void InvalidTargetConfiguration_BlocksWithoutHomeSubstitution(string kind)
+    {
+        using var fixture = new Fixture("No proposed test declarations.");
+        using var home = new Fixture("new test class " + Name);
+        var projectHome = Path.Combine(fixture.Root, "project-home");
+        Directory.CreateDirectory(projectHome);
+        var manifestPath = Path.Combine(projectHome, "acceptance-manifest.json");
+        File.Delete(fixture.ManifestPath);
+        if (kind == "invalid-json") File.WriteAllText(manifestPath, "{ malformed");
+        if (kind == "invalid-filter") File.WriteAllText(manifestPath,
+            Manifest.Replace("FullyQualifiedName~Build", "UnsupportedFilter=Build"));
+        if (kind == "unreadable") File.WriteAllText(manifestPath, Manifest);
+        using var locked = kind == "unreadable"
+            ? new FileStream(manifestPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None) : null;
+        var report = fixture.Readiness(projectHome);
+        Assert.False(report.AllowsStart(true));
+        var failure = Assert.Single(report.Findings, item => item.Kind == BriefPlannedTestLaneReadiness.ConfigurationKind);
+        Assert.Contains(projectHome, failure.Message);
+        Assert.DoesNotContain(report.Findings, item => item.Kind == LaneSubstringCollisionCheck.Rule);
+    }
+
+    [Fact]
+    public void ScoutConfigurationFailure_RemainsBlockingBeforePlanning()
+    {
+        using var fixture = new Fixture("new test class " + Name, scout: true);
+        fixture.WriteManifest("{ malformed");
+        var report = fixture.Readiness();
+        Assert.False(report.AllowsStart(true));
+        Assert.Equal(GoalReadinessSeverity.Blocker, Assert.Single(report.Findings,
+            item => item.Kind == BriefPlannedTestLaneReadiness.ConfigurationKind).Severity);
+    }
+
+    private sealed class Fixture : IDisposable
+    {
+        internal string Root { get; } = SharedTestSupport.CreateTempDirectory();
+        internal string ManifestPath => Path.Combine(Root, "config", "acceptance-manifest.json");
+        internal string ProposedPath => Path.Combine(Root, "tests", "Widget.Tests", Name + ".cs");
+        internal OrchestratorWorkspace Workspace { get; }
+        internal AgentOrchestratorKernel Kernel { get; } = new();
+        internal Goal Goal { get; }
+        internal TaskSpec Developer { get; } = new(TaskId.New(), "Implement the scoped change.", AgentRole.Developer);
+        internal WorkerProfile Profile { get; } = new("fixture", "worker --cd {workingDirectory}");
+        internal IReadOnlyList<AgentDefinition> Agents { get; }
+
+        internal Fixture(string scope, bool scout = false)
+        {
+            Workspace = OrchestratorWorkspace.ForDirectory(Root);
+            Directory.CreateDirectory(Workspace.OrchestratorDirectory);
+            StateDbMigrations.EnsureUpToDate(Workspace.SqliteStatePath);
+            WriteManifest(Manifest);
+            var planner = new TaskSpec(TaskId.New(), "Plan consistent placement.", AgentRole.Planner);
+            Goal = Kernel.CreateGoal("Improve the widget.\n## Scope\n- " + scope,
+                scout ? [planner, Developer] : [Developer]);
+            Kernel.SetGoalRefinedSpec(Goal.Id, new RefinedSpec("Improve the widget.",
+                ["Widget handles input."], VerificationClass.TestVerifiable, [], []));
+            Agents = (scout ? new[] { AgentRole.Planner, AgentRole.Developer } : [AgentRole.Developer])
+                .Select(role => new AgentDefinition(new AgentId(role.ToString()), role.ToString(), role,
+                    new ModelProfile("OpenAI", AgentCatalog.OpenAiGpt61SolSubscriptionModelAlias,
+                        ModelCapability.Text, SubscriptionMode.ApiKey),
+                    ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+                    Subscription: new SubscriptionLaunchProfile("codex-cli",
+                        AgentCatalog.OpenAiGpt61SolSubscriptionModelAlias, "low"))).ToArray();
+            Kernel.ActivateGoal(Goal.Id, Agents);
+        }
+
+        internal void WriteManifest(string text)
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(ManifestPath)!);
+            File.WriteAllText(ManifestPath, text);
+        }
+
+        internal GoalReadinessPreflightReport Readiness(string? projectHome = null) =>
+            GoalReadinessPreflight.Build(Goal, Agents, Root, resolveWorktree: (_, _) => Root,
+                projectHomeDirectory: projectHome);
+
+        public void Dispose() => SharedTestSupport.RemoveTempDirectory(Root);
+    }
+}

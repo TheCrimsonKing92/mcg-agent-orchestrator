@@ -10,7 +10,8 @@ internal static class CliLifecycleReadiness
     {
         var readiness = GoalReadinessPreflight.Build(goal, context.Agents,
             context.Workspace.ExecutionDirectory, context.WorkerProfiles,
-            context.Worktrees.TryResolve, context.Kernel.Goals);
+            context.Worktrees.TryResolve, context.Kernel.Goals,
+            projectHomeDirectory: context.Workspace.ProjectHomeDirectoryOrNull);
         // Workspace creation is the next owned step. Validate every other blocker before
         // committing a new goal or publishing epic membership. The full workspace check
         // still runs after Ensure, before native admission.
