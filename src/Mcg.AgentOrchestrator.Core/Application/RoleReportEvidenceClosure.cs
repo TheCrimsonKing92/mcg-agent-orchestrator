@@ -69,11 +69,7 @@ internal sealed class RoleReportEvidenceClosure(
         Func<string, string?> passedGateSourceForClass, out string? tests, out string? gate)
     {
         tests = gate = null;
-        var version = goal.AuthoritativeRefinedSpecVersion;
-        var identity = request.PlannerIdentity!;
-        var index = identity.CriterionIndex - 1;
-        var criterion = version is not null && version.BriefVersion == identity.BriefVersion &&
-            index >= 0 && index < version.Spec.AcceptanceCriteria.Count ? version.Spec.AcceptanceCriteria[index] : null;
+        var criterion = ReportCriterionLookup.Find(goal, request.PlannerIdentity);
         var requiredField = criterion is null ? null : DeveloperReportEvidence.FindRequiredField(criterion);
         if (requiredField is null) return "not-a-report-criterion";
         if (developer?.Status != WorkTaskStatus.Completed) return "owner-round-incomplete";

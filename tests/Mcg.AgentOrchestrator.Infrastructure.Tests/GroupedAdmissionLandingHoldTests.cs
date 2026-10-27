@@ -6,6 +6,55 @@ using Mcg.AgentOrchestrator.Infrastructure;
 // Parallel-safe: each test owns its kernel and uses only in-memory projections.
 public sealed class GroupedAdmissionLandingHoldTests
 {
+    [Fact]
+    public void Apply_RevisedBriefWithRecordedReport_AdmitsCohortMember()
+    {
+        var (kernel, goal, wait) = ReportSetup("developer", "deferred - AlphaTests", reviseBrief: true);
+        var pending = kernel.GetPendingHumanInput(goal.Id);
+        var ready = Ready(goal.Id);
+
+        var projection = GroupedAdmissionLandingHold.Apply(ready, pending, goal);
+
+        Assert.Same(ready, projection);
+        Assert.True(DeveloperReportWait.IsReportWait(goal, wait));
+        Assert.Null(GroupedAdmissionLandingHold.FindBlockingWait(pending, goal));
+        Assert.Equal(2, wait.PlannerIdentity!.BriefVersion);
+        ConductorSpeculativeAcceptanceCandidate[] candidates =
+        [
+            new(goal.Id, projection),
+            .. Enumerable.Range(0, 3).Select(_ => GoalId.New())
+                .Select(id => new ConductorSpeculativeAcceptanceCandidate(id, Ready(id)))
+        ];
+        var receipt = ConductorSpeculativeAcceptanceCohortPlanner.Plan(candidates).FormatReceipt(1);
+        var members = receipt.Split("members=", StringSplitOptions.None)[1].Split(' ')[0].Split(',');
+        Assert.Contains(goal.Id.Value[..8], members);
+        Assert.DoesNotContain("LandingHeld", receipt);
+        Assert.False(wait.IsCompleted);
+        Assert.Null(wait.Answer);
+    }
+
+    [Theory]
+    [InlineData("newer-wait")]
+    [InlineData("no-classes")]
+    [InlineData("not-report")]
+    public void Apply_RevisedBriefWithoutReportPrerequisite_KeepsLandingHold(string failure)
+    {
+        var (kernel, goal, wait) = ReportSetup("developer",
+            failure == "no-classes" ? "deferred - " : "deferred - AlphaTests", reviseBrief: true,
+            criterion: failure == "not-report" ? "The Developer implements the change." : RoleReportEvidenceClosureTests.ReportCriterion,
+            waitVersion: failure == "newer-wait" ? 3 : 2);
+        var pending = kernel.GetPendingHumanInput(goal.Id);
+
+        var excluded = Assert.IsType<GateReadyCandidateProjectionResult.Excluded>(
+            GroupedAdmissionLandingHold.Apply(Ready(goal.Id), pending, goal));
+
+        Assert.Equal(GateReadyCandidateExclusionReason.LandingHeld, excluded.Reason);
+        Assert.Equal(wait.Id.Value, excluded.HoldRequestId);
+        Assert.Same(wait, GroupedAdmissionLandingHold.FindBlockingWait(pending, goal));
+        Assert.False(wait.IsCompleted);
+        Assert.Null(wait.Answer);
+    }
+
     [Theory]
     [InlineData("developer")]
     [InlineData("worker")]
@@ -185,13 +234,23 @@ public sealed class GroupedAdmissionLandingHoldTests
             "Grouped admission projection"));
     }
 
-    private static (AgentOrchestratorKernel Kernel, Goal Goal, HumanInputRequest Wait) ReportSetup(string owner, string tests)
+    private static (AgentOrchestratorKernel Kernel, Goal Goal, HumanInputRequest Wait) ReportSetup(string owner, string tests,
+        bool reviseBrief = false, string criterion = RoleReportEvidenceClosureTests.ReportCriterion, int? waitVersion = null)
     {
         var kernel = new AgentOrchestratorKernel();
         var developer = new TaskSpec(TaskId.New(), "Implement candidate", AgentRole.Developer);
         var goal = kernel.CreateGoal("Admit a recorded Developer report", [developer]);
         kernel.RecordGoalRefinement(goal.Id, new RefinedSpec("Role report evidence",
-            [RoleReportEvidenceClosureTests.ReportCriterion], VerificationClass.TestVerifiable, [], []));
+            [criterion], VerificationClass.TestVerifiable, [], []));
+        if (reviseBrief)
+        {
+            kernel.ReviseGoalBrief(goal.Id, $"Revised report wording\n\n## Acceptance criteria\n1. {criterion}",
+                "Revise wording without changing criteria.");
+            Assert.Equal(2, goal.AuthoritativeBrief.Version);
+            Assert.Equal(1, Assert.Single(goal.RefinedSpecVersions).BriefVersion);
+            Assert.Equal(1, goal.AuthoritativeRefinedSpecVersion!.BriefVersion);
+            Assert.Equal(criterion, Assert.Single(goal.AuthoritativeRefinedSpecVersion.Spec.AcceptanceCriteria));
+        }
         kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
         var started = new DateTimeOffset(2026, 10, 25, 12, 0, 0, TimeSpan.Zero);
         kernel.RecordTaskDispatch(goal.Id, developer.Id, new TaskDispatchRecord(
@@ -204,7 +263,7 @@ public sealed class GroupedAdmissionLandingHoldTests
         var wait = kernel.RequestHumanInputDeduplicated(goal.Id, null, "Provide Developer report",
             kind: HumanWaitKind.ProspectiveAcceptanceEvidence, evidenceOwner: owner,
             plannerIdentity: new PlannerEvidenceIdentity(goal.Id.Value, developer.Id.Value,
-                goal.AuthoritativeBrief.Version, 1, "developer-report"),
+                waitVersion ?? goal.AuthoritativeBrief.Version, 1, "developer-report"),
             plannerEvidence: new PlannerEvidencePayload(1, "developer-report", "post-implementation", owner,
                 "Deferred report", "Developer owns; Acceptance executes", null, null, null)).Request;
         return (kernel, goal, wait);

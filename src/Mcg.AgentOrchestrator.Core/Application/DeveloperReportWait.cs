@@ -15,15 +15,8 @@ public static class DeveloperReportWait
             !string.Equals(owner, "worker", StringComparison.OrdinalIgnoreCase))
             return false;
 
-        var identity = request.PlannerIdentity;
-        var version = goal.AuthoritativeRefinedSpecVersion;
-        if (identity is null || identity.BriefVersion != goal.AuthoritativeBrief.Version ||
-            version is null || version.BriefVersion != identity.BriefVersion)
-            return false;
-
-        var index = identity.CriterionIndex - 1;
-        return index >= 0 && index < version.Spec.AcceptanceCriteria.Count &&
-            DeveloperReportEvidence.FindRequiredField(version.Spec.AcceptanceCriteria[index]) is not null;
+        return ReportCriterionLookup.Find(goal, request.PlannerIdentity) is { } criterion &&
+            DeveloperReportEvidence.FindRequiredField(criterion) is not null;
     }
 
     public static bool HasReportedClasses(Goal goal)
