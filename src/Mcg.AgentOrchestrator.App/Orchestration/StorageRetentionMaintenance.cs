@@ -1883,6 +1883,14 @@ internal static partial class StorageRetentionMaintenance
             }
         }
 
+        if (root.TryGetProperty("normalizedTestResultPaths", out var normalizedPaths) && normalizedPaths.ValueKind == JsonValueKind.Array)
+            foreach (var value in normalizedPaths.EnumerateArray())
+                if (value.ValueKind == JsonValueKind.String) AddDeclaredPath(paths, goalDirectory, value.GetString());
+        if (root.TryGetProperty("checks", out var checks) && checks.ValueKind == JsonValueKind.Array)
+            foreach (var check in checks.EnumerateArray())
+                if (check.ValueKind == JsonValueKind.Object)
+                    foreach (var path in ReadDeclaredAttemptPaths(check, goalDirectory)) paths.Add(path);
+
         if (root.TryGetProperty("testResultPaths", out var testResultPaths) &&
             testResultPaths.ValueKind == JsonValueKind.Array)
         {
