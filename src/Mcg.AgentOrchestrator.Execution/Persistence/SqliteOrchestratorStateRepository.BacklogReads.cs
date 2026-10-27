@@ -104,9 +104,11 @@ public sealed partial class SqliteOrchestratorStateRepository
         public override IReadOnlyList<TaskSnapshot> Read(
             ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
         {
-            // Let the enclosing serializer append the original $.Tasks path and location.
+            // An empty message lets the enclosing serializer generate the collection-type
+            // error with the original $.Tasks path and location, as full hydration does.
+            // A custom message suppresses that diagnostic suffix.
             if (reader.TokenType != JsonTokenType.StartArray)
-                throw new JsonException($"The JSON value could not be converted to {typeToConvert}.");
+                throw new JsonException();
             while (reader.Read() && reader.TokenType != JsonTokenType.EndArray)
             {
                 if (reader.TokenType is not (JsonTokenType.StartObject or JsonTokenType.Null))
