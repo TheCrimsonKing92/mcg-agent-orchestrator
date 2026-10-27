@@ -89,7 +89,8 @@ internal sealed class WorkerSkillSelector(WorkerSkillResolver? resolver = null, 
         TaskSpec task,
         string workingDirectory)
     {
-        var stack = ProjectStackFor(workingDirectory);
+        var stack = ProjectStackResolver.GuidanceStack(
+            ProjectStackResolver.Resolve(workingDirectory, _targetHome.ProjectHomeDirectory), _targetHome.IsOrchestratorHome);
         return SelectSkills(goal, task)
             .DistinctBy(skill => skill.Name, StringComparer.OrdinalIgnoreCase)
             .Where(skill => stack == ProjectStack.Dotnet || skill.Name != "dotnet-windows-build-hygiene")
@@ -103,9 +104,6 @@ internal sealed class WorkerSkillSelector(WorkerSkillResolver? resolver = null, 
                 BuildSkillReason(skill.Name, goal, task)))
             .ToArray();
     }
-
-    internal static ProjectStack ProjectStackFor(string workingDirectory) =>
-        TargetToolchainDetector.Detect(workingDirectory) == Toolchain.Go ? ProjectStack.Go : ProjectStack.Dotnet;
 
     private IEnumerable<SkillCandidate> SelectSkills(Goal goal, TaskSpec task)
     {

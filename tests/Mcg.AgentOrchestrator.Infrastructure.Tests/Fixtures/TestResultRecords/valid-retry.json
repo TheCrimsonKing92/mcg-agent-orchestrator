@@ -1,0 +1,16 @@
+{
+  "reportFormat": "CTRF",
+  "schemaVersion": "mcg-test-result/1",
+  "results": {
+    "tool": { "name": "vitest" },
+    "tests": [
+      {
+        "testId": "src/view.test.ts::renders",
+        "name": "renders",
+        "status": "passed",
+        "retryAttempts": [{ "status": "failed", "duration": 30, "message": "boom" }],
+        "extra": { "seed": "8431", "reportedBy": "vitest-junit" }
+      }
+    ]
+  }
+}
