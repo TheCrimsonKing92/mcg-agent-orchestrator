@@ -1890,7 +1890,10 @@ internal static partial class StorageRetentionMaintenance
             {
                 if (value.ValueKind == JsonValueKind.String)
                 {
-                    AddDeclaredPath(paths, goalDirectory, value.GetString());
+                    foreach (var path in NormalizedTestResultRetentionPaths.WithNormalizedPeer(value.GetString()))
+                    {
+                        AddDeclaredPath(paths, goalDirectory, path);
+                    }
                 }
             }
         }

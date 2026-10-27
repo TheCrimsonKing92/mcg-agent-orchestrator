@@ -272,7 +272,7 @@ internal sealed class ApparatusRedGate
                 continue;
             }
 
-            var trxFailures = ReadTrxFailures(check);
+            var trxFailures = ReceiptTestFailureReader.Read(check);
             var confirmedLaneFailures = uniqueChecks.ContainsKey(check.Name)
                 ? AcceptanceLaneRerunAttributionReader.ReadConfirmedFailures(
                     check, goal.Id.Value, acceptance.BranchHeadSha, acceptance.MainHeadSha, acceptance.AttemptId)
@@ -365,19 +365,6 @@ internal sealed class ApparatusRedGate
             cleanupChecks.Values.Select(AcceptanceAssemblyCleanupEvidence.AttachCleanupCause).ToArray(),
             sourceRequest.EnumerationCount,
             sourceRequest.ReadCount);
-    }
-
-    private static IReadOnlyList<AcceptanceTrxFailure> ReadTrxFailures(AcceptanceCheckResult check)
-    {
-        if (check.TestResultPaths is not { Count: > 0 } paths)
-        {
-            return [];
-        }
-
-        return paths
-            .Where(path => !string.IsNullOrWhiteSpace(path))
-            .SelectMany(path => AcceptanceTrxFailureReader.Read(path).Failures)
-            .ToArray();
     }
 
     private static bool IdentityMatches(string? trxTestName, string identity)
