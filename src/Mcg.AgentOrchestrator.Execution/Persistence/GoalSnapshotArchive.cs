@@ -11,7 +11,7 @@ public sealed class GoalSnapshotArchive(JsonSerializerOptions serializerOptions)
     // The caller initializes the schema and owns the connection and transaction covering the entire eligible set.
     public async Task<int> ArchiveAsync(
         SqliteConnection connection, DateTimeOffset cutoff, long maxSnapshotBytes = 134_217_728,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default, bool compress = false)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(maxSnapshotBytes, 1L);
         var candidates = new List<(string Id, long Bytes)>();
@@ -68,11 +68,23 @@ public sealed class GoalSnapshotArchive(JsonSerializerOptions serializerOptions)
 
             var stub = CreateMetadataSnapshot(snapshot);
             await using var copy = connection.CreateCommand();
-            copy.CommandText = """
+            if (compress)
+            {
+                copy.CommandText = """
+                    INSERT INTO goal_snapshot_archive (goal_id, snapshot_json, archived_at)
+                    VALUES ($id, $snapshot, $archived_at)
+                    ON CONFLICT(goal_id) DO NOTHING
+                    """;
+                copy.Parameters.Add("$snapshot", SqliteType.Blob).Value = GoalSnapshotArchiveCodec.Encode(json);
+            }
+            else
+            {
+                copy.CommandText = """
                 INSERT INTO goal_snapshot_archive (goal_id, snapshot_json, archived_at)
                 SELECT id, snapshot_json, $archived_at FROM goals WHERE id = $id
                 ON CONFLICT(goal_id) DO NOTHING
                 """;
+            }
             copy.Parameters.AddWithValue("$id", id);
             copy.Parameters.AddWithValue("$archived_at", archivedAt);
             if (await copy.ExecuteNonQueryAsync(cancellationToken) == 0)
@@ -101,7 +113,7 @@ public sealed class GoalSnapshotArchive(JsonSerializerOptions serializerOptions)
         command.Parameters.AddWithValue("$id", snapshot.Id);
         try
         {
-            var json = await command.ExecuteScalarAsync(cancellationToken) as string;
+            var json = GoalSnapshotArchiveCodec.Decode(await command.ExecuteScalarAsync(cancellationToken));
             return json is null ? snapshot : JsonSerializer.Deserialize<GoalSnapshot>(json, serializerOptions);
         }
         catch (SqliteException ex) when (ex.SqliteErrorCode == 1 &&

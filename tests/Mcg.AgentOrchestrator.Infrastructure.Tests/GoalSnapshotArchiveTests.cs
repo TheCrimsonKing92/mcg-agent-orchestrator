@@ -422,7 +422,7 @@ public sealed class GoalSnapshotArchiveTests
             command.CommandText = "SELECT goal_id, snapshot_json, archived_at FROM goal_snapshot_archive ORDER BY goal_id";
             using var reader = command.ExecuteReader();
             var rows = new Dictionary<string, ArchiveRow>();
-            while (reader.Read()) rows.Add(reader.GetString(0), new(reader.GetString(1), reader.GetString(2)));
+            while (reader.Read()) rows.Add(reader.GetString(0), new(GoalSnapshotArchiveCodec.Decode(reader.GetValue(1))!, reader.GetString(2)));
             return rows;
         }
 

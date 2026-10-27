@@ -255,7 +255,7 @@ public sealed class GoalSnapshotArchiveHotTableScenarioTests
             using var reader = command.ExecuteReader();
             var rows = new Dictionary<string, string>();
             while (reader.Read())
-                rows.Add(reader.GetString(0), reader.GetString(1));
+                rows.Add(reader.GetString(0), GoalSnapshotArchiveCodec.Decode(reader.GetValue(1))!);
             return rows;
         }
 
