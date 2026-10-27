@@ -2360,7 +2360,13 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         try
         {
         if (check.Type.Equals("crosswalk-test", StringComparison.OrdinalIgnoreCase))
-            return (await RunCrosswalkCheckAsync(check, worktreePath, goalId, stableSlotIndex, cancellationToken).ConfigureAwait(false), false);
+            return (await new CrosswalkAcceptanceCheck(
+                _executionContext ?? throw new InvalidOperationException("Crosswalk requires an acceptance execution owner."),
+                _invocationContext ?? throw new InvalidOperationException("Crosswalk requires an owned invocation."),
+                _timeProvider, _requiresTestTelemetryReceipt,
+                arguments => CreateGateHeartbeatContext(check, arguments, worktreePath, goalId, stableSlotIndex, null),
+                RunWithGateHeartbeatAsync).RunAsync(check, worktreePath,
+                    EngineSettings.ResolveCheckTimeout(check.TimeoutMinutes), cancellationToken).ConfigureAwait(false), false);
 
         if (check.Type.Equals("no-op", StringComparison.OrdinalIgnoreCase))
         {
@@ -2380,7 +2386,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             return (await RunGrepCheckAsync(check, worktreePath, expectPresent: true, cancellationToken).ConfigureAwait(false), false);
 
         if (check.Type.Equals("file-exists", StringComparison.OrdinalIgnoreCase))
-            return (RunFileExistsCheck(check, worktreePath), false);
+            return (AcceptanceFileExistsCheck.Run(check, worktreePath), false);
 
         if (check.Type.Equals("command-exit", StringComparison.OrdinalIgnoreCase))
             return await RunCommandCheckAsync(check, worktreePath, goalId, stableSlotIndex, stableSlotLease, dotnetTestBuildPhase, cancellationToken).ConfigureAwait(false);
@@ -2438,29 +2444,6 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             passed ? 0 : 1,
             passed ? null : $"Advisory check failed: {summary} for pattern '{check.Pattern}'",
             ResultSummary: summary,
-            Advisory: check.Advisory);
-    }
-
-    private AcceptanceCheckResult RunFileExistsCheck(
-        AcceptanceManifestCheck check,
-        string worktreePath)
-    {
-        if (string.IsNullOrWhiteSpace(check.FilePath))
-        {
-            return new AcceptanceCheckResult(
-                check.Name, false, 1,
-                "file-exists check has no path configured",
-                Advisory: check.Advisory);
-        }
-
-        var fullPath = System.IO.Path.Combine(worktreePath, check.FilePath);
-        var exists = File.Exists(fullPath);
-        return new AcceptanceCheckResult(
-            check.Name,
-            exists,
-            exists ? 0 : 1,
-            exists ? null : $"Advisory check failed: file not found: {check.FilePath}",
-            ResultSummary: exists ? "file exists" : "file not found",
             Advisory: check.Advisory);
     }
 

@@ -251,8 +251,8 @@ internal static class AcceptanceCheckProcessInvoker
                     progressSink,
                     progressInterval ?? DefaultProgressInterval,
                     runningObserver: laneStall is null ? null : laneStall.Observe);
-                heartbeatTask = WriteGateHeartbeatLoopAsync(
-                    heartbeat, heartbeatCts.Token, heartbeatInterval ?? DefaultHeartbeatInterval, () => { qosSweep?.RunPass(); sampler?.Tick(); });
+                heartbeatTask = GateLaneHeartbeatLoop.RunAsync(
+                    heartbeat.WriteRunning, () => { qosSweep?.RunPass(); sampler?.Tick(); }, heartbeatCts.Token, heartbeatInterval ?? DefaultHeartbeatInterval);
             }
 
             using var timeoutCts = timeoutSignal.CanBeCanceled
@@ -469,10 +469,6 @@ internal static class AcceptanceCheckProcessInvoker
             }
         }
     }
-
-    private static async Task WriteGateHeartbeatLoopAsync(
-        GateHeartbeatRuntime heartbeat, CancellationToken cancellationToken, TimeSpan heartbeatInterval, Action? onTick = null) =>
-        await GateLaneHeartbeatLoop.RunAsync(heartbeat.WriteRunning, onTick, cancellationToken, heartbeatInterval).ConfigureAwait(false);
 
     private static void ObserveProcessCleanup(
         Action<AcceptanceProcessCleanupObservation>? observer,

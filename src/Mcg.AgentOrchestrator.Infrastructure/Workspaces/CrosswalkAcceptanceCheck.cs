@@ -1,18 +1,23 @@
 using Mcg.AgentOrchestrator.Core;
+using static Mcg.AgentOrchestrator.Infrastructure.GoalAcceptanceVerifier;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
-public sealed partial class GoalAcceptanceVerifier
+// Owns discovery, selection, normalized evidence and verdicts for one Crosswalk check.
+// Process execution stays on the acceptance owner's existing heartbeat/drain seam.
+internal sealed class CrosswalkAcceptanceCheck(
+    IAcceptanceRunExecutionContext owner,
+    AcceptanceInvocationContext invocation,
+    TimeProvider timeProvider,
+    bool requiresTestTelemetryReceipt,
+    Func<string[], GateHeartbeatContext> createHeartbeat,
+    Func<string[], string, TimeSpan, GateHeartbeatContext, CancellationToken, CancellationToken, Task<CommandResult>> runProcess)
 {
-    private async Task<AcceptanceCheckResult> RunCrosswalkCheckAsync(
-        AcceptanceManifestCheck check, string worktreePath, GoalId? goalId,
-        int? stableSlotIndex, CancellationToken cancellationToken)
+    internal async Task<AcceptanceCheckResult> RunAsync(
+        AcceptanceManifestCheck check, string worktreePath, TimeSpan timeout, CancellationToken cancellationToken)
     {
-        var owner = _executionContext ?? throw new InvalidOperationException("Crosswalk requires an acceptance execution owner.");
-        var invocation = _invocationContext ?? throw new InvalidOperationException("Crosswalk requires an owned invocation.");
-        var timeout = EngineSettings.ResolveCheckTimeout(check.TimeoutMinutes);
-        var started = _timeProvider.GetTimestamp();
-        using var deadline = new CancellationTokenSource(timeout, _timeProvider);
+        var started = timeProvider.GetTimestamp();
+        using var deadline = new CancellationTokenSource(timeout, timeProvider);
         using var ownerLifetime = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, owner.CancellationToken);
         using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, owner.CancellationToken, deadline.Token);
         var diagnostics = new List<CrosswalkInvocationDiagnostic>();
@@ -34,11 +39,11 @@ public sealed partial class GoalAcceptanceVerifier
                 if (!string.Equals(root, ResolveCrosswalkProjectRoot(worktreePath, check.Project), CrosswalkPathComparison))
                     throw new IOException("Crosswalk project root changed before launch.");
                 var arguments = new[] { WorkerShell.Executable }.Concat(WorkerShell.BaseArguments()).Append(request.Command).ToArray();
-                var heartbeat = CreateGateHeartbeatContext(check, arguments, worktreePath, goalId, stableSlotIndex, null);
+                var heartbeat = createHeartbeat(arguments);
                 heartbeatPath = heartbeat.HeartbeatPath;
-                lastProcess = await owner.TrackStarted(RunWithGateHeartbeatAsync(arguments, root,
-                    request.Timeout ?? Remaining(), heartbeat, _requiresTestTelemetryReceipt ? ownerLifetime.Token : token,
-                    timeoutSignal: lifetime.Token)).ConfigureAwait(false);
+                lastProcess = await owner.TrackStarted(runProcess(arguments, root,
+                    request.Timeout ?? Remaining(), heartbeat, requiresTestTelemetryReceipt ? ownerLifetime.Token : token,
+                    lifetime.Token)).ConfigureAwait(false);
                 // Production always supplies separated stdout. The injected runner contract must too.
                 return new WorkerProcessRunResult(lastProcess.ExitCode, lastProcess.StandardOutput ?? "",
                     lastProcess.Stderr ?? "", lastProcess.TimedOut, lastProcess.CaptureLimited);
@@ -112,7 +117,7 @@ public sealed partial class GoalAcceptanceVerifier
         }
         return Finish();
 
-        TimeSpan Remaining() => timeout - _timeProvider.GetElapsedTime(started);
+        TimeSpan Remaining() => timeout - timeProvider.GetElapsedTime(started);
         bool Expired()
         {
             var category = cancellationToken.IsCancellationRequested || owner.CancellationToken.IsCancellationRequested
@@ -135,7 +140,7 @@ public sealed partial class GoalAcceptanceVerifier
             return new AcceptanceCheckResult(check.Name, passed, exitCode,
                 passed ? null : string.Join("; ", diagnostics.Select(d => $"{d.Category}: {d.Detail}")),
                 ArtifactsPath: paths.FirstOrDefault() is { } path ? Path.GetDirectoryName(path) : null,
-                DurationMilliseconds: (long)_timeProvider.GetElapsedTime(started).TotalMilliseconds,
+                DurationMilliseconds: (long)timeProvider.GetElapsedTime(started).TotalMilliseconds,
                 ResultSummary: $"crosswalk: selected={selected.Length} results={records.Count}", Advisory: check.Advisory,
                 TestResultAttemptId: owner.RunId, TestResultRunOrdinal: invocation.Ordinal,
                 FailureClassification: passed ? null : $"crosswalk-{diagnostics.FirstOrDefault()?.Category}",
