@@ -47,7 +47,7 @@ public sealed class GateOwnedCriterionRefinementTests
     }
 
     [Xunit.Fact]
-    public async Task MixedMarkersKeepOperatorOwnershipAndUnmarkedStaysWorkerOwned()
+    public async Task ConflictingExternalMarkersRequireClarificationWithoutAssigningOwners()
     {
         const string mixedCriterion =
             "The operator owns this criterion; Acceptance executes. TEST-VERIFIABLE.";
@@ -74,14 +74,19 @@ public sealed class GateOwnedCriterionRefinementTests
             """;
         var scenario = CreateRefinementScenario(response, objective);
 
-        await scenario.Service.RefineAsync(scenario.Kernel, scenario.Goal.Id);
+        var result = await scenario.Service.RefineAsync(scenario.Kernel, scenario.Goal.Id);
 
         var recorded = scenario.Kernel.GetGoal(scenario.Goal.Id);
-        Xunit.Assert.Equal([mixedCriterion], recorded.RefinedSpec!.OperatorOwnedAcceptanceCriteria);
+        Xunit.Assert.Equal(RefinementOutcome.AwaitingClarification, result.Outcome);
+        Xunit.Assert.Equal([mixedCriterion, unmarkedCriterion], recorded.RefinedSpec!.AcceptanceCriteria);
+        Xunit.Assert.Empty(recorded.RefinedSpec.OperatorOwnedAcceptanceCriteria);
         Xunit.Assert.Empty(recorded.RefinedSpec.AcceptanceGateOwnedAcceptanceCriteria);
-        var obligation = Xunit.Assert.Single(recorded.CriterionEvidenceObligations);
-        Xunit.Assert.Equal(0, obligation.CriterionIndex);
-        Xunit.Assert.Equal(CriterionEvidenceOwner.Operator, obligation.Owner);
+        Xunit.Assert.Empty(recorded.CriterionEvidenceObligations);
+        var question = Xunit.Assert.Single(recorded.RefinedSpec.OpenQuestions);
+        Xunit.Assert.Equal(mixedCriterion, question.Criterion);
+        Xunit.Assert.Contains("Declared criterion 1 claims both Operator and Acceptance evidence ownership",
+            question.Question, StringComparison.Ordinal);
+        Xunit.Assert.Single(scenario.Collaboration.Items);
     }
 
     [Xunit.Fact]
@@ -398,15 +403,24 @@ public sealed class GateOwnedCriterionRefinementTests
         Xunit.Assert.True(scenario.Goal.RefinedSpec!.HasOpenQuestions);
         Xunit.Assert.Empty(scenario.Goal.CriterionEvidenceObligations);
 
+        var missingCandidate = Xunit.Assert.Throws<ArgumentException>(() =>
+            scenario.Kernel.MapCriterionEvidenceOwner(scenario.Goal.Id, 0,
+                scenario.Goal.AuthoritativeRefinedSpecVersion!.Version, CriterionEvidenceOwner.Operator,
+                "operator", "operator observation"));
+        Xunit.Assert.Equal("expectedCandidateSha", missingCandidate.ParamName);
+        Xunit.Assert.True(scenario.Goal.RefinedSpec!.HasOpenQuestions);
+        Xunit.Assert.Empty(scenario.Goal.CriterionEvidenceObligations);
+
         scenario.Kernel.MapCriterionEvidenceOwner(scenario.Goal.Id, 0,
             scenario.Goal.AuthoritativeRefinedSpecVersion!.Version, CriterionEvidenceOwner.Operator,
-            "operator", "operator observation");
+            "operator", "operator observation", expectedCandidateSha: Candidate);
         await scenario.Service.SyncAnsweredClarificationsAsync(scenario.Kernel, scenario.Goal.Id);
 
         Xunit.Assert.False(scenario.Goal.RefinedSpec!.HasOpenQuestions);
         var outstanding = Xunit.Assert.Single(scenario.Goal.OutstandingCriterionEvidenceObligations);
         Xunit.Assert.Equal(CriterionEvidenceOwner.Operator, outstanding.Owner);
         Xunit.Assert.Equal(CriterionEvidenceState.Pending, outstanding.State);
+        Xunit.Assert.Equal(Candidate, outstanding.ExpectedCandidateSha);
         Xunit.Assert.Null(outstanding.ReceiptId);
     }
 
