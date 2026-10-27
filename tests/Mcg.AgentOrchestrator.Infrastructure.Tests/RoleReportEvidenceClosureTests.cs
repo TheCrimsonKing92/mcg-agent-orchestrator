@@ -7,6 +7,59 @@ public sealed class RoleReportEvidenceClosureTests
     internal const string ReportCriterion = "The Developer reports `tests: deferred - ` followed, directly after the hyphen and comma-separated, by every test class it touched or added. The Tester's evidence_request runs them. Developer owns; Acceptance executes. TEST-VERIFIABLE.";
     private static readonly DateTimeOffset DispatchTime = new(2026, 10, 25, 12, 0, 0, TimeSpan.Zero);
 
+    [Fact]
+    public void DeferredReport_RevisedBrief_ClosesWithValidatedClasses()
+    {
+        var scenario = CreateScenario(reviseBrief: true);
+        var request = CreateWait(scenario, "developer");
+        var queried = new List<string>();
+
+        var skipped = scenario.Kernel.CloseRoleReportEvidence(scenario.Goal.Id, "landing-C", name =>
+        {
+            queried.Add(name);
+            return "attempt G1";
+        });
+
+        Assert.Empty(skipped);
+        Assert.True(request.IsCompleted);
+        Assert.Equal(2, request.PlannerIdentity!.BriefVersion);
+        Assert.Equal(2, request.AuthoritativeAnswer!.BriefVersion);
+        Assert.Equal(HumanInputAnswerOrigin.Worker, request.AuthoritativeAnswer.Origin);
+        Assert.Equal(new[] { "AlphaTests", "BetaTests" }, queried);
+        Assert.Contains("criterion=1 candidate=B landing_candidate=landing-C", request.Answer);
+        Assert.Contains("tests=deferred - AlphaTests, BetaTests", request.Answer);
+        Assert.Contains("gate=AlphaTests@attempt G1,BetaTests@attempt G1", request.Answer);
+        Assert.Equal(request.Answer,
+            Assert.Single(scenario.Goal.Timeline.Where(item => item.Kind == ProgressKind.HumanInputReceived)).Message);
+        Assert.Empty(scenario.Kernel.GetPendingHumanInput(scenario.Goal.Id));
+    }
+
+    [Theory]
+    [InlineData("newer-wait", "brief-version-differs")]
+    [InlineData("no-classes", "developer-report-missing")]
+    [InlineData("not-report", "not-a-report-criterion")]
+    public void DeferredReport_RevisedBriefMissingPrerequisite_KeepsWait(string failure, string reason)
+    {
+        var scenario = CreateScenario(
+            criterion: failure == "not-report" ? "The Developer implements the change." : ReportCriterion,
+            tests: failure == "no-classes" ? "deferred - " : "deferred - AlphaTests, BetaTests",
+            reviseBrief: true);
+        var request = CreateWait(scenario, "developer", version: failure == "newer-wait" ? 3 : 2);
+
+        var skipped = scenario.Kernel.CloseRoleReportEvidence(scenario.Goal.Id, "landing-C",
+            _ => throw new Exception("Rejected report waits must not query gate evidence"));
+
+        var entry = Assert.Single(skipped);
+        Assert.Equal(request.Id, entry.Key);
+        Assert.Equal(reason, entry.Value);
+        Assert.False(request.IsCompleted);
+        Assert.Null(request.Answer);
+        Assert.Empty(request.AnswerHistory);
+        // Future-version waits remain stored but are excluded from GetPendingHumanInput.
+        Assert.Same(request, Assert.Single(scenario.Kernel.HumanInputRequests));
+        Assert.DoesNotContain(scenario.Goal.Timeline, item => item.Kind == ProgressKind.HumanInputReceived);
+    }
+
     [Theory]
     [InlineData("worker")]
     [InlineData(" WORKER ")]
@@ -230,7 +283,7 @@ public sealed class RoleReportEvidenceClosureTests
     }
 
     private static Scenario CreateScenario(string criterion = ReportCriterion,
-        string? tests = "deferred - AlphaTests, BetaTests")
+        string? tests = "deferred - AlphaTests, BetaTests", bool reviseBrief = false)
     {
         var kernel = new AgentOrchestratorKernel();
         var planner = new TaskSpec(TaskId.New(), "Plan evidence", AgentRole.Planner);
@@ -239,6 +292,15 @@ public sealed class RoleReportEvidenceClosureTests
         var tester = new TaskSpec(TaskId.New(), "Verify candidate", AgentRole.Tester);
         var goal = kernel.CreateGoal("Close role reports at landing", [planner, developer, reviewer, tester]);
         kernel.RecordGoalRefinement(goal.Id, new RefinedSpec("Bind role evidence", [criterion], VerificationClass.TestVerifiable, [], []));
+        if (reviseBrief)
+        {
+            kernel.ReviseGoalBrief(goal.Id, $"Revised report wording\n\n## Acceptance criteria\n1. {criterion}",
+                "Revise wording without changing criteria.");
+            Assert.Equal(2, goal.AuthoritativeBrief.Version);
+            Assert.Equal(1, Assert.Single(goal.RefinedSpecVersions).BriefVersion);
+            Assert.Equal(1, goal.AuthoritativeRefinedSpecVersion!.BriefVersion);
+            Assert.Equal(criterion, Assert.Single(goal.AuthoritativeRefinedSpecVersion.Spec.AcceptanceCriteria));
+        }
         kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
         kernel.RecordTaskDispatch(goal.Id, developer.Id, new TaskDispatchRecord(
             "codex-cli", "implement", "C:\\fixture", DispatchTime, BaseCommit: "A"));
