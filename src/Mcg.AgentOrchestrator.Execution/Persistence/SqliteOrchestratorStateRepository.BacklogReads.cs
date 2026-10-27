@@ -56,7 +56,13 @@ public sealed partial class SqliteOrchestratorStateRepository
                 Console.Error.WriteLine($"QUARANTINED goal {ShortGoalId(id)}: {ex.GetType().Name}: {ex.Message}");
                 continue;
             }
+            if (fields is null)
+            {
+                Console.Error.WriteLine($"QUARANTINED goal {ShortGoalId(id)}: JsonException: deserialized goal snapshot was null");
+                continue;
+            }
             ValidateSimilarityTaskCount(fields);
+            ValidateSimilarityDomain(fields, () => reader.GetStream(1));
             if (fields is { IsMetadataOnly: true })
             {
                 using var archive = connection.CreateCommand();
@@ -70,6 +76,7 @@ public sealed partial class SqliteOrchestratorStateRepository
                 if (stream is not null)
                     fields = ReadGoalSimilarityFields(stream, () => GoalSnapshotArchiveCodec.OpenDecodedStream(value)!);
                 ValidateSimilarityTaskCount(fields);
+                ValidateSimilarityDomain(fields, () => GoalSnapshotArchiveCodec.OpenDecodedStream(value)!);
             }
             if (fields is not { Status: GoalStatus.Completed }) continue;
             var objective = fields.Objective.Trim();
@@ -116,6 +123,19 @@ public sealed partial class SqliteOrchestratorStateRepository
             throw new ArgumentException("A goal must have at least one task.", "tasks");
     }
 
+    private static void ValidateSimilarityDomain(GoalSimilarityFields? fields, Func<Stream> reopenStream)
+    {
+        if (fields is not null && !string.IsNullOrWhiteSpace(fields.Objective) &&
+            (fields.IsMetadataOnly || fields is { Tasks.RequiresReconstruction: false, Timeline.HasNullEntry: false }
+                && !fields.Domain.RequiresReconstruction)) return;
+
+        // These are reconstruction failures, not deserialization failures. Replay only
+        // suspect documents, outside hot quarantine, so Core owns the exception contract.
+        using var stream = reopenStream();
+        var snapshot = JsonSerializer.Deserialize<GoalSnapshot>(stream, SerializerOptions);
+        _ = AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot([snapshot!], []));
+    }
+
     private sealed class InvalidSimilarityShapeException : Exception { }
 
     private static class SimilarityJson
@@ -134,8 +154,8 @@ public sealed partial class SqliteOrchestratorStateRepository
                 {
                     if (contract.Properties.Any(property => property.Name == member.Name)) continue;
                     var discarded = contract.CreateJsonPropertyInfo(typeof(object), member.Name);
-                    discarded.CustomConverter = new DiscardedSimilarityValueConverter(member.PropertyType);
-                    discarded.Set = (_, _) => { };
+                    discarded.CustomConverter = new DiscardedSimilarityValueConverter(member.PropertyType, member.Name);
+                    discarded.Set = (instance, value) => ((GoalSimilarityFields)instance).Domain.Set(member.Name, value);
                     contract.Properties.Add(discarded);
                 }
             });
@@ -143,18 +163,29 @@ public sealed partial class SqliteOrchestratorStateRepository
         }
     }
 
-    private sealed class DiscardedSimilarityValueConverter(Type valueType) : JsonConverter<object>
+    private sealed class DiscardedSimilarityValueConverter(Type valueType, string memberName) : JsonConverter<object>
     {
         public override bool HandleNull => true;
 
         public override object? Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
         {
+            var projection = reader;
             try { SimilarityTaskShapeConverter.ValidateTaskValue(ref reader, valueType, options); }
             catch (Exception ex) when (IsSnapshotDeserializeException(ex))
             {
                 throw new InvalidSimilarityShapeException();
             }
-            return null;
+            return memberName switch
+            {
+                nameof(GoalSnapshot.SourceBacklogItemId) => projection.TokenType == JsonTokenType.Null
+                    ? (bool?)null : IsBlankSimilarityText(ref projection),
+                nameof(GoalSnapshot.SourceBacklogCoverage) => projection.TokenType != JsonTokenType.Null,
+                nameof(GoalSnapshot.ExplicitDisposition) => JsonSerializer.Deserialize<GoalExplicitDisposition>(ref projection, options),
+                nameof(GoalSnapshot.ParkedLifecycleStatus) => JsonSerializer.Deserialize<GoalStatus?>(ref projection, options),
+                nameof(GoalSnapshot.BriefVersions) or nameof(GoalSnapshot.RefinedSpecVersions) =>
+                    HasInvalidSimilarityVersionChain(ref projection, options),
+                _ => null
+            };
         }
 
         public override void Write(Utf8JsonWriter writer, object value, JsonSerializerOptions options) =>
@@ -167,9 +198,72 @@ public sealed partial class SqliteOrchestratorStateRepository
     private sealed record GoalSimilarityFields(string Id, string Objective, GoalStatus Status,
         bool IsMetadataOnly, DateTimeOffset? CreatedAt, DateTimeOffset? TerminatedAt,
         [property: JsonConverter(typeof(SimilarityTaskShapeConverter))] SimilarityTaskShape? Tasks,
-        [property: JsonConverter(typeof(TimelineLatestConverter))] TimelineLatest? Timeline);
+        [property: JsonConverter(typeof(TimelineLatestConverter))] TimelineLatest? Timeline)
+    {
+        [JsonIgnore] public SimilarityDomainFields Domain { get; } = new();
+    }
 
-    private sealed record SimilarityTaskShape(int Count);
+    // Retain only cross-member validation facts; discarded text/spec payloads stay streamed.
+    private sealed class SimilarityDomainFields
+    {
+        private bool? _blankSourceId;
+        private bool _hasCoverage;
+        private GoalExplicitDisposition? _disposition;
+        private GoalStatus? _parkedStatus;
+        private bool _invalidBriefChain, _invalidSpecChain;
+
+        internal bool RequiresReconstruction => _invalidBriefChain || _invalidSpecChain ||
+            _blankSourceId == true || _blankSourceId is null && _hasCoverage ||
+            (_disposition?.Action == GoalExplicitDispositionAction.Park
+                ? _parkedStatus is null or GoalStatus.Parked : _parkedStatus is not null);
+
+        internal void Set(string member, object? value)
+        {
+            switch (member)
+            {
+                case nameof(GoalSnapshot.SourceBacklogItemId): _blankSourceId = (bool?)value; break;
+                case nameof(GoalSnapshot.SourceBacklogCoverage): _hasCoverage = (bool)value!; break;
+                case nameof(GoalSnapshot.ExplicitDisposition): _disposition = (GoalExplicitDisposition?)value; break;
+                case nameof(GoalSnapshot.ParkedLifecycleStatus): _parkedStatus = (GoalStatus?)value; break;
+                case nameof(GoalSnapshot.BriefVersions): _invalidBriefChain = (bool)value!; break;
+                case nameof(GoalSnapshot.RefinedSpecVersions): _invalidSpecChain = (bool)value!; break;
+            }
+        }
+    }
+
+    private sealed record SimilarityVersionLink(int Version, int? SupersededByVersion);
+
+    private static bool HasInvalidSimilarityVersionChain(ref Utf8JsonReader reader, JsonSerializerOptions options)
+    {
+        if (reader.TokenType == JsonTokenType.Null) return false;
+        var links = new List<SimilarityVersionLink>();
+        while (reader.Read() && reader.TokenType != JsonTokenType.EndArray)
+        {
+            var link = JsonSerializer.Deserialize<SimilarityVersionLink>(ref reader, options);
+            if (link is null) return true;
+            links.Add(link);
+        }
+        links.Sort((left, right) => left.Version.CompareTo(right.Version));
+        for (var index = 0; index < links.Count; index++)
+            if (links[index].Version != index + 1 ||
+                links[index].SupersededByVersion != (index == links.Count - 1 ? (int?)null : index + 2)) return true;
+        return false;
+    }
+
+    private static bool IsBlankSimilarityText(ref Utf8JsonReader reader)
+    {
+        if (reader.TokenType == JsonTokenType.Null) return true;
+        // Avoid allocating large ordinary descriptions just to reject blank text.
+        if (reader.HasValueSequence || reader.ValueIsEscaped) return string.IsNullOrWhiteSpace(reader.GetString());
+        foreach (var value in reader.ValueSpan)
+        {
+            if (value >= 128) return string.IsNullOrWhiteSpace(reader.GetString());
+            if (!char.IsWhiteSpace((char)value)) return false;
+        }
+        return true;
+    }
+
+    private sealed record SimilarityTaskShape(int Count, bool RequiresReconstruction);
 
     private sealed class SimilarityTaskShapeConverter : JsonConverter<SimilarityTaskShape>
     {
@@ -181,6 +275,7 @@ public sealed partial class SqliteOrchestratorStateRepository
             if (reader.TokenType != JsonTokenType.StartArray)
                 throw new InvalidSimilarityShapeException();
             var count = 0;
+            var requiresReconstruction = false;
             while (reader.Read() && reader.TokenType != JsonTokenType.EndArray)
             {
                 count++;
@@ -188,6 +283,18 @@ public sealed partial class SqliteOrchestratorStateRepository
                     throw new InvalidSimilarityShapeException();
                 try
                 {
+                    var task = reader;
+                    var blankDescription = true;
+                    if (task.TokenType == JsonTokenType.StartObject)
+                        while (task.Read() && task.TokenType != JsonTokenType.EndObject)
+                        {
+                            var description = task.ValueTextEquals("Description"u8);
+                            task.Read();
+                            if (description && task.TokenType is JsonTokenType.String or JsonTokenType.Null)
+                                blankDescription = IsBlankSimilarityText(ref task);
+                            task.Skip();
+                        }
+                    requiresReconstruction |= blankDescription;
                     ValidateTaskValue(ref reader, typeof(TaskSnapshot), options);
                 }
                 catch (Exception ex) when (IsSnapshotDeserializeException(ex))
@@ -197,7 +304,7 @@ public sealed partial class SqliteOrchestratorStateRepository
                     throw new InvalidSimilarityShapeException();
                 }
             }
-            return new(count);
+            return new(count, requiresReconstruction);
         }
 
         internal static void ValidateTaskValue(ref Utf8JsonReader reader, Type type, JsonSerializerOptions options)
@@ -241,7 +348,7 @@ public sealed partial class SqliteOrchestratorStateRepository
             JsonSerializerOptions options) => throw new NotSupportedException();
     }
 
-    private sealed record TimelineLatest(DateTimeOffset? Latest);
+    private sealed record TimelineLatest(DateTimeOffset? Latest, bool HasNullEntry);
 
     private sealed class TimelineLatestConverter : JsonConverter<TimelineLatest>
     {
@@ -251,8 +358,14 @@ public sealed partial class SqliteOrchestratorStateRepository
         {
             if (reader.TokenType != JsonTokenType.StartArray) throw new InvalidSimilarityShapeException();
             DateTimeOffset? latest = null;
+            var hasNullEntry = false;
             while (reader.Read() && reader.TokenType != JsonTokenType.EndArray)
             {
+                if (reader.TokenType == JsonTokenType.Null)
+                {
+                    hasNullEntry = true;
+                    continue;
+                }
                 if (reader.TokenType != JsonTokenType.StartObject) throw new InvalidSimilarityShapeException();
                 var validationReader = reader;
                 try
@@ -275,7 +388,7 @@ public sealed partial class SqliteOrchestratorStateRepository
                 // including its original offset (which affects the rendered date).
                 if (latest is null || occurredAt >= latest) latest = occurredAt;
             }
-            return new(latest);
+            return new(latest, hasNullEntry);
         }
 
         public override void Write(Utf8JsonWriter writer, TimelineLatest value, JsonSerializerOptions options) =>

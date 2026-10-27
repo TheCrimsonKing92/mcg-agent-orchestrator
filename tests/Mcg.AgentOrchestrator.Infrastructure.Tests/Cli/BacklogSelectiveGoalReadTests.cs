@@ -441,6 +441,112 @@ public sealed class BacklogSelectiveGoalReadTests(ITestOutputHelper output) : Cl
         Assert.Empty(actualError); // Domain failures must escape the hot quarantine boundary too.
     }
 
+    public static IEnumerable<object[]> InvalidSimilarityDomainMembers()
+    {
+        (string Member, string Value, Type Exception)[] cases =
+        [
+            ("Tasks", "null", typeof(ArgumentNullException)),
+            ("Tasks", "[null]", typeof(NullReferenceException)),
+            ("Timeline", "null", typeof(ArgumentNullException)),
+            ("Timeline", "[null]", typeof(NullReferenceException)),
+            ("Objective", "\"   \"", typeof(ArgumentException)),
+            ("Objective", "\"\"", typeof(ArgumentException)),
+            ("ParkedLifecycleStatus", "\"Active\"", typeof(ArgumentException)),
+            ("SourceBacklogCoverage", "\"Full\"", typeof(InvalidOperationException)),
+            ("SourceBacklogItemId", "\"   \"", typeof(ArgumentException)),
+            ("SourceBacklogItemId", "\"\"", typeof(ArgumentException)),
+            ("Tasks", "[{\"Id\":\"66666666666666666666666666666666\",\"Description\":\"   \"}]", typeof(ArgumentException)),
+            ("Tasks", "[{\"Id\":\"66666666666666666666666666666666\",\"Description\":\"\"}]", typeof(ArgumentException)),
+            ("BriefVersions", "[{\"Version\":2,\"Text\":\"quartz\",\"RecordedAt\":\"2026-09-01T00:00:00Z\"}]",
+                typeof(InvalidOperationException)),
+            ("RefinedSpecVersions", """
+                [{"Version":2,"Spec":{"BehavioralContract":"quartz","AcceptanceCriteria":["quartz"],
+                "VerificationClass":"TestVerifiable","Decisions":[],"OpenQuestions":[]},
+                "RecordedAt":"2026-09-01T00:00:00Z","BriefVersion":1}]
+                """, typeof(InvalidOperationException))
+        ];
+        foreach (var archive in new[] { false, true })
+        foreach (var entry in cases)
+            yield return [archive, entry.Member, entry.Value, entry.Exception];
+    }
+
+    [Theory]
+    [MemberData(nameof(InvalidSimilarityDomainMembers))]
+    public async Task Similarity_InvalidDomainState_PreservesHydrationFailure(
+        bool archive, string member, string value, Type exceptionType)
+    {
+        using var fixture = await Fixture.Create(4, 256);
+        if (archive) await fixture.MakeTerminalAndArchive(CompletedId);
+        if (member is "BriefVersions" or "RefinedSpecVersions")
+            fixture.ReplaceSnapshotMember(CompletedId, member,
+                value.Replace("\"Version\":2", "\"Version\":1", StringComparison.Ordinal), archive);
+        string[] args = ["backlog-similar", "quartz"];
+        var before = Run(args, fixture.Workspace, false);
+        Assert.Contains($"kind=goal id={CompletedId[..8]}", before.Text);
+        Assert.Equal(Run(args, fixture.Workspace, true).Text, before.Text);
+        Assert.Equal(1, before.Count("similarity-projected"));
+        Assert.Empty(before.Requested);
+        Assert.Empty(before.Deserialized);
+        fixture.ReplaceSnapshotMember(CompletedId, member, value, archive);
+
+        Exception? expected = null, actual = null;
+        var expectedError = AsyncLocalConsoleRouter.CaptureError(() =>
+            expected = Record.Exception(() => Run(args, fixture.Workspace, true)));
+        var actualError = AsyncLocalConsoleRouter.CaptureError(() =>
+            actual = Record.Exception(() => Run(args, fixture.Workspace, false)));
+        Assert.NotNull(expected);
+        Assert.NotNull(actual);
+        Assert.Equal(exceptionType, expected.GetType());
+        Assert.Equal(expected.GetType(), actual.GetType());
+        Assert.Equal(expected.Message, actual.Message);
+        if (expected is ArgumentException argument)
+            Assert.Equal(argument.ParamName, Assert.IsAssignableFrom<ArgumentException>(actual).ParamName);
+        Assert.Empty(expectedError);
+        Assert.Empty(actualError); // Reconstruction failures must escape hot quarantine too.
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Similarity_NullDocument_PreservesHydrationOutcome(bool archive)
+    {
+        using var fixture = await Fixture.Create(4, 256);
+        const string validId = "55555555555555555555555555555555";
+        await fixture.AddSimilarityTwin(validId);
+        if (archive) await fixture.MakeTerminalAndArchive(CompletedId);
+        string[] args = ["backlog-similar", "quartz", "--limit", "100"];
+        var before = Run(args, fixture.Workspace, false);
+        Assert.Contains($"kind=goal id={CompletedId[..8]}", before.Text);
+        Assert.Equal(2, before.Count("similarity-projected"));
+        fixture.ReplaceSnapshotJson(CompletedId, "null", archive);
+
+        if (archive)
+        {
+            NullReferenceException expected = null!, actual = null!;
+            var expectedError = AsyncLocalConsoleRouter.CaptureError(() => expected = Assert.Throws<NullReferenceException>(
+                () => Run(args, fixture.Workspace, true)));
+            var actualError = AsyncLocalConsoleRouter.CaptureError(() => actual = Assert.Throws<NullReferenceException>(
+                () => Run(args, fixture.Workspace, false)));
+            Assert.Equal(expected.Message, actual.Message);
+            Assert.Empty(expectedError);
+            Assert.Empty(actualError);
+        }
+        else
+        {
+            Receipt baseline = null!, candidate = null!;
+            var expectedError = AsyncLocalConsoleRouter.CaptureError(() => baseline = Run(args, fixture.Workspace, true));
+            var actualError = AsyncLocalConsoleRouter.CaptureError(() => candidate = Run(args, fixture.Workspace, false));
+            Assert.Contains($"QUARANTINED goal {CompletedId[..8]}: JsonException: deserialized goal snapshot was null", expectedError);
+            Assert.Equal(expectedError, actualError);
+            Assert.Equal(baseline.Text, candidate.Text);
+            Assert.DoesNotContain($"kind=goal id={CompletedId[..8]}", candidate.Text);
+            Assert.Contains($"kind=goal id={validId[..8]}", candidate.Text);
+            Assert.Equal(1, candidate.Count("similarity-projected"));
+            Assert.Empty(candidate.Requested);
+            Assert.Empty(candidate.Deserialized);
+        }
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -610,11 +716,16 @@ public sealed class BacklogSelectiveGoalReadTests(ITestOutputHelper output) : Cl
             Assert.Equal("Completed", node["Status"]!.GetValue<string>());
             if (member == "Tasks") Assert.IsType<JsonArray>(node[member]);
             node[member] = JsonNode.Parse(value);
-            var json = node.ToJsonString();
+            ReplaceSnapshotJson(id, node.ToJsonString(), archive);
+        }
+
+        internal void ReplaceSnapshotJson(string id, string json, bool archive = false)
+        {
             if (archive)
                 ReplaceArchive(id, GoalSnapshotArchiveCodec.Encode(json));
             else
             {
+                using var connection = Open(workspace.SqliteStatePath);
                 using var update = connection.CreateCommand();
                 update.CommandText = "UPDATE goals SET snapshot_json = $json WHERE id = $id";
                 update.Parameters.AddWithValue("$id", id);
