@@ -39,4 +39,10 @@ public static class ProjectStackResolver
         Toolchain.Go => ProjectStack.Go,
         _ => isOrchestratorHome ? ProjectStack.Dotnet : null
     };
+
+    internal static ProjectStack? GuidanceStackFor(string workingDirectory, WorkerTargetHome? targetHome)
+    {
+        var home = targetHome ?? WorkerTargetHome.Home;
+        return GuidanceStack(Resolve(workingDirectory, home.ProjectHomeDirectory), home.IsOrchestratorHome);
+    }
 }

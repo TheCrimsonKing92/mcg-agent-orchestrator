@@ -175,7 +175,7 @@ public sealed partial class AgentOrchestratorKernel
         bool measureWithTypedSourceBoundaries = false,
         IReadOnlyList<ChangedExistingTest>? changedExistingTests = null,
         string? changedExistingTestsDiagnostic = null, string? acceptanceManifestPromptPath = null,
-        string? integrationBranchPromptName = null)
+        string? integrationBranchPromptName = null, ProjectStack? roleRequirementStack = ProjectStack.Dotnet)
     {
         var goal = GetGoal(goalId);
         var task = goal.FindTask(taskId);
@@ -402,7 +402,7 @@ public sealed partial class AgentOrchestratorKernel
         }
 
         var roleLines = new List<string>();
-        roleLines.AddRange(RoleRequirementIntegrationBranch.Apply(RoleRequirementManifestPath.Apply(isScoutPlanner
+        roleLines.AddRange(RoleRequirementIntegrationBranch.Apply(RoleRequirementManifestPath.Apply(RoleRequirementStackGuidance.Apply(isScoutPlanner
             ? SdlcRolePromptRequirements.BuildScout(
                 complexity,
                 SdlcRolePromptRequirements.HasHighRiskOrComplexIntakeRiskLabel(goal))
@@ -410,7 +410,7 @@ public sealed partial class AgentOrchestratorKernel
                 task.RequiredRole,
                 complexity,
                 SdlcRolePromptRequirements.HasHighRiskOrComplexIntakeRiskLabel(goal),
-                hasDurableResearch), acceptanceManifestPromptPath), integrationBranchPromptName));
+                hasDurableResearch), roleRequirementStack), acceptanceManifestPromptPath), integrationBranchPromptName));
         if (!string.IsNullOrWhiteSpace(contextDirectory))
             CriteriaSelfCheckPromptContext.Externalize(roleLines, task.RequiredRole, includeReference: false);
         roleLines.Add(string.Empty);
@@ -457,7 +457,7 @@ public sealed partial class AgentOrchestratorKernel
             segments.Add(TaskBriefSegment.Fixed(practiceLines));
         }
 
-        var standingRuleLines = WorkerStandingRules.RenderBriefSection(task.RequiredRole, contextDirectory);
+        var standingRuleLines = WorkerStandingRules.RenderBriefSection(task.RequiredRole, contextDirectory, stack: roleRequirementStack);
         if (standingRuleLines.Count > 0)
         {
             segments.Add(TaskBriefSegment.Fixed(standingRuleLines));
