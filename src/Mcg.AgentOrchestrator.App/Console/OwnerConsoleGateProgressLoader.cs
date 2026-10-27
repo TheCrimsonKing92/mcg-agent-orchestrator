@@ -31,12 +31,15 @@ internal sealed class OwnerConsoleGateProgressLoader(string logPath, string mani
             var history = File.Exists(durationPath)
                 ? _durationTail.Select("lane-duration", ParseDuration, long.MaxValue).OfType<OwnerConsoleGateDuration>().ToArray()
                 : [];
+            var capacity = new OwnerConsoleGateCapacity(executors,
+                Math.Min(maxConcurrentShards, coreBudget ?? Math.Max(1, Environment.ProcessorCount / 2)));
             var gate = OwnerConsoleGateProgress.Build(now, events, lanes, history,
-                id => titles.FirstOrDefault(pair => pair.Key.StartsWith(id, StringComparison.Ordinal)).Value);
+                id => titles.FirstOrDefault(pair => pair.Key.StartsWith(id, StringComparison.Ordinal)).Value,
+                capacity: capacity.LocalBudget);
             return gate with
             {
                 Ended = OwnerConsoleGateEnd.Read(events),
-                Capacity = new(executors, Math.Min(maxConcurrentShards, coreBudget ?? Math.Max(1, Environment.ProcessorCount / 2))),
+                Capacity = capacity,
                 HostActivity = OwnerConsoleHostEvidenceRuns.Fold(
                     _conductTail.Select("host-evidence", OwnerConsoleHostEvidenceRuns.Parse, 1_048_576), now),
                 Lanes = gate.Lanes.Select(row => row.State == OwnerConsoleGateLaneState.Done && row.Outcome == "failed" && !row.IsAttribution
