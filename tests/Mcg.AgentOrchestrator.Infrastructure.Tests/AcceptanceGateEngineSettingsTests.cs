@@ -119,6 +119,7 @@ public sealed class AcceptanceGateEngineSettingsTests
                 "AcceptanceOverlappedCheckSchedulingTests",
                 "FocusedEvidenceOverflowContinuationTests",
                 "GoalAcceptanceVerifierCancellationTests",
+                "GoalAcceptanceVerifierCrosswalk",
                 "GoalAcceptanceVerifierTests",
                 "GoalAcceptanceVerifierDotnetBuildSlotTests",
                 "GoalAcceptanceVerifierDotnetBuildSlotTestsAnalyzerAuthority",
