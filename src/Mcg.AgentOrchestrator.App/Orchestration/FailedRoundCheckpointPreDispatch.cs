@@ -48,8 +48,9 @@ internal sealed class FailedRoundCheckpointPreDispatch(
             RecordFailure(index.Error);
             return;
         }
-        var result = _committer.TryCommitWorktreeEdits(worktree,
-            $"checkpoint: preserved uncommitted edits from failed dispatch {receipt.DispatchId}", receipt.DirtyPaths);
+        var message = OrchestratorCommitMessage.ForWorker(goal, task, receipt.DispatchId,
+            $"preserved uncommitted edits from failed dispatch {receipt.DispatchId}", receipt.DirtyPaths);
+        var result = _committer.TryCommitWorktreeEdits(worktree, message, receipt.DirtyPaths);
         if (!result.Succeeded)
         {
             // Restore staged/unstaged attribution as well as preserving file contents.
