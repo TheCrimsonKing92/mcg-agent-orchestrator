@@ -39,7 +39,9 @@ public sealed class ConductorBatchLoopTestsStepLedger(ITestOutputHelper output) 
             {
                 ["retire-until-goal-lessons"] = 11, ["workspace-intents"] = 13, ["steward"] = 17,
                 ["author"] = 19, ["store-evidence"] = 23, ["judge-panel"] = 29,
-                ["board-fill"] = 31, ["operator-intent-list"] = 37, ["eligibility"] = 41
+                ["board-fill"] = 31, ["operator-intent-list"] = 37, ["eligibility"] = 41,
+                ["attempt-census"] = 0, ["attempt-reconcile"] = 0, ["grouped-admission-prep"] = 0,
+                ["merge-train"] = 0, ["pair-cohort"] = 0, ["solo-admission"] = 0
             };
             var observed = new List<string>();
             var store = new SqliteOperatorIntentStore(Path.Combine(root, "intents.db"), Path.Combine(root, "logs"));
@@ -57,7 +59,7 @@ public sealed class ConductorBatchLoopTestsStepLedger(ITestOutputHelper output) 
             // The 37 ms capture belongs to the early phase: 221 - 37 = 184 ms.
             Assert.EndsWith(" cpu_ms=184", line);
             // Emission order differs from call order; instrumentation cannot reorder calls.
-            Assert.Equal(new[] { "operator-intent-list", "retire-until-goal-lessons", "steward", "author", "store-evidence", "judge-panel", "board-fill", "workspace-intents", "eligibility" }, observed);
+            Assert.Equal(new[] { "operator-intent-list", "retire-until-goal-lessons", "steward", "author", "store-evidence", "judge-panel", "board-fill", "workspace-intents", "eligibility", "attempt-census", "attempt-reconcile", "grouped-admission-prep", "merge-train", "pair-cohort", "solo-admission" }, observed);
             AssertBound(line, "prewalk_steps");
         }
         finally { TryDeleteDirectory(root); }
@@ -102,11 +104,11 @@ public sealed class ConductorBatchLoopTestsStepLedger(ITestOutputHelper output) 
         Assert.DoesNotContain("operator-intent-list", Phase(tick, "prewalk"));
         Assert.DoesNotContain(tick.ProgressLines!, line => line.Contains("phase=operator-intent ", StringComparison.Ordinal));
         Assert.Contains("sweep_steps=kernel-reload:0:0,refresh-dispatches:0:0,parked-reloads:0:0,terminal-sweep-run:0:0,owned-root-reap:0:0,reconcile-remediation:0:0,host-health:0:0,maintenance:0:0,state-log-check:0:0,failure-clusters:0:0,remote-git-mirror:0:0,goal-refinement:0:0", Phase(tick, "sweep"));
-        Assert.Equal(8, probeCalls);
+        Assert.Equal(14, probeCalls);
         var outsideCalls = 0;
         ConductorTickStepLedger.Measure("author", () => outsideCalls++);
         Assert.Equal(1, outsideCalls);
-        Assert.Equal(8, probeCalls);
+        Assert.Equal(14, probeCalls);
     }
 
     [Xunit.Fact(DisplayName = "Repeated fractional CPU samples truncate after accumulation and reset each tick")]

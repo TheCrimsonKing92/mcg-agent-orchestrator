@@ -46,12 +46,13 @@ public sealed class ConductorBatchLoopTestsStepLedgerFormatParity(ITestOutputHel
         {
             "PHASE_TIMING tick=1 phase=sweep elapsed_ms=40 goals=1 completed_dependencies=0 set_aside=0 dependency_metadata_ms=0 dependency_journals_read=0 sweep_git_index_ms=0 sweep_evidence_ms=0 sweep_ephemeral_ms=0 sweep_attention_ms=0 sweep_merge_evidence_ms=0 sweep_goals_ms=0 sweep_git_spawns=0 sweep_goals_swept=0 terminal_sweep_ms=0 persist_terminalizations_ms=0 recover_dispatches_ms=0 count_dispatches_ms=0 self_relaunch_drain_ms=0 canary_await_ms=0 readmit_setaside_ms=0 mark_dependencies_ms=0 reconcile_unscoped_ms=0 cpu_ms=40 ts=2026-01-01T00:00:00.0400000+00:00",
             "PHASE_TIMING tick=1 phase=prewalk elapsed_ms=0 scoped=1 candidates=1 eligible=1 deferred_intent=0 excluded_parked=0 excluded_terminal=0 cache_entries=0 cpu_ms=0 ts=2026-01-01T00:00:00.0400000+00:00",
+            "PHASE_TIMING tick=1 phase=acceptance-admission elapsed_ms=0 cpu_ms=0 ts=2026-01-01T00:00:00.0400000+00:00",
             $"PHASE_TIMING tick=1 phase=dispatch-prep goal={goal.Id.Value[..8]} task={task.Id.Value[..8]} role=Developer elapsed_ms=25 result=Started ts=2026-01-01T00:00:00.0650000+00:00",
             $"PHASE_TIMING tick=1 phase=per-goal-walk elapsed_ms=25 goals=1 slowest={goal.Id.Value[..8]}:25ms:Executed cpu_ms=25 ts=2026-01-01T00:00:00.0650000+00:00",
             "TICK tick=1 eligible=1 ts=2026-01-01T00:00:00.0650000+00:00",
             $"GOAL goal={goal.Id.Value[..8]} result=executed state=WorkspaceReady ts=2026-01-01T00:00:00.0650000+00:00",
             "TICK_END tick=1 advanced=1 held=0 escalated=0 done=0 cpu_ms=65 cpu_sweep_ms=40 cpu_prewalk_ms=0 cpu_walk_ms=25 ts=2026-01-01T00:00:00.0650000+00:00"
-        }, lines.Select(line => Regex.Replace(line, @" (?:prewalk_steps|sweep_steps|load_counters)=\S+", "")).ToArray());
+        }, lines.Select(line => Regex.Replace(line, @" (?:prewalk_steps|sweep_steps|load_counters|admission_steps)=\S+", "")).ToArray());
         Assert.Equal(1, sweepCalls);
         Assert.Equal(1, dispatchCalls);
         Assert.Equal(GoalStatus.Active, goal.Status);
