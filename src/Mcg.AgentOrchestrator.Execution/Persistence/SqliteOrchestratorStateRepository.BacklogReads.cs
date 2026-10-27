@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.Json.Serialization.Metadata;
 using Mcg.AgentOrchestrator.Core;
 using Microsoft.Data.Sqlite;
 
@@ -100,7 +101,7 @@ public sealed partial class SqliteOrchestratorStateRepository
             // Let the standard collection converter produce its original type, path and
             // byte location from the original document. An empty JsonException thrown by
             // our converter instead names GoalSimilarityFields, changing the diagnostic.
-            // Replay only malformed task shapes; valid payloads stay on the projection path.
+            // Replay only malformed task shapes/members; valid payloads stay on the projection path.
             using var diagnosticStream = reopenStream();
             _ = JsonSerializer.Deserialize<SimilarityTaskShapeDiagnostic>(diagnosticStream, SerializerOptions);
             throw new InvalidOperationException("Malformed task shape unexpectedly passed standard deserialization.");
@@ -110,7 +111,7 @@ public sealed partial class SqliteOrchestratorStateRepository
     private sealed record SimilarityTaskShapeDiagnostic(IReadOnlyList<TaskSnapshot>? Tasks);
     private sealed class InvalidSimilarityTaskShapeException : Exception { }
 
-    // Validate the task collection's shape without retaining valid payloads. A malformed hot
+    // Validate the task collection and typed members without retaining valid payloads. A malformed hot
     // collection must still be quarantined; the same corruption in an archive must throw.
     // No GoalSnapshot, task or timeline collection is created on the valid projection path.
     private sealed record GoalSimilarityFields(string Id, string Objective, GoalStatus Status,
@@ -131,10 +132,55 @@ public sealed partial class SqliteOrchestratorStateRepository
             {
                 if (reader.TokenType is not (JsonTokenType.StartObject or JsonTokenType.Null))
                     throw new InvalidSimilarityTaskShapeException();
-                else
-                    reader.Skip();
+                try
+                {
+                    ValidateTaskValue(ref reader, typeof(TaskSnapshot), options);
+                }
+                catch (Exception ex) when (IsSnapshotDeserializeException(ex))
+                {
+                    // Replay the original document to retain the standard member path,
+                    // exception type and byte position, including nested task members.
+                    throw new InvalidSimilarityTaskShapeException();
+                }
             }
             return Array.Empty<TaskSnapshot>();
+        }
+
+        private static void ValidateTaskValue(ref Utf8JsonReader reader, Type type, JsonSerializerOptions options)
+        {
+            // The serializer contract owns member types. Do not maintain a second task schema
+            // here, or decode unused descriptions, outputs and collection contents into a DOM.
+            if (type == typeof(string) && reader.TokenType is JsonTokenType.String or JsonTokenType.Null)
+                return;
+            var contract = options.GetTypeInfo(type);
+            if (contract.Kind == JsonTypeInfoKind.Object && reader.TokenType == JsonTokenType.StartObject
+                && !contract.Properties.Any(property => property.IsRequired || property.CustomConverter is not null))
+            {
+                while (reader.Read() && reader.TokenType != JsonTokenType.EndObject)
+                {
+                    JsonPropertyInfo? member = null;
+                    foreach (var property in contract.Properties)
+                        if (reader.ValueTextEquals(property.Name))
+                        {
+                            member = property;
+                            break;
+                        }
+                    reader.Read();
+                    if (member is null || (member.Set is null &&
+                        (member.Get is null || member.AssociatedParameter is null))) reader.Skip();
+                    else ValidateTaskValue(ref reader, member.PropertyType, options);
+                }
+                return;
+            }
+            if (contract.Kind == JsonTypeInfoKind.Enumerable && reader.TokenType == JsonTokenType.StartArray)
+            {
+                while (reader.Read() && reader.TokenType != JsonTokenType.EndArray)
+                    ValidateTaskValue(ref reader, contract.ElementType!, options);
+                return;
+            }
+            // Scalars, nulls and custom converters use the real serializer's validation.
+            // Unusual contracts (e.g. required members) also retain its complete validation.
+            _ = JsonSerializer.Deserialize(ref reader, type, options);
         }
 
         public override void Write(Utf8JsonWriter writer, IReadOnlyList<TaskSnapshot> value,

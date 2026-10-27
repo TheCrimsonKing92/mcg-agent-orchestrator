@@ -283,11 +283,15 @@ public sealed class BacklogSelectiveGoalReadTests(ITestOutputHelper output) : Cl
     }
 
     [Theory]
-    [InlineData("\"invalid\"")]
-    [InlineData("{}")]
-    [InlineData("42")]
-    [InlineData("[\"invalid\"]")]
-    public async Task Similarity_InvalidHotTasks_QuarantinesLikeFullHydration(string tasks)
+    [InlineData("\"invalid\"", "$.Tasks")]
+    [InlineData("{}", "$.Tasks")]
+    [InlineData("42", "$.Tasks")]
+    [InlineData("[\"invalid\"]", "$.Tasks[0]")]
+    [InlineData("[{\"Description\":42}]", "$.Tasks[0].Description")]
+    [InlineData("[{\"RequiredRole\":\"invalid-role\"}]", "$.Tasks[0].RequiredRole")]
+    [InlineData("[{\"LastExecution\":{\"Output\":42}}]", "$.Tasks[0].LastExecution.Output")]
+    [InlineData("[{\"CriterionRetryFeedback\":[42]}]", "$.Tasks[0].CriterionRetryFeedback[0]")]
+    public async Task Similarity_InvalidHotTasks_QuarantinesLikeFullHydration(string tasks, string path)
     {
         using var fixture = await Fixture.Create(4, 256);
         string[] args = ["backlog-similar", "quartz", "--excerpt", "--limit", "100"];
@@ -300,7 +304,7 @@ public sealed class BacklogSelectiveGoalReadTests(ITestOutputHelper output) : Cl
         var expectedError = AsyncLocalConsoleRouter.CaptureError(() => baseline = Run(args, fixture.Workspace, true));
         var actualError = AsyncLocalConsoleRouter.CaptureError(() => candidate = Run(args, fixture.Workspace, false));
         Assert.Contains($"QUARANTINED goal {CompletedId[..8]}: JsonException:", expectedError);
-        Assert.Contains(tasks.StartsWith('[') ? "$.Tasks[0]" : "$.Tasks", expectedError);
+        Assert.Contains(path, expectedError);
         Assert.Equal(expectedError, actualError);
         Assert.Equal(baseline.Text, candidate.Text);
         Assert.DoesNotContain($"kind=goal id={CompletedId[..8]}", candidate.Text);
@@ -311,11 +315,15 @@ public sealed class BacklogSelectiveGoalReadTests(ITestOutputHelper output) : Cl
     }
 
     [Theory]
-    [InlineData("\"invalid\"")]
-    [InlineData("{}")]
-    [InlineData("42")]
-    [InlineData("[\"invalid\"]")]
-    public async Task Similarity_InvalidArchivedTasks_ThrowsLikeFullHydration(string tasks)
+    [InlineData("\"invalid\"", "$.Tasks")]
+    [InlineData("{}", "$.Tasks")]
+    [InlineData("42", "$.Tasks")]
+    [InlineData("[\"invalid\"]", "$.Tasks[0]")]
+    [InlineData("[{\"Description\":42}]", "$.Tasks[0].Description")]
+    [InlineData("[{\"RequiredRole\":\"invalid-role\"}]", "$.Tasks[0].RequiredRole")]
+    [InlineData("[{\"LastExecution\":{\"Output\":42}}]", "$.Tasks[0].LastExecution.Output")]
+    [InlineData("[{\"CriterionRetryFeedback\":[42]}]", "$.Tasks[0].CriterionRetryFeedback[0]")]
+    public async Task Similarity_InvalidArchivedTasks_ThrowsLikeFullHydration(string tasks, string path)
     {
         using var fixture = await Fixture.Create(4, 256);
         await fixture.MakeTerminalAndArchive(CompletedId);
@@ -328,9 +336,11 @@ public sealed class BacklogSelectiveGoalReadTests(ITestOutputHelper output) : Cl
             () => Run(args, fixture.Workspace, true)));
         var actualError = AsyncLocalConsoleRouter.CaptureError(() => actual = Assert.Throws<JsonException>(
             () => Run(args, fixture.Workspace, false)));
-        Assert.Equal(tasks.StartsWith('[') ? "$.Tasks[0]" : "$.Tasks", expected.Path);
+        Assert.Equal(path, expected.Path);
         Assert.Equal(expected.Path, actual.Path);
         Assert.Equal(expected.Message, actual.Message);
+        Assert.Equal(expected.LineNumber, actual.LineNumber);
+        Assert.Equal(expected.BytePositionInLine, actual.BytePositionInLine);
         Assert.Empty(expectedError);
         Assert.Empty(actualError); // Archive corruption throws; it must not become a quarantine/skip.
     }
