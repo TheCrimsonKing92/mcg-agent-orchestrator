@@ -2,10 +2,10 @@ using System.Text;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
-public sealed class GoalWorktreeTestsRebaseMergeLongPathProbe : GoalWorktreeTestBase
+public sealed class GoalWorktreeTestsRebaseMergeLongPathProbe(Xunit.ITestOutputHelper output) : GoalWorktreeTestBase
 {
     [Xunit.Fact]
-    public void RawRebaseSucceedsFromPaddedFixtureRoot()
+    public async Task RawRebaseSucceedsFromPaddedFixtureRoot()
     {
         if (!OperatingSystem.IsWindows())
         {
@@ -26,7 +26,7 @@ public sealed class GoalWorktreeTestsRebaseMergeLongPathProbe : GoalWorktreeTest
                 var paddedRoot = Path.Combine(paddedTop, new string('x', paddingLength));
                 Directory.CreateDirectory(paddedRoot);
                 var movedContainer = Path.Combine(paddedRoot, Path.GetFileName(seedContainer));
-                Directory.Move(seedContainer, movedContainer);
+                await new DirectoryMoveFailureDiagnostics().MoveAsync(seedContainer, movedContainer, output.WriteLine);
                 repo = Path.Combine(movedContainer, "repo");
             }
 
