@@ -578,11 +578,11 @@ private static bool? TryExecuteTaskCommand(string command, IReadOnlyList<string>
             return true;
 
         case "ask-goal":
-            CliArgumentParser.RequirePartCount(parts, 2, "ask-goal <question>");
-            context.CurrentGoal = OrchestratorEntityResolver.RequireGoal(context.CurrentGoal);
-            var goalRequest = context.Kernel.RequestHumanInput(context.CurrentGoal.Id, null, parts[1]);
+            var askGoalArgs = CliArgumentParser.ParseAskGoalArgs(parts);
+            var askGoalTarget = CliArgumentParser.ResolveAskGoalTarget(askGoalArgs, context.Kernel, context.CurrentGoal);
+            var goalRequest = context.Kernel.RequestHumanInput(askGoalTarget.Id, null, askGoalArgs.Question);
             Console.WriteLine($"Human input requested: {goalRequest.Id}");
-            GoalTextView.PrintGoal(context.CurrentGoal);
+            GoalTextView.PrintGoal(askGoalTarget);
             return true;
 
         case "answer":

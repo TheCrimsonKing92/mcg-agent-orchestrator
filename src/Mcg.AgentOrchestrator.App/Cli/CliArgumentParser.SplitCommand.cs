@@ -82,7 +82,7 @@ public static IReadOnlyList<string> SplitCommand(string line)
 
     if (command.Equals("ask-goal", StringComparison.OrdinalIgnoreCase))
     {
-        return [command, remainder];
+        return [command, .. TokenizeQuotedArguments(remainder)];
     }
 
     if (command.Equals("gate-satisfied", StringComparison.OrdinalIgnoreCase))
@@ -436,11 +436,13 @@ private static IReadOnlyList<string> TokenizeQuotedArguments(string value)
     var parts = new List<string>();
     var current = new System.Text.StringBuilder();
     var quoted = false;
+    var argumentStarted = false;
     for (var index = 0; index < value.Length; index++)
     {
         var character = value[index];
         if (character == '\\' && index + 1 < value.Length && value[index + 1] == '"')
         {
+            argumentStarted = true;
             current.Append('"');
             index++;
             continue;
@@ -448,21 +450,24 @@ private static IReadOnlyList<string> TokenizeQuotedArguments(string value)
 
         if (character == '"')
         {
+            argumentStarted = true;
             quoted = !quoted;
             continue;
         }
 
         if (char.IsWhiteSpace(character) && !quoted)
         {
-            if (current.Length > 0)
+            if (argumentStarted)
             {
                 parts.Add(current.ToString());
                 current.Clear();
+                argumentStarted = false;
             }
 
             continue;
         }
 
+        argumentStarted = true;
         current.Append(character);
     }
 
@@ -471,7 +476,7 @@ private static IReadOnlyList<string> TokenizeQuotedArguments(string value)
         throw new ArgumentException("Operator intent metadata contains an unterminated quoted value.");
     }
 
-    if (current.Length > 0)
+    if (argumentStarted)
     {
         parts.Add(current.ToString());
     }
