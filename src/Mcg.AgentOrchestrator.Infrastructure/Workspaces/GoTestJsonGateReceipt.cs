@@ -59,40 +59,13 @@ internal static class GoTestJsonGateReceipt
             $"{Path.GetFileName(prefix)}.{AcceptanceArtifactFileNames.Slug(check.Name)}", ".trx"));
         Directory.CreateDirectory(directory);
         documentToWrite.Save(path);
-        return WithNormalizedResult(built with
+        return NormalizedGateResultStep.Apply(built with
         {
             TestResultPaths = [path],
             ExecutedTestCount = rows.Count,
             FailingTestIdentities = rows.Where(row => row.Failed).Select(row => $"{row.Package}.{row.Test}").ToArray(),
             OutputTail = built.OutputTail is null ? null : tail(decoded.ToString())
-        }, path);
-    }
-
-    private static AcceptanceCheckResult WithNormalizedResult(AcceptanceCheckResult receipt, string trxPath)
-    {
-        var target = NormalizedTestResultWriter.PathFor(trxPath);
-        try
-        {
-            var read = new TrxTestResultSource().Read(trxPath);
-            if (read.Status != TestResultReadStatus.Readable)
-                return receipt with
-                {
-                    NormalizedTestResultWriteFailure = new(target, NormalizedTestResultWriteFailure.SourceNotReadable,
-                        read.Detail ?? read.Status.ToString())
-                };
-            NormalizedTestResultWriter.Write(target, "go-test-json", read.Records);
-            return receipt with { NormalizedTestResultPaths = [target] };
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
-        {
-            var firstLine = ex.Message.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries).FirstOrDefault()
-                ?? "No message provided.";
-            return receipt with
-            {
-                NormalizedTestResultWriteFailure = new(target, NormalizedTestResultWriteFailure.WriteFailed,
-                    $"{ex.GetType().Name}: {firstLine}")
-            };
-        }
+        }, path, "go-test-json");
     }
 
     internal static IReadOnlyList<(string Package, string Test, bool Failed)> ReadTopLevelRows(

@@ -12,6 +12,10 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 
 internal static class GoalAcceptanceVerifierTestTelemetry
 {
+    internal static AcceptanceCheckResult WithNormalizedTrxResult(AcceptanceCheckResult receipt) =>
+        receipt.TestResultPaths is [var trxPath]
+            ? NormalizedGateResultStep.Apply(receipt, trxPath, NormalizedGateResultStep.TrxSourceLabel) : receipt;
+
     internal static DotnetTestTelemetry? ResolveDotnetTestTelemetry(
         string[] arguments,
         AcceptanceManifestCheck check,

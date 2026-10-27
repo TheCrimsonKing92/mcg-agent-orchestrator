@@ -2718,7 +2718,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 $"{(unreadableReceipts.Count > 0 ? "focused-selection-receipt-unreadable" : "focused-selection-apparatus-failure")} executed={executedTestCount?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown"}",
                 BuildGenericCommandResultSummary(result))
             : BuildGenericCommandResultSummary(result);
-        return (new AcceptanceCheckResult(
+        return (GoalAcceptanceVerifierTestTelemetry.WithNormalizedTrxResult(new AcceptanceCheckResult(
             IsInterrupted(result) ? BuildInterruptedFailureName(check, result) : check.Name,
             passed,
             result.ExitCode,
@@ -2744,7 +2744,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 worktreePath,
                 _invocationContext?.Ordinal ?? 0),
             ChildProcessId: result.ChildProcessId,
-            ChildProcessStartedAt: result.ChildProcessStartedAt, LaneScheduling: result.LaneScheduling), false);
+            ChildProcessStartedAt: result.ChildProcessStartedAt, LaneScheduling: result.LaneScheduling)), false);
     }
 
     private async Task<(AcceptanceCheckResult Result, bool Retried)> RunManagedDotnetTestCheckAsync(
@@ -2944,7 +2944,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             var durableTestResultPaths = GoalAcceptanceVerifierTestTelemetry.CopyCompletedTestReceiptsToAttemptFolder(
                 telemetry?.Paths,
                 _executionContext?.ResultsPrefix);
-            return (new AcceptanceCheckResult(
+            return (GoalAcceptanceVerifierTestTelemetry.WithNormalizedTrxResult(new AcceptanceCheckResult(
                 IsInterrupted(result) ? BuildInterruptedFailureName(check, result) : check.Name,
                 passed,
                 result.ExitCode,
@@ -2972,7 +2972,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                     worktreePath,
                     _invocationContext?.Ordinal ?? 0),
                 ChildProcessId: result.ChildProcessId,
-                ChildProcessStartedAt: result.ChildProcessStartedAt, LaneScheduling: result.LaneScheduling), lockRemediationApplied);
+                ChildProcessStartedAt: result.ChildProcessStartedAt, LaneScheduling: result.LaneScheduling)), lockRemediationApplied);
         }
         catch (Exception ex) when (IsBuildArtifactIoException(ex) &&
             ex is not DotnetBuildSlotsBusyException and not BuildLockBlockedException)
@@ -3032,7 +3032,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             var durableTestResultPaths = GoalAcceptanceVerifierTestTelemetry.CopyCompletedTestReceiptsToAttemptFolder(
                 telemetry?.Paths,
                 _executionContext?.ResultsPrefix);
-            return (new AcceptanceCheckResult(
+            return (GoalAcceptanceVerifierTestTelemetry.WithNormalizedTrxResult(new AcceptanceCheckResult(
                 IsInterrupted(result) ? BuildInterruptedFailureName(check, result) : check.Name,
                 passed,
                 result.ExitCode,
@@ -3060,7 +3060,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                     worktreePath,
                     _invocationContext?.Ordinal ?? 0),
                 ChildProcessId: result.ChildProcessId,
-                ChildProcessStartedAt: result.ChildProcessStartedAt, LaneScheduling: result.LaneScheduling), true);
+                ChildProcessStartedAt: result.ChildProcessStartedAt, LaneScheduling: result.LaneScheduling)), true);
         }
         finally
         {
