@@ -368,6 +368,8 @@ internal sealed class RemoteLaneCoordinator : IDisposable
                         ResultSummary: $"remote-executor={entry.Id}", TestResultPaths: paths,
                         TestResultAttemptId: _cache.AttemptId, ExecutedTestCount: trx.ExecutedTestCount,
                         DiscoveredTestCount: trx.DiscoveredTestCount, CompletionDecision: decision, TestProjectPath: check.Project);
+                    foreach (var path in paths)
+                        accepted = NormalizedGateResultStep.Apply(accepted, path, NormalizedGateResultStep.TrxSourceLabel);
                     inspectingTrx = false;
                     var detail = Detail();
                     var remoteDuration = ResolveRemoteDuration(detail.LastStatus, _clock.GetUtcNow() - submittedAt);

@@ -11,23 +11,26 @@ internal static class NormalizedGateResultStep
         {
             var read = new TrxTestResultSource().Read(trxPath);
             if (read.Status != TestResultReadStatus.Readable)
-                return receipt with
-                {
-                    NormalizedTestResultWriteFailure = new(target, NormalizedTestResultWriteFailure.SourceNotReadable,
-                        read.Detail ?? read.Status.ToString())
-                };
+                return WithFailure(receipt, new(target, NormalizedTestResultWriteFailure.SourceNotReadable,
+                    read.Detail ?? read.Status.ToString()));
             NormalizedTestResultWriter.Write(target, sourceLabel, read.Records);
-            return receipt with { NormalizedTestResultPaths = [target] };
+            return receipt with { NormalizedTestResultPaths = [.. (receipt.NormalizedTestResultPaths ?? []), target] };
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
         {
             var firstLine = ex.Message.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries).FirstOrDefault()
                 ?? "No message provided.";
-            return receipt with
-            {
-                NormalizedTestResultWriteFailure = new(target, NormalizedTestResultWriteFailure.WriteFailed,
-                    $"{ex.GetType().Name}: {firstLine}")
-            };
+            return WithFailure(receipt, new(target, NormalizedTestResultWriteFailure.WriteFailed,
+                $"{ex.GetType().Name}: {firstLine}"));
         }
     }
+
+    private static AcceptanceCheckResult WithFailure(AcceptanceCheckResult receipt, NormalizedTestResultWriteFailure failure) =>
+        receipt with
+        {
+            // The contract has one typed failure: keep its identity and append later diagnostics.
+            NormalizedTestResultWriteFailure = receipt.NormalizedTestResultWriteFailure is { } previous
+                ? previous with { Detail = $"{previous.Detail}\nTargetPath={failure.TargetPath}; Reason={failure.Reason}; Detail={failure.Detail}" }
+                : failure
+        };
 }
