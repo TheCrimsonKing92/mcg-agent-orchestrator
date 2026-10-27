@@ -9,6 +9,40 @@ public sealed class GateOwnedCriterionRefinementTests
 {
     private const string Candidate = "candidate-c";
 
+    // Parallel-safe: revision and gate evaluation use only a scenario-local kernel.
+    [Xunit.Theory]
+    [Xunit.InlineData("Operator owns execution; Acceptance owns execution. TEST-VERIFIABLE.")]
+    [Xunit.InlineData("REAL-WORLD-DEPENDENT.")]
+    public void UnsafeRevision_RefinementGate_BlocksUntilAuthoritativeCorrection(string declaration)
+    {
+        const string original = "The result is computed. Developer owns; Developer executes. TEST-VERIFIABLE.";
+        var revised = $"The result is observed. {declaration}";
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal($"Brief.\n\n## Acceptance criteria\n1. {original}");
+        kernel.SetGoalRefinedSpec(goal.Id,
+            new RefinedSpec("Observe ownership", [original], VerificationClass.TestVerifiable, [], []));
+        Xunit.Assert.Equal(GoalRefinementReadiness.Ready,
+            GoalRefinementGate.Evaluate(goal, null, new GoalRefinementClarificationFacts([])).Readiness);
+
+        kernel.ReviseGoalBrief(goal.Id, $"Brief.\n\n## Acceptance criteria\n1. {revised}");
+
+        Xunit.Assert.Equal(GoalRefinementReadiness.AwaitingClarification,
+            GoalRefinementGate.Evaluate(goal, null, new GoalRefinementClarificationFacts([])).Readiness);
+        var restored = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot()).GetGoal(goal.Id);
+        Xunit.Assert.Equal(GoalRefinementReadiness.AwaitingClarification,
+            GoalRefinementGate.Evaluate(restored, null, new GoalRefinementClarificationFacts([])).Readiness);
+
+        const string corrected = "The result is observed. Reviewer owns source inspection; Acceptance owns execution. TEST-VERIFIABLE.";
+        kernel.ReviseGoalBrief(goal.Id, $"Brief.\n\n## Acceptance criteria\n1. {corrected}");
+
+        Xunit.Assert.Equal(GoalRefinementReadiness.Ready,
+            GoalRefinementGate.Evaluate(goal, null, new GoalRefinementClarificationFacts([])).Readiness);
+        var obligation = Xunit.Assert.Single(goal.CriterionEvidenceObligations);
+        Xunit.Assert.Equal(3, obligation.CriterionVersion);
+        Xunit.Assert.Equal(CriterionEvidenceOwner.Acceptance, obligation.Owner);
+        Xunit.Assert.Equal(CriterionEvidenceState.Pending, obligation.State);
+    }
+
     [Xunit.Theory]
     [Xunit.InlineData("Acceptance executes")]
     [Xunit.InlineData("ACCEPTANCE-GATE-OWNED")]

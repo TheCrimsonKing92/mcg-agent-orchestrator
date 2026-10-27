@@ -24,6 +24,27 @@ public sealed class CriterionOwnershipDerivationDeclaredOwnerTests
 
         Xunit.Assert.Empty(result.AcceptanceGateOwned);
         Xunit.Assert.Empty(result.OperatorOwned);
+        var issue = Xunit.Assert.Single(result.Issues);
+        Xunit.Assert.Equal(0, issue.CriterionIndex);
+        Xunit.Assert.Contains("without an authoritative evidence owner", issue.Diagnostic);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("Operator owns execution; Acceptance owns execution.")]
+    [Xunit.InlineData("OPERATOR-OWNED; ACCEPTANCE-GATE-OWNED.")]
+    [Xunit.InlineData("Operator owns execution; ACCEPTANCE-GATE-OWNED.")]
+    public void ConflictingOwners_Revision_BlocksInsteadOfSelectingOwner(string declaration)
+    {
+        var criterion = $"The result is observed. {declaration} TEST-VERIFIABLE.";
+
+        // Even prior ownership cannot resolve contradictory current authority.
+        var result = CriterionOwnershipDerivation.DeriveForRevision([criterion], [criterion], [criterion]);
+
+        Xunit.Assert.Empty(result.AcceptanceGateOwned);
+        Xunit.Assert.Empty(result.OperatorOwned);
+        var issue = Xunit.Assert.Single(result.Issues);
+        Xunit.Assert.Equal(0, issue.CriterionIndex);
+        Xunit.Assert.Contains("both Operator and Acceptance", issue.Diagnostic);
     }
 
     [Xunit.Fact]

@@ -2,7 +2,12 @@ namespace Mcg.AgentOrchestrator.Core;
 
 public sealed record CriterionOwnershipDerivationResult(
     IReadOnlyList<string> AcceptanceGateOwned,
-    IReadOnlyList<string> OperatorOwned);
+    IReadOnlyList<string> OperatorOwned)
+{
+    public IReadOnlyList<CriterionOwnershipDerivationIssue> Issues { get; init; } = [];
+}
+
+public sealed record CriterionOwnershipDerivationIssue(int CriterionIndex, string Diagnostic);
 
 public static class CriterionOwnershipDerivation
 {
@@ -16,14 +21,22 @@ public static class CriterionOwnershipDerivation
         var seen = new HashSet<string>(StringComparer.Ordinal);
         var gateOwned = new List<string>();
         var operatorOwned = new List<string>();
+        var issues = new List<CriterionOwnershipDerivationIssue>();
 
-        foreach (var item in newCriteria)
+        for (var index = 0; index < newCriteria.Count; index++)
         {
-            var criterion = item;
+            var criterion = newCriteria[index];
             if (!seen.Add(criterion))
                 continue;
 
             var marker = AcceptanceCriterionOwnershipMarker.Classify(criterion);
+            if (AcceptanceCriterionOwnershipMarker.HasConflictingDeclaredEvidenceOwners(criterion))
+            {
+                issues.Add(new(index,
+                    $"Declared criterion {index + 1} claims both Operator and Acceptance evidence ownership: '{criterion}'."));
+                continue;
+            }
+
             var declared = AcceptanceCriterionOwnershipMarker.ResolveDeclaredEvidenceOwner(criterion);
             var operatorOwnedByMarker = marker.Classification ==
                 AcceptanceCriterionOwnershipClassification.OperatorOwned;
@@ -39,8 +52,13 @@ public static class CriterionOwnershipDerivation
             {
                 gateOwned.Add(criterion);
             }
+            else if (marker.Classification == AcceptanceCriterionOwnershipClassification.OperatorOwnedWeakSignal)
+            {
+                issues.Add(new(index,
+                    $"Declared criterion {index + 1} is REAL-WORLD-DEPENDENT without an authoritative evidence owner: '{criterion}'."));
+            }
         }
 
-        return new CriterionOwnershipDerivationResult(gateOwned, operatorOwned);
+        return new CriterionOwnershipDerivationResult(gateOwned, operatorOwned) { Issues = issues };
     }
 }

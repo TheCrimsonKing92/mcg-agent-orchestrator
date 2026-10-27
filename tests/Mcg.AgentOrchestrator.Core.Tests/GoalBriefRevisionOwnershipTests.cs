@@ -1,7 +1,71 @@
 using Mcg.AgentOrchestrator.Core;
 
+// Parallel-safe: each scenario owns an in-memory kernel and snapshot.
 public sealed class GoalBriefRevisionOwnershipTests
 {
+    [Xunit.Theory]
+    [Xunit.InlineData("The result is observed. Operator owns execution; Acceptance owns execution. TEST-VERIFIABLE.",
+        "both Operator and Acceptance")]
+    [Xunit.InlineData("The live behavior is observed. REAL-WORLD-DEPENDENT.",
+        "without an authoritative evidence owner")]
+    public void UnsafeOwnership_Revision_RequiresClarificationAfterReload(string revised, string diagnostic)
+    {
+        const string original = "The result is computed. Developer owns; Developer executes. TEST-VERIFIABLE.";
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal(Brief(original));
+        kernel.SetGoalRefinedSpec(goal.Id, Spec([original], []));
+        Xunit.Assert.False(goal.RefinedSpec!.HasOpenQuestions);
+        Xunit.Assert.Empty(goal.CriterionEvidenceObligations);
+
+        kernel.ReviseGoalBrief(goal.Id, Brief(revised));
+
+        var spec = goal.RefinedSpec!;
+        Xunit.Assert.Equal([revised], spec.AcceptanceCriteria);
+        Xunit.Assert.Empty(spec.OperatorOwnedAcceptanceCriteria);
+        Xunit.Assert.Empty(spec.AcceptanceGateOwnedAcceptanceCriteria);
+        Xunit.Assert.Empty(goal.CriterionEvidenceObligations);
+        Xunit.Assert.True(spec.HasOpenQuestions);
+        var question = Xunit.Assert.Single(spec.OpenQuestions);
+        Xunit.Assert.Equal(revised, question.Criterion);
+        Xunit.Assert.Equal("ownership-lifecycle", question.ForkKind);
+        Xunit.Assert.Contains(diagnostic, question.Question, StringComparison.Ordinal);
+        Xunit.Assert.Contains("Revise the versioned criterion", question.Question, StringComparison.Ordinal);
+        Xunit.Assert.Contains("criterion-evidence-map", question.Question, StringComparison.Ordinal);
+        Xunit.Assert.StartsWith("ownership-v2-", question.TopicKey);
+
+        var restored = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot()).GetGoal(goal.Id);
+        Xunit.Assert.True(restored.RefinedSpec!.HasOpenQuestions);
+        Xunit.Assert.Equal(question, Xunit.Assert.Single(restored.RefinedSpec.OpenQuestions));
+        Xunit.Assert.Equal(2, restored.AuthoritativeRefinedSpecVersion!.Version);
+        Xunit.Assert.Empty(restored.CriterionEvidenceObligations);
+    }
+
+    [Xunit.Fact]
+    public void CorrectedOwnership_Revision_ReplacesOnlyDerivedOwnershipQuestion()
+    {
+        const string original = "The result is computed. TEST-VERIFIABLE.";
+        const string unsafeCriterion = "The live behavior is observed. REAL-WORLD-DEPENDENT.";
+        const string corrected = "The result is observed. Acceptance owns execution. TEST-VERIFIABLE.";
+        var unrelated = new RefinedSpecOpenQuestion("source-question", "Which algorithm?", "behavior", "Open");
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal(Brief(original));
+        kernel.SetGoalRefinedSpec(goal.Id, Spec([original], []) with { OpenQuestions = [unrelated] });
+        kernel.ReviseGoalBrief(goal.Id, Brief(unsafeCriterion));
+        Xunit.Assert.Equal(2, goal.RefinedSpec!.OpenQuestions.Count);
+
+        kernel.ReviseGoalBrief(goal.Id, Brief(corrected));
+
+        Xunit.Assert.Equal(unrelated, Xunit.Assert.Single(goal.RefinedSpec!.OpenQuestions));
+        Xunit.Assert.Equal([corrected], goal.RefinedSpec.AcceptanceGateOwnedAcceptanceCriteria);
+        var obligation = Xunit.Assert.Single(goal.CriterionEvidenceObligations);
+        Xunit.Assert.Equal(3, obligation.CriterionVersion);
+        Xunit.Assert.Equal(CriterionEvidenceOwner.Acceptance, obligation.Owner);
+        Xunit.Assert.Equal(CriterionEvidenceState.Pending, obligation.State);
+        var historical = goal.RefinedSpecVersions.Single(version => version.Version == 2);
+        Xunit.Assert.True(historical.Spec.HasOpenQuestions);
+        Xunit.Assert.Equal(2, historical.Spec.OpenQuestions.Count);
+    }
+
     [Xunit.Theory]
     [Xunit.InlineData("Developer owns; Acceptance executes.")]
     [Xunit.InlineData("Acceptance owns execution.")]
