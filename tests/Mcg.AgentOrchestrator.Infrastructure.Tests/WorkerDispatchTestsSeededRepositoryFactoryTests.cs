@@ -993,6 +993,295 @@ public sealed class WorkerDispatchTestsSeededRepositoryFactoryTests
         Xunit.Assert.False(Directory.Exists(failure.Diagnostic.FinalPath!));
     }
 
+    [Xunit.Theory]
+    [Xunit.InlineData("null", false)]
+    [Xunit.InlineData("zero", false)]
+    [Xunit.InlineData("nonzero", false)]
+    [Xunit.InlineData("exit-throws", false)]
+    [Xunit.InlineData("wait-throws", false)]
+    [Xunit.InlineData("wait-canceled", false)]
+    [Xunit.InlineData("timeout", false)]
+    [Xunit.InlineData("timeout-exit-throws", false)]
+    [Xunit.InlineData("drain-timeout", false)]
+    [Xunit.InlineData("drain-timeout-exit-throws", false)]
+    [Xunit.InlineData("drain-failure", false)]
+    [Xunit.InlineData("drain-failure-exit-throws", false)]
+    [Xunit.InlineData("null", true)]
+    [Xunit.InlineData("zero", true)]
+    [Xunit.InlineData("nonzero", true)]
+    [Xunit.InlineData("exit-throws", true)]
+    [Xunit.InlineData("wait-throws", true)]
+    [Xunit.InlineData("wait-canceled", true)]
+    [Xunit.InlineData("timeout", true)]
+    [Xunit.InlineData("timeout-exit-throws", true)]
+    [Xunit.InlineData("drain-failure", true)]
+    [Xunit.InlineData("drain-failure-exit-throws", true)]
+    public void RunGitProbe_ObservationControls_PreservePreciseClassification(
+        string scenario, bool nativeCapture)
+    {
+        using var scope = new FactoryScope();
+        var created = scope.Factory.Create();
+        var waitCalls = 0;
+        var exitCalls = 0;
+        var drainCalls = 0;
+        var captureCalls = 0;
+        bool? actualWait = null;
+        int? actualExit = null;
+        bool? actualDrain = null;
+        using var seam = InfrastructureTestSupport.UseGitProbeSeam(
+            startProcess: nativeCapture ? null : process => process.Start(),
+            waitForExit: actual =>
+            {
+                waitCalls++;
+                actualWait = actual();
+                if (scenario == "wait-throws") throw new IOException("controlled wait failure");
+                if (scenario == "wait-canceled") throw new OperationCanceledException("unrelated cancellation");
+                return !scenario.StartsWith("timeout", StringComparison.Ordinal);
+            },
+            readExitCode: actual =>
+            {
+                exitCalls++;
+                var code = actual();
+                actualExit = code;
+                if (scenario.EndsWith("exit-throws", StringComparison.Ordinal))
+                    throw new IOException("controlled exit failure");
+                return scenario == "null" ? null : code;
+            },
+            waitForDrain: actual =>
+            {
+                drainCalls++;
+                actualDrain = actual();
+                return !scenario.StartsWith("drain-timeout", StringComparison.Ordinal);
+            },
+            captureStream: stream =>
+            {
+                captureCalls++;
+                if (!scenario.StartsWith("drain-failure", StringComparison.Ordinal)) return stream;
+                var unavailable = new MemoryStream();
+                unavailable.Dispose();
+                return unavailable;
+            });
+
+        var result = InfrastructureTestSupport.RunGitProbe(
+            created.PublishedIdentity.RepositoryPath,
+            scenario == "nonzero" ? ["rev-parse", "--verify", "refs/heads/missing"]
+                : ["rev-parse", "--verify", "HEAD^{commit}"]);
+
+        var expected = scenario switch
+        {
+            "zero" => WorkerDispatchTestsSeededRepositoryFactory.GitProbeClassification.Success,
+            "nonzero" => WorkerDispatchTestsSeededRepositoryFactory.GitProbeClassification.NonZeroExit,
+            "timeout" or "timeout-exit-throws" =>
+                WorkerDispatchTestsSeededRepositoryFactory.GitProbeClassification.ProcessTimeout,
+            "drain-timeout" or "drain-timeout-exit-throws" =>
+                WorkerDispatchTestsSeededRepositoryFactory.GitProbeClassification.DrainTimeout,
+            "drain-failure" or "drain-failure-exit-throws" =>
+                WorkerDispatchTestsSeededRepositoryFactory.GitProbeClassification.DrainFailure,
+            _ => WorkerDispatchTestsSeededRepositoryFactory.GitProbeClassification.ProcessObservationFailure
+        };
+        Xunit.Assert.Equal(1, waitCalls);
+        Xunit.Assert.Equal(1, exitCalls);
+        Xunit.Assert.True(actualWait, "The real Git child did not exit.");
+        Xunit.Assert.NotNull(actualExit);
+        if (drainCalls > 0) Xunit.Assert.True(actualDrain, "The real Git output did not drain.");
+        Xunit.Assert.True(captureCalls > 0);
+        Xunit.Assert.Equal(nativeCapture && IsWindows ? 0 : 1, drainCalls);
+        Xunit.Assert.Equal(expected, result.Classification);
+        Xunit.Assert.Equal(scenario == "zero", result.Succeeded);
+        Xunit.Assert.Equal(scenario.StartsWith("timeout", StringComparison.Ordinal), result.TimedOut);
+        Xunit.Assert.Equal(scenario.StartsWith("drain-timeout", StringComparison.Ordinal), result.DrainTimedOut);
+        Xunit.Assert.Equal(scenario.StartsWith("drain-failure", StringComparison.Ordinal), result.DrainFailed);
+        Xunit.Assert.True(result.ProcessStarted);
+        Xunit.Assert.NotNull(result.ChildProcessId);
+        Xunit.Assert.NotNull(result.ChildStartedAt);
+        if (nativeCapture && IsWindows)
+            Xunit.Assert.Contains("capture=owned-file-handles", result.EnvironmentContract, StringComparison.Ordinal);
+        var facts = Xunit.Assert.IsType<WorkerDispatchTestsSeededRepositoryFactory.GitProbeObservations>(result.Observations);
+        Xunit.Assert.True(facts.Wait.Attempted);
+        Xunit.Assert.Equal(scenario is not ("wait-throws" or "wait-canceled"), facts.Wait.Completed);
+        Xunit.Assert.True(facts.Exit.Attempted);
+        Xunit.Assert.Equal(!scenario.EndsWith("exit-throws", StringComparison.Ordinal), facts.Exit.Completed);
+        Xunit.Assert.Equal(nativeCapture && IsWindows && result.TimedOut, facts.CleanupWait.Attempted);
+        if (scenario == "null" || scenario.EndsWith("exit-throws", StringComparison.Ordinal))
+            Xunit.Assert.Null(result.ExitCode);
+        else if (scenario == "nonzero")
+            Xunit.Assert.NotEqual(0, result.ExitCode);
+        else
+            Xunit.Assert.Equal(0, result.ExitCode);
+        if (scenario is "wait-throws" or "wait-canceled")
+        {
+            Xunit.Assert.Null(facts.Wait.Exited);
+            Xunit.Assert.NotNull(facts.Wait.ExceptionType);
+        }
+        else
+            Xunit.Assert.Equal(!result.TimedOut, facts.Wait.Exited);
+        if (scenario != "nonzero" && !result.DrainFailed)
+            Xunit.Assert.Equal(created.PublishedIdentity.HeadCommit, result.StandardOutput.Trim());
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("null")]
+    [Xunit.InlineData("exit-throws")]
+    [Xunit.InlineData("wait-throws")]
+    public void Create_ExitObservationMissing_RejectsWithBoundedFacts(string scenario)
+    {
+        var armed = false;
+        var waits = 0;
+        var exits = 0;
+        var message = new string('e', 6000) + "unretained-suffix";
+        using var scope = new FactoryScope(hooks: new(
+            BeforeTemplateValidation: _ => armed = true));
+        using var seam = InfrastructureTestSupport.UseGitProbeSeam(
+            waitForExit: actual =>
+            {
+                var exited = actual();
+                if (armed)
+                {
+                    waits++;
+                    if (scenario == "wait-throws") throw new IOException(message);
+                }
+                return exited;
+            },
+            readExitCode: actual =>
+            {
+                var code = actual();
+                if (!armed) return code;
+                exits++;
+                if (scenario == "exit-throws") throw new IOException(message);
+                return scenario == "null" ? null : code;
+            });
+
+        var failure = Xunit.Assert.Throws<WorkerDispatchTestsSeededRepositoryFactory.SeededRepositoryFailureException>(
+            () => scope.Factory.Create());
+
+        Xunit.Assert.Equal(1, waits);
+        Xunit.Assert.Equal(1, exits);
+        var diagnostic = failure.Diagnostic;
+        var git = diagnostic.Git;
+        Xunit.Assert.Equal(WorkerDispatchTestsSeededRepositoryFactory.ValidationCheck.TemplateHeadCommit, diagnostic.Check);
+        Xunit.Assert.Equal(WorkerDispatchTestsSeededRepositoryFactory.GitProbeClassification.ProcessObservationFailure,
+            git.Classification);
+        Xunit.Assert.False(git.Succeeded);
+        Xunit.Assert.Matches("^[0-9a-f]{40}$", git.StandardOutput.Trim());
+        Xunit.Assert.Equal(41, git.StandardOutputByteCount);
+        Xunit.Assert.False(git.StandardOutputTruncated);
+        Xunit.Assert.NotEqual("not-assigned", git.FixtureAttemptId);
+        Xunit.Assert.True(git.ProbeOrdinal > 0);
+        Xunit.Assert.NotNull(git.ChildProcessId);
+        Xunit.Assert.NotNull(git.ChildStartedAt);
+        Xunit.Assert.Equal(WorkerDispatchTestsSeededRepositoryFactory.ValidationFailureOwner.ProcessOutputApparatus,
+            diagnostic.Owner);
+        Xunit.Assert.True(diagnostic.FileSystem.HasValidHeadBytes);
+        Xunit.Assert.Contains(git, diagnostic.ProbeReceipts!);
+        var facts = Xunit.Assert.IsType<WorkerDispatchTestsSeededRepositoryFactory.GitProbeObservations>(git.Observations);
+        Xunit.Assert.True(facts.Wait.Attempted);
+        Xunit.Assert.Equal(scenario != "wait-throws", facts.Wait.Completed);
+        Xunit.Assert.False(facts.CleanupWait.Attempted);
+        Xunit.Assert.True(facts.Exit.Attempted);
+        Xunit.Assert.Equal(scenario != "exit-throws", facts.Exit.Completed);
+        Xunit.Assert.Equal(scenario == "wait-throws" ? 0 : (int?)null, git.ExitCode);
+        if (scenario != "null")
+        {
+            var operation = scenario == "wait-throws" ? facts.Wait : facts.Exit;
+            Xunit.Assert.Equal(typeof(IOException).FullName, operation.ExceptionType);
+            Xunit.Assert.Equal(new string('e', 512), operation.ExceptionMessage);
+            Xunit.Assert.True(operation.ExceptionMessageTruncated);
+            Xunit.Assert.Contains("exceptionMessageTruncated=True", failure.Message, StringComparison.Ordinal);
+            Xunit.Assert.DoesNotContain("unretained-suffix", failure.Message, StringComparison.Ordinal);
+        }
+        Xunit.Assert.Contains($"observations=({facts})", failure.Message, StringComparison.Ordinal);
+        Xunit.Assert.Contains($"fixtureAttempt={git.FixtureAttemptId}", failure.Message, StringComparison.Ordinal);
+        Xunit.Assert.Contains($"probeOrdinal={git.ProbeOrdinal}", failure.Message, StringComparison.Ordinal);
+        Xunit.Assert.Contains(git.ChildIdentity, failure.Message, StringComparison.Ordinal);
+        Xunit.Assert.Contains($"exitCode={git.ExitCode?.ToString() ?? "null"}", failure.Message, StringComparison.Ordinal);
+        Xunit.Assert.True(AcceptanceFailureCauseReceiptCodec.TryParse(failure.Message, out var receipt), failure.Message);
+        Xunit.Assert.Equal("ProcessObservationFailure", receipt.ProbeClassification);
+        // Initial template rejection precedes staging allocation. The fixture still owns its template.
+        Xunit.Assert.Empty(diagnostic.Cleanup);
+        Xunit.Assert.Null(diagnostic.StagingPath);
+        Xunit.Assert.Null(diagnostic.FinalPath);
+        Xunit.Assert.True(Directory.Exists(diagnostic.SourceTemplatePath));
+        scope.Dispose();
+        Xunit.Assert.False(Directory.Exists(scope.Root));
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public void RunGitProbe_MissingExitWithOversizedCapture_RetainsBounds(bool nativeCapture)
+    {
+        using var scope = new FactoryScope();
+        using var output = new MemoryStream(System.Text.Encoding.UTF8.GetBytes(new string('o', 20000)));
+        using var error = new MemoryStream(System.Text.Encoding.UTF8.GetBytes(new string('e', 20000)));
+        var captures = 0;
+        int? actualExit = null;
+        using var seam = InfrastructureTestSupport.UseGitProbeSeam(
+            startProcess: nativeCapture ? null : process => process.Start(),
+            readExitCode: actual => { actualExit = actual(); return null; },
+            captureStream: _ => ++captures == 1 ? output : error);
+
+        var result = InfrastructureTestSupport.RunGitProbe(scope.Root, ["--version"]);
+
+        Xunit.Assert.Equal(0, actualExit);
+        Xunit.Assert.Equal(2, captures);
+        Xunit.Assert.Equal(WorkerDispatchTestsSeededRepositoryFactory.GitProbeClassification.ProcessObservationFailure,
+            result.Classification);
+        Xunit.Assert.False(result.Succeeded);
+        Xunit.Assert.Equal(20000, result.StandardOutputByteCount);
+        Xunit.Assert.Equal(20000, result.StandardErrorByteCount);
+        Xunit.Assert.Equal(new string('o', 4096), result.StandardOutput);
+        Xunit.Assert.Equal(new string('e', 4096), result.StandardError);
+        Xunit.Assert.True(result.StandardOutputTruncated);
+        Xunit.Assert.True(result.StandardErrorTruncated);
+        Xunit.Assert.DoesNotContain(new string('o', 4097), result.ToString(), StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain(new string('e', 4097), result.ToString(), StringComparison.Ordinal);
+        if (nativeCapture && IsWindows)
+            Xunit.Assert.Contains("capture=owned-file-handles", result.EnvironmentContract, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void RunGitProbe_NestedObservationScopes_RestorePreviousOperations()
+    {
+        using var scope = new FactoryScope();
+        var created = scope.Factory.Create();
+        var path = created.PublishedIdentity.RepositoryPath;
+        var outerCalls = 0;
+        var innerCalls = 0;
+        using (InfrastructureTestSupport.UseGitProbeSeam(readExitCode: actual =>
+               { outerCalls++; Xunit.Assert.Equal(0, actual()); return null; }))
+        {
+            using (InfrastructureTestSupport.UseGitProbeSeam(readExitCode: actual =>
+                   { innerCalls++; return actual(); }))
+                Xunit.Assert.True(InfrastructureTestSupport.RunGitProbe(path, ["status", "--short"]).Succeeded);
+            Xunit.Assert.Equal(WorkerDispatchTestsSeededRepositoryFactory.GitProbeClassification.ProcessObservationFailure,
+                InfrastructureTestSupport.RunGitProbe(path, ["status", "--short"]).Classification);
+        }
+        Xunit.Assert.True(InfrastructureTestSupport.RunGitProbe(path, ["status", "--short"]).Succeeded);
+        Xunit.Assert.Equal(1, outerCalls);
+        Xunit.Assert.Equal(1, innerCalls);
+    }
+
+    [Xunit.Fact]
+    public void RunGitProbe_StartReturnsFalse_LeavesObservationUnattempted()
+    {
+        using var scope = new FactoryScope();
+        var observations = 0;
+        using var seam = InfrastructureTestSupport.UseGitProbeSeam(
+            startProcess: _ => false,
+            waitForExit: actual => { observations++; return actual(); },
+            readExitCode: actual => { observations++; return actual(); });
+
+        var result = InfrastructureTestSupport.RunGitProbe(scope.Root, ["--version"]);
+
+        Xunit.Assert.Equal(0, observations);
+        Xunit.Assert.False(result.ProcessStarted);
+        Xunit.Assert.Equal(WorkerDispatchTestsSeededRepositoryFactory.GitProbeClassification.LaunchFailure,
+            result.Classification);
+        Xunit.Assert.NotNull(result.Observations);
+        Xunit.Assert.False(result.Observations.Wait.Attempted);
+        Xunit.Assert.False(result.Observations.Exit.Attempted);
+    }
+
     [Xunit.Fact]
     public void RunGitProbe_StartThrows_ReturnsTypedLaunchFailure()
     {
@@ -1004,6 +1293,11 @@ public sealed class WorkerDispatchTestsSeededRepositoryFactoryTests
             startProcess: _ => throw new System.ComponentModel.Win32Exception("controlled launch failure"));
 
         Xunit.Assert.False(result.ProcessStarted);
+        Xunit.Assert.Equal(WorkerDispatchTestsSeededRepositoryFactory.GitProbeClassification.LaunchFailure,
+            result.Classification);
+        Xunit.Assert.NotNull(result.Observations);
+        Xunit.Assert.False(result.Observations.Wait.Attempted);
+        Xunit.Assert.False(result.Observations.Exit.Attempted);
         Xunit.Assert.Null(result.ExitCode);
         Xunit.Assert.Equal(string.Empty, result.StandardOutput);
         Xunit.Assert.Contains("controlled launch failure", result.StandardError, StringComparison.Ordinal);
