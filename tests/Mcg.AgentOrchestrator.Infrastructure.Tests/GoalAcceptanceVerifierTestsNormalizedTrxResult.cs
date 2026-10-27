@@ -2,9 +2,9 @@ using System.Text.Json;
 using Mcg.AgentOrchestrator.Infrastructure;
 using static GoalAcceptanceVerifierDotnetBuildSlotTestsTrustedBaselineDiscovery;
 
-// Serial: the verifier uses build slots, the attempt-prefix environment variable and lock attribution hooks.
+// Serial: the verifier uses build slots and lock attribution hooks.
 [Xunit.Collection(TestCollections.JobAccounting)]
-public sealed class DotnetNormalizedTrxReceiptTests : GoalAcceptanceVerifierDotnetBuildSlotTests
+public sealed class GoalAcceptanceVerifierTestsNormalizedTrxResult : GoalAcceptanceVerifierDotnetBuildSlotTests
 {
     [Theory]
     [InlineData("mtp", false)]
@@ -73,6 +73,14 @@ public sealed class DotnetNormalizedTrxReceiptTests : GoalAcceptanceVerifierDotn
         var root = CreateManifestWorkspace($$"""
             {
               "version": 1,
+              "engine": {
+                "mtpInvocations": [{
+                  "project": "tests/Sample.Tests/Sample.Tests.csproj",
+                  "executablePathTemplate": "bin/{projectName}/{configuration}/{projectName}{executableExtension}",
+                  "firewallExecutablePathTemplate": "bin/{projectName}/{configuration}/{projectName}.exe",
+                  "arguments": ["{executable}", "--results-directory", "{resultsDirectory}", "--report-trx", "--report-trx-filename", "{trxFileName}"]
+                }]
+              },
               "checks": [
                 { "name": "normalized TRX", "type": "dotnet-test", "runner": "{{runner}}", "project": "tests/Sample.Tests/Sample.Tests.csproj", "arguments": [] }
               ],
@@ -80,15 +88,18 @@ public sealed class DotnetNormalizedTrxReceiptTests : GoalAcceptanceVerifierDotn
             }
             """);
         var attemptDirectory = Path.Combine(root, "attempt");
-        var previousPrefix = Environment.GetEnvironmentVariable(GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable);
         var previousAttribution = LockAttribution.AttributeForTests;
         var calls = 0;
         string? sourcePath = null;
         AcceptanceCheckResult? baseline = null;
         try
         {
-            Environment.SetEnvironmentVariable(GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable,
-                Path.Combine(attemptDirectory, "gate"));
+            // The compatibility owner can retain native reports in the build artifacts while
+            // copying completed receipts to its own durable folder. Exercise that real copy.
+            await using var owner = new AcceptanceAttemptExecutionOwner(
+                new AcceptanceAttemptIdentity("normalized-trx", "operator", root, "candidate", "main", "commit",
+                    Path.Combine(attemptDirectory, "gate"), 0, Environment.ProcessId, null),
+                AcceptanceGateEngineSettings.Load(root), publishResultsPrefix: false);
             if (retry)
                 LockAttribution.AttributeForTests = (path, _) => new BuildLockAttribution(
                     path, [new BuildLockHolder(null, "foreign-csc", null, false)], "test");
@@ -127,7 +138,7 @@ public sealed class DotnetNormalizedTrxReceiptTests : GoalAcceptanceVerifierDotn
                 return Task.FromResult(command);
             });
 
-            var result = await verifier.RunAsync(root, stableSlotIndex: 0);
+            var result = await verifier.RunOwnedAsync(root, null, null, 0, null, owner);
 
             Assert.Equal(retry ? 2 : 1, calls);
             var receipt = Assert.Single(result.Checks!);
@@ -142,7 +153,6 @@ public sealed class DotnetNormalizedTrxReceiptTests : GoalAcceptanceVerifierDotn
         finally
         {
             LockAttribution.AttributeForTests = previousAttribution;
-            Environment.SetEnvironmentVariable(GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable, previousPrefix);
             TryDeleteStableSlotHeartbeat(0);
             DeleteDirectoryWithRetry(root);
         }
