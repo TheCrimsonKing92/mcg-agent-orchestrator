@@ -26,6 +26,8 @@ public static partial class AcceptanceCriterionOwnershipMarker
         if (trailingRegion.Length == 0)
             return new(AcceptanceCriterionOwnershipClassification.Unclassified, trailingRegion);
 
+        // Carry mixed marker/sentence conflicts to legacy obligation derivation too.
+        var externalConflict = HasConflictingDeclaredEvidenceOwners(criterion) ? "acceptance-gate" : null;
         var explicitOwners = trailingSentences
             .SelectMany(sentence => ExplicitOwnerSentenceRegex().Matches(sentence).Cast<Match>())
             .ToArray();
@@ -41,7 +43,7 @@ public static partial class AcceptanceCriterionOwnershipMarker
                     ? AcceptanceCriterionOwnershipClassification.OperatorOwned
                     : AcceptanceCriterionOwnershipClassification.NotOperatorOwned,
                 trailingRegion,
-                explicitNonOperatorOwner?.Groups["owner"].Value);
+                explicitNonOperatorOwner?.Groups["owner"].Value ?? externalConflict);
         }
 
         var operatorOwned = OperatorOwnershipRegex().IsMatch(trailingRegion);
@@ -51,7 +53,7 @@ public static partial class AcceptanceCriterionOwnershipMarker
             return new(
                 AcceptanceCriterionOwnershipClassification.OperatorOwned,
                 trailingRegion,
-                nonOperatorOwner.Success ? nonOperatorOwner.Groups["owner"].Value : null);
+                nonOperatorOwner.Success ? nonOperatorOwner.Groups["owner"].Value : externalConflict);
         }
 
         if (nonOperatorOwner.Success)
@@ -71,7 +73,10 @@ public static partial class AcceptanceCriterionOwnershipMarker
         !string.IsNullOrWhiteSpace(text) && OperatorOwnershipRegex().IsMatch(text);
 
     public static bool HasAcceptanceGateOwnershipMarker(string? text) =>
-        !string.IsNullOrWhiteSpace(text) && AcceptanceGateOwnershipRegex().IsMatch(text);
+        !string.IsNullOrWhiteSpace(text) &&
+        (AcceptanceGateOwnershipRegex().IsMatch(text) ||
+         ExtractTrailingSentences(text).Any(sentence => ExplicitOwnerSentenceRegex().Matches(sentence)
+             .Cast<Match>().Any(match => IsAcceptanceOwner(match.Groups["owner"].Value))));
 
     public static string ExtractTrailingRegion(string? criterion) =>
         string.Join(" ", ExtractTrailingSentences(criterion));
@@ -110,7 +115,7 @@ public static partial class AcceptanceCriterionOwnershipMarker
     private static partial Regex SentenceBoundaryRegex();
 
     [GeneratedRegex(
-        @"\b(?:owns?|owned)\b|TEST-VERIFIABLE|REAL-WORLD-DEPENDENT",
+        @"\b(?:owns?|owned|executes|executed)\b|TEST-VERIFIABLE|REAL-WORLD-DEPENDENT",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex TrailingRegionSignalRegex();
 

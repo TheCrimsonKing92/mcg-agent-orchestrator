@@ -5,6 +5,54 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed class DeclaredOwnerAuthorityRefinementTests
 {
+    [Xunit.Theory]
+    [Xunit.InlineData("operator")]
+    [Xunit.InlineData("worker")]
+    public async Task AcceptanceDeclarationOverridesGeneratedOwner(string modelOwner)
+    {
+        const string criterion = "The fallback is preserved. Reviewer owns source inspection; Acceptance owns execution. TEST-VERIFIABLE.";
+        var goal = await Refine(criterion, modelOwner);
+
+        Xunit.Assert.Equal([criterion], goal.RefinedSpec!.AcceptanceGateOwnedAcceptanceCriteria);
+        Xunit.Assert.Empty(goal.RefinedSpec.OperatorOwnedAcceptanceCriteria);
+        Xunit.Assert.Equal(CriterionEvidenceOwner.Acceptance,
+            Xunit.Assert.Single(goal.CriterionEvidenceObligations).Owner);
+        AssertSingleOverride(goal,
+            $"Spec refiner owner overridden: declared criterion 1 declares acceptance-gate; refiner claimed {modelOwner}");
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("Operator owns execution; Acceptance owns execution")]
+    [Xunit.InlineData("OPERATOR-OWNED; ACCEPTANCE-GATE-OWNED")]
+    [Xunit.InlineData("Operator owns execution; ACCEPTANCE-GATE-OWNED")]
+    [Xunit.InlineData("OPERATOR-OWNED; Acceptance owns execution")]
+    [Xunit.InlineData("Operator owns execution. executed by the acceptance gate")]
+    public async Task ConflictingExternalDeclarationsRequireClarification(string declarations)
+    {
+        var criterion = $"The runtime behavior is verified. {declarations}. TEST-VERIFIABLE.";
+        var goal = await Refine(criterion, "worker", expectClarification: true);
+
+        Xunit.Assert.Empty(goal.RefinedSpec!.AcceptanceGateOwnedAcceptanceCriteria);
+        Xunit.Assert.Empty(goal.RefinedSpec.OperatorOwnedAcceptanceCriteria);
+        Xunit.Assert.Empty(goal.CriterionEvidenceObligations);
+        var question = Xunit.Assert.Single(goal.RefinedSpec.OpenQuestions);
+        Xunit.Assert.Equal(criterion, question.Criterion);
+        Xunit.Assert.Contains("both Operator and Acceptance", question.Question, StringComparison.Ordinal);
+        Xunit.Assert.Contains("Revise the versioned criterion", question.Question, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public async Task ExactTextFallbackKeepsExplicitAcceptanceAuthority()
+    {
+        const string criterion = "The fallback is preserved. Acceptance owns execution. TEST-VERIFIABLE.";
+        var goal = await Refine(criterion, "acceptance-gate", declaredIndex: null);
+
+        Xunit.Assert.Equal([criterion], goal.RefinedSpec!.AcceptanceGateOwnedAcceptanceCriteria);
+        Xunit.Assert.Empty(goal.RefinedSpec.OpenQuestions);
+        Xunit.Assert.Equal(CriterionEvidenceOwner.Acceptance,
+            Xunit.Assert.Single(goal.CriterionEvidenceObligations).Owner);
+    }
+
     [Xunit.Fact]
     public async Task ReviewerDeclarationOverridesOperatorClaim()
     {
@@ -105,7 +153,8 @@ public sealed class DeclaredOwnerAuthorityRefinementTests
         Xunit.Assert.Contains(expected, decision.Message, StringComparison.Ordinal);
     }
 
-    private static async Task<Goal> Refine(string criterion, string modelOwner)
+    private static async Task<Goal> Refine(
+        string criterion, string modelOwner, bool expectClarification = false, int? declaredIndex = 1)
     {
         var objective = $"""
             Implement the focused behavior.
@@ -114,11 +163,12 @@ public sealed class DeclaredOwnerAuthorityRefinementTests
 
             1. {criterion}
             """;
+        var indexProperty = declaredIndex is { } index ? $"\"declared_index\": {index}," : string.Empty;
         var response = $$"""
             {
               "behavioralContract": "Implement the focused behavior.",
               "acceptanceCriteria": [
-                {"text": {{JsonSerializer.Serialize(criterion)}}, "declared_index": 1, "evidence_owner": {{JsonSerializer.Serialize(modelOwner)}}}
+                {"text": {{JsonSerializer.Serialize(criterion)}}, {{indexProperty}} "evidence_owner": {{JsonSerializer.Serialize(modelOwner)}}}
               ],
               "verificationClass": "TestVerifiable",
               "decisions": [],
@@ -142,7 +192,11 @@ public sealed class DeclaredOwnerAuthorityRefinementTests
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal(objective);
 
-        await service.RefineAsync(kernel, goal.Id);
+        var result = await service.RefineAsync(kernel, goal.Id);
+
+        Xunit.Assert.NotNull(provider.LastRequest);
+        Xunit.Assert.Equal(expectClarification ? RefinementOutcome.AwaitingClarification : RefinementOutcome.AutoRefined,
+            result.Outcome);
 
         return kernel.GetGoal(goal.Id);
     }
