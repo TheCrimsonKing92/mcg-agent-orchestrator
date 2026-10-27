@@ -1,0 +1,5 @@
+{
+  "reportFormat": "CTRF",
+  "schemaVersion": "mcg-test-result/1",
+  "results": { "tool": { "name": "pytest-junit" }, "tests": [] }
+}

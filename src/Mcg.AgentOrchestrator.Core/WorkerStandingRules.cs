@@ -24,8 +24,16 @@ public static class WorkerStandingRules
         "Do not reformat Go files you did not change, and do not run `go mod tidy` unless the task asks."
     ]);
 
-    public static IReadOnlyList<string> RulesForRole(AgentRole role, ProjectStack stack = ProjectStack.Dotnet) => (role, stack) switch
+    private static readonly IReadOnlyList<string> NeutralRules = Array.AsReadOnly<string>(
+    [
+        "Tests never decide pass or fail on wall-clock time; bounded waits are hang-only and name the event that did not happen.",
+        "Before changing any message, reason or diagnostic text, search the tests for exact-equality assertions on it, and if one exists put new information in a separate field instead of editing the asserted text.",
+        "Run the project's own build and test commands from the worktree root and report each command and its result in `tests`."
+    ]);
+
+    public static IReadOnlyList<string> RulesForRole(AgentRole role, ProjectStack? stack = ProjectStack.Dotnet) => (role, stack) switch
     {
+        (AgentRole.Developer or AgentRole.Tester, null) => NeutralRules,
         (AgentRole.Developer, ProjectStack.Go) => GoDeveloperRules,
         (AgentRole.Tester, ProjectStack.Go) => GoDeveloperRules.Take(3).ToArray(),
         (AgentRole.Developer, _) => DeveloperRules,
@@ -44,7 +52,7 @@ public static class WorkerStandingRules
     public static string ContextReference(AgentRole role) =>
         ContextFileNameForRole(role) ?? throw new ArgumentOutOfRangeException(nameof(role), role, "Role has no standing-rules context file.");
 
-    public static void WriteContextArtifact(AgentRole role, string contextDirectory, ProjectStack stack = ProjectStack.Dotnet)
+    public static void WriteContextArtifact(AgentRole role, string contextDirectory, ProjectStack? stack = ProjectStack.Dotnet)
     {
         if (ContextFileNameForRole(role) is not { } fileName)
         {
@@ -58,7 +66,7 @@ public static class WorkerStandingRules
         File.WriteAllText(Path.Combine(contextDirectory, fileName), string.Join(Environment.NewLine, lines));
     }
 
-    public static IReadOnlyList<string> RenderBriefSection(AgentRole role, string? contextDirectory = null, ProjectStack stack = ProjectStack.Dotnet)
+    public static IReadOnlyList<string> RenderBriefSection(AgentRole role, string? contextDirectory = null, ProjectStack? stack = ProjectStack.Dotnet)
     {
         var rules = RulesForRole(role, stack);
         if (rules.Count == 0)
