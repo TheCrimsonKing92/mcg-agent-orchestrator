@@ -29,6 +29,29 @@ public sealed class AnsweredSelectorRebindingTests
         Assert.Equal(new[] { ("OldNameTests", "NewNameTests") }, AnsweredSelectorRebinding.Parse(answer));
 
     [Theory]
+    [InlineData("OldNameTests becomes NewNameTests.")]
+    [InlineData("OldNameTests becomes NewNameTests. Next sentence.")]
+    [InlineData("OldNameTests becomes NewNameTests.\tNext sentence.")]
+    [InlineData("OldNameTests becomes NewNameTests.\nNext line.")]
+    [InlineData("OldNameTests becomes NewNameTests.\r\nNext line.")]
+    [InlineData("OldNameTests -> NewNameTests.")]
+    [InlineData("OldNameTests -> NewNameTests. Next sentence.")]
+    [InlineData("OldNameTests -> NewNameTests.\tNext sentence.")]
+    [InlineData("OldNameTests -> NewNameTests.\nNext line.")]
+    [InlineData("`OldNameTests` becomes `NewNameTests`.")]
+    [InlineData("`OldNameTests` -> `NewNameTests`.\nNext line.")]
+    [InlineData("`OldNameTests` BECOMES NewNameTests.")]
+    [InlineData("OldNameTests -> `NewNameTests`. Next sentence.")]
+    public void Parse_TerminalPeriod_ReturnsExactPair(string answer) =>
+        Assert.Equal(new[] { ("OldNameTests", "NewNameTests") }, AnsweredSelectorRebinding.Parse(answer));
+
+    [Fact]
+    public void Parse_PeriodTerminatedIncidentAnswer_ReturnsExactPair() =>
+        Assert.Equal(new[] { ("GoalAcceptanceVerifierTestsNormalizedTrxResult", "GoalAcceptanceVerifierDotnetBuildSlotTestsLaneReceipt") },
+            AnsweredSelectorRebinding.Parse(
+                "GoalAcceptanceVerifierTestsNormalizedTrxResult becomes GoalAcceptanceVerifierDotnetBuildSlotTestsLaneReceipt."));
+
+    [Theory]
     [InlineData("oldNameTests becomes NewNameTests")]
     [InlineData("OldNameTests becomes OldNameTests")]
     [InlineData("The class becomes flaky under load.")]
@@ -44,6 +67,26 @@ public sealed class AnsweredSelectorRebindingTests
     [InlineData("`OldNameTests becomes NewNameTests")]
     [InlineData("OldNameTests becomes NewNameTests`")]
     [InlineData("``OldNameTests`` becomes NewNameTests")]
+    [InlineData("Namespace.OldNameTests becomes NewNameTests.")]
+    [InlineData("OldNameTests becomes Namespace.NewNameTests.")]
+    [InlineData("OldNameTests becomes NewNameTests.Check.")]
+    [InlineData("Namespace.OldNameTests -> NewNameTests.")]
+    [InlineData("OldNameTests -> Namespace.NewNameTests.")]
+    [InlineData("OldNameTests -> NewNameTests.Check.")]
+    [InlineData("OldNameTests becomes NewNameTests..")]
+    [InlineData("OldNameTests -> NewNameTests.. Next sentence.")]
+    [InlineData("OldNameTests -> NewNameTests.1")]
+    [InlineData("_OldNameTests becomes NewNameTests.")]
+    [InlineData("old\u0301OldNameTests becomes NewNameTests.")]
+    [InlineData("OldNameTests becomes NewNameTests\u0301.Check.")]
+    [InlineData("`OldNameTests becomes NewNameTests.")]
+    [InlineData("OldNameTests becomes NewNameTests`.")]
+    [InlineData("OldNameTests becomes `NewNameTests.")]
+    [InlineData("`OldNameTests` becomes `NewNameTests.`")]
+    [InlineData("OldNameTests -> ``NewNameTests``.")]
+    [InlineData("`Namespace.OldNameTests` becomes `NewNameTests`.")]
+    [InlineData("`OldNameTests` becomes `Namespace.NewNameTests`.")]
+    [InlineData("`OldNameTests` becomes `NewNameTests.Check`.")]
     public void Parse_NonRenameOrNonIdentifier_ReturnsNoPairs(string? answer) =>
         Assert.Empty(AnsweredSelectorRebinding.Parse(answer));
 
@@ -55,11 +98,13 @@ public sealed class AnsweredSelectorRebindingTests
                 "OtherTests -> NextTests; OldNameTests -> NewNameTests"));
     }
 
-    [Fact]
-    public void Parse_UnicodeIdentifierParts_PreservesNames()
+    [Theory]
+    [InlineData("")]
+    [InlineData(".")]
+    public void Parse_UnicodeIdentifierParts_PreservesNames(string suffix)
     {
         Assert.Equal(new[] { ("Old_\u2160\u0301Tests", "New_\u2161\u0301Tests") },
-            AnsweredSelectorRebinding.Parse("Old_\u2160\u0301Tests becomes New_\u2161\u0301Tests"));
+            AnsweredSelectorRebinding.Parse("Old_\u2160\u0301Tests becomes New_\u2161\u0301Tests" + suffix));
     }
 
     [Fact]
@@ -81,20 +126,26 @@ public sealed class AnsweredSelectorRebindingTests
     }
 
     [Theory]
-    [InlineData("worker")]
-    [InlineData("other-goal")]
-    [InlineData("old-brief")]
-    [InlineData("conflict")]
-    [InlineData("pending")]
-    [InlineData("dismissed")]
-    public void For_IneligibleOrConflictingAnswer_ReturnsNoRebinds(string scenario)
+    [InlineData("worker", "")]
+    [InlineData("other-goal", "")]
+    [InlineData("old-brief", "")]
+    [InlineData("conflict", "")]
+    [InlineData("pending", "")]
+    [InlineData("dismissed", "")]
+    [InlineData("worker", ".")]
+    [InlineData("other-goal", ".")]
+    [InlineData("old-brief", ".")]
+    [InlineData("conflict", ".")]
+    [InlineData("pending", ".")]
+    [InlineData("dismissed", ".")]
+    public void For_IneligibleOrConflictingAnswer_ReturnsNoRebinds(string scenario, string suffix)
     {
         using var fixture = new ProspectiveEvidenceGateFixture();
         var kernel = GateTestObligationIntakeTests.Seed(fixture.Kernel, fixture.Goal, ["OldNameTests"]);
         var goal = kernel.GetGoal(fixture.Goal.Id);
         var answerGoal = scenario == "other-goal"
             ? kernel.CreateGoal("Other goal", [new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer)]) : goal;
-        const string answer = "- OldNameTests becomes NewNameTests";
+        var answer = "- OldNameTests becomes NewNameTests" + suffix;
         var request = kernel.RequestHumanInput(answerGoal.Id, null, scenario == "pending" ? answer : "Rename question");
         if (scenario == "dismissed")
             kernel.DismissHumanInput(request.Id);
@@ -112,7 +163,7 @@ public sealed class AnsweredSelectorRebindingTests
         {
             var other = kernel.RequestHumanInput(goal.Id, null, "Another rename question");
             Assert.NotEqual(request.Id, other.Id);
-            kernel.SubmitHumanInput(other.Id, "OldNameTests becomes OtherNameTests");
+            kernel.SubmitHumanInput(other.Id, "OldNameTests becomes OtherNameTests" + suffix);
         }
 
         Assert.Empty(AnsweredSelectorRebinding.For(goal, Assert.Single(goal.GateTestObligations), kernel.HumanInputRequests));

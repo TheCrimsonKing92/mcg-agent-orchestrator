@@ -8,11 +8,14 @@ using Mcg.AgentOrchestrator.Infrastructure;
 public sealed class LandingExecutorGateTestObligationAnsweredRebindTests
 {
     [Theory]
-    [InlineData(true, "NewNameTests.Check", true)]
-    [InlineData(false, "NewNameTests.Check", false)]
-    [InlineData(true, "OtherWorkTests.Check", false)]
+    [InlineData(true, "NewNameTests.Check", "Passed", "", true)]
+    [InlineData(false, "NewNameTests.Check", "Passed", "", false)]
+    [InlineData(true, "OtherWorkTests.Check", "Passed", "", false)]
+    [InlineData(true, "NewNameTests.Check", "Passed", ".", true)]
+    [InlineData(true, "OtherWorkTests.Check", "Passed", ".", false)]
+    [InlineData(true, "NewNameTests.Check", "Failed", ".", false)]
     public void Landing_AnswerAndPassingReplacement_ControlObligationHold(
-        bool answered, string row, bool shouldLand)
+        bool answered, string row, string outcome, string suffix, bool shouldLand)
     {
         var repo = LandingExecutorTests.CreateGitRepository();
         try
@@ -23,14 +26,14 @@ public sealed class LandingExecutorGateTestObligationAnsweredRebindTests
             if (answered)
             {
                 var request = kernel.RequestHumanInput(goal.Id, null, "Rename question");
-                kernel.SubmitHumanInput(request.Id, "- OldNameTests becomes NewNameTests");
+                kernel.SubmitHumanInput(request.Id, "- OldNameTests becomes NewNameTests" + suffix);
             }
             Assert.Equal(GoalStatus.Verified, goal.Status);
             Assert.Empty(kernel.GetPendingHumanInput(goal.Id));
             var candidate = LandingExecutorTests.ReadGit(repo, "rev-parse", GoalWorktrees.BranchName(goal.Id));
             var mainBefore = LandingExecutorTests.ReadGit(repo, "rev-parse", "main");
             Assert.NotEqual(mainBefore, candidate);
-            ProspectiveEvidenceGateFixture.WriteAttempt(workspace.OrchestratorDirectory, goal, candidate, [(row, "Passed")]);
+            ProspectiveEvidenceGateFixture.WriteAttempt(workspace.OrchestratorDirectory, goal, candidate, [(row, outcome)]);
 
             var result = LandingExecutor.Execute(kernel, goal, workspace);
 
