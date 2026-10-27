@@ -14,7 +14,7 @@ public sealed class WorkerStackVerificationGuidanceTests
         Assert.Equal(string.Empty, lines[0]);
         Assert.Equal("## Build/Test Verification", lines[1]);
         Assert.Contains("`go build ./...`, `go vet ./...` and `go test ./...`", lines[2], StringComparison.Ordinal);
-        Assert.Equal("- Do not run the .NET worker build helper or any `dotnet` command.", lines[4]);
+        Assert.Equal("- Do not build or test with `dotnet` or the .NET worker build helper; the orchestrator's `Submit-WorkerResult.ps1` submission command is required and is not a project build.", lines[4]);
         Assert.Equal("- The acceptance gate re-runs the Go checks and decides the verdict.", lines[5]);
     }
 

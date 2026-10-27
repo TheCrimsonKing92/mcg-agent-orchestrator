@@ -58,6 +58,19 @@ public sealed class WorkerGoGuidanceTests : IDisposable
         Assert.Equal(WorkerStandingRules.RulesForRole(AgentRole.Tester, ProjectStack.Go), ReadRules(context));
     }
 
+    [Fact]
+    public void GoTesterCurrentTaskCarriesSubmitCommandAndDotnetExemption()
+    {
+        var (goal, task) = CreateTask(AgentRole.Tester);
+        var currentTask = Read(Write(goal, task, GoRoot), "current-task.md");
+        var expectedCommand = WorkerResultSubmission.FormatCommand(
+            WorkerResultSubmission.ResolveScriptPath(), GoRoot, task.Id,
+            WorkerResultSubmission.PathFor(GoRoot, goal.Id));
+
+        Assert.Contains("submit it with `" + expectedCommand + "`", currentTask, StringComparison.Ordinal);
+        Assert.Equal("- Do not build or test with `dotnet` or the .NET worker build helper; the orchestrator's `Submit-WorkerResult.ps1` submission command is required and is not a project build.", BuildTestSection(currentTask)[2]);
+    }
+
     [Theory]
     [InlineData(AgentRole.Developer)]
     [InlineData(AgentRole.Tester)]
@@ -117,7 +130,8 @@ public sealed class WorkerGoGuidanceTests : IDisposable
         Assert.Contains("go test ./...", currentTask, StringComparison.Ordinal);
         Assert.Contains("go test ./<package> -run '<TestRegex>'", currentTask, StringComparison.Ordinal);
         Assert.Contains("Report each result in WORKER_RESULT `tests`", currentTask, StringComparison.Ordinal);
-        Assert.Contains("Do not run the .NET worker build helper or any `dotnet` command", currentTask, StringComparison.Ordinal);
+        Assert.Contains("Do not build or test with `dotnet` or the .NET worker build helper; the orchestrator's `Submit-WorkerResult.ps1` submission command is required and is not a project build.", currentTask, StringComparison.Ordinal);
+        Assert.DoesNotContain("or any `dotnet` command", currentTask, StringComparison.Ordinal);
         Assert.Contains("The acceptance gate re-runs the Go checks and decides the verdict", currentTask, StringComparison.Ordinal);
         Assert.DoesNotContain("Invoke-WorkerBuildCheck", currentTask, StringComparison.Ordinal);
         Assert.DoesNotContain("dotnet test", currentTask, StringComparison.Ordinal);
