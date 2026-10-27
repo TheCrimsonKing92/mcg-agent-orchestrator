@@ -79,7 +79,8 @@ public sealed class WorkerStackVerificationGuidanceTests
     public void Deterministic_DifferentGoals_ChangeOnlyArtifactsLine()
     {
         var goalA = new GoalId("guidance-a");
-        var goalB = new GoalId("guidance-b");
+        // Artifact roots use eight-character goal prefixes; the control needs a distinct prefix.
+        var goalB = new GoalId("other-b");
 
         var first = WorkerStackVerificationGuidance.DeterministicVerificationSection(Toolchain.Dotnet, goalA);
         var second = WorkerStackVerificationGuidance.DeterministicVerificationSection(Toolchain.Dotnet, goalB);
