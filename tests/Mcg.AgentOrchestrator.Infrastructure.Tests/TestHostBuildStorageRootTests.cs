@@ -4,8 +4,6 @@ using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
 
-namespace CliCommandTestsBuildStorageRoot;
-
 // Serial collection: the two scenario facts temporarily change the process storage root.
 [Xunit.Collection(TestCollections.IsolatedDotnetRoot)]
 public sealed class TestHostBuildStorageRootTests : ConductorBatchLoopTests

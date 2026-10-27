@@ -29,24 +29,25 @@ internal static class AssemblyDotnetBuildStorageRootIsolation
             var inherited = Environment.GetEnvironmentVariable(DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable);
             if (ShouldReplace(inherited, DefaultRoot()))
             {
-                // Reclaim diagnostics must not turn a successful fallback into a startup failure.
-                Action<string> diagnostic = _ => { };
+                Action<string> diagnostic = Console.Error.WriteLine;
                 try
                 {
                     _baselineFixture = new IsolatedDotnetRootFixture(IsolatedDotnetRootFixture.GetWindowsBasePath(), diagnostic);
                 }
-                catch
+                catch (Exception exception)
                 {
+                    try { diagnostic($"test-build-storage-root baseline-fallback exceptionType={exception.GetType().Name}"); }
+                    catch { }
                     _baselineFixture = new IsolatedDotnetRootFixture(null, diagnostic);
                 }
             }
 
             BaselineRoot = Environment.GetEnvironmentVariable(DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable);
         }
-        catch
+        catch (Exception exception)
         {
             BaselineRoot = null;
-            try { Console.Error.WriteLine("test-build-storage-root baseline-failed"); }
+            try { Console.Error.WriteLine($"test-build-storage-root baseline-failed exceptionType={exception.GetType().Name}"); }
             catch { }
         }
     }
