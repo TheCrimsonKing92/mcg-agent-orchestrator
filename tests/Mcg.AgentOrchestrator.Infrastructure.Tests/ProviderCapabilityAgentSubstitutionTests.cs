@@ -239,12 +239,18 @@ public sealed class ProviderCapabilityAgentSubstitutionTests
         var goal = scenario.NewGoal();
         var task = goal.Tasks.Single();
         CapabilityBlock(scenario, goal, task);
+        // Skill writes need ownership approval before the batch reaches capability preflight.
+        Assert.Empty(DispatchReadinessRules.SelectFirstParallelSafeAssignedBatch(goal, scenario.Agents).TaskIds);
+        var approvedBatch = DispatchReadinessRules.SelectFirstParallelSafeAssignedBatch(
+            goal, scenario.Agents, approveHighRiskOwnership: true);
+        Assert.Equal(task.Id, Assert.Single(approvedBatch.TaskIds));
         var before = goal.Timeline.ToArray();
         var repository = InfrastructureTestSupport.CreateMigratedStateRepository(scenario.Workspace.SqliteStatePath);
         using var worker = new ProviderHoldFallbackScenarioTests.PreparationWorker();
 
         var start = new GoalDispatchOperations().StartSubscriptionReadyTasks(scenario.Kernel,
             scenario.Workspace, goal, scenario.Agents, scenario.Profiles,
+            approveHighRiskOwnership: true,
             checkpointBeforeWorkerStart: (kernel, _, _, _) => repository.SaveAsync(kernel).GetAwaiter().GetResult(),
             runner: new BackgroundDispatchRunner(disableProcessStart: false, startProcess: worker.Start),
             sandboxOptions: scenario.Sandbox, commandExists: _ => true, cascadeTesterCheapFirst: false,
