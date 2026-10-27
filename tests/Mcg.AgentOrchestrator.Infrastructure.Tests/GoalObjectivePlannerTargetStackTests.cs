@@ -24,7 +24,7 @@ public sealed class GoalObjectivePlannerTargetStackTests
         var baseline = GoalObjectivePlanner.Build(CrosswalkObjective, null, null);
 
         Assert.Equal(new[] { "rg", "go build ./..., go vet ./..., go test ./..." }, targetPlan.RequiredTools);
-        Assert.Equal(new[] { "rg", "npm/yarn (package.json scripts)" }, baseline.RequiredTools);
+        Assert.Equal(new[] { "rg", "run the project's build and test commands" }, baseline.RequiredTools);
     }
 
     public static IEnumerable<object[]> ToolOverrideCases() =>

@@ -33,7 +33,7 @@ private static string? GetOptionalArgument(IReadOnlyList<string> parts, params s
     return null;
 }
 
-private static string? GetFlagValue(IReadOnlyList<string> parts, string flag)
+internal static string? GetFlagValue(IReadOnlyList<string> parts, string flag)
 {
     for (var i = 1; i < parts.Count; i++)
     {
@@ -429,7 +429,7 @@ private static void EnsureCliConfirmation(IReadOnlyList<string> parts, string fl
     throw new InvalidOperationException(message);
 }
 
-private static bool HasCliConfirmation(IReadOnlyList<string> parts, string flag)
+internal static bool HasCliConfirmation(IReadOnlyList<string> parts, string flag)
 {
     return parts.Any(part => part.Equals(flag, StringComparison.OrdinalIgnoreCase));
 }

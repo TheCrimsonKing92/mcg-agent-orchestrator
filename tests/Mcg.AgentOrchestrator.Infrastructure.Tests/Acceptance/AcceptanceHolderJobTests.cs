@@ -191,7 +191,7 @@ public sealed class AcceptanceHolderJobTests
         {
             using var job = DurableAcceptanceJob.Attach(holder, name, fixture.Launch, path);
             // Retain the exact custodian process handle before the root can exit.
-            using var custodian = Process.GetProcessById(job.CustodianIdentity.ProcessId);
+            var custodian = fixture.TrackCustodian(job.CustodianIdentity);
             // A PID lookup alone does not retain the handle required by ExitCode after exit.
             Assert.False(custodian.SafeHandle.IsInvalid);
             Assert.Equal(job.CustodianIdentity.StartedAt, new DateTimeOffset(custodian.StartTime.ToUniversalTime()));
@@ -350,6 +350,7 @@ public sealed class AcceptanceHolderJobTests
             try
             {
                 _ = process.SafeHandle;
+                _ = process.ProcessName;
                 Assert.True(SpawnProcessIdentityReader.TryRead(process, out var live));
                 Assert.Equal(SpawnTrackedProcessStatus.LiveMatch,
                     SpawnProcessIdentityReader.EvaluateRecordedIdentity(identity, live, out _));
@@ -367,9 +368,9 @@ public sealed class AcceptanceHolderJobTests
             {
                 foreach (var process in _custodians)
                     Assert.True(process.WaitForExit(30_000), "Custodian did not exit after its owned job settled.");
+                BoundedDirectoryRemoval.Remove(Root, _custodians);
             }
             finally { foreach (var process in _custodians) process.Dispose(); }
-            Directory.Delete(Root, recursive: true);
         }
     }
 

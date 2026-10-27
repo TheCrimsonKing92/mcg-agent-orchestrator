@@ -95,7 +95,8 @@ internal static class GoalScopeCollisionAdvisor
         IReadOnlyList<string> proposedText,
         IReadOnlyCollection<Goal> goals,
         string? excludedSourceBacklogItemId = null,
-        IReadOnlyDictionary<string, GoalScopeLifecycleObservation>? lifecycleObservations = null)
+        IReadOnlyDictionary<string, GoalScopeLifecycleObservation>? lifecycleObservations = null,
+        string? repositoryRoot = null)
     {
         var gaps = new List<ScopeEvidenceGapNote>();
         var proposedScopes = GoalFileScopeInference.FromTextParts(
@@ -108,6 +109,12 @@ internal static class GoalScopeCollisionAdvisor
                 null,
                 ScopeEvidenceGap.TextTruncated,
                 $"Proposed scope text exceeded {MaximumTextCharacters} characters and was truncated."));
+        }
+
+        if (repositoryRoot is not null)
+        {
+            proposedScopes = BriefScopeSectionSelector.KeepResolvable(
+                string.Join('\n', proposedText), proposedScopes, repositoryRoot);
         }
 
         AddProposedEvidenceGap(proposedScopes, gaps);

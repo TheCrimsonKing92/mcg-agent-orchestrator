@@ -104,7 +104,7 @@ private static GoalObjectivePlan BuildGoalObjectivePlan(
         simple
             ? GoalIntakePipeline.DeveloperOnly
             : pipelineRequest?.ToPipelineOverride(),
-        context.Kernel.BuildTaskDurationStats(), GoalIntakeTargetStack.For(context.Workspace));
+        context.Kernel.BuildTaskDurationStats(), GoalIntakeTargetStack.For(context.Workspace), context.Workspace.RootDirectory);
 
 private static GoalIntakePipelineRequest? ResolveGoalIntakePipelineRequest(IReadOnlyList<string> parts)
 {
@@ -172,7 +172,7 @@ private static void PrintScopeCollisionAdvisory(
             [rawObjective],
             context.Kernel.Goals,
             intakeItemId,
-            lifecycleObservations),
+            lifecycleObservations, context.Workspace.RootDirectory),
         intakeItemId,
         heading);
 }
@@ -304,6 +304,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             var requestedEpic = EpicAtCreation.ResolveRequested(context.Workspace,
                 EpicAtCreation.HasArgument(parts) ? GetFlagValue(parts, "--epic") ?? "" : null);
             var goalPipelineRequest = ResolveGoalIntakePipelineRequest(parts);
+            var goalDependsOn = CliGoalDependencyCommands.ResolveAtCreation(context, parts);
             // --simple: delegate to simple-goal (1 Developer task)
             if (HasCliConfirmation(parts, "--simple"))
             {
@@ -380,6 +381,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 context.EventWriter,
                 context.RefinementCollaborationItemRaise);
             ApplySourceBacklogItemLink(context, context.CurrentGoal, goalSourceBacklogLink);
+            CliGoalDependencyCommands.ApplyAtCreation(context.Kernel, context.CurrentGoal, goalDependsOn);
             context.FinalizeGoalCreation(context.CurrentGoal);
             EpicAtCreation.AssignAfterCommit(context.Workspace, PortfolioMemberKind.Goal, context.CurrentGoal.Id.Value, goalEpicId);
             GoalTextView.PrintGoal(context.CurrentGoal);
@@ -432,34 +434,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             return true;
 
         case "goal-depends":
-        {
-            CliArgumentParser.RequirePartCount(parts, 3, "goal-depends <goal-prefix> --on <dependency-prefix> | goal-depends <goal-prefix> --remove <dependency-prefix> | goal-depends <goal-prefix> --clear");
-            var dependentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, parts[1]);
-            var onPrefix = GetFlagValue(parts, "--on");
-            var removePrefix = GetFlagValue(parts, "--remove");
-            var clear = HasCliConfirmation(parts, "--clear");
-            if ((onPrefix is not null ? 1 : 0) + (removePrefix is not null ? 1 : 0) + (clear ? 1 : 0) != 1)
-                throw new ArgumentException("goal-depends requires exactly one of --on, --remove, or --clear.");
-            if (clear)
-            {
-                context.Kernel.ClearGoalDependencies(dependentGoal.Id);
-                Console.WriteLine($"Dependencies cleared: {dependentGoal.Id.Value[..8]}");
-                return true;
-            }
-
-            var dependencyGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, null, onPrefix ?? removePrefix!);
-            if (onPrefix is not null)
-            {
-                context.Kernel.SetGoalDependency(dependentGoal.Id, dependencyGoal.Id);
-                Console.WriteLine($"Dependency set: {dependentGoal.Id.Value[..8]} depends on {dependencyGoal.Id.Value[..8]}");
-            }
-            else
-            {
-                context.Kernel.RemoveGoalDependency(dependentGoal.Id, dependencyGoal.Id);
-                Console.WriteLine($"Dependency removed: {dependentGoal.Id.Value[..8]} no longer depends on {dependencyGoal.Id.Value[..8]}");
-            }
-            return true;
-        }
+            return CliGoalDependencyCommands.ExecuteGoalDepends(context, parts);
 
         case "goal-amend":
         {

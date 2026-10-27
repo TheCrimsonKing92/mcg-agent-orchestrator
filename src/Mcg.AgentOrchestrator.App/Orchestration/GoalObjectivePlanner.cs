@@ -224,13 +224,19 @@ internal static class GoalObjectivePlanner
         string objective,
         GoalIntakePipeline? pipelineOverride = null,
         IEnumerable<TaskDurationStatsRecord>? durationStats = null,
-        Toolchain? targetStack = null)
+        Toolchain? targetStack = null,
+        string? repositoryRoot = null)
     {
         var normalized = objective.Trim();
         var classificationText = BuildActionableClassificationText(normalized);
         var fileScopeText = BuildActionableFileScopeText(normalized);
         var tokens = BuildTokenSet(classificationText);
-        var fileScopes = InferFileScopes(fileScopeText);
+        var allScopes = InferFileScopes(fileScopeText);
+        var fileScopes = repositoryRoot is null
+            ? allScopes
+            : BriefScopeSectionSelector.KeepResolvable(
+                fileScopeText, GoalFileScopeInference.FromText(fileScopeText), repositoryRoot)
+                .Select(scope => scope.Path).ToArray();
         var estimated = TaskComplexityEstimator.Estimate(classificationText, classificationText, AgentRole.Developer);
         var historicalRecord = FindHistoricalEstimate(durationStats, AgentRole.Developer, estimated);
         var historicalEstimate = BuildHistoricalEstimate(historicalRecord);
@@ -241,7 +247,7 @@ internal static class GoalObjectivePlanner
         var workflow = pipelineDecision.Workflow;
         var requiredTools = BuildRequiredTools(fileScopes, tokens, targetStack);
         var requiredVerification = BuildRequiredVerification(fileScopes, tokens, estimated);
-        var ambiguous = pipelineOverride is null && IsAmbiguous(normalized, tokens, fileScopes);
+        var ambiguous = pipelineOverride is null && IsAmbiguous(normalized, tokens, allScopes);
 
         return new GoalObjectivePlan(
             normalized,

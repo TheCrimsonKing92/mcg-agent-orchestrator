@@ -102,6 +102,7 @@ public static class AcceptanceEngineSurfaceRegistry
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/CandidateRerunCheckClassifier",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/CommandLineTooLongException",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/DeclaredTestProjectInventory",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/DotnetStructuralCoverageDiscovery",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/DotnetTestCheckTranslator",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/FocusedEvidenceRequestResolver.BooleanPlanning.cs",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GateChildReapSeam",

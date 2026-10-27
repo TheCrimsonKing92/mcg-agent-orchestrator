@@ -57,6 +57,7 @@ internal static class ApparatusRedClassifier
     internal const string CrossGoalEvidenceKind = "cross-goal-flake";
     internal const string CandidateRerunEvidenceKind = "candidate-rerun-pass";
     internal const string CandidateRerunNotExecutedEvidenceKind = "candidate-rerun-not-executed";
+    internal const string BaselineNotExecutedEvidenceKind = "baseline-not-executed";
     internal const string BoundExhaustedToken = "apparatus-regate-bound-exhausted";
 
     /// <summary>
@@ -162,6 +163,20 @@ internal static class ApparatusRedClassifier
                 }
 
                 evidenceKinds.Add(CandidateRerunNotExecutedEvidenceKind);
+                continue;
+            }
+
+            if (failingTest.BaselineAttribution is { Origin: AcceptanceTestFailureOrigin.Unattributed } baselineAttribution &&
+                ApparatusInfrastructureSignatures.Match(baselineAttribution.Evidence) is not null)
+            {
+                if (failingTest.ReferencedChangedTypes is { Count: > 0 } types)
+                {
+                    return new ApparatusRedDisposition.Genuine(
+                        $"failing test {failingTest.TestIdentity} references candidate-changed type {string.Join(", ", types)}; " +
+                        "a baseline arm that did not execute does not exclude a candidate-introduced failure");
+                }
+
+                evidenceKinds.Add(BaselineNotExecutedEvidenceKind);
                 continue;
             }
 

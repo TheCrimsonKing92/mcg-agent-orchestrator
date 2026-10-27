@@ -361,7 +361,10 @@ public sealed class CliCommandTestsAttentionCommands : CliCommandTestBase
             kernel,
             workspace);
         ApplyQueuedAnswer(kernel, workspace, goal);
-        ApplyQueuedAnswer(kernel, workspace, goal);
+        Xunit.Assert.Equal(2, goal.Timeline.Count(entry => entry.OperatorIntentApplied is not null));
+        var idlePass = OperatorIntentCoordinator.CreateDefault(workspace).ExecutePending(kernel, goal);
+        Xunit.Assert.False(idlePass.MutatedGoalState);
+        Xunit.Assert.Empty(idlePass.ProgressLines);
         var items = await store.ListAsync();
 
         Xunit.Assert.Contains("[stranded-edits-disposition] Disposition", shown, StringComparison.Ordinal);
