@@ -119,6 +119,14 @@ public sealed class BriefPlannedTestLaneReadinessTests
     [InlineData("negated-path-suffix")]
     [InlineData("negated-prefix")]
     [InlineData("negated-filter-plan")]
+    [InlineData("production-update-prefix")]
+    [InlineData("production-update-path-prefix")]
+    [InlineData("negated-membership-work")]
+    [InlineData("never-membership-work")]
+    [InlineData("must-not-membership-work")]
+    [InlineData("will-not-membership-work")]
+    [InlineData("dont-membership-work")]
+    [InlineData("membership-mention-only")]
     public void DeclarationContext_UnownedClassBlocksDeveloperPreparation(string kind)
     {
         var scope = kind switch
@@ -133,16 +141,28 @@ public sealed class BriefPlannedTestLaneReadinessTests
             "negated-path-suffix" => "Add new tests/Widget.Tests/BuildWidgetTests.cs; do not edit the manifest.",
             "negated-prefix" => "Do not edit the manifest; add new test class BuildWidgetTests.",
             "negated-filter-plan" => "Add new test class BuildWidgetTests; " + Plan.Replace("change filter", "do not change filter"),
+            "production-update-prefix" => "Update production widget handling; add new test class BuildWidgetTests.",
+            "production-update-path-prefix" => "Update production widget handling; add new tests/Widget.Tests/BuildWidgetTests.cs.",
+            "negated-membership-work" => "Add new test class BuildWidgetTests; " + Plan.Replace("update the pinned", "do not update the pinned"),
+            "never-membership-work" => "Add new test class BuildWidgetTests; " + Plan.Replace("update the pinned", "never update the pinned"),
+            "must-not-membership-work" => "Add new test class BuildWidgetTests; " + Plan.Replace("update the pinned", "must not update the pinned"),
+            "will-not-membership-work" => "Add new test class BuildWidgetTests; " + Plan.Replace("update the pinned", "will not update the pinned"),
+            "dont-membership-work" => "Add new test class BuildWidgetTests; " + Plan.Replace("update the pinned", "don't update the pinned"),
+            "membership-mention-only" => "Add new test class BuildWidgetTests; " + Plan.Replace("update the pinned", "mention the pinned"),
             _ => throw new ArgumentException(kind)
         };
         using var fixture = new Fixture(scope);
         Assert.Equal(WorkTaskStatus.Assigned, fixture.Developer.Status);
         Assert.Empty(DispatchReadinessRules.BuildIncompleteEarlierStageDependencies(fixture.Goal, fixture.Developer));
+        var before = File.ReadAllBytes(fixture.ManifestPath);
         var report = fixture.Readiness();
         var finding = Assert.Single(report.Findings, item => item.Kind == LaneSubstringCollisionCheck.Rule);
         Assert.Contains(Name, finding.Message);
         Assert.DoesNotContain("QuokkaTests", finding.Message);
         Assert.False(report.AllowsStart(true));
+        Assert.DoesNotContain(report.Findings,
+            item => item.Kind is BriefPlannedTestLaneReadiness.PendingKind or BriefPlannedTestLaneReadiness.ConfigurationKind);
+        Assert.Equal(before, File.ReadAllBytes(fixture.ManifestPath));
         var preparationCalls = 0;
         var operations = new GoalDispatchOperations(resolveHome: _ =>
         {
