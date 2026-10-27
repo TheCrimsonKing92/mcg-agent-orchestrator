@@ -104,7 +104,7 @@ private static GoalObjectivePlan BuildGoalObjectivePlan(
         simple
             ? GoalIntakePipeline.DeveloperOnly
             : pipelineRequest?.ToPipelineOverride(),
-        context.Kernel.BuildTaskDurationStats(), GoalIntakeTargetStack.For(context.Workspace));
+        context.Kernel.BuildTaskDurationStats(), GoalIntakeTargetStack.For(context.Workspace), context.Workspace.RootDirectory);
 
 private static GoalIntakePipelineRequest? ResolveGoalIntakePipelineRequest(IReadOnlyList<string> parts)
 {
@@ -172,7 +172,7 @@ private static void PrintScopeCollisionAdvisory(
             [rawObjective],
             context.Kernel.Goals,
             intakeItemId,
-            lifecycleObservations),
+            lifecycleObservations, context.Workspace.RootDirectory),
         intakeItemId,
         heading);
 }

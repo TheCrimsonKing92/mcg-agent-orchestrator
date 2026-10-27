@@ -168,8 +168,11 @@ internal static class GoalFileScopeInference
         var inGeneratedScopeBlock = false;
         var inExclusions = false;
         var generatedProvenance = FileScopeProvenance.Inferred;
-        foreach (var line in NormalizeNewlines(text).Split('\n'))
+        var lines = NormalizeNewlines(text).Split('\n');
+        var scopeRegion = BriefScopeSectionSelector.FindScopeRegion(lines);
+        for (var lineIndex = 0; lineIndex < lines.Length; lineIndex++)
         {
+            var line = lines[lineIndex];
             var trimmed = line.Trim();
             if (trimmed.Equals(BacklogIntakePlanner.TargetScopeHeadingLine, StringComparison.Ordinal))
             {
@@ -221,8 +224,20 @@ internal static class GoalFileScopeInference
                 continue;
             }
 
+            if (provenance == FileScopeProvenance.Explicit && scopeRegion is { } region &&
+                (lineIndex < region.Start || lineIndex >= region.End))
+            {
+                continue;
+            }
+
             foreach (Match match in FileScopeRegex.Matches(line))
             {
+                if (provenance == FileScopeProvenance.Explicit &&
+                    BriefScopeSectionSelector.IsEvidenceOnly(line, match.Index, match.Length))
+                {
+                    continue;
+                }
+
                 if (!inGeneratedScopeBlock && IsInsideExclusionConstraint(line, match))
                 {
                     continue;
@@ -238,6 +253,20 @@ internal static class GoalFileScopeInference
                     TrustRank(provenance) > TrustRank(existing))
                 {
                     scopes[path] = provenance;
+                }
+            }
+
+            if (provenance == FileScopeProvenance.Explicit && scopeRegion is { } selected &&
+                lineIndex >= selected.Start && lineIndex < selected.End)
+            {
+                foreach (var candidate in BriefScopeSectionSelector.BacktickedPaths(line))
+                {
+                    var path = NormalizePath(candidate);
+                    if (!scopes.TryGetValue(path, out var existing) ||
+                        TrustRank(provenance) > TrustRank(existing))
+                    {
+                        scopes[path] = provenance;
+                    }
                 }
             }
         }
@@ -494,7 +523,7 @@ internal static class GoalFileScopeInference
         return true;
     }
 
-    private static bool IsDeclaredNew(string text, int matchIndex)
+    internal static bool IsDeclaredNew(string text, int matchIndex)
     {
         var start = Math.Max(0, matchIndex - 80);
         var prefix = text[start..matchIndex];
