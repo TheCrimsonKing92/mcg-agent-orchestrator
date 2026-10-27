@@ -20,7 +20,7 @@ public sealed class BuildServerShutdownSourceGuardTests
             .ToArray();
 
         Assert.Equal(
-            ["src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/DotnetBuildEnvironmentManager.cs"],
+            ["src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/DotnetBuildServerRecovery.cs"],
             callers);
     }
 

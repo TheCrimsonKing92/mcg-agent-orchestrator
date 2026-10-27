@@ -26,21 +26,21 @@ public sealed partial class DotnetBuildEnvironmentManagerTests
             }
         };
 
-        var outcome = DotnetBuildEnvironmentManager.RunBuildServerShutdownProcess(startInfo);
+        var outcome = DotnetBuildServerRecovery.RunBuildServerShutdownProcess(startInfo);
 
         Assert.True(outcome.Exited);
         Assert.Equal(7, outcome.ExitCode);
         Assert.True(outcome.StandardOutput.Length > 65_536);
         Assert.True(outcome.StandardError.Length > 65_536);
-        Assert.Same(outcome, DotnetBuildEnvironmentManager.LastBuildServerShutdownOutcome);
+        Assert.Same(outcome, DotnetBuildServerRecovery.LastBuildServerShutdownOutcome);
     }
 
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_defers_compiler_lock_recovery_until_the_last_lease_is_released")]
     public void DotnetBuildEnvironmentManagerDefersCompilerLockRecoveryUntilTheLastLeaseIsReleased()
     {
         var shutdownCount = 0;
-        Assert.NotNull(DotnetBuildEnvironmentManager.ShutdownBuildServersForTests);
-        DotnetBuildEnvironmentManager.ShutdownBuildServersForTests = () => shutdownCount++;
+        Assert.NotNull(DotnetBuildServerRecovery.ShutdownBuildServersForTests);
+        DotnetBuildServerRecovery.ShutdownBuildServersForTests = () => shutdownCount++;
         try
         {
             using var first = RootedDotnetBuildEnvironmentManager.AcquireFirstAvailableStableSlotExecutionLock(
@@ -60,7 +60,7 @@ public sealed partial class DotnetBuildEnvironmentManagerTests
         }
         finally
         {
-            DotnetBuildEnvironmentManager.ShutdownBuildServersForTests =
+            DotnetBuildServerRecovery.ShutdownBuildServersForTests =
                 AssemblyBuildServerShutdownIsolation.SafeDefault;
         }
     }
@@ -69,8 +69,8 @@ public sealed partial class DotnetBuildEnvironmentManagerTests
     public void DotnetBuildEnvironmentManagerCountsLegacyStreamUntilItReleasesItsLock()
     {
         var shutdownCount = 0;
-        Assert.NotNull(DotnetBuildEnvironmentManager.ShutdownBuildServersForTests);
-        DotnetBuildEnvironmentManager.ShutdownBuildServersForTests = () => shutdownCount++;
+        Assert.NotNull(DotnetBuildServerRecovery.ShutdownBuildServersForTests);
+        DotnetBuildServerRecovery.ShutdownBuildServersForTests = () => shutdownCount++;
         try
         {
             var legacyEnvironment = RootedDotnetBuildEnvironmentManager.CreateStableSlotAttempt(StorageRoot, 0);
@@ -89,7 +89,7 @@ public sealed partial class DotnetBuildEnvironmentManagerTests
         }
         finally
         {
-            DotnetBuildEnvironmentManager.ShutdownBuildServersForTests =
+            DotnetBuildServerRecovery.ShutdownBuildServersForTests =
                 AssemblyBuildServerShutdownIsolation.SafeDefault;
         }
     }

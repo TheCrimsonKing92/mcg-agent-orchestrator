@@ -54,9 +54,10 @@ internal static class AuthorBriefDraftService
                 return Outcome(1);
             }
             mainHead = repository.MainHead;
+            var stack = GoalIntakeTargetStack.For(workspace);
             var lessons = new ConductorLessonSelector(workspace.OperatorLessonsStorePath)
                 .Select(ConductorLessonSelector.AuthorTags("brief"));
-            var round = AuthorBriefDraftRound.DispatchAsync(AuthorBriefDraftPrompt.Render(item, lessons, mainHead),
+            var round = AuthorBriefDraftRound.DispatchAsync(AuthorBriefDraftPrompt.Render(item, lessons, mainHead, stack),
                 workspace.ExecutionDirectory, (request, token) =>
                 {
                     processSeamEntered = true;
@@ -96,7 +97,7 @@ internal static class AuthorBriefDraftService
             }
             draftPath = Path.Combine(directory, stem + ".md");
             File.WriteAllText(draftPath, result.Markdown!);
-            checks = AuthorBriefDraftChecks.Run(result.Markdown!, mainHead, seams.Repository);
+            checks = AuthorBriefDraftChecks.Run(result.Markdown!, mainHead, seams.Repository, stack);
             var findings = BriefLint.Lint(result.Markdown!);
             checks = [.. checks, .. findings
                 .Where(finding => finding.Severity is BriefLintSeverity.BlocksDispatch or BriefLintSeverity.BlocksCliStart)

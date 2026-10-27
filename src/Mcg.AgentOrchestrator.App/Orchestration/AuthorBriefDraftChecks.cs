@@ -1,5 +1,6 @@
 using System.Text.RegularExpressions;
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
@@ -14,7 +15,7 @@ internal static class AuthorBriefDraftChecks
         RegexOptions.CultureInvariant);
 
     internal static IReadOnlyList<AuthorBriefDraftCheck> Run(string markdown, string mainHead,
-        IAuthorBriefDraftRepository repository)
+        IAuthorBriefDraftRepository repository, Toolchain? stack = null)
     {
         var headings = Headings.Matches(markdown).Cast<Match>().ToArray();
         var missing = Sections.Where(section => !headings.Any(heading =>
@@ -57,8 +58,8 @@ internal static class AuthorBriefDraftChecks
             .Where(line => line.StartsWith("- ", StringComparison.Ordinal) || line.StartsWith("* ", StringComparison.Ordinal))
             .ToArray();
         var numberedCriteria = criteria.Count == 0 || bulletedLines.Length == 0;
-        var developerDeferred = criteria.Any(criterion => criterion.Contains("tests: deferred - ", StringComparison.Ordinal) &&
-            criterion.TrimEnd().EndsWith("Developer owns; Acceptance executes. TEST-VERIFIABLE.", StringComparison.Ordinal));
+        var stackCriteria = AuthorBriefDraftStackCriteria.For(stack);
+        var developerDeferred = criteria.Any(stackCriteria.Matches);
         var buildItemCount = SectionText("What to build").ReplaceLineEndings("\n").Split('\n')
             .Count(line => Regex.IsMatch(line.TrimStart(), @"^\d+\.", RegexOptions.CultureInvariant));
         var postLandingCriteria = criteria.Select((criterion, index) =>
@@ -87,8 +88,8 @@ internal static class AuthorBriefDraftChecks
             new("numbered-criteria", numberedCriteria, criteria.Count == 0 ? "No declared criteria; criteria-present reports the absence." :
                 numberedCriteria ? "No bulleted criteria outside fenced code blocks." : $"Observed bulleted lines: {string.Join(" | ", bulletedLines)}"),
             new("developer-deferred-criterion", criteria.Count == 0 || developerDeferred, criteria.Count == 0 ?
-                "No declared criteria; criteria-present reports the absence." : developerDeferred ? "Developer deferred-tests criterion present." :
-                $"Observed {criteria.Count} declared criteria; none contains tests: deferred - and ends with Developer owns; Acceptance executes. TEST-VERIFIABLE."),
+                "No declared criteria; criteria-present reports the absence." : developerDeferred ? stackCriteria.PassDetail :
+                stackCriteria.FailureDetail(criteria.Count)),
             new("build-item-count", buildItemCount <= 4, $"Observed {buildItemCount} numbered build items; maximum is 4."),
             new("post-landing-criterion", postLandingCriteria.Length == 0, postLandingCriteria.Length == 0 ?
                 "No declared criterion describes a post-landing step." :

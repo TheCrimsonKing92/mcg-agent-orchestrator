@@ -19,7 +19,8 @@ public static partial class GoalWorktrees
         string integrationBranch,
         out CandidateIdentity? identity,
         out string failureReason,
-        Func<string, IReadOnlyList<string>, string>? manifestIdentity = null)
+        Func<string, IReadOnlyList<string>, string>? manifestIdentity = null,
+        string? projectHomeDirectory = null)
     {
         identity = null;
         failureReason = string.Empty;
@@ -52,7 +53,7 @@ public static partial class GoalWorktrees
             if (!TryHashBaseClosure(worktreePath, baseSha, changedFiles, out var closureHash, out failureReason))
                 return false;
             var manifest = (manifestIdentity ?? ((path, files) =>
-                GoalAcceptanceVerifier.ComputeEffectiveAcceptancePlanIdentity(path, files)))(
+                GoalAcceptanceVerifier.ComputeEffectiveAcceptancePlanIdentity(path, files, projectHomeDirectory)))(
                 worktreePath, changedFiles);
             if (string.IsNullOrWhiteSpace(manifest))
                 return Fail("manifest-unavailable", out failureReason);

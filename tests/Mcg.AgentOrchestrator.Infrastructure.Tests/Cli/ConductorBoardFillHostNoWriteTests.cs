@@ -15,6 +15,7 @@ public sealed class ConductorBoardFillHostNoWriteTests : CliTaskQueryTestSupport
         ConductorBoardFillHost? host = null;
         try
         {
+            File.WriteAllText(Path.Combine(root, "App.sln"), "");
             var workspace = OrchestratorWorkspace.ForDirectory(root);
             var backlog = new BacklogStore(workspace.BacklogStorePath);
             var item = await backlog.AddAsync("Read only board", "Draft the existing item");

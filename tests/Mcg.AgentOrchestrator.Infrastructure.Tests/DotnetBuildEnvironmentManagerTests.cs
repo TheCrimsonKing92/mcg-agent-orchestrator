@@ -279,7 +279,7 @@ public sealed partial class DotnetBuildEnvironmentManagerTests : DotnetBuildEnvi
                 throw new UnauthorizedAccessException($"Access to the path '{lockedPath}' is denied.");
             }
         };
-        DotnetBuildEnvironmentManager.ShutdownBuildServersForTests = () => shutdownCount++;
+        DotnetBuildServerRecovery.ShutdownBuildServersForTests = () => shutdownCount++;
         LockAttribution.AttributeForTests = (path, _) => new BuildLockAttribution(
             path,
             [new BuildLockHolder(2468, "VBCSCompiler", "VBCSCompiler.exe -pipename:slot-0", true)],
@@ -314,7 +314,7 @@ public sealed partial class DotnetBuildEnvironmentManagerTests : DotnetBuildEnvi
         {
             WorkerProcessJobs.TryKillPidTree = originalKill;
             DotnetBuildEnvironmentManager.PrepareArtifactsDirectoryForTests = null;
-            DotnetBuildEnvironmentManager.ShutdownBuildServersForTests =
+            DotnetBuildServerRecovery.ShutdownBuildServersForTests =
                 AssemblyBuildServerShutdownIsolation.SafeDefault;
             LockAttribution.AttributeForTests = null;
         }

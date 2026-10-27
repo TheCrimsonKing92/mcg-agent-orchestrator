@@ -31,7 +31,7 @@ public sealed class DispatchProcessHostTests
             "src",
             "Mcg.AgentOrchestrator.Infrastructure",
             "Workspaces",
-            "DotnetBuildEnvironmentManager.cs"));
+            "DotnetBuildServerRecovery.cs"));
 
         Assert.DoesNotContain("ShutdownBuildServerOnExit", parameterNames);
         Assert.DoesNotContain("build-server", source, StringComparison.OrdinalIgnoreCase);
