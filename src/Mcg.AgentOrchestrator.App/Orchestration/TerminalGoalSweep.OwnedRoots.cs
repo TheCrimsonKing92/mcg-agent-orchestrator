@@ -14,7 +14,8 @@ internal sealed record TerminalGoalSweepOwnedRootResult(
     IReadOnlyList<string>? ReclaimedGoalRoots = null,
     IReadOnlyList<string>? GoalRootReclaimFailures = null,
     IReadOnlyList<string>? OrphanFixtureEvents = null,
-    string? BuildRootRetentionSummary = null)
+    string? BuildRootRetentionSummary = null,
+    string? UnstoredBuildRootRetentionSummary = null)
 {
     private const string ObserveOnlyPrefix = "observe-only unregistered build root: ";
     internal IReadOnlyList<string> OperatorEvents
@@ -47,6 +48,8 @@ internal sealed record TerminalGoalSweepOwnedRootResult(
                 events.AddRange(OrphanFixtureEvents);
             if (BuildRootRetentionSummary is not null)
                 events.Add(BuildRootRetentionSummary);
+            if (UnstoredBuildRootRetentionSummary is not null)
+                events.Add(UnstoredBuildRootRetentionSummary);
             return events;
         }
     }
@@ -61,12 +64,14 @@ internal static partial class TerminalGoalSweep
 {
     internal const int MaxOwnedBuildRootsPerSweep = 25;
     internal const int MaxTerminalBuildRootReclaimsPerSweep = 2;
+    internal const long MaxUnstoredBuildRootReclaimBytesPerSweep = 1_073_741_824;
     private static readonly OwnedRootSweepState s_ownedRootState = new();
 
     internal sealed class OwnedRootSweepState
     {
         internal long ReapCursor;
         internal int ObservationCursor;
+        internal string? UnstoredRetentionCursor;
         internal readonly OwnedRunRootObservationLedger ObservationLedger = new();
     }
 
@@ -177,6 +182,7 @@ internal static partial class TerminalGoalSweep
         else
             reclaimed = new GoalBuildRootReclaimResult([], [readFailure!]);
         string? retentionSummary = null;
+        string? unstoredRetentionSummary = null;
         var retentionDays = policy?.BuildRootRetentionDays ?? LoadBuildRootRetentionDays(stateDbPath);
         if (retentionDays > 0)
         {
@@ -184,9 +190,17 @@ internal static partial class TerminalGoalSweep
                 canonicalRepoRoot, projectRegistry);
             if (retentionStores is not null &&
                 TryReadGoalRetentionFacts(retentionStores, out var facts))
+            {
                 retentionSummary = new TerminalBuildRootRetention(storageRoot, registry,
                     isOwnerRunning ?? TerminalBuildRootRetention.IsOwnerProcessRunning, timeProvider ?? TimeProvider.System)
                     .Run(facts, retentionDays, MaxTerminalBuildRootReclaimsPerSweep).SummaryLine;
+                var unstored = new UnstoredGoalBuildRootRetention(storageRoot, registry,
+                    isOwnerRunning ?? TerminalBuildRootRetention.IsOwnerProcessRunning, timeProvider ?? TimeProvider.System)
+                    .Run(facts.Select(fact => fact.GoalId).ToArray(), retentionStores, retentionDays,
+                        MaxOwnedBuildRootsPerSweep, MaxUnstoredBuildRootReclaimBytesPerSweep, state.UnstoredRetentionCursor);
+                state.UnstoredRetentionCursor = unstored.NextCursor;
+                unstoredRetentionSummary = unstored.SummaryLine;
+            }
             else if (retentionStores is not null || retentionDiscoveryFailure is not null)
                 retentionSummary = $"SWEEP_BUILD_ROOT_RETENTION window-days={retentionDays} reclaimed=0 bytes=0 skipped=0 reasons=goal-store-unavailable";
         }
@@ -207,7 +221,8 @@ internal static partial class TerminalGoalSweep
             observation.UnregisteredRoots,
             ReclaimedGoalRoots: reclaimed.ReclaimedRoots,
             GoalRootReclaimFailures: reclaimed.Failures,
-            BuildRootRetentionSummary: retentionSummary);
+            BuildRootRetentionSummary: retentionSummary,
+            UnstoredBuildRootRetentionSummary: unstoredRetentionSummary);
     }
 
     private static int LoadBuildRootRetentionDays(string stateDbPath)
