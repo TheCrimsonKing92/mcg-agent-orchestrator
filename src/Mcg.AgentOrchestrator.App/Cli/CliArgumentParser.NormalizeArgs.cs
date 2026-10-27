@@ -99,7 +99,8 @@ public static IReadOnlyList<string> NormalizeArgs(string[] args)
 
     if (command.Equals("ask-goal", StringComparison.OrdinalIgnoreCase))
     {
-        return [command, string.Join(' ', args.Skip(1))];
+        // Keep option boundaries until help and selector validation have completed.
+        return args;
     }
 
     if (command.Equals("ask", StringComparison.OrdinalIgnoreCase))
