@@ -119,10 +119,10 @@ internal static class BriefPlannedTestLaneReadiness
         // Only the introducing clause declares new work. A preceding purpose clause may describe
         // existing behavior, while arbitrary prose or executable arguments do not declare anything.
         var clauses = Regex.Split(prefix, @"[,;.!?]\s+", Options);
-        // Punctuation in raw command arguments cannot create an instruction context. Keep
-        // affirmative scope entries and purpose/negated clauses, then classify the local clause.
-        if (clauses.Length > 1 && !Regex.IsMatch(clauses[0],
-                @"^\s*(?:add|create|introduce|implement|update|new|to|for|do\s+not|don't|must\s+not|will\s+not|never|not\s+adding|no\s+new)(?:\s|$)", Options))
+        // Command syntax retains its argument context across punctuation. Ordinary preceding
+        // prose does not restrict which affirmative local clause can introduce new work.
+        if (Regex.IsMatch(clauses[0],
+                @"^\s*(?:echo\b|[\w./\\-]*[-./\\][\w./\\-]*(?=\s|$))", Options))
             return false;
         var context = clauses[^1];
         context = Regex.Replace(context, @"\bnew\s+(?:(?:test|source|class|file)\s+)*[`'""]?$", "", Options).Trim();
@@ -154,9 +154,9 @@ internal static class BriefPlannedTestLaneReadiness
         // Required test work needs its own affirmative action, independently of the filter change.
         var membershipWork = Regex.Match(line,
             @"\b(?:update|add|extend|create|implement|change)\s+(?:(?:the|a)\s+)?pinned\s+(?:lane\s+)?membership\s+test\b", Options);
-        if (!membershipWork.Success || Regex.IsMatch(
+        if (!membershipWork.Success || !Regex.IsMatch(
                 Regex.Split(line[..membershipWork.Index], @"[;.!?]\s+|\b(?:and|but)\s+", Options).Last(),
-                @"\b(?:do not|don't|must not|will not|never|not adding|no new)\b", Options)) return false;
+                @"^\s*(?:(?:(?:we|this\s+change)\s+)?will\s+|(?:plan\s+to|must)\s+)?$", Options)) return false;
         // A class-specific selector is concrete planned work. Evaluate it with the canonical filter semantics.
         foreach (Match match in Regex.Matches(line, @"FullyQualifiedName(?:!~|!=|~|=)[^\s`'"",;]+",
                      RegexOptions.CultureInvariant))

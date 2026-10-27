@@ -121,12 +121,16 @@ public sealed class BriefPlannedTestLaneReadinessTests
     [InlineData("negated-filter-plan")]
     [InlineData("production-update-prefix")]
     [InlineData("production-update-path-prefix")]
+    [InlineData("production-fix-prefix")]
+    [InlineData("production-refactor-path-prefix")]
     [InlineData("negated-membership-work")]
     [InlineData("never-membership-work")]
     [InlineData("must-not-membership-work")]
     [InlineData("will-not-membership-work")]
     [InlineData("dont-membership-work")]
     [InlineData("membership-mention-only")]
+    [InlineData("does-not-membership-work")]
+    [InlineData("does-not-membership-work-conjunction")]
     public void DeclarationContext_UnownedClassBlocksDeveloperPreparation(string kind)
     {
         var scope = kind switch
@@ -143,12 +147,18 @@ public sealed class BriefPlannedTestLaneReadinessTests
             "negated-filter-plan" => "Add new test class BuildWidgetTests; " + Plan.Replace("change filter", "do not change filter"),
             "production-update-prefix" => "Update production widget handling; add new test class BuildWidgetTests.",
             "production-update-path-prefix" => "Update production widget handling; add new tests/Widget.Tests/BuildWidgetTests.cs.",
+            "production-fix-prefix" => "Fix production widget handling; add new test class BuildWidgetTests.",
+            "production-refactor-path-prefix" => "Refactor production widget handling; add new tests/Widget.Tests/BuildWidgetTests.cs.",
             "negated-membership-work" => "Add new test class BuildWidgetTests; " + Plan.Replace("update the pinned", "do not update the pinned"),
             "never-membership-work" => "Add new test class BuildWidgetTests; " + Plan.Replace("update the pinned", "never update the pinned"),
             "must-not-membership-work" => "Add new test class BuildWidgetTests; " + Plan.Replace("update the pinned", "must not update the pinned"),
             "will-not-membership-work" => "Add new test class BuildWidgetTests; " + Plan.Replace("update the pinned", "will not update the pinned"),
             "dont-membership-work" => "Add new test class BuildWidgetTests; " + Plan.Replace("update the pinned", "don't update the pinned"),
             "membership-mention-only" => "Add new test class BuildWidgetTests; " + Plan.Replace("update the pinned", "mention the pinned"),
+            "does-not-membership-work" => "Add new test class BuildWidgetTests; " +
+                Plan.Replace("and update the pinned", "; this change does not update the pinned"),
+            "does-not-membership-work-conjunction" => "Add new test class BuildWidgetTests; " +
+                Plan.Replace("and update the pinned", "and this change does not update the pinned"),
             _ => throw new ArgumentException(kind)
         };
         using var fixture = new Fixture(scope);
@@ -290,6 +300,8 @@ public sealed class BriefPlannedTestLaneReadinessTests
     [InlineData("raw-output-comma")]
     [InlineData("raw-custom-comma")]
     [InlineData("raw-action-command")]
+    [InlineData("raw-semicolon-action")]
+    [InlineData("raw-custom-semicolon-path")]
     public void CommandContents_DoNotBlockDeveloperPreparation(string kind)
     {
         var scope = kind switch
@@ -310,6 +322,8 @@ public sealed class BriefPlannedTestLaneReadinessTests
             "raw-output-comma" => "Write-Output ignored, new test class BuildWidgetTests.",
             "raw-custom-comma" => "custom-command ignored, new test class BuildWidgetTests.",
             "raw-action-command" => "Add-Content ignored, new test class BuildWidgetTests.",
+            "raw-semicolon-action" => "echo ignored; add new test class BuildWidgetTests.",
+            "raw-custom-semicolon-path" => "custom-command ignored; add new tests/Widget.Tests/BuildWidgetTests.cs.",
             _ => throw new ArgumentException(kind)
         };
         using var fixture = new Fixture(scope);
