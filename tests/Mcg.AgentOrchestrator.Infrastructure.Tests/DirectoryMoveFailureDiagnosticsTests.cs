@@ -173,6 +173,57 @@ public sealed class DirectoryMoveFailureDiagnosticsTests(Xunit.ITestOutputHelper
     }
 
     [Fact]
+    public async Task Deadline_WhenContentIsFull_PreservesTimeoutStatuses()
+    {
+        var huge = string.Concat(Enumerable.Repeat("😀漢\n", 20000));
+        var primary = new IOException(huge);
+        // Measure the prefix through the public receipt so path lengths and PID width cannot
+        // affect where this test fills the 27 KiB content allowance (plus 4 KiB status reserve).
+        var (_, baseline) = await Fail(new DirectoryMoveFailureDiagnostics(_ => Task.FromResult(huge),
+            new ManualStewardTimeProvider()), primary);
+        var prefixEnd = baseline.IndexOf("destination.metadata=", StringComparison.Ordinal);
+        Assert.True(prefixEnd >= 0);
+        Assert.Contains("truncated(snapshot-cap)", baseline[..prefixEnd]);
+        const int contentLimit = 27 * 1024;
+        var fillerLength = contentLimit - Encoding.UTF8.GetByteCount(baseline[..prefixEnd]) -
+            Encoding.UTF8.GetByteCount("destination.metadata=\"\"\n");
+        Assert.InRange(fillerLength, 1, 4000);
+
+        var clock = new ManualStewardTimeProvider();
+        var pending = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var fields = new List<string>();
+        var helper = new DirectoryMoveFailureDiagnostics(probe =>
+        {
+            fields.Add(probe.Field);
+            if (probe.Field == "destination.owner")
+            {
+                started.SetResult();
+                return pending.Task;
+            }
+            return Task.FromResult(probe.Field == "destination.metadata"
+                ? new string('x', fillerLength) : huge);
+        }, clock);
+        var operation = Fail(helper, primary);
+        await WaitFor(started.Task, "destination.owner probe started after filling content");
+        clock.Advance(DirectoryMoveFailureDiagnostics.CaptureBudget);
+        await WaitFor(operation, "full snapshot released at aggregate deadline");
+        var (observed, snapshot) = await operation;
+        Assert.Same(primary, observed);
+        var statusStart = snapshot.IndexOf("destination.owner=", StringComparison.Ordinal);
+        Assert.True(statusStart >= 0);
+        Assert.Equal(contentLimit, Encoding.UTF8.GetByteCount(snapshot[..statusStart]));
+        Assert.Contains("destination.owner=\"timed-out(unfinished; aggregate-deadline)\"", snapshot);
+        Assert.Contains("destination.acl=\"timed-out(not-started; aggregate-deadline)\"", snapshot);
+        Assert.Contains("destination.parent.handles=\"timed-out(not-started; aggregate-deadline)\"", snapshot);
+        Assert.Contains("capture.status=\"timed-out(partial)\"", snapshot);
+        Assert.Contains("output.truncated=true", snapshot);
+        Assert.True(Encoding.UTF8.GetByteCount(snapshot) <= DirectoryMoveFailureDiagnostics.MaximumOutputBytes);
+        Assert.DoesNotContain("destination.acl", fields);
+        pending.SetResult("late-result-must-not-be-published");
+    }
+
+    [Fact]
     public async Task Output_IsCappedInUtf8AndKeepsOmissionStatuses()
     {
         var huge = string.Concat(Enumerable.Repeat("😀漢\n", 20000));
@@ -183,7 +234,7 @@ public sealed class DirectoryMoveFailureDiagnosticsTests(Xunit.ITestOutputHelper
         Assert.Contains("truncated(snapshot-cap)", snapshot);
         Assert.Contains("output.truncated=true", snapshot);
         Assert.Contains("destination.parent.handles=", snapshot);
-        Assert.Contains("capture.status=", snapshot);
+        Assert.Contains("capture.status=\"completed\"", snapshot);
         Assert.DoesNotContain("\uFFFD", snapshot);
     }
 

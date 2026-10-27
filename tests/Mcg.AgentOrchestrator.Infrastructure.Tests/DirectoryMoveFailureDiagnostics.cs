@@ -97,7 +97,7 @@ internal sealed class DirectoryMoveFailureDiagnostics(
                 if (deadline.IsCompleted)
                 {
                     expired = true;
-                    report.Add(probe.Field, "timed-out(not-started; aggregate-deadline)");
+                    report.Add(probe.Field, "timed-out(not-started; aggregate-deadline)", preserveStatus: true);
                     continue;
                 }
                 try
@@ -107,7 +107,7 @@ internal sealed class DirectoryMoveFailureDiagnostics(
                     if (await Task.WhenAny(pending, deadline).ConfigureAwait(false) != pending || deadline.IsCompleted)
                     {
                         expired = true;
-                        report.Add(probe.Field, "timed-out(unfinished; aggregate-deadline)");
+                        report.Add(probe.Field, "timed-out(unfinished; aggregate-deadline)", preserveStatus: true);
                         _ = pending.ContinueWith(task => { _ = task.Exception; }, CancellationToken.None,
                             TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
                             TaskScheduler.Default);
@@ -120,7 +120,7 @@ internal sealed class DirectoryMoveFailureDiagnostics(
                     report.Add(probe.Field, Error(diagnostic));
                 }
             }
-            report.Add("capture.status", expired ? "timed-out(partial)" : "completed");
+            report.Add("capture.status", expired ? "timed-out(partial)" : "completed", preserveStatus: true);
             var snapshot = report.Finish();
             try { publish(snapshot); }
             catch (Exception writerFailure)
@@ -216,13 +216,14 @@ internal sealed class DirectoryMoveFailureDiagnostics(
         private int bytes;
         private bool truncated;
 
-        internal void Add(string field, string value)
+        internal void Add(string field, string value, bool preserveStatus = false)
         {
             var quoted = Quote(value, 4096);
             truncated |= quoted.Contains("[truncated(field-cap)]", StringComparison.Ordinal);
             var line = field + "=" + quoted + "\n";
-            // Fixed field count and short internal names need <4 KiB for all omission statuses.
-            if (bytes + Encoding.UTF8.GetByteCount(line) > maximumBytes - 4096)
+            // Fixed field count and short internal names need <4 KiB for omission and outcome statuses.
+            // Only fixed, short internal outcomes may use the reserve, never arbitrary probe content.
+            if (!preserveStatus && bytes + Encoding.UTF8.GetByteCount(line) > maximumBytes - 4096)
             {
                 truncated = true;
                 line = field + "=truncated(snapshot-cap)\n";
