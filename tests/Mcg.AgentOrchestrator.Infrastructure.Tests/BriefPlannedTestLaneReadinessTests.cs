@@ -115,6 +115,10 @@ public sealed class BriefPlannedTestLaneReadinessTests
     [InlineData("historical-prefix")]
     [InlineData("separate-collection")]
     [InlineData("separate-path-collection")]
+    [InlineData("negated-suffix")]
+    [InlineData("negated-path-suffix")]
+    [InlineData("negated-prefix")]
+    [InlineData("negated-filter-plan")]
     public void DeclarationContext_UnownedClassBlocksDeveloperPreparation(string kind)
     {
         var scope = kind switch
@@ -125,6 +129,10 @@ public sealed class BriefPlannedTestLaneReadinessTests
             "historical-prefix" => "To cover historical widget inputs, add new test class BuildWidgetTests.",
             "separate-collection" => "new test class BuildWidgetTests. Add new test class QuokkaTests in collection 'BuildCollection'.",
             "separate-path-collection" => "new tests/Widget.Tests/BuildWidgetTests.cs. Add new test class QuokkaTests in collection 'BuildCollection'.",
+            "negated-suffix" => "Add new test class BuildWidgetTests; do not edit the manifest.",
+            "negated-path-suffix" => "Add new tests/Widget.Tests/BuildWidgetTests.cs; do not edit the manifest.",
+            "negated-prefix" => "Do not edit the manifest; add new test class BuildWidgetTests.",
+            "negated-filter-plan" => "Add new test class BuildWidgetTests; " + Plan.Replace("change filter", "do not change filter"),
             _ => throw new ArgumentException(kind)
         };
         using var fixture = new Fixture(scope);
@@ -256,6 +264,12 @@ public sealed class BriefPlannedTestLaneReadinessTests
     [InlineData("semicolon-action")]
     [InlineData("execute-comma")]
     [InlineData("invoke-comma")]
+    [InlineData("raw-comma-class")]
+    [InlineData("raw-comma-path")]
+    [InlineData("raw-comma-action")]
+    [InlineData("raw-output-comma")]
+    [InlineData("raw-custom-comma")]
+    [InlineData("raw-action-command")]
     public void CommandContents_DoNotBlockDeveloperPreparation(string kind)
     {
         var scope = kind switch
@@ -270,6 +284,12 @@ public sealed class BriefPlannedTestLaneReadinessTests
             "semicolon-action" => "Run echo ignored; add new test class BuildWidgetTests.",
             "execute-comma" => "Execute echo ignored, new test class BuildWidgetTests.",
             "invoke-comma" => "Invoke echo ignored, new test class BuildWidgetTests.",
+            "raw-comma-class" => "echo ignored, new test class BuildWidgetTests.",
+            "raw-comma-path" => "echo ignored, new tests/Widget.Tests/BuildWidgetTests.cs.",
+            "raw-comma-action" => "echo ignored, add new test class BuildWidgetTests.",
+            "raw-output-comma" => "Write-Output ignored, new test class BuildWidgetTests.",
+            "raw-custom-comma" => "custom-command ignored, new test class BuildWidgetTests.",
+            "raw-action-command" => "Add-Content ignored, new test class BuildWidgetTests.",
             _ => throw new ArgumentException(kind)
         };
         using var fixture = new Fixture(scope);
@@ -347,10 +367,19 @@ public sealed class BriefPlannedTestLaneReadinessTests
     [Theory]
     [InlineData("=")]
     [InlineData("!=")]
+    [InlineData("trailing-wildcard")]
+    [InlineData("invalid-tail")]
     public void UnsupportedSourceSelector_PlacementPlanRemainsBlocking(string selector)
     {
-        using var fixture = new Fixture("new test class " + Name + ". " +
-            Plan.Replace("FullyQualifiedName~", "FullyQualifiedName" + selector));
+        var plan = selector switch
+        {
+            "trailing-wildcard" => Plan.Replace(Name, Name + "*"),
+            "invalid-tail" => Plan.Replace(Name, Name + "/extra"),
+            _ => Plan.Replace("FullyQualifiedName~", "FullyQualifiedName" + selector)
+        };
+        using var fixture = new Fixture("new test class " + Name + ". " + plan);
+        Assert.Equal(WorkTaskStatus.Assigned, fixture.Developer.Status);
+        Assert.Empty(DispatchReadinessRules.BuildIncompleteEarlierStageDependencies(fixture.Goal, fixture.Developer));
         var before = File.ReadAllBytes(fixture.ManifestPath);
         var report = fixture.Readiness();
 
@@ -359,6 +388,22 @@ public sealed class BriefPlannedTestLaneReadinessTests
         Assert.DoesNotContain(report.Findings,
             item => item.Kind is BriefPlannedTestLaneReadiness.PendingKind or BriefPlannedTestLaneReadiness.ConfigurationKind);
         Assert.Equal(before, File.ReadAllBytes(fixture.ManifestPath));
+        var preparationCalls = 0;
+        var operations = new GoalDispatchOperations(resolveHome: _ =>
+        {
+            preparationCalls++;
+            throw new InvalidOperationException("Unexpected preparation.");
+        });
+
+        var failure = Assert.Throws<InvalidOperationException>(() => operations.ProfileDispatchTask(
+            fixture.Kernel, fixture.Workspace, fixture.Goal, fixture.Developer, fixture.Profile));
+
+        Assert.Contains(LaneSubstringCollisionCheck.Rule, failure.Message);
+        Assert.Contains(Name, failure.Message);
+        Assert.Equal(0, preparationCalls);
+        Assert.Null(fixture.Developer.LastDispatch);
+        Assert.Null(fixture.Developer.LastProcess);
+        Assert.False(File.Exists(fixture.ProposedPath));
     }
 
     [Fact]

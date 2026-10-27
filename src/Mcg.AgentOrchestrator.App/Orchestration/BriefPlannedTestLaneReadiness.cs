@@ -118,7 +118,13 @@ internal static class BriefPlannedTestLaneReadiness
             return false;
         // Only the introducing clause declares new work. A preceding purpose clause may describe
         // existing behavior, while arbitrary prose or executable arguments do not declare anything.
-        var context = Regex.Split(prefix, @"[,;.!?]\s+", Options).Last();
+        var clauses = Regex.Split(prefix, @"[,;.!?]\s+", Options);
+        // Punctuation in raw command arguments cannot create an instruction context. Keep
+        // affirmative scope entries and purpose/negated clauses, then classify the local clause.
+        if (clauses.Length > 1 && !Regex.IsMatch(clauses[0],
+                @"^\s*(?:add|create|introduce|implement|new|to|for|do\s+not|don't|must\s+not|will\s+not|never|not\s+adding|no\s+new)(?:\s|$)", Options))
+            return false;
+        var context = clauses[^1];
         context = Regex.Replace(context, @"\bnew\s+(?:(?:test|source|class|file)\s+)*[`'""]?$", "", Options).Trim();
         return Regex.IsMatch(context, @"^(?:(?:add|create|introduce|implement)(?:\s+a)?\s*)?[`'""]?$", Options);
     }
@@ -137,21 +143,26 @@ internal static class BriefPlannedTestLaneReadiness
 
     private static bool HasPlacementPlan(string line, string name, AcceptanceTestLane lane)
     {
+        var filterChange = Regex.Match(line, @"\b(?:change|update|add|extend|exclude|include)\b[^;.!?]*\bfilter\b", Options);
+        // A negated filter action is not planned placement; unrelated declaration clauses stay intact.
+        if (!filterChange.Success || Regex.IsMatch(
+                Regex.Split(line[..filterChange.Index], @"[;.!?]\s+", Options).Last(),
+                @"\b(?:do not|don't|must not|will not|never|not adding|no new)\b", Options)) return false;
         if (!Regex.IsMatch(line, @"\b(?:plan|planned|will|change|update|add)\b", Options) ||
             !Regex.IsMatch(line, "\\blane\\s+[`'\"]?" + Regex.Escape(lane.Name) + "[`'\"]?(?=[\\s,;:.]|$)", Options) ||
             !line.Contains("acceptance-manifest.json", StringComparison.OrdinalIgnoreCase) ||
-            !Regex.IsMatch(line, @"\bpinned\s+(?:lane\s+)?membership\s+test\b", Options) ||
-            !Regex.IsMatch(line, @"\b(?:change|update|add|extend|exclude|include)\b.*\bfilter\b", Options)) return false;
+            !Regex.IsMatch(line, @"\bpinned\s+(?:lane\s+)?membership\s+test\b", Options)) return false;
         // A class-specific selector is concrete planned work. Evaluate it with the canonical filter semantics.
-        foreach (Match match in Regex.Matches(line, @"FullyQualifiedName(?:!~|!=|~|=)" + Identifier,
+        foreach (Match match in Regex.Matches(line, @"FullyQualifiedName(?:!~|!=|~|=)[^\s`'"",;]+",
                      RegexOptions.CultureInvariant))
         {
             var filter = match.Value;
-            if (!filter.EndsWith(name, StringComparison.Ordinal) &&
-                !filter.EndsWith(name.Split('.', '+').Last(), StringComparison.Ordinal)) continue;
             // Source manifests reject exact selectors, even though resolved owned-collection filters allow them.
+            // Validate the complete token, including any unsupported suffix, rather than an identifier prefix.
             try { _ = AcceptanceCheckCommandBuilder.TranslateMtpFilter(filter).ToArray(); }
             catch (InvalidOperationException) { continue; }
+            if (!filter.EndsWith(name, StringComparison.Ordinal) &&
+                !filter.EndsWith(name.Split('.', '+').Last(), StringComparison.Ordinal)) continue;
             var planned = lane with { Filter = filter };
             var selected = AcceptanceLaneMembership.LanesIncluding([planned], name).Count > 0;
             if (filter.Contains('!') ? !selected : selected) return true;
@@ -186,7 +197,6 @@ internal static class BriefPlannedTestLaneReadiness
             if (scope is { } range ? !(index >= range.Start && index < range.End) && !inNewTests
                 : hasHeading && !inNewTests) continue;
             if (line.StartsWith('>') || line.StartsWith('"') || line.StartsWith('\'') ||
-                Regex.IsMatch(line, @"\b(?:do not|don't|must not|will not|never|not adding|no new)\b", Options) ||
                 Regex.IsMatch(line, @"^(?:[-*]\s+)?(?:dotnet|rg|git|pwsh|powershell)\b", Options)) continue;
             yield return line;
         }
