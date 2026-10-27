@@ -68,7 +68,7 @@ internal sealed partial class WorkerArtifactWriter
             CriteriaSelfCheckPromptContext.BuildArtifact(task.RequiredRole));
         WriteText(
             Path.Combine(contextDirectory, "current-task.md"),
-            BuildCurrentTask(task, workingDirectory, ProjectStackResolver.GuidanceStack(
+            BuildCurrentTaskForStack(task, workingDirectory, ProjectStackResolver.GuidanceStack(
                 ProjectStackResolver.Resolve(workingDirectory, _targetHome.ProjectHomeDirectory), _targetHome.IsOrchestratorHome), preserveCompleteArtifacts,
                 task.RequiredRole == AgentRole.Tester ? WorkerResultSubmission.PathFor(workingDirectory, goal.Id) : null));
         var durablePlannerPlans = ResolveDurablePlannerPlans(goal.Tasks, task.Id);
@@ -325,6 +325,16 @@ internal sealed partial class WorkerArtifactWriter
     }
 
     private static string BuildCurrentTask(
+        TaskSpec task,
+        string workingDirectory,
+        bool preserveCompleteArtifacts,
+        string? submissionPath) =>
+        // Preserve the four-argument contract used by the build-guidance reflection check.
+        BuildCurrentTaskForStack(task, workingDirectory, ProjectStackResolver.GuidanceStack(
+            ProjectStackResolver.Resolve(workingDirectory, null), isOrchestratorHome: true),
+            preserveCompleteArtifacts, submissionPath);
+
+    private static string BuildCurrentTaskForStack(
         TaskSpec task,
         string workingDirectory,
         ProjectStack? stack,

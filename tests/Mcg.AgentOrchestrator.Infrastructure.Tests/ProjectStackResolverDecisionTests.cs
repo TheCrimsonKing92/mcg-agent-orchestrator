@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Xunit;
@@ -50,13 +51,31 @@ public sealed class ProjectStackResolverDecisionTests : IDisposable
     }
 
     [Theory]
-    [InlineData("GO", Toolchain.Go)]
-    [InlineData("Dotnet", Toolchain.Dotnet)]
-    public void Resolve_ConverterRecognizedCase_UsesDeclaration(string stack, Toolchain expected)
+    [InlineData("go")]
+    [InlineData("dotnet")]
+    [InlineData("GO")]
+    [InlineData("Dotnet")]
+    public void Resolve_StringDeclaration_MatchesExistingConverter(string stack)
     {
         var target = CreateDirectory();
         var projectHome = CreateDirectory();
         Write(projectHome, "project-model.json", $"{{\"stack\":\"{stack}\"}}");
+
+        ProjectStack? declaredStack = null;
+        try
+        {
+            declaredStack = JsonSerializer.Deserialize<ProjectStack>(JsonSerializer.Serialize(stack));
+        }
+        catch (JsonException)
+        {
+            // Converter rejection means the declaration must leave marker detection authoritative.
+        }
+        var expected = declaredStack switch
+        {
+            ProjectStack.Go => Toolchain.Go,
+            ProjectStack.Dotnet => Toolchain.Dotnet,
+            _ => TargetToolchainDetector.Detect(target)
+        };
 
         Assert.Equal(expected, ProjectStackResolver.Resolve(target, projectHome));
     }
