@@ -11,14 +11,20 @@ namespace Mcg.AgentOrchestrator.App.Application;
 /// </summary>
 public static class DispatchReadinessRules
 {
-    internal static bool HasAssignedDispatchCandidates(Goal goal) =>
-        goal.Tasks.Any(IsSubscriptionStartCandidate);
+    internal static bool HasAssignedDispatchCandidates(Goal goal, DateTimeOffset? now = null) =>
+        goal.Tasks.Any(task => IsSubscriptionStartCandidate(task, now ?? DateTimeOffset.UtcNow));
 
     internal static bool IsSubscriptionStartCandidate(TaskSpec task)
+        => IsSubscriptionStartCandidate(task, DateTimeOffset.UtcNow);
+
+    private static bool IsSubscriptionStartCandidate(TaskSpec task, DateTimeOffset now)
     {
+        // Cooldown evidence admits dependency-safe preparation, never a direct start;
+        // real preflight continues to block the exhausted binding.
         return task.Status == WorkTaskStatus.Assigned &&
             !HasBlockingRunningProcess(task) &&
-            !WorkerProfileDispatcher.IsTaskRetryDeferred(task, DateTimeOffset.UtcNow, out _);
+            (!WorkerProfileDispatcher.IsTaskRetryDeferred(task, now, out _) ||
+             DispatchFailureClassifier.TryGetTaskSubscriptionCooldown(task, now, out _));
     }
 
     private static bool HasBlockingRunningProcess(TaskSpec task)
@@ -34,10 +40,11 @@ public static class DispatchReadinessRules
         Goal goal,
         IReadOnlyList<AgentDefinition>? agents = null,
         bool approveHighRiskOwnership = false,
-        IReadOnlySet<TaskId>? excludedTaskIds = null)
+        IReadOnlySet<TaskId>? excludedTaskIds = null,
+        DateTimeOffset? now = null)
     {
         var assigned = goal.Tasks
-            .Where(IsSubscriptionStartCandidate)
+            .Where(task => IsSubscriptionStartCandidate(task, now ?? DateTimeOffset.UtcNow))
             .Where(task => IsRefinementEligible(goal, task))
             .Where(task => excludedTaskIds?.Contains(task.Id) != true)
             .ToList();
@@ -67,14 +74,15 @@ public static class DispatchReadinessRules
         Goal goal,
         IReadOnlyList<AgentDefinition> agents,
         bool approveHighRiskOwnership = false,
-        IReadOnlySet<TaskId>? excludedTaskIds = null)
+        IReadOnlySet<TaskId>? excludedTaskIds = null,
+        DateTimeOffset? now = null)
     {
         var assigned = goal.Tasks
-            .Where(IsSubscriptionStartCandidate)
+            .Where(task => IsSubscriptionStartCandidate(task, now ?? DateTimeOffset.UtcNow))
             .Where(task => IsRefinementEligible(goal, task))
             .Where(task => excludedTaskIds?.Contains(task.Id) != true)
             .ToList();
-        var plan = BuildReadyTaskParallelPlan(goal, agents, approveHighRiskOwnership, excludedTaskIds);
+        var plan = BuildReadyTaskParallelPlan(goal, agents, approveHighRiskOwnership, excludedTaskIds, now);
         var firstBatch = plan.Batches.FirstOrDefault();
         var taskIds = firstBatch is null
             ? []

@@ -27,7 +27,7 @@ internal static class DispatchReadinessEvaluator
         SubscriptionPlan plan,
         DateTimeOffset now)
     {
-        if (!DispatchReadinessRules.HasAssignedDispatchCandidates(goal))
+        if (!DispatchReadinessRules.HasAssignedDispatchCandidates(goal, now))
         {
             return new DispatchReadinessBlocked("No assigned dispatch candidates", HasCandidates: false);
         }
@@ -36,7 +36,7 @@ internal static class DispatchReadinessEvaluator
             .Where(item => item.TaskStatus == WorkTaskStatus.Assigned)
             .ToList();
 
-        if (assignedItems.Any(item => item.CanPrepare))
+        if (assignedItems.Any(item => item.CanPrepare || item.CanAttemptSubscriptionSubstitution))
         {
             return new DispatchReadinessReady();
         }

@@ -53,8 +53,14 @@ public static class RetryAdmissionReservationStore
                         if (retryReplayTask.Id != taskId.Value ||
                             retryReplayTask.LatestRetryAt != retriedAt ||
                             retryReplayTask.Status is not (WorkTaskStatus.Pending or WorkTaskStatus.Assigned) ||
-                            retryReplayTask.LastDispatch is not null ||
-                            retryReplayTask.LastProcess is not null)
+                            // Automatic provider retries retain the settled attempt for evidence.
+                            // It must precede this dispatch; a live process is never a replay baseline.
+                            (retryReplayTask.LastDispatch is { } previousDispatch &&
+                             (previousDispatch.DispatchedAt > retriedAt ||
+                              previousDispatch.DispatchedAt >= preparedDispatch.DispatchedAt)) ||
+                            (retryReplayTask.LastProcess is { } previousProcess &&
+                             (retryReplayTask.LastDispatch is null || previousProcess.CompletedAt is null ||
+                              previousProcess.ExitCode is null || previousProcess.CompletedAt > retriedAt)))
                         {
                             throw new InvalidOperationException(
                                 $"Retry admission replay baseline for task '{taskId}' does not describe the exact post-retry, pre-dispatch state.");

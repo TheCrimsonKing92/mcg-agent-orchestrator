@@ -53,10 +53,15 @@ internal sealed partial class GoalDispatchOperations
             .Concat(heldTaskIds.Select(id => new TaskId(id))).ToHashSet();
         var offlineAssignments = OfflineAssignedAgentRedelegation.Apply(kernel, goal, agents,
             goal.Tasks.Where(DispatchReadinessRules.IsSubscriptionStartCandidate)
+                // Local and provider-inherited cooldowns belong to guarded substitution below.
+                // Offline repair must not bypass preflight, provenance or the shared bound.
+                .Where(task => !WorkerProfileDispatcher.IsTaskRetryDeferred(task, utcNow(), out _))
+                .Where(task => agents.FirstOrDefault(agent => agent.Id == task.AssignedAgentId) is not { } assigned ||
+                    !ProviderHoldAgentSubstitution.TryGetSubscriptionCooldown(goal, task, assigned, utcNow(), out _))
                 .Where(task => !excludedTaskIds.Contains(task.Id)).Select(task => task.Id));
         goal = kernel.GetGoal(goal.Id);
         excludedTaskIds = excludedTaskIds.Concat(offlineAssignments.ExcludedTaskIds).ToHashSet();
-        var safeBatch = DispatchReadinessRules.SelectFirstParallelSafeAssignedBatch(goal, agents, approveHighRiskOwnership, excludedTaskIds);
+        var safeBatch = DispatchReadinessRules.SelectFirstParallelSafeAssignedBatch(goal, agents, approveHighRiskOwnership, excludedTaskIds, utcNow());
         EnsureRefinedForSelectedTasks(kernel, workspace, providers, goal, safeBatch.TaskIds);
         goal = kernel.GetGoal(goal.Id);
         var home = _resolveHome(workspace);
@@ -73,7 +78,7 @@ internal sealed partial class GoalDispatchOperations
                 targetHome: WorkerTargetHomeFactory.For(home, workspace));
         if (admitProviderBudgetProbe)
             ProviderBudgetProbeAdmission.Apply(kernel, goal, safeBatch.TaskIds.ToArray(), preflight, utcNow());
-        new ProviderHoldAgentSubstitution(kernel, agents, preflight).ApplyBatch(goal, safeBatch.TaskIds);
+        new ProviderHoldAgentSubstitution(kernel, agents, preflight, utcNow).ApplyBatch(goal, safeBatch.TaskIds);
         new ProviderCapabilityAgentSubstitution(kernel, agents, preflight).ApplyBatch(kernel.GetGoal(goal.Id), safeBatch.TaskIds);
         goal = kernel.GetGoal(goal.Id);
         var retryReplayTasks = kernel.ExportGoalSnapshot(goal.Id).Tasks

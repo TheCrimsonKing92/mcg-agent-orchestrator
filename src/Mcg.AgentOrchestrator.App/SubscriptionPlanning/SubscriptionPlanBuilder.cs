@@ -1,4 +1,5 @@
 using Mcg.AgentOrchestrator.App.Rendering;
+using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -121,7 +122,8 @@ public sealed record SubscriptionPlanItem(
     int? TaskBriefHeadroom = null,
     WorkerRouteDecision? Route = null,
     string? ReasoningEffortReason = null,
-    ProviderBudgetExhaustionHold? ProviderBudgetHold = null);
+    ProviderBudgetExhaustionHold? ProviderBudgetHold = null,
+    bool CanAttemptSubscriptionSubstitution = false);
 
 public static class SubscriptionPlanBuilder
 {
@@ -450,7 +452,8 @@ public static class SubscriptionPlanBuilder
                 taskBriefHeadroom,
                 route,
                 reasoningEffortReason,
-                providerBindingHeld ? providerHold : null);
+                providerBindingHeld ? providerHold : null,
+                ProviderHoldAgentSubstitution.CanAttemptSubscriptionSubstitution(goal, task, agents, effectiveNow));
         }
         catch (InvalidOperationException ex)
         {
