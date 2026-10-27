@@ -72,13 +72,6 @@ public sealed record DotnetBuildStableSlotWait(
     public string? LeaseId { get; init; }
 }
 
-internal sealed record DotnetBuildServerShutdownOutcome(
-    bool Exited,
-    int? ExitCode,
-    string StandardOutput,
-    string StandardError,
-    string? Failure = null);
-
 public abstract record DotnetBuildLeaseAcquisition
 {
     public sealed record Acquired(DotnetBuildEnvironmentLease Lease) : DotnetBuildLeaseAcquisition;
@@ -141,15 +134,8 @@ public static class DotnetBuildEnvironmentManager
         new(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
     private static readonly OwnedRunRootWriteFailureBuffer OwnedRunRootWriteFailures = new();
     private static int s_nextStableSlotScanStart = -1;
-    private static int s_heldExecutionLeaseCount;
-    private static int s_compilerLockRecoveryRequested;
-    private static readonly object s_buildServerRecoverySync = new();
-    private static DotnetBuildServerShutdownOutcome? s_lastBuildServerShutdownOutcome;
     internal static Action<DotnetBuildEnvironment>? PrepareArtifactsDirectoryForTests { get; set; }
     internal static Action<int>? BeforeStaleLeaseIntegrityProbeForTests { get; set; }
-    internal static Action? ShutdownBuildServersForTests { get; set; }
-    internal static DotnetBuildServerShutdownOutcome? LastBuildServerShutdownOutcome =>
-        Volatile.Read(ref s_lastBuildServerShutdownOutcome);
     internal static Func<ProcessCommandLineSnapshot>? ProcessCommandLineSnapshotForTests { get; set; }
     internal static TimeProvider DefaultLeaseTimeProviderForTests => DefaultLeaseTimeProvider;
     internal static Action<TimeSpan> DefaultLeaseSleepForTests => DefaultLeaseSleep;
@@ -565,117 +551,6 @@ public static class DotnetBuildEnvironmentManager
             ? $"Deleted orphaned build lease {status.LeaseId} at {status.RootPath}."
             : $"Could not delete orphaned build lease {status.LeaseId}; inspect file locks under {status.RootPath}.";
         return deleted;
-    }
-
-    public static void ShutdownBuildServersBestEffort()
-    {
-        if (ShutdownBuildServersForTests is { } shutdownForTests)
-        {
-            shutdownForTests();
-            return;
-        }
-
-        try
-        {
-            RunBuildServerShutdownProcess(new ProcessStartInfo
-            {
-                FileName = "dotnet",
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                ArgumentList = { "build-server", "shutdown" }
-            });
-        }
-        catch (Exception exception)
-        {
-            // Best effort cleanup only; build/test result handling owns the real verdict.
-            Volatile.Write(
-                ref s_lastBuildServerShutdownOutcome,
-                new DotnetBuildServerShutdownOutcome(false, null, string.Empty, string.Empty, exception.Message));
-        }
-    }
-
-    internal static DotnetBuildServerShutdownOutcome RunBuildServerShutdownProcess(
-        ProcessStartInfo startInfo,
-        int timeoutMilliseconds = 10_000)
-    {
-        using var process = Process.Start(startInfo);
-        if (process is null)
-        {
-            var notStarted = new DotnetBuildServerShutdownOutcome(
-                false, null, string.Empty, string.Empty, "Process.Start returned null.");
-            Volatile.Write(ref s_lastBuildServerShutdownOutcome, notStarted);
-            return notStarted;
-        }
-
-        var standardOutput = process.StandardOutput.ReadToEndAsync();
-        var standardError = process.StandardError.ReadToEndAsync();
-        var exited = process.WaitForExit(timeoutMilliseconds);
-        if (!exited)
-        {
-            try
-            {
-                process.Kill(entireProcessTree: true);
-                process.WaitForExit(2_000);
-            }
-            catch
-            {
-                // Best effort cleanup only; the retained outcome reports that the shutdown did not exit.
-            }
-        }
-
-        Task.WaitAll([standardOutput, standardError], 2_000);
-        var outcome = new DotnetBuildServerShutdownOutcome(
-            exited,
-            exited ? process.ExitCode : null,
-            standardOutput.IsCompletedSuccessfully ? standardOutput.Result : string.Empty,
-            standardError.IsCompletedSuccessfully ? standardError.Result : string.Empty);
-        Volatile.Write(ref s_lastBuildServerShutdownOutcome, outcome);
-        return outcome;
-    }
-
-    private static bool ShutdownBuildServersForCompilerLockRecovery(bool requestRecovery = true)
-    {
-        lock (s_buildServerRecoverySync)
-        {
-            if (requestRecovery)
-                s_compilerLockRecoveryRequested = 1;
-            if (s_heldExecutionLeaseCount != 0 || s_compilerLockRecoveryRequested == 0)
-                return false;
-
-            s_compilerLockRecoveryRequested = 0;
-            ShutdownBuildServersBestEffort();
-            return true;
-        }
-    }
-
-    internal static void RegisterExecutionLease()
-    {
-        lock (s_buildServerRecoverySync)
-            s_heldExecutionLeaseCount++;
-    }
-
-    internal static void RequestCompilerLockRecovery()
-    {
-        lock (s_buildServerRecoverySync)
-            s_compilerLockRecoveryRequested = 1;
-    }
-
-    internal static void ReleaseExecutionLease(bool attemptPendingRecovery)
-    {
-        lock (s_buildServerRecoverySync)
-        {
-            s_heldExecutionLeaseCount--;
-            if (s_heldExecutionLeaseCount < 0)
-            {
-                s_heldExecutionLeaseCount = 0;
-                throw new InvalidOperationException("The held dotnet build execution lease count became negative.");
-            }
-
-            if (attemptPendingRecovery && s_heldExecutionLeaseCount == 0)
-                ShutdownBuildServersForCompilerLockRecovery(requestRecovery: false);
-        }
     }
 
     internal static void TransferExecutionLeaseToLegacyStream(FileStream stream, Action releaseObserver)
@@ -1752,7 +1627,7 @@ public static class DotnetBuildEnvironmentManager
         if (!attemptedCompilerLockRemediation && IsCompilerLock(attribution))
         {
             attemptedCompilerLockRemediation = true;
-            ShutdownBuildServersForCompilerLockRecovery();
+            DotnetBuildServerRecovery.ShutdownBuildServersForCompilerLockRecovery();
             return ArtifactPrepLockRemediation.RetryImmediately;
         }
 
@@ -3064,7 +2939,7 @@ public sealed class DotnetBuildEnvironmentLease : IDisposable
         _stream = stream;
         _cancellationToken = cancellationToken;
         SlotWaitDuration = slotWaitDuration;
-        DotnetBuildEnvironmentManager.RegisterExecutionLease();
+        DotnetBuildServerRecovery.RegisterExecutionLease();
     }
 
     public DotnetBuildEnvironment Environment { get; }
@@ -3098,7 +2973,7 @@ public sealed class DotnetBuildEnvironmentLease : IDisposable
                 }
                 finally
                 {
-                    DotnetBuildEnvironmentManager.ReleaseExecutionLease(attemptPendingRecovery: true);
+                    DotnetBuildServerRecovery.ReleaseExecutionLease(attemptPendingRecovery: true);
                 }
             });
         }
@@ -3112,7 +2987,7 @@ public sealed class DotnetBuildEnvironmentLease : IDisposable
     }
 
     internal void MarkCompilerLockRemediationRequired() =>
-        DotnetBuildEnvironmentManager.RequestCompilerLockRecovery();
+        DotnetBuildServerRecovery.RequestCompilerLockRecovery();
 
     internal void ReleaseExecutionLock()
     {
@@ -3165,7 +3040,7 @@ public sealed class DotnetBuildEnvironmentLease : IDisposable
             }
             finally
             {
-                DotnetBuildEnvironmentManager.ReleaseExecutionLease(attemptPendingRecovery: true);
+                DotnetBuildServerRecovery.ReleaseExecutionLease(attemptPendingRecovery: true);
             }
         }
 

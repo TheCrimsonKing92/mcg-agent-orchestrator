@@ -455,7 +455,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixt
             lockedPathByLeaseId[current.LeaseId] = lockedPath;
             throw new UnauthorizedAccessException($"Access to the path '{lockedPath}' is denied.");
         };
-        DotnetBuildEnvironmentManager.ShutdownBuildServersForTests = () => shutdownCount++;
+        DotnetBuildServerRecovery.ShutdownBuildServersForTests = () => shutdownCount++;
         LockAttribution.AttributeForTests = (path, _) => new BuildLockAttribution(
             path,
             [new BuildLockHolder(24680, "VBCSCompiler", "VBCSCompiler.exe -pipename:first-available", true)],
@@ -486,7 +486,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixt
         {
             WorkerProcessJobs.TryKillPidTree = originalKill;
             DotnetBuildEnvironmentManager.PrepareArtifactsDirectoryForTests = null;
-            DotnetBuildEnvironmentManager.ShutdownBuildServersForTests =
+            DotnetBuildServerRecovery.ShutdownBuildServersForTests =
                 AssemblyBuildServerShutdownIsolation.SafeDefault;
             LockAttribution.AttributeForTests = null;
         }
