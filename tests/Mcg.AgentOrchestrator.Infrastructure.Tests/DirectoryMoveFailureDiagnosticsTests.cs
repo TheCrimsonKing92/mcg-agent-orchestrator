@@ -5,7 +5,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 using Xunit;
 
 // Parallel-safe: instance-local seams, virtual deadlines, and uniquely owned fixture paths.
-public sealed class GoalWorktreeTestsRebaseMergeMoveFailureDiagnostics(Xunit.ITestOutputHelper output)
+public sealed class DirectoryMoveFailureDiagnosticsTests(Xunit.ITestOutputHelper output)
 {
     private static readonly TimeSpan HangBound = TimeSpan.FromSeconds(30);
     private static readonly string Source = Path.Combine(Path.GetTempPath(), "move-evidence-unit-" + Guid.NewGuid().ToString("N"), "source");
