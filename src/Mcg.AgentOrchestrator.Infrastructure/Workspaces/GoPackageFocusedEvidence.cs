@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using Mcg.AgentOrchestrator.Core;
 using AcceptanceManifestCheck = Mcg.AgentOrchestrator.Infrastructure.GoalAcceptanceVerifier.AcceptanceManifestCheck;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
@@ -11,6 +12,7 @@ internal static class GoPackageFocusedEvidence
     private const string FallbackPrefix = "go declared-check evidence: ";
     private const string PassMarker = "--- PASS: ";
     private const string FailMarker = "--- FAIL: ";
+    private const string SkipMarker = "--- SKIP: ";
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };
     private static readonly Regex PackagePattern = new(
         @"\A[A-Za-z0-9_][A-Za-z0-9_.-]*(/[A-Za-z0-9_][A-Za-z0-9_.-]*)*\z");
@@ -158,14 +160,40 @@ internal static class GoPackageFocusedEvidence
             var lines = (result.OutputTail ?? "").Split('\n').Select(line => line.Trim()).ToArray();
             var prefix = check.Name.StartsWith(FocusedPrefix, StringComparison.Ordinal)
                 ? NormalizePackage(check.Arguments[^1]) + "." : "";
+            var skipped = lines.Where(line => line.StartsWith(SkipMarker, StringComparison.Ordinal))
+                .Select(line => prefix + line[SkipMarker.Length..].Split(' ')[0]).ToArray();
             return result with
             {
                 ExecutedTestCount = lines.Count(line => line.StartsWith(PassMarker, StringComparison.Ordinal) ||
-                    line.StartsWith(FailMarker, StringComparison.Ordinal)),
+                    line.StartsWith(FailMarker, StringComparison.Ordinal) || line.StartsWith(SkipMarker, StringComparison.Ordinal)),
                 FailingTestIdentities = lines.Where(line => line.StartsWith(FailMarker, StringComparison.Ordinal))
-                    .Select(line => prefix + line[FailMarker.Length..].Split(' ')[0]).ToArray()
+                    .Select(line => prefix + line[FailMarker.Length..].Split(' ')[0]).ToArray(),
+                SkippedTestIdentities = skipped.Length > 0 ? skipped : null
             };
         }).ToArray();
+    }
+
+    internal static IReadOnlyList<FindingEvidenceSelection> UndemonstratedSelections(
+        AcceptanceManifestCheck check, IReadOnlyList<AcceptanceCheckResult> recorded,
+        IReadOnlyList<FindingEvidenceSelection> selections)
+    {
+        var demonstrated = recorded.SelectMany(result => (result.OutputTail ?? "").Split('\n'))
+            .Select(line => line.Trim())
+            .SelectMany(line => new[] { PassMarker, FailMarker, SkipMarker }
+                .Where(marker => line.StartsWith(marker, StringComparison.Ordinal))
+                .Select(marker => line[marker.Length..].Split(' ')[0]))
+            .ToHashSet(StringComparer.Ordinal);
+        var identities = recorded.SelectMany(result =>
+                (result.FailingTestIdentities ?? []).Concat(result.SkippedTestIdentities ?? []))
+            .ToHashSet(StringComparer.Ordinal);
+        var focused = check.Name.StartsWith(FocusedPrefix, StringComparison.Ordinal);
+        return selections.SelectMany(selection => selection.TestClass.Split('|', StringSplitOptions.TrimEntries)
+                .Where(test => !demonstrated.Contains(test) &&
+                    !identities.Contains((focused ? NormalizePackage(selection.TestProject) + "." : "") + test))
+                .Select(test => selection with { TestClass = test }))
+            .DistinctBy(selection => $"{selection.TestProject}:{selection.TestClass}", StringComparer.Ordinal)
+            .OrderBy(selection => selection.TestProject, StringComparer.Ordinal)
+            .ThenBy(selection => selection.TestClass, StringComparer.Ordinal).ToArray();
     }
 
     private static string NormalizePackage(string package)

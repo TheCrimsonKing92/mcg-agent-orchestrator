@@ -45,7 +45,7 @@ public sealed partial record AcceptanceCheckResult(
     IReadOnlyList<AcceptanceTestFailureAttribution>? FailingTestAttributions = null,
     int? ChildProcessId = null,
     DateTimeOffset? ChildProcessStartedAt = null,
-    IReadOnlyList<string>? CoveredBy = null, [property: System.Text.Json.Serialization.JsonIgnore] LaneSchedulingSummary? LaneScheduling = null);
+    IReadOnlyList<string>? CoveredBy = null, [property: System.Text.Json.Serialization.JsonIgnore] LaneSchedulingSummary? LaneScheduling = null, [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] IReadOnlyList<string>? SkippedTestIdentities = null);
 
 public enum AcceptanceTestFailureOrigin
 {

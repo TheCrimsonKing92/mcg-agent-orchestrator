@@ -4,12 +4,14 @@ using AcceptanceManifestCheck = Mcg.AgentOrchestrator.Infrastructure.GoalAccepta
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
 // A recorded result establishes execution only when that check ran tests.
-internal sealed record FocusedEvidenceNotRunPlan(IReadOnlyList<FocusedEvidenceNotRunPlan.NotRunCheck> Checks)
+internal sealed record FocusedEvidenceNotRunPlan(IReadOnlyList<FocusedEvidenceNotRunPlan.NotRunCheck> Checks,
+    IReadOnlyList<string>? Skipped = null)
 {
     internal const string ApparatusStoppedAfterFailure = "apparatus-stopped-after-failure";
     internal const string NoResultRecorded = "no-result-recorded";
     internal const string ExecutionNotDemonstrated = "execution-not-demonstrated";
-    internal sealed record NotRunCheck(string CheckName, string Reason, IReadOnlyList<FindingEvidenceSelection> Selections);
+    internal sealed record NotRunCheck(string CheckName, string Reason, IReadOnlyList<FindingEvidenceSelection> Selections,
+        IReadOnlyList<FindingEvidenceSelection>? UndemonstratedSelections = null);
 
     internal IReadOnlyList<FindingEvidenceSelection> Selections => Checks.SelectMany(check => check.Selections)
         .DistinctBy(selection => $"{selection.TestProject}:{selection.TestClass}", StringComparer.Ordinal).ToArray();
@@ -37,12 +39,21 @@ internal sealed record FocusedEvidenceNotRunPlan(IReadOnlyList<FocusedEvidenceNo
                 .Select(parts => new FindingEvidenceSelection(parts[0], parts[1])).ToArray();
             var reason = recorded.Length > 0 ? ExecutionNotDemonstrated
                 : stoppedAfterFailure ? ApparatusStoppedAfterFailure : NoResultRecorded;
-            missing.Add(new(check.Name, $"not-run:{reason}", selections));
+            missing.Add(new(check.Name, $"not-run:{reason}", selections,
+                GoPackageFocusedEvidence.IsEvidenceCheck(check)
+                    ? GoPackageFocusedEvidence.UndemonstratedSelections(check, recorded, selections) : null));
             stoppedAfterFailure |= !continueAfterFailure && recorded.Any(result => !result.Passed);
         }
-        return new(missing);
+        return new(missing, results.SelectMany(result => result.SkippedTestIdentities ?? [])
+            .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray());
     }
 
-    internal string AppendSummary(string summary) => Checks.Count == 0 ? summary :
-        summary + Environment.NewLine + string.Join(Environment.NewLine, Checks.Select(check => $"{check.CheckName} {check.Reason}"));
+    internal string AppendSummary(string summary)
+    {
+        var lines = Checks.SelectMany(check => new[] { $"{check.CheckName} {check.Reason}" }
+                .Concat((check.UndemonstratedSelections ?? []).Select(selection =>
+                    $"undemonstrated {selection.TestProject}:{selection.TestClass} {check.Reason}")))
+            .Concat((Skipped ?? []).Select(identity => $"skipped: {identity}")).ToArray();
+        return lines.Length == 0 ? summary : summary + Environment.NewLine + string.Join(Environment.NewLine, lines);
+    }
 }
