@@ -1,0 +1,8 @@
+{
+  "reportFormat": "CTRF",
+  "schemaVersion": "mcg-test-result/1",
+  "results": {
+    "tool": { "name": "jest" },
+    "tests": [{ "testId": "renders", "name": "first", "name": "second", "status": "passed" }]
+  }
+}

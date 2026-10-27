@@ -12,6 +12,8 @@ internal sealed class NormalizedTestResultSource : ITestResultSource
     {
         "testId", "name", "status", "duration", "filePath", "suite", "message", "trace", "retryAttempts", "extra"
     });
+    private static readonly string[] ExtraPropertyNames = ["seed", "outputRef", "reportedBy"];
+    private static readonly string[] AttemptPropertyNames = ["status", "duration", "message", "trace"];
 
     public string ReportedBy => "normalized";
 
@@ -44,15 +46,15 @@ internal sealed class NormalizedTestResultSource : ITestResultSource
 
     private static string? ValidateReport(JsonElement root)
     {
-        var violation = RequiredObject(root, "", "reportFormat", "schemaVersion", "results");
+        var violation = RequiredObject(root, "", ["reportFormat", "schemaVersion", "results"]);
         if (violation is not null) return violation;
         if (!IsString(root.GetProperty("reportFormat"), "CTRF")) return "/reportFormat";
         if (!IsString(root.GetProperty("schemaVersion"), SchemaVersion)) return "/schemaVersion";
         var results = root.GetProperty("results");
-        violation = RequiredObject(results, "/results", "tool", "tests");
+        violation = RequiredObject(results, "/results", ["tool", "tests"]);
         if (violation is not null) return violation;
         var tool = results.GetProperty("tool");
-        violation = RequiredObject(tool, "/results/tool", "name");
+        violation = RequiredObject(tool, "/results/tool", ["name"]);
         if (violation is not null) return violation;
         if (!NonEmptyString(tool.GetProperty("name"))) return "/results/tool/name";
         var tests = results.GetProperty("tests");
@@ -69,7 +71,7 @@ internal sealed class NormalizedTestResultSource : ITestResultSource
 
     private static string? ValidateTest(JsonElement test, string path, HashSet<string> ids)
     {
-        var violation = RequiredObject(test, path, "testId", "name", "status");
+        var violation = RequiredObject(test, path, ["testId", "name", "status"], TestPropertyNames);
         if (violation is not null) return violation;
         foreach (var name in TestPropertyNames)
         {
@@ -108,9 +110,9 @@ internal sealed class NormalizedTestResultSource : ITestResultSource
                     }
                     break;
                 case "extra":
-                    violation = RequiredObject(value, pointer);
+                    violation = RequiredObject(value, pointer, [], ExtraPropertyNames);
                     if (violation is not null) return violation;
-                    foreach (var field in new[] { "seed", "outputRef", "reportedBy" })
+                    foreach (var field in ExtraPropertyNames)
                         if (value.TryGetProperty(field, out var extra) && extra.ValueKind != JsonValueKind.String)
                             return pointer + "/" + field;
                     break;
@@ -124,7 +126,7 @@ internal sealed class NormalizedTestResultSource : ITestResultSource
 
     private static string? ValidateAttempt(JsonElement attempt, string path)
     {
-        var violation = RequiredObject(attempt, path, "status");
+        var violation = RequiredObject(attempt, path, ["status"], AttemptPropertyNames);
         if (violation is not null) return violation;
         if (!ValidStatus(attempt.GetProperty("status"))) return path + "/status";
         if (attempt.TryGetProperty("duration", out var duration) && !TryDuration(duration, out _))
@@ -135,9 +137,11 @@ internal sealed class NormalizedTestResultSource : ITestResultSource
         return null;
     }
 
-    private static string? RequiredObject(JsonElement value, string path, params string[] required)
+    private static string? RequiredObject(JsonElement value, string path, string[] required,
+        IReadOnlyCollection<string>? declared = null)
     {
         if (value.ValueKind != JsonValueKind.Object) return path;
+        if (JsonDuplicateMemberScan.Find(value, path, declared ?? required) is { } duplicate) return duplicate;
         foreach (var name in required)
             if (!value.TryGetProperty(name, out _)) return path + "/" + name;
         return null;

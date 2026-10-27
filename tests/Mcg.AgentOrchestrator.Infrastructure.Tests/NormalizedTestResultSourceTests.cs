@@ -62,6 +62,7 @@ public sealed class NormalizedTestResultSourceTests
 
     [Theory]
     [InlineData("invalid-duplicate-id.json", "/results/tests/1/testId")]
+    [InlineData("invalid-duplicate-name.json", "/results/tests/0/name")]
     [InlineData("invalid-status.json", "/results/tests/0/status")]
     [InlineData("invalid-missing-name.json", "/results/tests/0/name")]
     public void Read_InvalidFixture_ReportsExactPointerAndNoPartialRecords(string name, string pointer)
@@ -97,9 +98,78 @@ public sealed class NormalizedTestResultSourceTests
     [InlineData("{\"reportFormat\":\"CTRF\",\"schemaVersion\":\"mcg-test-result/1\",\"results\":{\"tests\":[]}}", "/results/tool")]
     [InlineData("{\"reportFormat\":\"CTRF\",\"schemaVersion\":\"mcg-test-result/1\",\"results\":{\"tool\":{\"name\":\"\"},\"tests\":[]}}", "/results/tool/name")]
     [InlineData("{\"reportFormat\":\"CTRF\",\"schemaVersion\":\"mcg-test-result/1\",\"results\":{\"tool\":{\"name\":\"tool\"},\"tests\":{}}}", "/results/tests")]
+    [InlineData("""{"reportFormat":"CTRF","reportFormat":"CTRF","schemaVersion":"mcg-test-result/1","results":{"tool":{"name":"tool"},"tests":[]}}""",
+        "/reportFormat")]
+    [InlineData("""{"reportFormat":"CTRF","schemaVersion":"mcg-test-result/1","results":{"tool":{"name":"tool"},"tests":[],"tests":[]}}""",
+        "/results/tests")]
+    [InlineData("""{"reportFormat":"CTRF","schemaVersion":"mcg-test-result/1","results":{"tool":{"name":"tool","name":"tool"},"tests":[]}}""",
+        "/results/tool/name")]
+    [InlineData("""{"reportFormat":"CTRF","schemaVersion":"mcg-test-result/1","results":{"tool":{"name":"tool"},"tests":[{"testId":"id","name":"test","status":"passed","u":1,"u":2}]}}""",
+        "/results/tests/0/u")]
+    [InlineData("""{"reportFormat":"CTRF","schemaVersion":"mcg-test-result/1","results":{"tool":{"name":"tool"},"tests":[{"testId":"id","name":"test","status":"passed","x":{"a":1,"a":2}}]}}""",
+        "/results/tests/0/x/a")]
+    [InlineData("""{"reportFormat":"CTRF","schemaVersion":"mcg-test-result/1","results":{"tool":{"name":"tool"},"tests":[{"testId":"id","status":"failed","status":"passed"}]}}""",
+        "/results/tests/0/status")]
+    [InlineData("""{"reportFormat":"CTRF","schemaVersion":"mcg-test-result/1","results":{"tool":{"name":"tool"},"tests":[{"testId":"id","status":"passed","x":{"a":1,"a":2}}]}}""",
+        "/results/tests/0/x/a")]
+    [InlineData("""{"reportFormat":"CTRF","schemaVersion":"mcg-test-result/1","results":{"tool":{"name":"tool"},"tests":[{"testId":"id","name":"test","status":"passed","a/b~c":1,"a/b~c":2}]}}""",
+        "/results/tests/0/a~1b~0c")]
+    [InlineData("""{"x":{"a":1,"a":2}}""", "/x/a")]
+    [InlineData("""{"reportFormat":"CTRF","schemaVersion":"mcg-test-result/1","results":{"x":[{"a":1,"a":2}]}}""",
+        "/results/x/0/a")]
+    [InlineData("""{"reportFormat":"CTRF","schemaVersion":"mcg-test-result/1","results":{"tool":{"x":{"a":1,"a":2}},"tests":[]}}""",
+        "/results/tool/x/a")]
+    [InlineData("""{"reportFormat":"CTRF","schemaVersion":"mcg-test-result/1","results":{"tool":{"name":"tool"},"tests":[{"testId":"id","name":"test","status":"passed","extra":{"seed":null,"x":{"a":1,"a":2}}}]}}""",
+        "/results/tests/0/extra/x/a")]
+    [InlineData("""{"reportFormat":"CTRF","schemaVersion":"mcg-test-result/1","results":{"tool":{"name":"tool"},"tests":[{"testId":"id","name":"test","status":"passed","retryAttempts":[{"x":[{"a":1,"a":2}]}]}]}}""",
+        "/results/tests/0/retryAttempts/0/x/0/a")]
+    [InlineData("""{"reportFormat":"CTRF","schemaVersion":"mcg-test-result/1","results":{"tool":{"name":"tool"},"tests":[{"testId":"id","name":"test","status":"passed","x":{"z":{"a":1,"a":2},"b":{"c":1,"c":2}}}]}}""",
+        "/results/tests/0/x/z/a")]
+    [InlineData("""{"reportFormat":"CTRF","schemaVersion":"mcg-test-result/1","results":{"tool":{"name":"tool"},"tests":[{"testId":"id","name":"test","status":"passed","x":[{},[{"a":1,"a":2}],{"b":1,"b":2}]}]}}""",
+        "/results/tests/0/x/1/0/a")]
+    [InlineData("""{"reportFormat":"CTRF","schemaVersion":"mcg-test-result/1","results":{"tool":{"name":"tool"},"tests":[{"testId":"id","name":"test","status":"passed","z":1,"a":1,"z":2,"a":2}]}}""",
+        "/results/tests/0/z")]
+    [InlineData("""{"reportFormat":"CTRF","schemaVersion":"mcg-test-result/1","results":{"tool":{"name":"tool"},"tests":[{"testId":"id","name":"test","extra":{"seed":"1","seed":"2"},"status":"bogus"}]}}""",
+        "/results/tests/0/status")]
+    [InlineData("""{"reportFormat":"CTRF","schemaVersion":"mcg-test-result/1","results":{"tool":{"name":"tool"},"tests":[{"testId":"id","name":"test","status":"passed","extra":{"seed":"1","seed":"2"},"retryAttempts":[{"message":null,"status":"failed"}]}]}}""",
+        "/results/tests/0/retryAttempts/0/message")]
+    [InlineData("""{"reportFormat":"CTRF","schemaVersion":"mcg-test-result/1","results":{"tool":{"name":"tool"},"tests":[{"testId":"ok","name":"first","status":"passed"},{"testId":"id","name":"first","name":"second","status":"passed"}]}}""",
+        "/results/tests/1/name")]
     public void Read_InvalidReportStructure_ReportsFirstViolation(string json, string pointer)
     {
         WithReport(json, path => AssertInvalid(new NormalizedTestResultSource().Read(path), pointer));
+    }
+
+    [Theory]
+    [InlineData("{\"testId\":\"id\",\"name\":\"first\",\"name\":\"second\",\"status\":\"passed\"}", "name")]
+    [InlineData("{\"testId\":\"id\",\"name\":\"test\",\"status\":\"passed\",\"extra\":{\"seed\":\"1\",\"seed\":\"2\"}}", "extra/seed")]
+    [InlineData("{\"testId\":\"id\",\"name\":\"test\",\"status\":\"passed\",\"retryAttempts\":[{\"status\":\"failed\",\"status\":\"passed\"}]}", "retryAttempts/0/status")]
+    [InlineData("{\"testId\":\"id\",\"status\":\"passed\",\"x\":{\"a\":1,\"a\":2}}", "x/a")]
+    [InlineData("{\"testId\":\"id\",\"name\":\"test\",\"status\":\"passed\",\"x\":[[{\"a\":1,\"a\":2}]]}", "x/0/0/a")]
+    [InlineData("{\"testId\":\"id\",\"name\":\"test\",\"status\":\"passed\",\"x\":{\"b\":{\"a\":1,\"a\":2},\"b\":0}}", "x/b")]
+    [InlineData("{\"x\":{\"a\":1,\"a\":2},\"trace\":\"first\",\"trace\":\"second\"}", "trace")]
+    [InlineData("{\"testId\":\"id\",\"name\":\"test\",\"status\":\"passed\",\"a/b~c\":1,\"a/b~c\":2}", "a~1b~0c")]
+    [InlineData("{\"testId\":\"id\",\"name\":\"test\",\"\\u006eame\":\"second\",\"status\":\"passed\"}", "name")]
+    public void Read_DuplicateMember_ReportsPointerAndNoPartialRecords(string test, string pointer)
+    {
+        WithReport(Report(test), path => AssertInvalid(new NormalizedTestResultSource().Read(path),
+            "/results/tests/0/" + pointer));
+    }
+
+    [Theory]
+    [InlineData("\"Name\":\"distinct\"")]
+    [InlineData("\"\\u00e9\":1,\"e\\u0301\":2")]
+    [InlineData("\"x\":{\"name\":\"nested\",\"y\":[{\"name\":\"other\"}]}")]
+    public void Read_DistinctMemberNames_RemainsReadable(string members)
+    {
+        var test = "{\"testId\":\"id\",\"name\":\"test\",\"status\":\"passed\"," + members + "}";
+        WithReport(Report(test), path =>
+        {
+            var result = new NormalizedTestResultSource().Read(path);
+            Assert.Equal(TestResultReadStatus.Readable, result.Status);
+            Assert.Null(result.Detail);
+            Assert.Equal("test", Assert.Single(result.Records).DisplayName);
+        });
     }
 
     [Theory]
@@ -128,8 +198,9 @@ public sealed class NormalizedTestResultSourceTests
     [InlineData("\"extra\":{\"reportedBy\":null}", "extra/reportedBy")]
     public void Read_InvalidKnownProperty_ReportsMemberPointer(string member, string pointer)
     {
-        // Last-occurrence semantics allow this table to replace a required property too.
-        var test = "{\"testId\":\"id\",\"name\":\"test\",\"status\":\"passed\"," + member + "}";
+        var required = new[] { "\"testId\":\"id\"", "\"name\":\"test\"", "\"status\":\"passed\"" }
+            .Where(property => !member.StartsWith(property[..(property.IndexOf(':') + 1)], StringComparison.Ordinal));
+        var test = "{" + string.Join(",", required.Append(member)) + "}";
         WithReport(Report(test), path => AssertInvalid(new NormalizedTestResultSource().Read(path),
             "/results/tests/0/" + pointer));
     }
