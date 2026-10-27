@@ -144,6 +144,38 @@ public sealed class CrossProviderDeferralReleaseTests
             restored.GetTask(goal.Id, task.Id), clock.UtcNow, out _));
     }
 
+    [Xunit.Fact]
+    public void Reassignment_Reload_PreservesProviderBindingReceiptAndReset()
+    {
+        var (kernel, goal, task, clock, _) = DeferredTester();
+        var snapshot = kernel.ExportGoalSnapshot(goal.Id);
+        var saved = snapshot.Tasks.Single();
+        var dispatch = saved.LastDispatch! with { ClaudeCredentialSourceDirectory = "C:\\credentials\\original" };
+        snapshot = snapshot with { Tasks = [saved with { LastDispatch = dispatch, DispatchHistory = [dispatch] }] };
+        kernel = AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot([snapshot], []), clock);
+        task = kernel.GetTask(goal.Id, task.Id);
+        var reset = task.SubscriptionRetryAfter!.Value;
+
+        kernel.ReassignTaskAgent(goal.Id, task.Id, Tester("Anthropic"));
+        kernel = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot(), clock);
+        goal = kernel.GetGoal(goal.Id);
+        task = kernel.GetTask(goal.Id, task.Id);
+
+        Assert.Null(task.SubscriptionRetryAfter);
+        Assert.False(DispatchFailureClassifier.IsSubscriptionRetryDeferred(task, clock.UtcNow, out _));
+        Assert.True(DispatchFailureClassifier.TryGetProviderSubscriptionCooldown(
+            goal, TaskId.New(), "OpenAI", clock.UtcNow, out var hold));
+        Assert.Equal(reset, hold.RetryAfter);
+        Assert.Equal("openai::c:\\credentials\\original", hold.BindingKey);
+        Assert.Equal($"verification:{clock.UtcNow:O}", hold.EvidenceReceipt);
+        Assert.Equal(clock.UtcNow, hold.DispatchStartedAt);
+        Assert.Equal(task.Id, hold.SourceTaskId);
+        Assert.True(DispatchFailureClassifier.TryGetProviderSubscriptionCooldown(
+            goal, task.Id, "OpenAI", clock.UtcNow, out _));
+        Assert.False(DispatchFailureClassifier.TryGetProviderSubscriptionCooldown(
+            goal, TaskId.New(), "Anthropic", clock.UtcNow, out _));
+    }
+
     private static (AgentOrchestratorKernel, Goal, TaskSpec, FakeClock, AgentDefinition) DeferredTester(
         string? dispatchProvider = "OpenAI")
     {

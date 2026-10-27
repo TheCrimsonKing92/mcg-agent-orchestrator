@@ -85,7 +85,8 @@ public static class CrossGoalSubscriptionStartPlanner
         }
 
         var readyItems = subscriptionPlan.Items
-            .Where(item => item is { CanPrepare: true, TaskStatus: WorkTaskStatus.Assigned })
+            .Where(item => item.TaskStatus == WorkTaskStatus.Assigned &&
+                (item.CanPrepare || item.CanAttemptSubscriptionSubstitution))
             .ToList();
         if (readyItems.Count == 0)
         {
