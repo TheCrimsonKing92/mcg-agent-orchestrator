@@ -25,6 +25,7 @@ public sealed class IsolatedProcessSpawningRemainderChainTests
         typeof(ConfirmLegacyAcceptanceHolderSettlementScriptTests),
         typeof(ExecutorBuildCheckScriptTests),
         typeof(CandidateIdentityComputationTests),
+        typeof(CandidateIdentityProjectHomeTests),
         typeof(AcceptanceSharedApparatusRealProcessControlTests),
         typeof(AcceptanceMtpFilterResponseFileManagedTests)
     ];
@@ -52,6 +53,9 @@ public sealed class IsolatedProcessSpawningRemainderChainTests
         [nameof(ConfirmLegacyAcceptanceHolderSettlementScriptTests)] = 8.2,
         [nameof(ExecutorBuildCheckScriptTests)] = 7.8,
         [nameof(CandidateIdentityComputationTests)] = 7.3,
+        // Gate attempt 0a5ab00c-gate-20261027095412364-12a5c9a700c84971acd65e32d637e0d0:
+        // 0a5ab00c-gate-20261027095412364-12a5c9a700c84971acd65e32d637e0d0.infrastructure-tests-remainder.trx (summed cases, rounded).
+        [nameof(CandidateIdentityProjectHomeTests)] = 1.4,
         [nameof(AcceptanceSharedApparatusRealProcessControlTests)] = 6.3,
         [nameof(AcceptanceMtpFilterResponseFileManagedTests)] = 5.2,
         [nameof(PatchEquivalenceContextOnlyDriftTests)] = 123.7,
@@ -132,7 +136,7 @@ public sealed class IsolatedProcessSpawningRemainderChainTests
         foreach (var type in MovedTypes)
             Xunit.Assert.Equal(SplitCollection, DeclaredCollection(type));
         var members = RunnableTypes().Where(type => DeclaredCollection(type) == SplitCollection).ToArray();
-        Xunit.Assert.Equal(14, members.Length);
+        Xunit.Assert.Equal(15, members.Length);
         Xunit.Assert.Equal(MovedTypes.Select(type => type.FullName).Order(StringComparer.Ordinal),
             members.Select(type => type.FullName).Order(StringComparer.Ordinal));
 
@@ -201,7 +205,7 @@ public sealed class IsolatedProcessSpawningRemainderChainTests
     {
         var (sums, unlisted) = Score(RemainderMembers(), PlanningSeconds);
         Xunit.Assert.Empty(unlisted);
-        Xunit.Assert.InRange(sums[SplitCollection], 223.9 - 0.05, 223.9 + 0.05);
+        Xunit.Assert.InRange(sums[SplitCollection], 225.3 - 0.05, 225.3 + 0.05);
         Xunit.Assert.InRange(sums[OriginalCollection],
             229.4 + PermitReleaseScenarioGateSeconds + FocusedEvidenceInterruptionGateSeconds - 0.05,
             229.4 + PermitReleaseScenarioGateSeconds + FocusedEvidenceInterruptionGateSeconds + 0.05);

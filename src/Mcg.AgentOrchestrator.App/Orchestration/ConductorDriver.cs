@@ -261,7 +261,7 @@ internal sealed partial class ConductorDriver
             workspace, _cohortCleanupHooks.BuildStorageRoot);
         var eventWriter = new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory, integrationBranch: workspace.IntegrationBranch, committed: GoalLifecycleChangeSink.Create(workspace));
         _cohortKernel = kernel;
-        ConfigureCandidateIdentity(kernel, workspace.ConductEventsLogPath);
+        ConfigureCandidateIdentity(kernel, workspace.ConductEventsLogPath, workspace.ProjectHomeDirectoryOrNull);
         _cohortWorkspace = workspace;
         _runDeveloperCompletionStructuralPreflight = path =>
             DeveloperCompletionStructuralPreflight.Evaluate(path, workspace.ProjectHomeDirectoryOrNull, workspace.IntegrationBranch);
