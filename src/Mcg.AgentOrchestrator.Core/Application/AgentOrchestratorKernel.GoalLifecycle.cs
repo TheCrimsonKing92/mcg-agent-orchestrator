@@ -1165,15 +1165,11 @@ public sealed partial class AgentOrchestratorKernel
         var task = goal.FindTask(taskId);
         if (goal.Timeline.Any(evt => evt.TaskId == taskId && evt.Kind == ProgressKind.ProviderHoldSubstituted))
             throw new InvalidOperationException("A provider-held task may be substituted only once.");
-        var heldAgentId = task.AssignedAgentId?.Value ?? "none";
         if (task.AssignedAgentId == substitute.Id)
             throw new InvalidOperationException("A provider hold substitute must change the assigned agent.");
-        task = ReassignTaskAgent(goalId, taskId, substitute, subscriptionCooldown is null
-            ? "Provider budget hold substitution." : "Provider subscription cooldown substitution.");
-        Append(goal, taskId, ProgressKind.ProviderHoldSubstituted,
-            $"held binding={heldBindingKey}; held agent={heldAgentId}; substitute={substitute.Id.Value}; receipt={(string.IsNullOrWhiteSpace(evidenceReceipt) ? "none" : evidenceReceipt)}" +
-            (subscriptionCooldown is null ? "" :
-                $"; reason=subscription-cooldown; source task={subscriptionCooldown.SourceTaskId.Value}; source dispatch={subscriptionCooldown.DispatchStartedAt:O}; reset={subscriptionCooldown.RetryAfter:O}"));
+        var provenance = ProviderHoldSubstitutionProvenance.Create(task.AssignedAgentId, substitute.Id, heldBindingKey, evidenceReceipt, subscriptionCooldown);
+        task = ReassignTaskAgent(goalId, taskId, substitute, provenance.ReassignmentReason);
+        Append(goal, taskId, ProgressKind.ProviderHoldSubstituted, provenance.Message);
         return task;
     }
 
