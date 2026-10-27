@@ -110,6 +110,9 @@ public sealed class BriefPlannedTestLaneReadinessTests
 
     [Theory]
     [InlineData("existing-purpose")]
+    [InlineData("existing-prefix")]
+    [InlineData("existing-prefix-path")]
+    [InlineData("historical-prefix")]
     [InlineData("separate-collection")]
     [InlineData("separate-path-collection")]
     public void DeclarationContext_UnownedClassBlocksDeveloperPreparation(string kind)
@@ -117,6 +120,9 @@ public sealed class BriefPlannedTestLaneReadinessTests
         var scope = kind switch
         {
             "existing-purpose" => "Add new test class BuildWidgetTests to cover existing widget behavior.",
+            "existing-prefix" => "To cover existing widget behavior, add new test class BuildWidgetTests.",
+            "existing-prefix-path" => "To cover existing widget behavior, add new tests/Widget.Tests/BuildWidgetTests.cs.",
+            "historical-prefix" => "To cover historical widget inputs, add new test class BuildWidgetTests.",
             "separate-collection" => "new test class BuildWidgetTests. Add new test class QuokkaTests in collection 'BuildCollection'.",
             "separate-path-collection" => "new tests/Widget.Tests/BuildWidgetTests.cs. Add new test class QuokkaTests in collection 'BuildCollection'.",
             _ => throw new ArgumentException(kind)
@@ -237,6 +243,48 @@ public sealed class BriefPlannedTestLaneReadinessTests
         Assert.True(fixture.Readiness().AllowsStart(false));
         Assert.DoesNotContain(fixture.Readiness().Findings,
             finding => finding.Kind is LaneSubstringCollisionCheck.Rule or BriefPlannedTestLaneReadiness.PendingKind);
+    }
+
+    [Theory]
+    [InlineData("double-quoted")]
+    [InlineData("single-quoted")]
+    [InlineData("quoted-action")]
+    [InlineData("unquoted")]
+    [InlineData("example-action")]
+    public void CommandContents_DoNotBlockDeveloperPreparation(string kind)
+    {
+        var scope = kind switch
+        {
+            "double-quoted" => "Run echo \"new test class BuildWidgetTests\".",
+            "single-quoted" => "Run echo 'new test class BuildWidgetTests'.",
+            "quoted-action" => "Run echo \"Add new test class BuildWidgetTests\".",
+            "unquoted" => "Run echo new test class BuildWidgetTests.",
+            "example-action" => "Example: cover existing widgets, add new test class BuildWidgetTests.",
+            _ => throw new ArgumentException(kind)
+        };
+        using var fixture = new Fixture(scope);
+        Assert.Equal(WorkTaskStatus.Assigned, fixture.Developer.Status);
+        Assert.Empty(DispatchReadinessRules.BuildIncompleteEarlierStageDependencies(fixture.Goal, fixture.Developer));
+        var report = fixture.Readiness();
+        Assert.True(report.AllowsStart(false));
+        Assert.DoesNotContain(report.Findings,
+            finding => finding.Kind is LaneSubstringCollisionCheck.Rule or BriefPlannedTestLaneReadiness.PendingKind);
+        var preparationCalls = 0;
+        var reachedPreparation = new InvalidOperationException("Preparation reached home resolution.");
+        var operations = new GoalDispatchOperations(resolveHome: _ =>
+        {
+            preparationCalls++;
+            throw reachedPreparation;
+        });
+
+        var failure = Assert.Throws<InvalidOperationException>(() => operations.ProfileDispatchTask(
+            fixture.Kernel, fixture.Workspace, fixture.Goal, fixture.Developer, fixture.Profile));
+
+        Assert.Same(reachedPreparation, failure);
+        Assert.Equal(1, preparationCalls);
+        Assert.Null(fixture.Developer.LastDispatch);
+        Assert.Null(fixture.Developer.LastProcess);
+        Assert.False(File.Exists(fixture.ProposedPath));
     }
 
     [Fact]

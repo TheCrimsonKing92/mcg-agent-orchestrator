@@ -107,12 +107,20 @@ internal static class BriefPlannedTestLaneReadiness
 
     private static bool IsDeclarationContext(string line, int index)
     {
-        // Classify the context introducing the declaration. Its purpose may legitimately mention
-        // existing behavior or historical inputs after the name without making it an evidence citation.
-        var context = Regex.Replace(Regex.Replace(line[..index], NewClass, "", Options),
-            TestSourcePath, "", RegexOptions.CultureInvariant);
-        return !Regex.IsMatch(context,
-            @"\b(?:example|illustrative|historical|history|previous|existing|regex|command|evidence)\b", Options);
+        // A quoted command argument is not an instruction to introduce the named class.
+        if (Regex.Matches(line, @"(?<!\w)(?:""[^""]*""|'[^']*')", Options).Cast<Match>()
+            .Any(quote => quote.Index < index && index < quote.Index + quote.Length &&
+                !Regex.IsMatch(quote.Value[1..^1], "^" + TestSourcePath + "$", RegexOptions.CultureInvariant))) return false;
+        var prefix = line[..index];
+        // Evidence/example labels retain their meaning across clauses on the same line.
+        if (Regex.IsMatch(prefix,
+                @"^\s*(?:for\s+)?(?:example|illustrative|historical|history|previous|regex|command|evidence)\b", Options))
+            return false;
+        // Only the introducing clause declares new work. A preceding purpose clause may describe
+        // existing behavior, while arbitrary prose or executable arguments do not declare anything.
+        var context = Regex.Split(prefix, @"[,;.!?]\s+", Options).Last();
+        context = Regex.Replace(context, @"\bnew\s+(?:(?:test|source|class|file)\s+)*[`'""]?$", "", Options).Trim();
+        return Regex.IsMatch(context, @"^(?:(?:add|create|introduce|implement)(?:\s+a)?\s*)?[`'""]?$", Options);
     }
 
     private static bool IsNew(string line, int index, int length) =>
