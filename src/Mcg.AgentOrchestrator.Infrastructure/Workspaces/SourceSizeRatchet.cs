@@ -198,7 +198,8 @@ internal static class SourceSizeRatchet
             // Goal 568eb0fe keeps the tick alive for parked goals with unreconciled owned attempts;
             // the existing eligible-empty decision owns whether reconciliation can run. Its pre-walk
             // reset preserves admission isolation after batch reconciliation; measured 2698, no headroom.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs", 2578),
+            // Goal e1e7c5d3: four lines open and report the acceptance-admission CPU window.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs", 2582),
             // Goal 354522f1 tick persistence partial measured at 467 lines.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.TickPersistence.cs", 467),
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.DependencyReadmission.cs", 370),
@@ -352,7 +353,7 @@ internal static class SourceSizeRatchet
             // for outcome/compatibility mutations; parsing and application live in dedicated collaborators.
             // Goal 9d55c9bf adds four lines to classify dogfood-log list at the existing kernel-state route seam;
             // extracting this single switch case would split route ownership. No additional headroom.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Cli/CliPersistentStateRunner.cs", 4732),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Cli/CliPersistentStateRunner.cs", 3365),
             // Goal 03aaf13e adds the explicit-root isolation fact at the verifier's existing execution-
             // environment seam; the production verifier remains at its prior ceiling.
             // Goal 56ff780e keeps passed/failed/unknown shard-completion producer coverage in its owning
@@ -631,7 +632,8 @@ internal static class SourceSizeRatchet
             // Its tick-context reset before the goal walk adds two lines after batch reconciliation;
             // merged-tree measurement is recorded below, with no additional headroom.
             // b596bd5a: probe completion/admission/backoff adds 32 lines; partial count unchanged, no headroom.
-            new SourceClassCeiling("ConductorBatchLoop", 9123, 56),
+            // Goal e1e7c5d3: four lines open and report the acceptance-admission CPU window.
+            new SourceClassCeiling("ConductorBatchLoop", 9127, 56),
             // Goal ec8903af moved the goal-prefix parser to CliGoalPrefixArguments.
             // Goal cd1f6380 adds four lines at the owning transaction boundary, forwarding both
             // registrars and invoking actions after commit; list behavior lives in PostCommitActions.
@@ -644,7 +646,7 @@ internal static class SourceSizeRatchet
             // the command owns intent submission. After integrating main, measured 5972 lines in the same 18 partials; no headroom.
             // Goal 9d55c9bf adds the same four-line dogfood-log list case in the owning route classifier;
             // keep classification centralized across the same 18 partial files. No additional headroom.
-            new SourceClassCeiling("CliPersistentStateRunner", 5899, 18),
+            new SourceClassCeiling("CliPersistentStateRunner", 4506, 17),
             // Goal 5935c270 extracts subscription-plan output into SubscriptionPlanTextView
             // (2026-10-09 console architecture review, finding 4, taming slice 13).
             // Goal c0ff6203 extracts six small text views (taming slice 14).

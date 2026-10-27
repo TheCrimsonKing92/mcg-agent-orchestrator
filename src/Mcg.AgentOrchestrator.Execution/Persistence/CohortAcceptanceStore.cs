@@ -184,6 +184,28 @@ public sealed partial class CohortAcceptanceStore
             .ToArray();
     }
 
+    public IReadOnlyList<GoalFinalizedLanding> ReadFinalizedLandingsForGoal(GoalId goalId)
+    {
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT r.receipt_id, m.candidate_revision, li.combined_commit_revision
+            FROM cohort_members m
+            JOIN cohort_receipts r ON r.cohort_id=m.cohort_id
+            JOIN cohort_landing_intents li ON li.cohort_id=r.cohort_id AND li.receipt_id=r.receipt_id
+            WHERE m.goal_id=$goal AND m.landed=1 AND li.state='finalized'
+              AND r.outcome='Passed' AND r.valid_for_landing=1 AND r.gate_exit_code=0
+              AND NOT EXISTS (SELECT 1 FROM cohort_invalidations i WHERE i.cohort_id=r.cohort_id);
+            """;
+        command.Parameters.AddWithValue("$goal", goalId.Value);
+        using var reader = command.ExecuteReader();
+        var landings = new List<GoalFinalizedLanding>();
+        while (reader.Read())
+            landings.Add(new GoalFinalizedLanding(
+                "cohort-receipt", reader.GetString(0), reader.GetString(1), reader.GetString(2)));
+        return landings.OrderBy(landing => landing.ReceiptId, StringComparer.Ordinal).ToArray();
+    }
+
     public AcceptanceCohortMaterializationFailure SaveMaterializationFailure(
         IReadOnlyList<AcceptanceCohortMemberBinding> members,
         string observedMainRevision,

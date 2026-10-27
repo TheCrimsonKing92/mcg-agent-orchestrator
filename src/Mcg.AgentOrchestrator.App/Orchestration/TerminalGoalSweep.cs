@@ -666,6 +666,7 @@ internal static partial class TerminalGoalSweep
 
             if (HasStandingTerminalDisposition(executionDirectory, goal, branchFacts))
             {
+                var addResult = false;
                 if (goal.Status == GoalStatus.Cancelled &&
                     hasTerminalTaskDesync &&
                     !TryBuildTerminalLiveDispatchBlocker(goal, prefix, out _, out _))
@@ -673,10 +674,28 @@ internal static partial class TerminalGoalSweep
                     CloseStaleTasksOnTerminalGoal(kernel, goal, prefix, desyncEvidence, repairs);
                     if (repairs.Count > 0)
                     {
-                        results.Add(new TerminalGoalSweepGoalResult(originalGoal.Id, prefix, repairs, blockers));
+                        addResult = true;
                     }
                 }
 
+                // BuildGoalBranchFacts gates branch facts by status; settled Cancelled goals
+                // need the status-independent branch and registration checks as well.
+                if (!branchFacts.HasGoalBranch && !branchFacts.HasRegisteredWorktree &&
+                    !branchFactIndex.HasGoalBranch(goal.Id) &&
+                    branchFactIndex.BuildReplacementFacts(goal) is { HasGoalBranch: false, HasRegisteredWorktree: false } &&
+                    GoalWorktrees.ClearSettledGoalCleanupBackoff(executionDirectory, goal.Id, cleanupHooks) is { } cleared)
+                {
+                    var disposition = GoalOperationJournal.HasRetiredTerminalDisposition(recoveryJournal)
+                        ? "retired" : "landed-merge-evidence";
+                    repairs.Add(new TerminalGoalSweepRepair(
+                        "settled-cleanup-backoff-cleared",
+                        $"disposition={disposition}; reason={cleared.Reason}; skip_until_utc={cleared.SkipUntilUtc.UtcDateTime.ToString("O", CultureInfo.InvariantCulture)}",
+                        "excluded"));
+                    addResult = true;
+                }
+
+                if (addResult)
+                    results.Add(new TerminalGoalSweepGoalResult(originalGoal.Id, prefix, repairs, blockers));
                 continue;
             }
 
