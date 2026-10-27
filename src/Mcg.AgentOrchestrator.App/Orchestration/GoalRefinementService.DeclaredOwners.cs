@@ -53,6 +53,46 @@ internal sealed partial class GoalRefinementService
 
     private sealed record DeclaredOwnershipIssue(string Diagnostic, string? Criterion);
 
+    private async Task<bool> AddDeclaredOwnershipQuestionsAsync(
+        Goal goal,
+        IReadOnlyList<DeclaredOwnershipIssue> issues,
+        IReadOnlyList<RefinedSpecOpenQuestion> existingOpenQuestions,
+        List<RefinedSpecOpenQuestion> openQuestions,
+        CancellationToken cancellationToken)
+    {
+        var raisedClarification = false;
+        foreach (var issue in issues)
+        {
+            const string forkKind = "ownership-lifecycle";
+            var questionText = $"{issue.Diagnostic} Revise the versioned criterion or its declared_index to resolve this ownership issue. For an existing criterion, an explicit criterion-evidence-map repair may declare its evidence owner.";
+            var normalizedKey = BuildNormalizedQuestionKey(forkKind, questionText);
+            var topicKey = $"ownership-v{goal.AuthoritativeBrief.Version}-{normalizedKey[^16..]}";
+            var existingOpen = existingOpenQuestions.FirstOrDefault(question =>
+                string.Equals(ResolveQuestionTopicKey(question), topicKey, StringComparison.OrdinalIgnoreCase));
+            if (existingOpen is not null)
+            {
+                AddOpenQuestionIfMissing(openQuestions, existingOpen);
+                continue;
+            }
+
+            // A prior answer or a generic precedent cannot waive a still-present
+            // contradictory or unmatched declaration in the current specification.
+            var correlationKey = BuildCorrelationKey(goal.Id, topicKey);
+            await _raiseCollaborationItem(
+                CollaborationItemType.Clarification, goal.Id.Value,
+                BuildClarificationSubject(topicKey),
+                $"Question: {questionText}\nFork kind: {forkKind}\nTopic key: {topicKey}\nCriterion: {issue.Criterion}",
+                correlationKey, cancellationToken);
+            raisedClarification = true;
+            openQuestions.Add(new RefinedSpecOpenQuestion(
+                correlationKey, questionText, forkKind, "Open",
+                TopicKey: topicKey, NormalizedQuestionKey: normalizedKey,
+                Criterion: issue.Criterion, BlastRadius: "high"));
+        }
+
+        return raisedClarification;
+    }
+
     private static bool HasExplicitCurrentOwnershipMapping(Goal goal, string criterion) =>
         goal.CriterionEvidenceObligations.Any(obligation =>
             obligation.CriterionVersion == goal.AuthoritativeRefinedSpecVersion?.Version &&

@@ -37,7 +37,8 @@ internal sealed record RefinementResult(
         RefinedSpec spec,
         RefinementInvocationMetadata invocation,
         RefinementFailure failure) =>
-        new(RefinementOutcome.AutoRefined, spec, RefinementDisposition.Fallback, invocation, failure);
+        new(spec.HasOpenQuestions ? RefinementOutcome.AwaitingClarification : RefinementOutcome.AutoRefined,
+            spec, RefinementDisposition.Fallback, invocation, failure);
 }
 
 internal sealed record RefinerAttempt(
@@ -137,7 +138,23 @@ internal sealed partial class GoalRefinementService
             {
                 ClarificationAnswerHistory = clarificationAnswerHistory
             };
+            var fallbackOperatorOwned = fallback.OperatorOwnedAcceptanceCriteria.ToList();
+            var fallbackGateOwned = fallback.AcceptanceGateOwnedAcceptanceCriteria.ToList();
+            var fallbackIssues = FindDeclaredOwnershipIssues(
+                goal, AcceptanceCriteriaParser.ParseDeclared(goal.Objective), fallback.AcceptanceCriteria, [],
+                fallbackOperatorOwned, fallbackGateOwned);
+            var fallbackQuestions = new List<RefinedSpecOpenQuestion>();
+            var raisedOwnershipClarification = await AddDeclaredOwnershipQuestionsAsync(
+                goal, fallbackIssues, existingOpenQuestions, fallbackQuestions, cancellationToken);
+            fallback = fallback with
+            {
+                OperatorOwnedAcceptanceCriteria = fallbackOperatorOwned,
+                AcceptanceGateOwnedAcceptanceCriteria = fallbackGateOwned,
+                OpenQuestions = fallbackQuestions
+            };
             kernel.RecordGoalRefinement(goalId, fallback);
+            if (raisedOwnershipClarification)
+                kernel.RecordGoalClarificationRound(goalId);
             kernel.RecordGoalPolicyDecision(goalId, FallbackVerificationClassPolicy.BuildOwnershipReceipt(fallback));
             return RefinementResult.Fallback(
                 fallback,
@@ -261,34 +278,8 @@ internal sealed partial class GoalRefinementService
                 BlastRadius: AcceptanceCriterionFeasibility.FixedBlastRadius));
         }
 
-        foreach (var issue in ownershipIssues)
-        {
-            const string forkKind = "ownership-lifecycle";
-            var questionText = $"{issue.Diagnostic} Revise the versioned criterion or its declared_index to resolve this ownership issue. For an existing criterion, an explicit criterion-evidence-map repair may declare its evidence owner.";
-            var normalizedKey = BuildNormalizedQuestionKey(forkKind, questionText);
-            var topicKey = $"ownership-v{goal.AuthoritativeBrief.Version}-{normalizedKey[^16..]}";
-            var existingOpen = existingOpenQuestions.FirstOrDefault(question =>
-                string.Equals(ResolveQuestionTopicKey(question), topicKey, StringComparison.OrdinalIgnoreCase));
-            if (existingOpen is not null)
-            {
-                AddOpenQuestionIfMissing(openQuestions, existingOpen);
-                continue;
-            }
-
-            // A prior answer or a generic precedent cannot waive a still-present
-            // contradictory or unmatched declaration in the current specification.
-            var correlationKey = BuildCorrelationKey(goalId, topicKey);
-            await _raiseCollaborationItem(
-                CollaborationItemType.Clarification, goalId.Value,
-                BuildClarificationSubject(topicKey),
-                $"Question: {questionText}\nFork kind: {forkKind}\nTopic key: {topicKey}\nCriterion: {issue.Criterion}",
-                correlationKey, cancellationToken);
-            raisedClarificationRound = true;
-            openQuestions.Add(new RefinedSpecOpenQuestion(
-                correlationKey, questionText, forkKind, "Open",
-                TopicKey: topicKey, NormalizedQuestionKey: normalizedKey,
-                Criterion: issue.Criterion, BlastRadius: "high"));
-        }
+        raisedClarificationRound |= await AddDeclaredOwnershipQuestionsAsync(
+            goal, ownershipIssues, existingOpenQuestions, openQuestions, cancellationToken);
 
         foreach (var fork in output.Forks)
         {

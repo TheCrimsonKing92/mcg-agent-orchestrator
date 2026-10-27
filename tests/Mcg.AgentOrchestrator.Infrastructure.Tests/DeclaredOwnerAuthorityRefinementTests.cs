@@ -21,14 +21,20 @@ public sealed class DeclaredOwnerAuthorityRefinementTests
             $"Spec refiner owner overridden: declared criterion 1 declares acceptance-gate; refiner claimed {modelOwner}");
     }
 
-    [Xunit.Fact]
-    public async Task ConflictingExternalDeclarationsRequireClarification()
+    [Xunit.Theory]
+    [Xunit.InlineData("Operator owns execution; Acceptance owns execution")]
+    [Xunit.InlineData("OPERATOR-OWNED; ACCEPTANCE-GATE-OWNED")]
+    [Xunit.InlineData("Operator owns execution; ACCEPTANCE-GATE-OWNED")]
+    [Xunit.InlineData("OPERATOR-OWNED; Acceptance owns execution")]
+    [Xunit.InlineData("Operator owns execution. executed by the acceptance gate")]
+    public async Task ConflictingExternalDeclarationsRequireClarification(string declarations)
     {
-        const string criterion = "The runtime behavior is verified. Operator owns execution; Acceptance owns execution. TEST-VERIFIABLE.";
+        var criterion = $"The runtime behavior is verified. {declarations}. TEST-VERIFIABLE.";
         var goal = await Refine(criterion, "worker", expectClarification: true);
 
         Xunit.Assert.Empty(goal.RefinedSpec!.AcceptanceGateOwnedAcceptanceCriteria);
         Xunit.Assert.Empty(goal.RefinedSpec.OperatorOwnedAcceptanceCriteria);
+        Xunit.Assert.Empty(goal.CriterionEvidenceObligations);
         var question = Xunit.Assert.Single(goal.RefinedSpec.OpenQuestions);
         Xunit.Assert.Equal(criterion, question.Criterion);
         Xunit.Assert.Contains("both Operator and Acceptance", question.Question, StringComparison.Ordinal);

@@ -49,11 +49,21 @@ public static partial class AcceptanceCriterionOwnershipMarker
 
     public static bool HasConflictingDeclaredEvidenceOwners(string? criterion)
     {
-        var owners = ExtractTrailingSentences(criterion)
+        var sentences = ExtractTrailingSentences(criterion);
+        var owners = sentences
             .SelectMany(sentence => ExplicitOwnerSentenceRegex().Matches(sentence).Cast<Match>())
             .Select(match => match.Groups["owner"].Value)
             .ToArray();
-        return owners.Any(IsAcceptanceOwner) &&
-               owners.Any(owner => owner.Equals("operator", StringComparison.OrdinalIgnoreCase));
+        // Marker declarations may accompany explicit owner sentences. Require a
+        // clause boundary so descriptive mentions do not become ownership claims.
+        var clauses = sentences.SelectMany(sentence => sentence.Split(';'))
+            .Select(clause => clause.Trim())
+            .Select(clause => clause.StartsWith("the ", StringComparison.OrdinalIgnoreCase) ? clause[4..] : clause)
+            .ToArray();
+        var acceptanceDeclared = owners.Any(IsAcceptanceOwner) ||
+                                 clauses.Any(clause => AcceptanceGateOwnershipRegex().Match(clause) is { Success: true, Index: 0 });
+        var operatorDeclared = owners.Any(owner => owner.Equals("operator", StringComparison.OrdinalIgnoreCase)) ||
+                               clauses.Any(clause => OperatorOwnershipRegex().Match(clause) is { Success: true, Index: 0 });
+        return acceptanceDeclared && operatorDeclared;
     }
 }
