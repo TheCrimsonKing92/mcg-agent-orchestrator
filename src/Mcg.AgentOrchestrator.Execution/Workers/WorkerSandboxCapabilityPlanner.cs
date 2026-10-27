@@ -113,21 +113,21 @@ public static class WorkerSandboxCapabilityPlanner
             ProviderKind.OpenAICodexLuna or
             ProviderKind.OpenAICodexOssCli))
         {
-            detail = "Repository-scoped skill writes require a typed Codex or Claude CLI provider.";
+            detail = $"{WorkerProfileDispatcher.ProviderCapabilityUnsupportedErrorCode}: Repository-scoped skill writes require a typed Codex or Claude CLI provider.";
             return false;
         }
 
         var launcher = WorkerProfileDiagnostics.EvaluateRealLauncher(profile, provider, commandExists);
         if (!launcher.IsRealLauncher)
         {
-            detail = launcher.Detail;
+            detail = $"{WorkerProfileDispatcher.ProviderCapabilityUnsupportedErrorCode}: {launcher.Detail}";
             return false;
         }
 
         var patchCapability = WorkerProfileDiagnostics.EvaluatePatchCapability(profile, provider);
         if (!patchCapability.IsPatchCapable)
         {
-            detail = patchCapability.Detail;
+            detail = $"{WorkerProfileDispatcher.ProviderCapabilityUnsupportedErrorCode}: {patchCapability.Detail}";
             return false;
         }
 

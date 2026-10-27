@@ -125,14 +125,17 @@ public sealed class ProviderHoldAgentSubstitutionTests
         internal readonly Goal Source;
         private readonly bool _skillTarget;
 
-        internal Scenario(bool skillTarget = false)
+        internal Scenario(bool skillTarget = false, bool exhaustPrimary = true)
         {
             _skillTarget = skillTarget;
             Agents = [Primary, Alternate];
             Workspace = OrchestratorWorkspace.ForDirectory(Root);
             Source = NewGoal();
-            Exhaust(Source, Primary);
-            Assert.Equal(GoalStatus.Failed, Source.Status);
+            if (exhaustPrimary)
+            {
+                Exhaust(Source, Primary);
+                Assert.Equal(GoalStatus.Failed, Source.Status);
+            }
         }
 
         internal ProviderBudgetExhaustionHold Hold

@@ -74,6 +74,7 @@ public sealed record DispatchModelOverride(string? ProfileName, string? ModelNam
 public static partial class WorkerProfileDispatcher
 {
     internal const string ProviderBudgetExhaustionErrorCode = "provider-budget-exhausted";
+    internal const string ProviderCapabilityUnsupportedErrorCode = "provider-capability-unsupported";
     public const string OpenAiSubscriptionProfileName = "codex-cli";
     public const string OpenAiLunaSubscriptionProfileName = LunaLaneNames.LunaProfileName;
     public const string AnthropicSubscriptionProfileName = "claude-cli";
@@ -782,6 +783,11 @@ public static partial class WorkerProfileDispatcher
             return ReviewerMergeTreeUnavailableErrorCode;
         }
 
+        if (findings.Any(finding => finding.Contains(ProviderCapabilityUnsupportedErrorCode, StringComparison.Ordinal)))
+        {
+            return ProviderCapabilityUnsupportedErrorCode;
+        }
+
         return null;
     }
 
@@ -1367,8 +1373,9 @@ public static partial class WorkerProfileDispatcher
             return "worktree-status-unavailable";
         if (blockedFindings.Any(finding => finding.Contains("worker profile", StringComparison.OrdinalIgnoreCase)))
             return "worker-profile";
-        if (blockedFindings.Any(finding => finding.Contains("capability", StringComparison.OrdinalIgnoreCase) ||
-                finding.Contains(".git", StringComparison.OrdinalIgnoreCase)))
+        if (blockedFindings.Any(finding => !finding.Contains(ProviderCapabilityUnsupportedErrorCode, StringComparison.Ordinal) &&
+                (finding.Contains("capability", StringComparison.OrdinalIgnoreCase) ||
+                 finding.Contains(".git", StringComparison.OrdinalIgnoreCase))))
             return "start-gate";
         if (blockedFindings.Any(finding => finding.Contains("subscription retry", StringComparison.OrdinalIgnoreCase) ||
                 finding.Contains("cooling down", StringComparison.OrdinalIgnoreCase) ||
@@ -1376,6 +1383,8 @@ public static partial class WorkerProfileDispatcher
             return "subscription-preflight";
         if (blockedFindings.Any(finding => finding.Contains("missing required local skill", StringComparison.OrdinalIgnoreCase)))
             return "missing-skill";
+        if (blockedFindings.Any(finding => finding.Contains(ProviderCapabilityUnsupportedErrorCode, StringComparison.Ordinal)))
+            return ProviderCapabilityUnsupportedErrorCode;
 
         return "preflight-blocked";
     }
