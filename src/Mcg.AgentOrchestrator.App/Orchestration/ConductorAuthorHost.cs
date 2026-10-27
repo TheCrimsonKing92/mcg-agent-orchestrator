@@ -166,7 +166,7 @@ internal sealed partial class ConductorAuthorHost
         {
             if (onlyGoalId is not null && ready.Item.GoalId != onlyGoalId) continue;
             var goal = kernel.Goals.FirstOrDefault(candidate => candidate.Id.Value == ready.Item.GoalId);
-            if (goal is not null && ConductorOwnerQuestionHolds.ExcludesFromWalk(goal.CurrentHold?.State)) continue;
+            if (goal is not null && ConductorOwnerQuestionHolds.ExcludesFromWalk(goal.CurrentHold?.State) && (ConductorAuthorResultParser.Parse(ready.Output)?.Kind != "answer" || RequiresOwner(kernel, ready.Item, ready.Output))) continue;
             if (_rounds.Values.Any(running => running.Item.GoalId == ready.Item.GoalId)) continue;
             ProcessCompleted(kernel, ready.Item, ready.Output, changed);
         }
@@ -192,7 +192,7 @@ internal sealed partial class ConductorAuthorHost
                 Record(item, "no-action", "item-superseded");
                 return;
             }
-            if (ConductorOwnerQuestionHolds.ExcludesFromWalk(goal.CurrentHold?.State))
+            if (ConductorOwnerQuestionHolds.ExcludesFromWalk(goal.CurrentHold?.State) && (ConductorAuthorResultParser.Parse(output)?.Kind != "answer" || RequiresOwner(kernel, item, output)))
                 throw new InvalidOperationException($"Cannot process Author item {identity} while an owner question holds its goal.");
             var result = ConductorAuthorResultParser.Parse(output);
             if (result is null)

@@ -182,6 +182,9 @@ internal sealed partial class OperatorIntentCoordinator
                     return false;
                 }
 
+                if (stored is not null && OwnerQuestionAnswerHoldPreservation.ShouldPreserve(goal.CurrentHold, stored))
+                    preserveGoalHold = true;
+
                 if (stored?.Verb != OperatorIntentVerbs.TaskGraphRepair)
                     return false;
                 if (!goal.Timeline.Any(item => item.OperatorIntentApplied?.IntentId == completion.IntentId))
@@ -199,6 +202,7 @@ internal sealed partial class OperatorIntentCoordinator
         }
 
         var mutated = false;
+        var preserveOwnerQuestionHold = false;
         var rejectedAdjudication = false;
         var lines = new List<string>();
         var appliedVerbs = new List<string>();
@@ -296,6 +300,7 @@ internal sealed partial class OperatorIntentCoordinator
                 AddPendingCompletion(goal.Id.Value, intent.Id, outcome);
                 lines.Add($"OPERATOR_INTENT id={intent.Id} verb={intent.Verb} goal={goal.Id.Value[..8]} result={(retryClarification == RetryClarificationHandling.Resumed ? "retry-resumed-pending-commit" : "applied-pending-commit")}");
                 mutated = true;
+                preserveOwnerQuestionHold = OwnerQuestionAnswerHoldPreservation.ShouldPreserve(goal.CurrentHold, intent);
                 appliedVerbs.Add(intent.Verb);
                 if (!OperatorIntentBatchPolicy.CanShareTick(intent.Verb))
                 {
@@ -305,6 +310,7 @@ internal sealed partial class OperatorIntentCoordinator
             catch (AnswerApplicationRetryException ex) when (intent.Verb == OperatorIntentVerbs.Answer)
             {
                 mutated = true;
+                preserveOwnerQuestionHold = OwnerQuestionAnswerHoldPreservation.ShouldPreserve(goal.CurrentHold, intent);
                 lines.Add($"OPERATOR_INTENT id={intent.Id} verb=answer goal={goal.Id.Value[..8]} result=retryable reason={Sanitize(ex.Message)}");
                 break;
             }
@@ -329,7 +335,7 @@ internal sealed partial class OperatorIntentCoordinator
         return new OperatorIntentExecutionResult(mutated, lines)
         {
             RejectedAdjudication = rejectedAdjudication,
-            PreserveGoalHold = appliedVerbs.Contains(OperatorIntentVerbs.TaskGraphRepair)
+            PreserveGoalHold = appliedVerbs.Contains(OperatorIntentVerbs.TaskGraphRepair) || preserveOwnerQuestionHold
         };
     }
 
