@@ -464,6 +464,43 @@ public sealed class CrosswalkClientTests : IDisposable
         Assert.Empty(outcome.Result);
     }
 
+    [Theory]
+    [InlineData(0, false, false, null)]
+    [InlineData(7, false, false, CrosswalkDiagnosticCategory.NonzeroExit)]
+    [InlineData(2, false, false, CrosswalkDiagnosticCategory.UnsupportedAdapter)]
+    [InlineData(0, true, false, CrosswalkDiagnosticCategory.Timeout)]
+    [InlineData(0, false, true, CrosswalkDiagnosticCategory.CaptureLimited)]
+    public async Task RunAsync_RetainsResultsAndInvocationFacts(int exit, bool timedOut, bool limited,
+        CrosswalkDiagnosticCategory? category)
+    {
+        using var owner = new CancellationTokenSource();
+        var client = new CrosswalkClient(_ => CreateExecutable(), (_, token) =>
+        {
+            Assert.Equal(owner.Token, token);
+            return Task.FromResult(new WorkerProcessRunResult(exit, RunJson, "stderr receipt", timedOut, limited));
+        });
+        var outcome = await client.RunAsync(_sandbox.FullName, ["first"], TimeSpan.FromSeconds(30), owner.Token);
+        Assert.Equal(2, outcome.Result.Count);
+        Assert.Equal(exit, outcome.ExitCode);
+        Assert.Equal("stderr receipt", outcome.StandardError);
+        if (category is { } expected) Assert.Equal(expected, outcome.Diagnostics[0].Category);
+        else Assert.Empty(outcome.Diagnostics);
+    }
+
+    [Theory]
+    [InlineData("bad json", CrosswalkDiagnosticCategory.InvalidJson)]
+    [InlineData("{}", CrosswalkDiagnosticCategory.MalformedResults)]
+    public async Task RunAsync_SeparatesParsingFromPrimaryInvocationFailure(string json, CrosswalkDiagnosticCategory secondary)
+    {
+        var client = new CrosswalkClient(_ => CreateExecutable(), (_, _) =>
+            Task.FromResult(new WorkerProcessRunResult(2, json, "unsupported adapter")));
+        var outcome = await client.RunAsync(_sandbox.FullName, [], TimeSpan.FromSeconds(30), CancellationToken.None);
+        Assert.Equal("exit-2", outcome.Status);
+        Assert.Equal(CrosswalkDiagnosticCategory.UnsupportedAdapter, outcome.Diagnostics[0].Category);
+        Assert.Equal(secondary, outcome.Diagnostics[1].Category);
+        Assert.Equal("unsupported adapter", outcome.StandardError);
+    }
+
     private string CreateExecutable()
     {
         var path = Path.Combine(_sandbox.FullName, "crosswalk's tool.exe");
