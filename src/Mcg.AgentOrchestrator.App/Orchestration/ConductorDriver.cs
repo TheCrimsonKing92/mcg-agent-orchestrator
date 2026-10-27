@@ -971,10 +971,10 @@ internal sealed partial class ConductorDriver
         _getFindingEvidenceEngineSettings = goal => AcceptanceGateEngineSettings.Load(
             GoalWorktrees.TryResolve(dir, goal.Id) ?? dir, workspace.ProjectHomeDirectoryOrNull);
         _resolveFindingEvidenceSiblingClasses = (goal, project, requestedClass) =>
-            FocusedEvidenceSiblingClassResolver.ResolveSiblingTestClassNames(
+            FocusedEvidenceSiblingExpansionBound.Shared.Resolve(
                 GoalWorktrees.TryResolve(dir, goal.Id) ?? dir,
-                project,
-                requestedClass);
+                project, requestedClass,
+                worktree => GoalAcceptanceEvidenceBundleBuilder.GetChangedFiles(worktree, workspace.IntegrationBranch)).KeptSiblings;
         RecoverCohortLandingEffects(kernel, workspace, eventWriter, _cohortAcceptanceStore);
         RecoverMergeTrainLandingEffects(kernel, workspace, eventWriter, _mergeTrainAcceptanceStore);
     }
