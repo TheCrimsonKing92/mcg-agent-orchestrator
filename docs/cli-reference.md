@@ -91,6 +91,7 @@ next [goal-id] --full
 ```text
 goal <objective>
 goal --brief-file <path>
+goal --brief-file <path> --depends-on <goal-prefix>
 goal <objective> --simple
 goal --brief-file <path> --simple
 ```
@@ -102,6 +103,8 @@ Pass `--simple` to create a single-Developer goal (equivalent to `simple-goal`).
 Before creation, `goal` with an inline objective, `--brief-file` or `--text-file` prints early brief diagnostics as `BRIEF-LINT <severity> <kind>: <message> remedy: <remedy>`, one line per finding. `revise <goal-id> --brief-file <path>` and `revise <goal-id> --text-file <path>` print the same diagnostics before recording the revision. Clean briefs add no output. The severity is `blocks-dispatch` for Git-directory references or unscoped skill definition filenames, `blocks-cli-start` for readiness high-risk words, or `advisory` for inline heading splits and missing test-removal declarations. These lines never block creation or revision and do not change exit codes; existing dispatch and start checks still apply. Diagnostics inspect the brief only, so later task text can introduce additional dispatch risks.
 
 ### Goal dependencies
+
+The repeatable `--depends-on <goal-prefix>` flag records each dependency in the same commit that creates the goal, holds the goal until the dependency lands, and is refused with `--simple`, `--run`, `--from-backlog` and `--backlog-item`.
 
 `goal-depends <goal> --on <dependency>` records a hard dependency used by the conductor's dispatch-start gate. It does not interrupt workers already in flight. Use `goal-depends <goal> --remove <dependency>` to remove one link, or `goal-depends <goal> --clear` to remove all links. Supply exactly one of these flags; self-dependencies and cycles are rejected, as are removal of an absent link and clearing an empty dependency set.
 

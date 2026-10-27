@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -70,6 +71,19 @@ internal static class GoalIntakeRequestMapper
             assignedAgents
         };
         var canonical = JsonSerializer.Serialize(payload);
+        var dependsOn = args
+            .Select((value, index) => (value, index))
+            .Where(entry => entry.value.Equals("--depends-on", StringComparison.OrdinalIgnoreCase) &&
+                entry.index + 1 < args.Count && !args[entry.index + 1].StartsWith("--", StringComparison.Ordinal))
+            .Select(entry => args[entry.index + 1].ToLowerInvariant())
+            .OrderBy(value => value, StringComparer.Ordinal)
+            .ToArray();
+        if (dependsOn.Length > 0)
+        {
+            var dependencyPayload = JsonNode.Parse(canonical)!.AsObject();
+            dependencyPayload["dependsOn"] = JsonSerializer.SerializeToNode(dependsOn);
+            canonical = dependencyPayload.ToJsonString();
+        }
         var fingerprint = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonical))).ToLowerInvariant();
         return new GoalIntakeRequestDescriptor(requestKey, fingerprint, mode, objective);
     }
@@ -162,7 +176,7 @@ internal static class GoalIntakeRequestMapper
         "--ideation" or "--researcher" or "--planner" or "--developer" or "--tester" or "--reviewer";
 
     private static bool IsValueFlag(string value) => value.ToLowerInvariant() is
-        "--request-key" or "--brief-file" or "--text-file" or "--pipeline" or
+        "--request-key" or "--brief-file" or "--text-file" or "--pipeline" or "--depends-on" or
         "--backlog-item" or "--backlog-coverage" or "--ideation" or "--researcher" or
         "--planner" or "--developer" or "--tester" or "--reviewer";
 }
