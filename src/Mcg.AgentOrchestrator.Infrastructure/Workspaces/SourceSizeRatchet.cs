@@ -67,7 +67,7 @@ internal static class SourceSizeRatchet
             // Goal 56ff780e adds three lines at the existing shard-progress seam to carry the result,
             // outcome and failed-test count to the owner gate view; measured 4976 lines, no extra headroom.
             // Goal bd3c0539 adds one settled-check progress call.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs", 4965),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs", 4768),
             // Goal c0cfa8ae test telemetry collaborator measured at 423 lines.
             // Goal 402c1005 moved TRX completion inspection and shard decisions into AcceptanceShardCompletionAdjudicator.
             // Goal ad3fafc0 extracted run ownership publication and stale-receipt clearing into AcceptanceTestRunPreparation.
@@ -558,7 +558,7 @@ internal static class SourceSizeRatchet
             // Goal 6cf5a8ce routes the backlog-premise-check/close verbs to their separately owned command type.
             // Goal 568eb0fe reports the retained lifecycle outcome after committed unpark instead
             // of promising Active; this belongs with the existing command outcome rendering.
-            new SourceClassCeiling("CliCommandHandlers", 11769, 30),
+            new SourceClassCeiling("CliCommandHandlers", 11713, 30),
             // Goal ae77554f extracts bounded remote offer history parsing into RemoteLaneOfferHistoryReader.
             // Measured 9053 total lines across the existing 32 partial files; no extra headroom.
             // Goal 03580ad1 extracts source-mutation edits to AcceptanceSourceMutation; measured 8938 lines in 31 partials.
@@ -575,7 +575,7 @@ internal static class SourceSizeRatchet
             // Goal bd3c0539 adds three lane progress call lines across existing partials.
             // Measured 8683 lines in the same 28 partials after integrating main at 6dff3b77a.
             // Goal 3651d0e4: the offer-context call site binds the remote-lane occupancy owner.
-            new SourceClassCeiling("GoalAcceptanceVerifier", 8647, 28),
+            new SourceClassCeiling("GoalAcceptanceVerifier", 8432, 27),
             // Goal d647b5f3 extracts premise-invalid clarification construction to PremiseInvalidClarification.
             // Goal 439c80ae extracts Reviewer evidence brief projection to ReviewerEvidenceBriefSection;
             // measured 9319 total lines across the existing 27 partial files, with no extra headroom.
