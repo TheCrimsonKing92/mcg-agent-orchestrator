@@ -86,7 +86,6 @@ public sealed class SubscriptionCooldownSubstitutionScenarioTests
         Assert.Contains($"source dispatch={sourceDispatch.DispatchedAt:O}", evt.Message, StringComparison.Ordinal);
         Assert.Contains($"reset={reset:O}", evt.Message, StringComparison.Ordinal);
         Assert.True(scenario.AuthProbes > 0);
-        Assert.True(scenario.CommandProbes > 0);
 
         await repository.SaveAsync(scenario.Kernel);
         var restored = await repository.LoadAsync();

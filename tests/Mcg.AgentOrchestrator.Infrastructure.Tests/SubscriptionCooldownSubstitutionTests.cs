@@ -22,7 +22,7 @@ public sealed class SubscriptionCooldownSubstitutionTests
         Assert.Equal(before.Timeline, scenario.Kernel.ExportGoalSnapshot(goal.Id).Timeline);
         Assert.Equal(scenario.Primary.Id, task.AssignedAgentId);
         Assert.True(scenario.AuthProbes > 0);
-        Assert.True(scenario.CommandProbes > 0);
+        Assert.Contains(scenario.Preflights, check => check.AgentId == scenario.Alternate.Id && check.Allowed);
         Assert.Null(scenario.Preflight(goal, task, scenario.Kernel.Goals).ErrorCode);
     }
 
@@ -88,7 +88,7 @@ public sealed class SubscriptionCooldownSubstitutionTests
         using var scenario = new Scenario();
         var goal = scenario.NewGoal();
         scenario.Limit(goal, control == "missing-reset" ? "ERROR: You've hit your usage limit."
-            : control == "connectivity" ? "Unable to connect to API: network connection failed."
+            : control == "connectivity" ? "ERROR: Unable to connect to API: network connection failed."
             : Scenario.LimitText, control == "unrelated-provider" ? "OpenAI" : null);
         if (control is "expired" or "at-reset")
             scenario.Clock.UtcNow = goal.Tasks.Single().SubscriptionRetryAfter!.Value.AddSeconds(control == "expired" ? 1 : 0);
@@ -158,6 +158,9 @@ public sealed class SubscriptionCooldownSubstitutionTests
         Assert.Equal(scenario.Alternate.Id, task.AssignedAgentId);
         scenario.Clock.UtcNow = scenario.Clock.UtcNow.AddMinutes(1);
         scenario.Limit(goal, provider: "OpenAI");
+        Assert.True(DispatchFailureClassifier.RequiresSubscriptionLimitReview(task));
+        scenario.Kernel.AcknowledgeSubscriptionLimitReview(goal.Id, task.Id,
+            "Acknowledge repeated limits to isolate the automatic substitution bound.");
         var third = Scenario.Agent("third", "Ollama", "codex-oss-cli", "qwen3-coder");
         scenario.Agents = [..scenario.Agents, third];
         var scratch = AgentOrchestratorKernel.FromSnapshot(scenario.Kernel.ExportSnapshot(), scenario.Clock);
@@ -184,7 +187,7 @@ public sealed class SubscriptionCooldownSubstitutionTests
             WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget);
         internal readonly OrchestratorWorkspace Workspace;
         internal int AuthProbes;
-        internal int CommandProbes;
+        internal readonly List<(AgentId? AgentId, bool Allowed)> Preflights = [];
 
         internal Scenario()
         {
@@ -227,17 +230,17 @@ public sealed class SubscriptionCooldownSubstitutionTests
             return DispatcherProviderProbeFakes.SignedInClaudeCli();
         }
 
-        internal bool CommandExists(string _)
-        {
-            CommandProbes++;
-            return true;
-        }
+        internal bool CommandExists(string _) => true;
 
-        internal WorkerSubscriptionPreflightResult Preflight(Goal goal, TaskSpec task, IEnumerable<Goal> holds) =>
-            WorkerProfileDispatcher.PreflightSubscriptionTask(goal, task, Agents, Profiles,
+        internal WorkerSubscriptionPreflightResult Preflight(Goal goal, TaskSpec task, IEnumerable<Goal> holds)
+        {
+            var result = WorkerProfileDispatcher.PreflightSubscriptionTask(goal, task, Agents, Profiles,
                 Workspace.ResolveExecutionDirectory(goal.Id), Clock.UtcNow,
                 allowGitReference: true, sandboxOptions: Sandbox, commandExists: CommandExists,
                 providerHoldScope: holds, cascadeTesterCheapFirst: false, claudeAuthProbe: ProbeAuth);
+            Preflights.Add((task.AssignedAgentId, result.Allowed));
+            return result;
+        }
 
         internal ProviderHoldAgentSubstitution Resolver() => new(Kernel, Agents, Preflight, () => Clock.UtcNow);
         internal ProviderHoldAgentSubstitution.Result Resolve(Goal goal) => Resolver().Resolve(goal, goal.Tasks.Single());
