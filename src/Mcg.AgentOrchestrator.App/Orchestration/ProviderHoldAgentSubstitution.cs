@@ -89,7 +89,7 @@ internal sealed class ProviderHoldAgentSubstitution(
             AgentExecutionPolicies.AllowsSubscription(candidate.ExecutionPolicy) &&
             !candidate.Model.ProviderName.Equals(assigned.Model.ProviderName, StringComparison.OrdinalIgnoreCase));
 
-    private static bool TryGetSubscriptionCooldown(Goal goal, TaskSpec task, AgentDefinition assigned,
+    internal static bool TryGetSubscriptionCooldown(Goal goal, TaskSpec task, AgentDefinition assigned,
         DateTimeOffset now, out ProviderSubscriptionCooldown cooldown)
     {
         if (DispatchFailureClassifier.TryGetTaskSubscriptionCooldown(task, now, out cooldown) &&

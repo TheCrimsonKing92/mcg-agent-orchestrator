@@ -207,9 +207,9 @@ public sealed class SubscriptionCooldownSubstitutionTests
 
         internal string Receipt(Goal goal) => Path.Combine(Root, goal.Id.Value + ".stderr");
 
-        internal void Limit(Goal goal, string text = LimitText, string? provider = null)
+        internal void Limit(Goal goal, string text = LimitText, string? provider = null, TaskSpec? task = null)
         {
-            var task = goal.Tasks.Single();
+            task ??= goal.Tasks.Single();
             var agent = Agents.First(agent => agent.Id == task.AssignedAgentId);
             var dispatch = new TaskDispatchRecord(agent.Subscription!.WorkerProfileName, "fixture worker",
                 Workspace.ResolveExecutionDirectory(goal.Id), Clock.UtcNow,

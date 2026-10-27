@@ -53,9 +53,11 @@ internal sealed partial class GoalDispatchOperations
             .Concat(heldTaskIds.Select(id => new TaskId(id))).ToHashSet();
         var offlineAssignments = OfflineAssignedAgentRedelegation.Apply(kernel, goal, agents,
             goal.Tasks.Where(DispatchReadinessRules.IsSubscriptionStartCandidate)
-                // Deferred cooldown tasks are admitted only for guarded substitution below.
-                // Offline repair must not release their deferral or bypass its shared bound.
+                // Local and provider-inherited cooldowns belong to guarded substitution below.
+                // Offline repair must not bypass preflight, provenance or the shared bound.
                 .Where(task => !WorkerProfileDispatcher.IsTaskRetryDeferred(task, utcNow(), out _))
+                .Where(task => agents.FirstOrDefault(agent => agent.Id == task.AssignedAgentId) is not { } assigned ||
+                    !ProviderHoldAgentSubstitution.TryGetSubscriptionCooldown(goal, task, assigned, utcNow(), out _))
                 .Where(task => !excludedTaskIds.Contains(task.Id)).Select(task => task.Id));
         goal = kernel.GetGoal(goal.Id);
         excludedTaskIds = excludedTaskIds.Concat(offlineAssignments.ExcludedTaskIds).ToHashSet();
