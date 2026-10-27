@@ -605,7 +605,8 @@ internal static class SourceSizeRatchet
             // transaction and recorded typed outcome; measured 9323 lines in 28 partials, no headroom.
             // Raised by 5 lines for goal e4c3d077: expose locked role-report evidence closure at landing.
             // Goal 60609951: persisted capability substitution beside the existing budget substitution (+16 lines).
-            new SourceClassCeiling("AgentOrchestratorKernel", 9344, 28),
+            // Goal 2e546ce9: criteria-changing revision invokes evidence supersession (+3 measured lines, no headroom).
+            new SourceClassCeiling("AgentOrchestratorKernel", 9347, 28),
             // Goal d6033045 extracted the pre-admission receipt pass to PassedMergeTrainReceiptAdmission; goal 1d0f2317
             // adds one admission predicate to exclude stream-complete children before slot reservation. Measured 9255.
             // Goal 679eee57 added a one-line tick call to the separately owned ConductorExperimentWatch (+1); goal 80de5cb2 extracted

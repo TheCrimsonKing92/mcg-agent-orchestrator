@@ -19,7 +19,10 @@ public sealed record GoalBriefRevisionResult(
     IReadOnlyList<TaskId> InFlightTaskIds,
     IReadOnlyList<TaskId> CompletedTaskIds,
     int? RefinedCriteriaCount,
-    bool RefinedCriteriaReDerived);
+    bool RefinedCriteriaReDerived)
+{
+    public IReadOnlyList<HumanInputRequestId> ClosedPlannerEvidenceRequestIds { get; init; } = [];
+}
 
 public sealed record GoalBriefAnswerSupersession(
     HumanInputRequestId RequestId,

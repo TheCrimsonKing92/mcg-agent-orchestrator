@@ -4,7 +4,7 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal static partial class LandingExecutor
 {
-    private static (ProspectiveEvidenceGateResolution Resolution, string? HoldDescription, IReadOnlyList<string> ObligationLines) EvaluatePendingHumanInput(
+    internal static (ProspectiveEvidenceGateResolution Resolution, string? HoldDescription, IReadOnlyList<string> ObligationLines) EvaluatePendingHumanInput(
         AgentOrchestratorKernel kernel, Goal goal, OrchestratorWorkspace workspace, string? candidateRevision)
     {
         var orchestratorDirectory = workspace.OrchestratorDirectory;

@@ -346,7 +346,8 @@ public sealed record HumanInputRequestSnapshot(
     PlannerEvidenceStoreReference? StoreReference = null,
     IReadOnlyList<string>? TestNames = null,
     PlannerEvidenceIdentity? PlannerIdentity = null,
-    PlannerEvidencePayload? PlannerEvidence = null);
+    PlannerEvidencePayload? PlannerEvidence = null,
+    HumanInputBriefSupersession? BriefSupersession = null);
 
 public static class VerificationTextBounds
 {
