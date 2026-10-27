@@ -112,9 +112,9 @@ internal static class BriefPlannedTestLaneReadiness
             .Any(quote => quote.Index < index && index < quote.Index + quote.Length &&
                 !Regex.IsMatch(quote.Value[1..^1], "^" + TestSourcePath + "$", RegexOptions.CultureInvariant))) return false;
         var prefix = line[..index];
-        // Evidence/example labels retain their meaning across clauses on the same line.
+        // Evidence/example labels and command instructions retain their meaning across clauses.
         if (Regex.IsMatch(prefix,
-                @"^\s*(?:for\s+)?(?:example|illustrative|historical|history|previous|regex|command|evidence)\b", Options))
+                @"^\s*(?:for\s+)?(?:example|illustrative|historical|history|previous|regex|command|evidence|run|execute|invoke)\b", Options))
             return false;
         // Only the introducing clause declares new work. A preceding purpose clause may describe
         // existing behavior, while arbitrary prose or executable arguments do not declare anything.

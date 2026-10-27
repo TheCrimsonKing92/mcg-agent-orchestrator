@@ -251,6 +251,11 @@ public sealed class BriefPlannedTestLaneReadinessTests
     [InlineData("quoted-action")]
     [InlineData("unquoted")]
     [InlineData("example-action")]
+    [InlineData("comma-class")]
+    [InlineData("comma-path")]
+    [InlineData("semicolon-action")]
+    [InlineData("execute-comma")]
+    [InlineData("invoke-comma")]
     public void CommandContents_DoNotBlockDeveloperPreparation(string kind)
     {
         var scope = kind switch
@@ -260,6 +265,11 @@ public sealed class BriefPlannedTestLaneReadinessTests
             "quoted-action" => "Run echo \"Add new test class BuildWidgetTests\".",
             "unquoted" => "Run echo new test class BuildWidgetTests.",
             "example-action" => "Example: cover existing widgets, add new test class BuildWidgetTests.",
+            "comma-class" => "Run echo ignored, new test class BuildWidgetTests.",
+            "comma-path" => "Run echo ignored, new tests/Widget.Tests/BuildWidgetTests.cs.",
+            "semicolon-action" => "Run echo ignored; add new test class BuildWidgetTests.",
+            "execute-comma" => "Execute echo ignored, new test class BuildWidgetTests.",
+            "invoke-comma" => "Invoke echo ignored, new test class BuildWidgetTests.",
             _ => throw new ArgumentException(kind)
         };
         using var fixture = new Fixture(scope);
@@ -315,12 +325,20 @@ public sealed class BriefPlannedTestLaneReadinessTests
     }
 
     [Theory]
-    [InlineData("Plan to update the manifest.")]
-    [InlineData("Plan lane 'Other lane': change filter in acceptance-manifest.json to FullyQualifiedName~BuildWidgetTests and update the pinned membership test.")]
-    [InlineData("Plan lane 'Build lane': change filter in acceptance-manifest.json to FullyQualifiedName~UnrelatedTests and update the pinned membership test.")]
-    [InlineData("Plan lane 'Build lane': change filter in acceptance-manifest.json to FullyQualifiedName~BuildWidgetTests.")]
-    public void IncompletePlacementPlan_RemainsBlocking(string plan)
+    [InlineData("vague-manifest")]
+    [InlineData("wrong-lane")]
+    [InlineData("wrong-class")]
+    [InlineData("missing-membership-test")]
+    public void IncompletePlacementPlan_RemainsBlocking(string kind)
     {
+        var plan = kind switch
+        {
+            "vague-manifest" => "Plan to update the manifest.",
+            "wrong-lane" => "Plan lane 'Other lane': change filter in acceptance-manifest.json to FullyQualifiedName~BuildWidgetTests and update the pinned membership test.",
+            "wrong-class" => "Plan lane 'Build lane': change filter in acceptance-manifest.json to FullyQualifiedName~UnrelatedTests and update the pinned membership test.",
+            "missing-membership-test" => "Plan lane 'Build lane': change filter in acceptance-manifest.json to FullyQualifiedName~BuildWidgetTests.",
+            _ => throw new ArgumentException(kind)
+        };
         using var fixture = new Fixture("new test class " + Name + ". " + plan);
         Assert.False(fixture.Readiness().AllowsStart(true));
         Assert.Single(fixture.Readiness().Findings, item => item.Kind == LaneSubstringCollisionCheck.Rule);
