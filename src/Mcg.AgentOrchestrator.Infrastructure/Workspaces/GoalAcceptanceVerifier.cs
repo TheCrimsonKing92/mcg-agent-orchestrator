@@ -302,7 +302,10 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         bool CaptureLimited = false,
         long? CaptureLimitBytes = null,
         TimeSpan? LaneStallSilence = null,
-        TimeSpan? LaneStallLimit = null, LaneSchedulingSummary? LaneScheduling = null);
+        TimeSpan? LaneStallLimit = null, LaneSchedulingSummary? LaneScheduling = null)
+    {
+        internal string? StandardOutput { get; init; }
+    }
 
     internal static readonly Encoding StrictUtf8 = new UTF8Encoding(false, true);
     internal static readonly Encoding StrictUtf16LittleEndian = new UnicodeEncoding(false, true, true);
@@ -336,7 +339,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             {
                 _ = BuildDotnetTestArguments(check);
             }
-            else if (type is not ("no-op" or "grep-absent" or "grep-present" or "file-exists" or "command-exit"))
+            else if (type is not ("crosswalk-test" or "no-op" or "grep-absent" or "grep-present" or "file-exists" or "command-exit"))
             {
                 throw new InvalidOperationException(
                     $"Acceptance manifest check '{check.Name}' has unsupported type '{check.Type}'.");
@@ -1658,7 +1661,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
     private static IReadOnlyList<string> CollectTestResultPaths(IEnumerable<AcceptanceCheckResult> checks) =>
         checks
-            .SelectMany(check => check.TestResultPaths ?? [])
+            .SelectMany(check => check.CrosswalkDiagnostics is not null
+                ? check.NormalizedTestResultPaths ?? [] : check.TestResultPaths ?? [])
             .Where(path => !string.IsNullOrWhiteSpace(path))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
@@ -2355,6 +2359,15 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         using var targetScope = AcceptanceGatePhaseAccountant.BeginCurrentTarget(check.Name);
         try
         {
+        if (check.Type.Equals("crosswalk-test", StringComparison.OrdinalIgnoreCase))
+            return (await new CrosswalkAcceptanceCheck(
+                _executionContext ?? throw new InvalidOperationException("Crosswalk requires an acceptance execution owner."),
+                _invocationContext ?? throw new InvalidOperationException("Crosswalk requires an owned invocation."),
+                _timeProvider, _requiresTestTelemetryReceipt,
+                arguments => CreateGateHeartbeatContext(check, arguments, worktreePath, goalId, stableSlotIndex, null),
+                RunWithGateHeartbeatAsync).RunAsync(check, worktreePath,
+                    EngineSettings.ResolveCheckTimeout(check.TimeoutMinutes), cancellationToken).ConfigureAwait(false), false);
+
         if (check.Type.Equals("no-op", StringComparison.OrdinalIgnoreCase))
         {
             return (new AcceptanceCheckResult(
@@ -2373,7 +2386,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             return (await RunGrepCheckAsync(check, worktreePath, expectPresent: true, cancellationToken).ConfigureAwait(false), false);
 
         if (check.Type.Equals("file-exists", StringComparison.OrdinalIgnoreCase))
-            return (RunFileExistsCheck(check, worktreePath), false);
+            return (AcceptanceFileExistsCheck.Run(check, worktreePath), false);
 
         if (check.Type.Equals("command-exit", StringComparison.OrdinalIgnoreCase))
             return await RunCommandCheckAsync(check, worktreePath, goalId, stableSlotIndex, stableSlotLease, dotnetTestBuildPhase, cancellationToken).ConfigureAwait(false);
@@ -2431,29 +2444,6 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             passed ? 0 : 1,
             passed ? null : $"Advisory check failed: {summary} for pattern '{check.Pattern}'",
             ResultSummary: summary,
-            Advisory: check.Advisory);
-    }
-
-    private AcceptanceCheckResult RunFileExistsCheck(
-        AcceptanceManifestCheck check,
-        string worktreePath)
-    {
-        if (string.IsNullOrWhiteSpace(check.FilePath))
-        {
-            return new AcceptanceCheckResult(
-                check.Name, false, 1,
-                "file-exists check has no path configured",
-                Advisory: check.Advisory);
-        }
-
-        var fullPath = System.IO.Path.Combine(worktreePath, check.FilePath);
-        var exists = File.Exists(fullPath);
-        return new AcceptanceCheckResult(
-            check.Name,
-            exists,
-            exists ? 0 : 1,
-            exists ? null : $"Advisory check failed: file not found: {check.FilePath}",
-            ResultSummary: exists ? "file exists" : "file not found",
             Advisory: check.Advisory);
     }
 
@@ -4047,7 +4037,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         string workingDirectory,
         TimeSpan timeout,
         GateHeartbeatContext heartbeatContext,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        CancellationToken timeoutSignal = default)
     {
         return _requiresTestTelemetryReceipt
             ? await RunProcessAsync(
@@ -4056,6 +4047,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 timeout,
                 forceUtf8ConsoleOutput: false,
                 cancellationToken,
+                timeoutSignal: timeoutSignal,
                 heartbeatContext: heartbeatContext,
                 progressSink: EmitGateProgress,
                 engineSettings: EngineSettings,
