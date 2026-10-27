@@ -225,33 +225,17 @@ internal static bool RunAcceptanceWorkspaceMergeCore(CliExecutionContext context
             DotnetBuildEnvironmentLease? stableSlotLease = null;
             try
             {
-                var onSlotWait = (DotnetBuildStableSlotWait wait) =>
-                    Console.WriteLine($"waiting for build-{wait.SlotIndex} permit held by pid {wait.OwnerProcessId?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown"}");
-                stableSlotLease = context.StableSlotSelector is { } stableSlotSelector
-                    ? stableSlotSelector(context.StableSlotAcquisitionTimeout, onSlotWait)
-                    : SelectGoalBuildPermit(
-                        goal.Id,
-                        context.StableSlotAcquisitionTimeout,
-                        onSlotWait,
-                        context.CleanupHooks.BuildStorageRoot,
-                        context.Workspace.ExecutionDirectory);
-                if (context.CleanupHooks.BuildStorageRoot is { } configuredRoot &&
-                    (!configuredRoot.ContainsPath(stableSlotLease.Environment.RootPath) ||
-                     !configuredRoot.ContainsPath(stableSlotLease.Environment.ArtifactsPath) ||
-                     !configuredRoot.ContainsPath(stableSlotLease.Environment.ExecutionLockPath)))
-                {
-                    stableSlotLease.Dispose();
-                    stableSlotLease = null;
-                    throw new InvalidOperationException("Acceptance build lease is outside the configured build storage namespace.");
-                }
-                stableSlotIndex = stableSlotLease.Environment.BuildPermitIndex ??
-                    ParseStableSlotIndex(stableSlotLease.Environment.SlotOwnerToken)
-                    ?? throw new IOException($"Build permit did not identify its pool index: {stableSlotLease.Environment.SlotOwnerToken}");
+                (stableSlotLease, stableSlotIndex) = CliAcceptanceBuildPermit.Acquire(
+                    goal.Id,
+                    context.StableSlotSelector,
+                    context.StableSlotAcquisitionTimeout,
+                    context.CleanupHooks.BuildStorageRoot,
+                    context.Workspace.ExecutionDirectory);
             }
             catch (DotnetBuildSlotsBusyException ex)
             {
                 stableSlotLease?.Dispose();
-                Console.WriteLine($"SLOTS_BUSY goal={goal.Id.Value[..8]} wantedBy={ex.SlotsBusy.WantedBy} busySlots={FormatBusySlots(ex.SlotsBusy.BusySlots)}");
+                Console.WriteLine($"SLOTS_BUSY goal={goal.Id.Value[..8]} wantedBy={ex.SlotsBusy.WantedBy} busySlots={CliAcceptanceBuildPermit.FormatBusySlots(ex.SlotsBusy.BusySlots)}");
                 Console.WriteLine("Acceptance verification: stable dotnet build slots busy; goal remains ready and will retry on a later conduct tick.");
                 GoalOperationJournal.AcceptanceBlocked(
                     context.Workspace.ExecutionDirectory,
@@ -635,46 +619,6 @@ private static void RunPostLandingCanary(
         context.Workspace,
         new ConductorLandingReceipt(goal.Id.Value, changedFiles, landingSha),
         Console.WriteLine);
-}
-
-private static DotnetBuildEnvironmentLease SelectGoalBuildPermit(
-    GoalId goalId,
-    TimeSpan? timeout,
-    Action<DotnetBuildStableSlotWait>? onWait,
-    DotnetBuildStorageRoot? storageRoot,
-    string repositoryRoot)
-{
-    var environment = DotnetBuildEnvironmentManager.CreateAttempt(
-        goalId, "acceptance", storageRoot: storageRoot, repositoryRoot: repositoryRoot);
-    if (environment.BuildPermitIndex is { } permitIndex &&
-        !DotnetBuildEnvironmentManager.IsStableSlotExecutionLeaseAvailable(permitIndex, storageRoot))
-    {
-        onWait?.Invoke(new DotnetBuildStableSlotWait(
-            permitIndex,
-            DotnetBuildEnvironmentManager.GetStableSlotExecutionLeaseOwner(permitIndex, storageRoot)));
-    }
-
-    return DotnetBuildEnvironmentManager.TryAcquireLeaseExecutionLock(environment, timeout) switch
-    {
-        DotnetBuildLeaseAcquisition.Acquired acquired => acquired.Lease,
-        DotnetBuildLeaseAcquisition.SlotsBusy busy => throw new DotnetBuildSlotsBusyException(busy),
-        DotnetBuildLeaseAcquisition.BuildLockBlocked blocked => throw new BuildLockBlockedException(blocked.Attribution),
-        _ => throw new InvalidOperationException("Unknown dotnet build lease acquisition result.")
-    };
-}
-
-private static string FormatBusySlots(IReadOnlyList<DotnetBuildStableSlotWait> busySlots) =>
-    string.Join(
-        "|",
-        busySlots.Select(slot =>
-            $"slot-{slot.SlotIndex}:pid-{slot.OwnerProcessId?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown"}"));
-
-private static int? ParseStableSlotIndex(string slotOwnerToken)
-{
-    return slotOwnerToken.StartsWith("build-", StringComparison.OrdinalIgnoreCase) &&
-        int.TryParse(slotOwnerToken[6..], System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var slotIndex)
-            ? slotIndex
-            : null;
 }
 
 private static bool TryNormalizePrematureCompletedGoalForAcceptance(
