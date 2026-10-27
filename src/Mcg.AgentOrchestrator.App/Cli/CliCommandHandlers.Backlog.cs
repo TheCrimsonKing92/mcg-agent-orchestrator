@@ -37,12 +37,12 @@ private static bool? TryExecuteBacklogCommand(string command, IReadOnlyList<stri
                 var claim = ResolveSourceBacklogClaimForRead(context, item.Id, out var ambiguity);
                 var linkedGoal = claim is null
                     ? null
-                    : context.Kernel.Goals.FirstOrDefault(goal => goal.Id.Value == claim.OwnerGoalId);
+                    : FindBacklogReadGoal(context, claim.OwnerGoalId);
                 var goalId = ambiguity is null ? linkedGoal?.Id.Value ?? "-" : "legacy-owner-ambiguous";
                 if (rows is not null)
                 {
                     var readiness = BacklogDependencyReadiness.Evaluate(item,
-                        id => context.Kernel.Goals.FirstOrDefault(goal => goal.Id.Value == id),
+                        id => FindBacklogReadGoal(context, id),
                         id => store.GetByExactIdAsync(id).GetAwaiter().GetResult(),
                         id =>
                         {
@@ -233,7 +233,7 @@ private static bool? TryExecuteBacklogCommand(string command, IReadOnlyList<stri
             Console.WriteLine($"Coverage:{(authoritativeClaim is null ? " -" : $" {authoritativeClaim.Coverage.ToString().ToLowerInvariant()}")}");
             if (ambiguity is not null)
                 Console.WriteLine($"Claim:   reason=legacy-owner-ambiguous linkedGoals={string.Join(',', ambiguity.LinkedGoalIds)}");
-            var linkedGoals = context.Kernel.Goals
+            var linkedGoals = BacklogReadGoalsForItem(context, item.Id)
                 .Where(goal => string.Equals(goal.SourceBacklogItemId, item.Id, StringComparison.Ordinal))
                 .OrderBy(goal => goal.Id.Value, StringComparer.Ordinal)
                 .ToList();
@@ -411,6 +411,13 @@ private static bool? TryExecuteBacklogCommand(string command, IReadOnlyList<stri
     }
 }
 
+internal static IReadOnlyCollection<Goal> BacklogReadGoalsForItem(CliExecutionContext context, string itemId) =>
+    (context.BacklogReads?.ForItem(itemId) ?? context.Kernel).Goals;
+
+private static Goal? FindBacklogReadGoal(CliExecutionContext context, string id) =>
+    context.BacklogReads is { } reads ? reads.FindGoal(id)
+        : context.Kernel.Goals.FirstOrDefault(goal => goal.Id.Value == id);
+
 private static Goal? FindAuthoritativeSourceGoalForRead(
     CliExecutionContext context,
     string backlogItemId,
@@ -419,7 +426,7 @@ private static Goal? FindAuthoritativeSourceGoalForRead(
     var claim = ResolveSourceBacklogClaimForRead(context, backlogItemId, out ambiguity);
     return claim is null
         ? null
-        : context.Kernel.Goals.FirstOrDefault(goal => goal.Id.Value == claim.OwnerGoalId);
+        : FindBacklogReadGoal(context, claim.OwnerGoalId);
 }
 
 internal static SourceBacklogClaimSnapshot? ResolveSourceBacklogClaimForRead(
@@ -431,7 +438,7 @@ internal static SourceBacklogClaimSnapshot? ResolveSourceBacklogClaimForRead(
     {
         ambiguity = null;
         return new SourceBacklogClaimStore(context.Workspace.SqliteStatePath)
-            .ResolveClaim(context.Kernel, backlogItemId);
+            .ResolveClaim(context.BacklogReads?.ForItem(backlogItemId) ?? context.Kernel, backlogItemId);
     }
     catch (LegacySourceBacklogOwnerAmbiguousException ex)
     {
@@ -492,7 +499,7 @@ internal static string RenderBacklogDependencyState(
 {
     if (dependency.TargetKind == BacklogDependencyTargetKind.Goal)
     {
-        var goal = context.Kernel.Goals.FirstOrDefault(candidate => candidate.Id.Value == dependency.PrerequisiteId);
+        var goal = FindBacklogReadGoal(context, dependency.PrerequisiteId);
         return goal is null
             ? "missing"
             : $"{goal.Status}/{ResolveBacklogShowGoalLandingState(context, goal)}";
@@ -514,7 +521,7 @@ private static string RenderBacklogReadinessSuffix(
     CliExecutionContext context,
     BacklogStore store) =>
     BacklogDependencyReadiness.Evaluate(item,
-        id => context.Kernel.Goals.FirstOrDefault(goal => goal.Id.Value == id),
+        id => FindBacklogReadGoal(context, id),
         id => store.GetByExactIdAsync(id).GetAwaiter().GetResult(),
         id =>
         {
@@ -638,7 +645,7 @@ private static List<SimilarityDocument> LoadBacklogSimilarityCorpus(CliExecution
 {
     var corpus = BacklogSimilaritySearch.LoadBacklogDocumentsAsync(context.Workspace.BacklogStorePath)
         .GetAwaiter().GetResult().ToList();
-    corpus.AddRange(context.Kernel.Goals
+    corpus.AddRange(context.BacklogReads?.SimilarityDocuments() ?? context.Kernel.Goals
         .Where(goal => goal.Status == GoalStatus.Completed)
         .Select(goal => new SimilarityDocument(
             "goal",
@@ -647,7 +654,7 @@ private static List<SimilarityDocument> LoadBacklogSimilarityCorpus(CliExecution
             FirstNonEmptyLine(goal.Objective),
             goal.MetadataTerminatedAt ?? goal.MetadataCreatedAt ??
                 goal.Timeline.OrderBy(item => item.OccurredAt).LastOrDefault()?.OccurredAt ?? DateTimeOffset.MinValue,
-            goal.Objective)));
+            goal.Objective)).ToArray());
     return corpus;
 }
 

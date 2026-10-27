@@ -148,6 +148,8 @@ public void RunAfterCommit(Action action)
 
 public OrchestratorWorkspace Workspace { get; } = workspace;
 
+internal BacklogQueryReadContext? BacklogReads { get; init; }
+
 public string AgentCatalogPath => Workspace.AgentCatalogPath;
 
 public IModelProviderRegistry Providers { get; } = providers;
