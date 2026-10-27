@@ -47,6 +47,7 @@ public sealed class CliProcessEnvironmentCollection;
 
 // Build-lease tests need a process-local isolated root but do not mutate cleanup-hook state.
 [Xunit.CollectionDefinition(TestCollections.IsolatedDotnetRoot, DisableParallelization = true)]
+[ProcessLocalTestCollection("The isolated build root and its leases are process-local; IsolatedDotnetRootFixture claims a separate root per test process.")]
 public sealed class IsolatedDotnetRootCollection : Xunit.ICollectionFixture<IsolatedDotnetRootFixture>;
 
 // Job Object accounting tests use process-wide worker job registries, real fake worker processes,
