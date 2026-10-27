@@ -151,6 +151,50 @@ public sealed class ReceiptTestFailureReaderTests
         });
     }
 
+    [Fact]
+    public void Read_DotnetApparatusRedReceipt_NormalizedFailuresMatchTrx()
+    {
+        WithRoot(root =>
+        {
+            var trxPath = Path.Combine(root, "dotnet.trx");
+            File.WriteAllText(trxPath, NormalizedGateResultStepTests.Trx);
+            var receipt = NormalizedGateResultStep.Apply(
+                new AcceptanceCheckResult("dotnet test", false, 1, "raw dotnet failure",
+                    TestResultPaths: [trxPath], FailingTestIdentities: ["Sample.Tests.Fails"],
+                    ExecutedTestCount: 2), trxPath, NormalizedGateResultStep.TrxSourceLabel);
+
+            Assert.Equal(NormalizedTestResultWriter.PathFor(trxPath),
+                Assert.Single(receipt.NormalizedTestResultPaths!));
+            Assert.Null(receipt.NormalizedTestResultWriteFailure);
+            Assert.True(ReceiptTestFailureReader.TryReadNormalized(receipt, out var normalizedFailures));
+            var trxFailures = ReceiptTestFailureReader.ReadFromTrx(receipt);
+            Assert.Equal(new AcceptanceTrxFailure("Sample.Tests.Fails", "Failed", "Expected true.",
+                "at Sample.Tests.Fails()"), Assert.Single(trxFailures));
+            Assert.Equal(trxFailures, normalizedFailures);
+            Assert.Equal(trxFailures, ReceiptTestFailureReader.Read(receipt));
+
+            var (normalizedReading, normalizedDisposition) = ReadGate(root, "dotnet-normalized", receipt);
+            var (trxReading, trxDisposition) = ReadGate(root, "dotnet-trx",
+                receipt with { NormalizedTestResultPaths = null });
+            var normalized = Assert.Single(normalizedReading.FailingTests);
+            var trx = Assert.Single(trxReading.FailingTests);
+            Assert.Equal("dotnet test", normalized.CheckName);
+            Assert.Equal("Sample.Tests.Fails", normalized.TestIdentity);
+            Assert.Equal("Expected true.", normalized.FailureMessage);
+            Assert.Equal(trx.CheckName, normalized.CheckName);
+            Assert.Equal(trx.TestIdentity, normalized.TestIdentity);
+            Assert.Equal(trx.ExceptionSignature, normalized.ExceptionSignature);
+            Assert.Equal(trx.FailureMessage, normalized.FailureMessage);
+            Assert.Equal(trx.MessageFingerprint, normalized.MessageFingerprint);
+            Assert.Equal(Assert.IsType<ApparatusRedDisposition.Genuine>(trxDisposition).Reason,
+                Assert.IsType<ApparatusRedDisposition.Genuine>(normalizedDisposition).Reason);
+
+            File.Move(trxPath, trxPath + ".gone");
+            Assert.Empty(ReceiptTestFailureReader.ReadFromTrx(receipt));
+            Assert.Equal(trxFailures, ReceiptTestFailureReader.Read(receipt));
+        });
+    }
+
     private static (ApparatusRedGateReading Reading, ApparatusRedDisposition Disposition) ReadGate(
         string root, string indexName, AcceptanceCheckResult receipt)
     {
