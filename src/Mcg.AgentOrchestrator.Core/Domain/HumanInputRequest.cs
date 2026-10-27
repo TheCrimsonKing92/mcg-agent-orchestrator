@@ -134,6 +134,8 @@ public sealed class HumanInputRequest
 
     public bool IsCompleted { get; private set; }
 
+    public HumanInputBriefSupersession? BriefSupersession { get; private set; }
+
     public string? Answer => AuthoritativeAnswer?.Text;
 
     public DateTimeOffset? AnsweredAt => AuthoritativeAnswer?.AnsweredAt ?? DismissedAt;
@@ -194,6 +196,18 @@ public sealed class HumanInputRequest
         _answerHistory.Clear();
         DismissedAt = dismissedAt;
         WasDismissed = true;
+    }
+
+    internal void CompleteAsBriefSuperseded(int briefVersion, string? revisionReason, DateTimeOffset at)
+    {
+        if (IsCompleted || Kind != HumanWaitKind.ProspectiveAcceptanceEvidence)
+            throw new InvalidOperationException("Only open prospective evidence requests can be superseded by a brief.");
+
+        var reason = string.IsNullOrWhiteSpace(revisionReason) ? "no revision reason supplied" : revisionReason.Trim();
+        BriefSupersession = new HumanInputBriefSupersession(
+            briefVersion, $"Superseded by goal brief v{briefVersion}: {reason}", at);
+        IsCompleted = true;
+        WasDismissed = false;
     }
 
     private DateTimeOffset? DismissedAt { get; set; }
@@ -334,7 +348,7 @@ public sealed class HumanInputRequest
             SuppressionRevision,
             EvidenceOwner,
             StoreReference,
-            TestNames, PlannerIdentity, PlannerEvidence);
+            TestNames, PlannerIdentity, PlannerEvidence, BriefSupersession);
     }
 
     internal static HumanInputRequest FromSnapshot(HumanInputRequestSnapshot snapshot)
@@ -367,6 +381,11 @@ public sealed class HumanInputRequest
             if (snapshot.WasDismissed)
             {
                 request.Dismiss(snapshot.AnsweredAt ?? snapshot.RequestedAt);
+            }
+            else if (snapshot.BriefSupersession is { } supersession)
+            {
+                request.IsCompleted = true;
+                request.BriefSupersession = supersession;
             }
             else if (snapshot.AnswerHistory is { Count: > 0 })
             {
@@ -426,6 +445,9 @@ public sealed class HumanInputRequest
     private static string BuildFingerprint(string normalizedValue) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(normalizedValue))).ToLowerInvariant();
 }
+
+// A lifecycle completion is retained separately from answers so it cannot satisfy evidence.
+public sealed record HumanInputBriefSupersession(int BriefVersion, string Reason, DateTimeOffset SupersededAt);
 
 /// <summary>Records an answer and, when known, the authoritative brief version that governed it.</summary>
 /// <param name="BriefVersion">

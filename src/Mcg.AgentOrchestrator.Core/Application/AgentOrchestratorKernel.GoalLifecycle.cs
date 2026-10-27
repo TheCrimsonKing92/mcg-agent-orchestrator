@@ -140,6 +140,7 @@ public sealed partial class AgentOrchestratorKernel
         var version = goal.ReviseBrief(newBrief, reason, recordedAt);
         var refinedCriteriaCount = default(int?);
         var refinedCriteriaReDerived = false;
+        IReadOnlyList<HumanInputRequestId> closedPlannerEvidenceRequestIds = [];
         var declaredCriteria = AcceptanceCriteriaParser.ParseDeclared(newBrief);
         if (declaredCriteria.Count > 0 &&
             goal.RefinedSpec is { } currentSpec &&
@@ -159,6 +160,8 @@ public sealed partial class AgentOrchestratorKernel
                 recordedAt);
             refinedCriteriaCount = declaredCriteria.Count;
             refinedCriteriaReDerived = true;
+            closedPlannerEvidenceRequestIds = RevisedBriefPlannerEvidenceSupersession.Complete(
+                _humanInputRequests.Values, goal, version, recordedAt, _eventWriter);
         }
         foreach (var supersession in supersessions)
         {
@@ -195,7 +198,7 @@ public sealed partial class AgentOrchestratorKernel
             inFlight,
             completed,
             refinedCriteriaCount,
-            refinedCriteriaReDerived);
+            refinedCriteriaReDerived) { ClosedPlannerEvidenceRequestIds = closedPlannerEvidenceRequestIds };
     }
 
     public TaskSpec AddTask(
