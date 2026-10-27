@@ -182,7 +182,8 @@ public static class ProviderBudgetHoldSchedules
             !latestProbe.Goal.IsTerminal &&
             latestProbe.Goal.Tasks.Any(task => task.Id == probeEvent.TaskId && task.Status == WorkTaskStatus.Assigned && task.AssignedAgentId is not null) &&
             !latestProbe.Goal.Timeline.Skip(latestProbe.Index + 1).Any(evt => evt.TaskId == probeEvent.TaskId &&
-                evt.Kind is ProgressKind.TaskRedelegated or ProgressKind.ProviderHoldSubstituted or ProgressKind.TaskCancelled))
+                evt.Kind is ProgressKind.TaskRedelegated or ProgressKind.ProviderHoldSubstituted or
+                    ProgressKind.ProviderCapabilitySubstituted or ProgressKind.TaskCancelled))
         {
             admittedGoal = latestProbe.Goal.Id;
             admittedTask = probeEvent.TaskId;

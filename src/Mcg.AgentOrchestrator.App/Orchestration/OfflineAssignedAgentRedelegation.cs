@@ -15,7 +15,8 @@ internal static class OfflineAssignedAgentRedelegation
     {
         // Timeline position is authoritative even when the clock gives several events the same timestamp.
         var latestAssignment = goal.Timeline.LastOrDefault(evt => evt.TaskId == taskId &&
-            evt.Kind is ProgressKind.TaskDelegated or ProgressKind.TaskRedelegated or ProgressKind.ProviderHoldSubstituted);
+            evt.Kind is ProgressKind.TaskDelegated or ProgressKind.TaskRedelegated or ProgressKind.ProviderHoldSubstituted or
+                ProgressKind.ProviderCapabilitySubstituted);
         return latestAssignment is { Kind: ProgressKind.TaskRedelegated } &&
             latestAssignment.Message.StartsWith("Reassigned ", StringComparison.Ordinal) &&
             !latestAssignment.Message.Contains("repaired stale", StringComparison.OrdinalIgnoreCase) &&

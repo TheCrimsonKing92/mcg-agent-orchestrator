@@ -1,5 +1,6 @@
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Infrastructure;
 using Scenario = ProviderHoldAgentSubstitutionTests.Scenario;
 
 // Parallel-safe: fixed-clock, in-memory kernels only; no shared state or worker processes.
@@ -46,6 +47,7 @@ public sealed class OfflineAssignedAgentRedelegationTests
     [Xunit.InlineData("automatic", false)]
     [Xunit.InlineData("redelegate", false)]
     [Xunit.InlineData("provider-hold", false)]
+    [Xunit.InlineData("provider-capability", false)]
     public void PinUsesLatestAssignmentEvenWithIdenticalTimestamps(string assignment, bool expected)
     {
         var (kernel, goal, primary, alternate) = Create();
@@ -61,6 +63,8 @@ public sealed class OfflineAssignedAgentRedelegationTests
             case "automatic": kernel.ReassignTaskAgent(goal.Id, task.Id, alternate, OfflineAssignedAgentRedelegation.Marker); break;
             case "redelegate": kernel.RedelegateTask(goal.Id, task.Id, [alternate]); break;
             case "provider-hold": kernel.SubstituteProviderHeldTaskAgent(goal.Id, task.Id, alternate, "xai::<provider-default>", "fixture"); break;
+            case "provider-capability": kernel.SubstituteCapabilityBlockedTaskAgent(goal.Id, task.Id, alternate,
+                WorkerProfileDispatcher.ProviderCapabilityUnsupportedErrorCode); break;
             default: throw new ArgumentOutOfRangeException(nameof(assignment));
         }
 

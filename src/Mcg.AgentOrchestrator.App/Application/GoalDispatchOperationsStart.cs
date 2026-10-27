@@ -74,6 +74,7 @@ internal sealed partial class GoalDispatchOperations
         if (admitProviderBudgetProbe)
             ProviderBudgetProbeAdmission.Apply(kernel, goal, safeBatch.TaskIds.ToArray(), preflight, utcNow());
         new ProviderHoldAgentSubstitution(kernel, agents, preflight).ApplyBatch(goal, safeBatch.TaskIds);
+        new ProviderCapabilityAgentSubstitution(kernel, agents, preflight).ApplyBatch(kernel.GetGoal(goal.Id), safeBatch.TaskIds);
         goal = kernel.GetGoal(goal.Id);
         var retryReplayTasks = kernel.ExportGoalSnapshot(goal.Id).Tasks
             .Where(task => safeBatch.TaskIds.Contains(new TaskId(task.Id)) && task.LatestRetryAt is not null)
