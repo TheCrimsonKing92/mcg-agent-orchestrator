@@ -302,7 +302,10 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         bool CaptureLimited = false,
         long? CaptureLimitBytes = null,
         TimeSpan? LaneStallSilence = null,
-        TimeSpan? LaneStallLimit = null, LaneSchedulingSummary? LaneScheduling = null);
+        TimeSpan? LaneStallLimit = null, LaneSchedulingSummary? LaneScheduling = null)
+    {
+        internal string? StandardOutput { get; init; }
+    }
 
     internal static readonly Encoding StrictUtf8 = new UTF8Encoding(false, true);
     internal static readonly Encoding StrictUtf16LittleEndian = new UnicodeEncoding(false, true, true);
@@ -336,7 +339,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             {
                 _ = BuildDotnetTestArguments(check);
             }
-            else if (type is not ("no-op" or "grep-absent" or "grep-present" or "file-exists" or "command-exit"))
+            else if (type is not ("crosswalk-test" or "no-op" or "grep-absent" or "grep-present" or "file-exists" or "command-exit"))
             {
                 throw new InvalidOperationException(
                     $"Acceptance manifest check '{check.Name}' has unsupported type '{check.Type}'.");
@@ -1658,7 +1661,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
     private static IReadOnlyList<string> CollectTestResultPaths(IEnumerable<AcceptanceCheckResult> checks) =>
         checks
-            .SelectMany(check => check.TestResultPaths ?? [])
+            .SelectMany(check => check.CrosswalkDiagnostics is not null
+                ? check.NormalizedTestResultPaths ?? [] : check.TestResultPaths ?? [])
             .Where(path => !string.IsNullOrWhiteSpace(path))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
@@ -2355,6 +2359,9 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         using var targetScope = AcceptanceGatePhaseAccountant.BeginCurrentTarget(check.Name);
         try
         {
+        if (check.Type.Equals("crosswalk-test", StringComparison.OrdinalIgnoreCase))
+            return (await RunCrosswalkCheckAsync(check, worktreePath, goalId, stableSlotIndex, cancellationToken).ConfigureAwait(false), false);
+
         if (check.Type.Equals("no-op", StringComparison.OrdinalIgnoreCase))
         {
             return (new AcceptanceCheckResult(
@@ -4047,7 +4054,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         string workingDirectory,
         TimeSpan timeout,
         GateHeartbeatContext heartbeatContext,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        CancellationToken timeoutSignal = default)
     {
         return _requiresTestTelemetryReceipt
             ? await RunProcessAsync(
@@ -4056,6 +4064,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 timeout,
                 forceUtf8ConsoleOutput: false,
                 cancellationToken,
+                timeoutSignal: timeoutSignal,
                 heartbeatContext: heartbeatContext,
                 progressSink: EmitGateProgress,
                 engineSettings: EngineSettings,

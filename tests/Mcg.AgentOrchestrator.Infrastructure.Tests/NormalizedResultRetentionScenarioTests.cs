@@ -8,6 +8,28 @@ using AcceptanceManifestCheck = Mcg.AgentOrchestrator.Infrastructure.GoalAccepta
 public sealed class NormalizedResultRetentionScenarioTests
 {
     [Fact]
+    public void ReadIdentities_NormalizedOnlyReceipt_RetainsDeclaredAttemptOwnership()
+    {
+        using var fixture = new RetentionReclaimFixture();
+        var goalDirectory = Path.Combine(fixture.AttemptRoot(), RetentionReclaimFixture.FailedId);
+        Directory.CreateDirectory(goalDirectory);
+        var normalized = Path.Combine(goalDirectory, "crosswalk.ctrf.json");
+        var nested = Path.Combine(goalDirectory, "nested.ctrf.json");
+        var outside = Path.Combine(fixture.ExecutionDirectory, "outside.ctrf.json");
+        File.WriteAllText(Path.Combine(goalDirectory, "a1.attempt.json"), JsonSerializer.Serialize(new
+        {
+            attemptId = "a1", goalId = RetentionReclaimFixture.FailedId, ordinal = 1,
+            startedAt = RetentionReclaimFixture.Now, outcome = 1, reconciledAt = RetentionReclaimFixture.Now,
+            normalizedTestResultPaths = new[] { normalized, outside },
+            checks = new[] { new { normalizedTestResultPaths = new[] { nested } } }
+        }));
+        Assert.True(StorageRetentionMaintenance.TryReadAttemptIdentities(goalDirectory,
+            RetentionReclaimFixture.FailedId, out var attempts, out var reason), reason);
+        Assert.Equal(new[] { normalized, nested }.Order(StringComparer.OrdinalIgnoreCase), Assert.Single(attempts).DeclaredPaths);
+        Assert.DoesNotContain(outside, Assert.Single(attempts).DeclaredPaths!);
+    }
+
+    [Fact]
     public void WithNormalizedPeer_TrxPaths_AddsPeerAndKeepsOtherInputs()
     {
         using var fixture = new RetentionReclaimFixture();

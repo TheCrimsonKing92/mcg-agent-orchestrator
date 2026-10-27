@@ -394,7 +394,8 @@ internal static class AcceptanceCheckProcessInvoker
                 captureLimited,
                 captureLimited ? engineSettings.OutputCaptureLimitBytes : null,
                 LaneStallSilence: timedOut && laneStall is { Stopped: true } ? laneStall.Silent : null,
-                LaneStallLimit: timedOut && laneStall is { Stopped: true } ? laneStall.Limit : null, LaneScheduling: sampler?.Summary());
+                LaneStallLimit: timedOut && laneStall is { Stopped: true } ? laneStall.Limit : null, LaneScheduling: sampler?.Summary())
+            { StandardOutput = stdout };
         }
         finally
         {
