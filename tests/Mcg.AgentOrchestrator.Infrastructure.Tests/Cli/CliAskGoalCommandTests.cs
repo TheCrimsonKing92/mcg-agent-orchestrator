@@ -145,6 +145,31 @@ public sealed class CliAskGoalCommandTests
     }
 
     [Theory]
+    [InlineData("ask-goal --goal \"\" abc20000 Which release?", "--goal requires")]
+    [InlineData("ask-goal Which release? --goal \"\"", "--goal requires")]
+    [InlineData("ask-goal --goal abc20000 \"\"", "Provide a question")]
+    public async Task ReplEmptyArgumentsAreRejectedWithoutChangingAnyRow(string line, string diagnostic)
+    {
+        using var fixture = new CliAskGoalFixture();
+        await fixture.SeedAsync();
+        var kernel = await fixture.Repository.LoadAsync();
+        Goal? current = kernel.GetGoal(CliAskGoalFixture.CurrentId);
+        var originalCurrent = current;
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var profiles = WorkerProfileCatalog.Default();
+        var before = fixture.StateRows();
+
+        var error = Assert.Throws<ArgumentException>(() => CliPersistentStateRunner.ExecuteCommand(
+            CliArgumentParser.SplitCommand(line), fixture.Repository, fixture.Workspace, ref agents,
+            new InMemoryModelProviderRegistry([]), ref profiles, ref current));
+
+        Assert.Contains(diagnostic, error.Message);
+        Assert.Contains(CliCommandHelp.AskGoalUsage, error.Message);
+        Assert.Same(originalCurrent, current);
+        Assert.Equal(before, fixture.StateRows());
+    }
+
+    [Theory]
     [InlineData("ask-goal --goal abc20000 Which release?", "Which release?")]
     [InlineData("ask-goal Which release? --goal abc20000", "Which release?")]
     [InlineData("ask-goal --goal abc20000 \"Which \\\"release\\\"?\"", "Which \"release\"?")]

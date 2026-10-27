@@ -77,6 +77,19 @@ public sealed class CliArgumentNormalizationTests
         Xunit.Assert.Equal(expected, CliArgumentParser.SplitCommand(input));
     }
 
+    [Xunit.Theory]
+    [Xunit.InlineData("ask-goal --goal \"\" abc20000 Which release?",
+        new[] { "ask-goal", "--goal", "", "abc20000", "Which", "release?" })]
+    [Xunit.InlineData("ask-goal Which release? --goal \"\"",
+        new[] { "ask-goal", "Which", "release?", "--goal", "" })]
+    [Xunit.InlineData("ask-goal \"\" \"\"", new[] { "ask-goal", "", "" })]
+    [Xunit.InlineData("ask-goal \"\"suffix prefix\"\"", new[] { "ask-goal", "suffix", "prefix" })]
+    [Xunit.InlineData("ask-goal   Which   release?", new[] { "ask-goal", "Which", "release?" })]
+    public void SplitCommand_QuotedEmptyArguments_PreserveTokenBoundaries(string input, string[] expected)
+    {
+        Xunit.Assert.Equal(expected, CliArgumentParser.SplitCommand(input));
+    }
+
     [Xunit.Fact]
     public void OneShotNote_FreeTextBeforeTrailingGoal_IsCanonicalized()
     {
