@@ -5,15 +5,18 @@ using Mcg.AgentOrchestrator.Core;
 public sealed class GateTestObligationAnsweredRebindTests
 {
     [Theory]
-    [InlineData("OldNameTests")]
-    [InlineData("OldNameTests.Check")]
-    [InlineData("Fixture.OldNameTests.Check")]
-    public void OperatorAnswer_PassingNewRows_SatisfiesOriginalSelector(string selector)
+    [InlineData("OldNameTests", "")]
+    [InlineData("OldNameTests.Check", "")]
+    [InlineData("Fixture.OldNameTests.Check", "")]
+    [InlineData("OldNameTests", ".")]
+    [InlineData("OldNameTests.Check", ".")]
+    [InlineData("Fixture.OldNameTests.Check", ".")]
+    public void OperatorAnswer_PassingNewRows_SatisfiesOriginalSelector(string selector, string suffix)
     {
         using var fixture = new ProspectiveEvidenceGateFixture();
         var kernel = GateTestObligationIntakeTests.Seed(fixture.Kernel, fixture.Goal, [selector]);
         var goal = kernel.GetGoal(fixture.Goal.Id);
-        var request = Answer(kernel, goal);
+        var request = Answer(kernel, goal, suffix);
         var rowClass = selector.StartsWith("Fixture.", StringComparison.Ordinal) ? "Fixture.NewNameTests" : "NewNameTests";
         var (id, _, _) = fixture.WriteAttempt([($"{rowClass}.Check", "Passed"), ($"{rowClass}.Second", "Passed")]);
         var baseline = Assert.Single(GateTestObligationEvaluator.Evaluate(goal,
@@ -37,15 +40,18 @@ public sealed class GateTestObligationAnsweredRebindTests
     }
 
     [Theory]
-    [InlineData("unrelated")]
-    [InlineData("failed")]
-    [InlineData("partial")]
-    [InlineData("other-goal")]
-    [InlineData("segment-substring")]
-    [InlineData("ambiguous-segments")]
-    [InlineData("skipped")]
-    [InlineData("existing-failure")]
-    public void UnsuccessfulRebind_PreservesBaselineGrading(string scenario)
+    [InlineData("unrelated", "")]
+    [InlineData("failed", "")]
+    [InlineData("partial", "")]
+    [InlineData("other-goal", "")]
+    [InlineData("segment-substring", "")]
+    [InlineData("ambiguous-segments", "")]
+    [InlineData("skipped", "")]
+    [InlineData("existing-failure", "")]
+    [InlineData("unrelated", ".")]
+    [InlineData("failed", ".")]
+    [InlineData("skipped", ".")]
+    public void UnsuccessfulRebind_PreservesBaselineGrading(string scenario, string suffix)
     {
         using var fixture = new ProspectiveEvidenceGateFixture();
         string[] selectors = scenario switch
@@ -59,7 +65,7 @@ public sealed class GateTestObligationAnsweredRebindTests
         var goal = kernel.GetGoal(fixture.Goal.Id);
         var answerGoal = scenario == "other-goal"
             ? kernel.CreateGoal("Other goal", [new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer)]) : goal;
-        Answer(kernel, answerGoal);
+        Answer(kernel, answerGoal, suffix);
         (string, string)[] rows = scenario switch
         {
             "unrelated" => [("OtherWorkTests.Check", "Passed")],
@@ -121,10 +127,10 @@ public sealed class GateTestObligationAnsweredRebindTests
         Assert.Single(result.AnswerRebinds!);
     }
 
-    private static HumanInputRequest Answer(AgentOrchestratorKernel kernel, Goal goal)
+    private static HumanInputRequest Answer(AgentOrchestratorKernel kernel, Goal goal, string suffix = "")
     {
         var request = kernel.RequestHumanInput(goal.Id, null, "Rename question");
-        kernel.SubmitHumanInput(request.Id, "- OldNameTests becomes NewNameTests");
+        kernel.SubmitHumanInput(request.Id, "- OldNameTests becomes NewNameTests" + suffix);
         return request;
     }
 }

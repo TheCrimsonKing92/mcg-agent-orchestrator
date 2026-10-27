@@ -12,7 +12,9 @@ internal static class AnsweredSelectorRebinding
     private static readonly Regex RenamePattern = new(
         $@"(?<![{IdentifierPart}.`])(?<oldQuote>`?)(?<old>[A-Z][{IdentifierPart}]*)\k<oldQuote>(?![{IdentifierPart}.`])" +
         $@"\s+(?:(?i:becomes)|->)\s+" +
-        $@"(?<![{IdentifierPart}.`])(?<newQuote>`?)(?<new>[A-Z][{IdentifierPart}]*)\k<newQuote>(?![{IdentifierPart}.`])",
+        $@"(?<![{IdentifierPart}.`])(?<newQuote>`?)(?<new>[A-Z][{IdentifierPart}]*)\k<newQuote>" +
+        // A single sentence period may follow the name; a member-qualification dot may not.
+        $@"(?:(?![{IdentifierPart}.`])|(?=\.(?:\s|\z)))",
         RegexOptions.CultureInvariant);
 
     internal static IReadOnlyList<(string OldClass, string NewClass)> Parse(string? answer)
