@@ -80,7 +80,7 @@ private static bool? TryExecuteBacklogCommand(string command, IReadOnlyList<stri
             if (!idFlagPresent && freeText.Length == 0)
                 throw new ArgumentException(CliCommandHelp.BacklogSimilarUsage);
 
-            var corpus = LoadBacklogSimilarityCorpus(context);
+            var corpus = BacklogSimilarityCorpus.Load(context);
             string queryText;
             string? excludeId = null;
             if (idFlagPresent)
@@ -637,25 +637,8 @@ private static IReadOnlyList<SimilarityHit> SearchBacklogSimilarity(
     string? statusFilter,
     string? excludeId)
 {
-    var corpus = LoadBacklogSimilarityCorpus(context);
+    var corpus = BacklogSimilarityCorpus.Load(context);
     return BacklogSimilaritySearch.Search(corpus, queryText, limit, includeExcerpt, statusFilter, excludeId);
-}
-
-private static List<SimilarityDocument> LoadBacklogSimilarityCorpus(CliExecutionContext context)
-{
-    var corpus = BacklogSimilaritySearch.LoadBacklogDocumentsAsync(context.Workspace.BacklogStorePath)
-        .GetAwaiter().GetResult().ToList();
-    corpus.AddRange(context.BacklogReads?.SimilarityDocuments() ?? context.Kernel.Goals
-        .Where(goal => goal.Status == GoalStatus.Completed)
-        .Select(goal => new SimilarityDocument(
-            "goal",
-            goal.Id.Value,
-            goal.Status.ToString(),
-            FirstNonEmptyLine(goal.Objective),
-            goal.MetadataTerminatedAt ?? goal.MetadataCreatedAt ??
-                goal.Timeline.OrderBy(item => item.OccurredAt).LastOrDefault()?.OccurredAt ?? DateTimeOffset.MinValue,
-            goal.Objective)).ToArray());
-    return corpus;
 }
 
 private static string RenderSimilarityHit(SimilarityHit hit)
@@ -668,10 +651,6 @@ private static string RenderSimilarityHit(SimilarityHit hit)
     var excerpt = hit.Excerpt is null ? "" : $" excerpt={hit.Excerpt}";
     return $"- kind={hit.Kind} id={idPrefix} status={hit.Status} title={title} updated={hit.UpdatedAt:yyyy-MM-dd} rank={hit.Rank.ToString("G6", System.Globalization.CultureInfo.InvariantCulture)}{excerpt}";
 }
-
-private static string FirstNonEmptyLine(string text) =>
-    text.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-        .FirstOrDefault() ?? "-";
 
 private static int? ParseOptionalNonNegativeInt(IReadOnlyList<string> parts, string flag)
 {
