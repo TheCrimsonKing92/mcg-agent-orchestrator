@@ -3,7 +3,8 @@ using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Scenario = ProviderHoldAgentSubstitutionTests.Scenario;
 
-// Parallel-safe: each scenario owns its repositories and worktrees; no worker is launched.
+// Parallel-safe: each scenario owns its repositories, worktrees and databases. Start-path tests
+// inject an isolated stdin-gated shell; the prepared provider command is never executed.
 public sealed class ProviderCapabilityAgentSubstitutionTests
 {
     [Xunit.Fact]
@@ -132,5 +133,194 @@ public sealed class ProviderCapabilityAgentSubstitutionTests
 
         Assert.Equal(scenario.Primary.Id, task.AssignedAgentId);
         Assert.Equal(before, goal.Timeline.Count);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public void Resolve_NonCapabilityBlock_PreservesFindingsAndState(bool cooldown)
+    {
+        using var scenario = new Scenario(exhaustPrimary: false);
+        var goal = scenario.NewGoal();
+        var task = goal.Tasks.Single();
+        var worktree = scenario.Workspace.ResolveExecutionDirectory(goal.Id);
+        if (cooldown)
+        {
+            var source = scenario.Kernel.AddTask(goal.Id, AgentRole.Tester, "Earlier provider request.", scenario.Agents);
+            scenario.Kernel.RecordTaskDispatch(goal.Id, source.Id, new TaskDispatchRecord(
+                "grok-cli", "fixture worker", worktree, Scenario.ObservedAt,
+                ProviderName: "xAI", WorkerProviderKind: ProviderKind.XaiGrokCli, GoalId: goal.Id));
+            scenario.Kernel.RecordTaskVerification(goal.Id, source.Id, new TaskVerificationRecord(
+                "fixture worker", worktree, 1, string.Empty,
+                "ERROR: You've hit your usage limit. Try again in 2 hours.", Scenario.ObservedAt,
+                ProviderFailureKind: ProviderFailureKind.RateLimit, DispatchStartedAt: Scenario.ObservedAt));
+            Assert.True(DispatchFailureClassifier.TryGetProviderSubscriptionCooldown(
+                goal, task.Id, "xAI", Scenario.ObservedAt.AddHours(1), out _));
+        }
+        else
+            File.WriteAllText(Path.Combine(worktree, "dirty.txt"), "uncommitted");
+
+        var original = scenario.Preflight(goal, task, scenario.Kernel.ProviderHoldScope);
+        Assert.False(original.Allowed);
+        Assert.Null(original.ErrorCode);
+        Assert.Contains(original.Findings, finding => finding.StartsWith("blocked:", StringComparison.Ordinal) &&
+            finding.Contains(cooldown ? "provider xAI is cooling down" : "worktree has 1 uncommitted change",
+                StringComparison.Ordinal));
+        Assert.Contains(scenario.Agents, agent => agent.Id == scenario.Alternate.Id &&
+            agent.Status == AgentStatus.Available && agent.Role == task.RequiredRole &&
+            AgentExecutionPolicies.AllowsSubscription(agent.ExecutionPolicy));
+
+        Assert.Equal(0, AssertUnchanged(scenario, goal, task, original));
+    }
+
+    [Xunit.Fact]
+    public void Resolve_OperatorPin_PreservesFindingsAndState()
+    {
+        using var scenario = new Scenario(skillTarget: true, exhaustPrimary: false);
+        var goal = scenario.NewGoal();
+        var task = goal.Tasks.Single();
+        scenario.Kernel.ReassignTaskAgent(goal.Id, task.Id, scenario.Primary);
+        Assert.True(OfflineAssignedAgentRedelegation.IsOperatorPin(goal, task.Id));
+        var original = CapabilityBlock(scenario, goal, task);
+        AssertCapableAlternate(scenario, goal, task);
+
+        Assert.Equal(0, AssertUnchanged(scenario, goal, task, original));
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("untyped")]
+    [Xunit.InlineData("offline")]
+    [Xunit.InlineData("both")]
+    public void Resolve_NoCapableAlternate_PreservesFindingsAndState(string roster)
+    {
+        using var scenario = new Scenario(skillTarget: true, exhaustPrimary: false);
+        var untyped = Scenario.Agent("qwen-tester", "LlamaCpp", WorkerProfile.QwenCodeCliName, "qwen3-coder");
+        var offline = scenario.Alternate with { Status = AgentStatus.Offline };
+        scenario.Agents = roster switch
+        {
+            "untyped" => [scenario.Primary, untyped],
+            "offline" => [scenario.Primary, offline],
+            _ => [scenario.Primary, untyped, offline]
+        };
+        var goal = scenario.NewGoal();
+        var task = goal.Tasks.Single();
+        var original = CapabilityBlock(scenario, goal, task);
+
+        Assert.Equal(roster == "offline" ? 0 : 2, AssertUnchanged(scenario, goal, task, original));
+    }
+
+    [Xunit.Fact]
+    public void Resolve_PreviouslyCapabilitySubstituted_PreservesFindingsAndState()
+    {
+        using var scenario = new Scenario(skillTarget: true, exhaustPrimary: false);
+        var untyped = Scenario.Agent("qwen-tester", "LlamaCpp", WorkerProfile.QwenCodeCliName, "qwen3-coder");
+        scenario.Agents = [scenario.Primary, untyped, scenario.Alternate];
+        var goal = scenario.NewGoal();
+        var task = goal.Tasks.Single();
+        scenario.Kernel.SubstituteCapabilityBlockedTaskAgent(goal.Id, task.Id, untyped,
+            WorkerProfileDispatcher.ProviderCapabilityUnsupportedErrorCode);
+        Assert.Single(goal.Timeline, item => item.Kind == ProgressKind.ProviderCapabilitySubstituted);
+        Assert.False(OfflineAssignedAgentRedelegation.IsOperatorPin(goal, task.Id));
+        var original = CapabilityBlock(scenario, goal, task);
+        AssertCapableAlternate(scenario, goal, task);
+
+        Assert.Equal(0, AssertUnchanged(scenario, goal, task, original));
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(true)]
+    [Xunit.InlineData(false)]
+    public void Start_SkillWrite_DispatchesCapableAlternateOrReportsCapabilityHold(bool capable)
+    {
+        using var scenario = new Scenario(skillTarget: true, exhaustPrimary: false);
+        if (!capable)
+            scenario.Agents = [scenario.Primary,
+                Scenario.Agent("qwen-tester", "LlamaCpp", WorkerProfile.QwenCodeCliName, "qwen3-coder")];
+        var goal = scenario.NewGoal();
+        var task = goal.Tasks.Single();
+        CapabilityBlock(scenario, goal, task);
+        var before = goal.Timeline.ToArray();
+        var repository = InfrastructureTestSupport.CreateMigratedStateRepository(scenario.Workspace.SqliteStatePath);
+        using var worker = new ProviderHoldFallbackScenarioTests.PreparationWorker();
+
+        var start = new GoalDispatchOperations().StartSubscriptionReadyTasks(scenario.Kernel,
+            scenario.Workspace, goal, scenario.Agents, scenario.Profiles,
+            checkpointBeforeWorkerStart: (kernel, _, _, _) => repository.SaveAsync(kernel).GetAwaiter().GetResult(),
+            runner: new BackgroundDispatchRunner(disableProcessStart: false, startProcess: worker.Start),
+            sandboxOptions: scenario.Sandbox, commandExists: _ => true, cascadeTesterCheapFirst: false,
+            claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli,
+            utcNow: () => Scenario.ObservedAt.AddHours(1));
+
+        goal = scenario.Kernel.GetGoal(goal.Id);
+        task = scenario.Kernel.GetTask(goal.Id, task.Id);
+        Assert.DoesNotContain(goal.Timeline, item => item.Kind == ProgressKind.ProviderHoldSubstituted);
+        Assert.Empty(start.Processes.StartFailures ?? []);
+        Assert.Empty(start.Processes.StartRefusals ?? []);
+        if (capable)
+        {
+            Assert.Equal(task.Id, Assert.Single(start.Dispatches).Task.Id);
+            Assert.Equal(task.Id, Assert.Single(start.Processes.Tasks).Id);
+            Assert.Empty(start.BlockedDiagnostics);
+            Assert.Equal(scenario.Alternate.Id, task.AssignedAgentId);
+            Assert.Equal(scenario.Alternate.Id.Value, task.LastDispatch!.AssignedAgentId);
+            Assert.Equal("codex-cli", task.LastDispatch.WorkerName);
+            Assert.NotNull(task.LastProcess);
+            var evt = Assert.Single(goal.Timeline, item => item.Kind == ProgressKind.ProviderCapabilitySubstituted);
+            Assert.Equal(task.Id, evt.TaskId);
+            Assert.Contains("held agent=xai-tester", evt.Message, StringComparison.Ordinal);
+            Assert.Contains("substitute=openai-tester", evt.Message, StringComparison.Ordinal);
+            Assert.Contains(WorkerProfileDispatcher.ProviderCapabilityUnsupportedErrorCode, evt.Message, StringComparison.Ordinal);
+        }
+        else
+        {
+            Assert.Empty(start.Dispatches);
+            Assert.Empty(start.Processes.Tasks);
+            Assert.Equal(WorkerProfileDispatcher.ProviderCapabilityUnsupportedErrorCode,
+                Assert.Single(start.BlockedDiagnostics).Reason);
+            Assert.Equal(scenario.Primary.Id, task.AssignedAgentId);
+            Assert.Null(task.LastDispatch);
+            Assert.Null(task.LastProcess);
+            Assert.Equal(before, goal.Timeline);
+        }
+    }
+
+    private static WorkerSubscriptionPreflightResult CapabilityBlock(Scenario scenario, Goal goal, TaskSpec task)
+    {
+        var original = scenario.Preflight(goal, task, scenario.Kernel.ProviderHoldScope);
+        Assert.False(original.Allowed);
+        Assert.Equal(WorkerProfileDispatcher.ProviderCapabilityUnsupportedErrorCode, original.ErrorCode);
+        return original;
+    }
+
+    private static void AssertCapableAlternate(Scenario scenario, Goal goal, TaskSpec task)
+    {
+        var scratch = AgentOrchestratorKernel.FromSnapshot(scenario.Kernel.ExportSnapshot());
+        var trial = scratch.ReassignTaskAgent(goal.Id, task.Id, scenario.Alternate);
+        var check = scenario.Preflight(scratch.GetGoal(goal.Id), trial, scratch.ProviderHoldScope);
+        Assert.True(check.Allowed, string.Join("\n", check.Findings));
+    }
+
+    private static int AssertUnchanged(Scenario scenario, Goal goal, TaskSpec task,
+        WorkerSubscriptionPreflightResult original)
+    {
+        var before = goal.Timeline.ToArray();
+        var agent = task.AssignedAgentId;
+        var revision = task.ConductorRoutingRevision;
+        var trials = 0;
+        var resolver = new ProviderCapabilityAgentSubstitution(scenario.Kernel, scenario.Agents,
+            (viewGoal, viewTask, scope) =>
+            {
+                if (ReferenceEquals(viewTask, task)) return original;
+                trials++;
+                return scenario.Preflight(viewGoal, viewTask, scope);
+            });
+
+        var none = Assert.IsType<ProviderCapabilityAgentSubstitution.Result.None>(resolver.Resolve(goal, task));
+        Assert.Same(original.Findings, none.Findings);
+        resolver.ApplyBatch(goal, [task.Id]);
+        Assert.Equal(agent, task.AssignedAgentId);
+        Assert.Equal(revision, task.ConductorRoutingRevision);
+        Assert.Equal(before, goal.Timeline);
+        return trials;
     }
 }
