@@ -125,7 +125,9 @@ public sealed class RunGoalServiceProcessContractTests
                 EchoProfiles(),
                 workspace,
                 goal,
-                allowLargePaidSubscriptionStart: false,
+                // Only the local echo profile runs here. Acknowledge its paid model label so prior-task
+                // context growth cannot stop the second echo at the prompt-size confirmation gate.
+                allowLargePaidSubscriptionStart: true,
                 pollInterval: TimeSpan.FromMilliseconds(50),
                 sleep: WaitForCurrentExitFile(goal, workspace.LogDirectory),
                 cancellationToken: failsafe.Token);
@@ -142,7 +144,16 @@ public sealed class RunGoalServiceProcessContractTests
             $"The real-process run-goal contract did not finish within the {RunFailsafe.TotalMinutes:0}-minute failsafe; " +
             $"task1={task1.Status}, task2={task2.Status}, stopReason={result.StopReason}.");
         Assert.True(result.Executed);
-        Assert.Equal(2, result.CompletedTasks.Count);
+        Assert.True(result.CompletedTasks.Count == 2,
+            $"Expected two terminal echo tasks, got {result.CompletedTasks.Count}; " +
+            $"stopReason={result.StopReason}; blockingAction={result.BlockingAction?.Kind}; " +
+            $"continueAfter={result.ContinueAfter:O}; failure={result.Failure?.Reason}; " +
+            $"stopEvidence={result.StopEvidence?.Reason}; outputTail={result.StopEvidence?.OutputTail}; " +
+            string.Join(Environment.NewLine, goal.Tasks.Select(task =>
+                $"task={task.Description}; status={task.Status}; exit={task.LastVerification?.ExitCode}; " +
+                $"rule={task.LastVerification?.CompletionVerdictRule}; " +
+                $"failure={task.LastVerification?.OrchestratorFailureReason}; " +
+                $"stdout={task.LastProcess?.StandardOutputPath}; stderr={task.LastProcess?.StandardErrorPath}")));
         Assert.True(result.CompletedTasks.All(t => t.Succeeded));
         Assert.True(result.ContinueAfter is null);
         Assert.True(result.StopEvidence is null);

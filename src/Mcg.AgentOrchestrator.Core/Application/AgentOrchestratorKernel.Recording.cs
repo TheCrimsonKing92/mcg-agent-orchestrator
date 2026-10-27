@@ -6,7 +6,7 @@ public sealed partial class AgentOrchestratorKernel
     {
         // Preserve the observed process exit. A protocol rejection is nevertheless not passing
         // verification and must never authorize completion when an unrelated answer arrives.
-        task.RecordVerification(verification with { OrchestratorFailureReason = diagnostic });
+        task.RecordVerification(verification with { OrchestratorFailureReason = diagnostic, CompletionVerdictVerifiedSuccess = false, CompletionVerdictRule = TaskOutcomeRules.PlannerOutputContractRejected.Token });
         ReportWorkerTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, diagnostic);
     }
 

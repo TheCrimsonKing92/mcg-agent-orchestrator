@@ -95,6 +95,7 @@ public static class AgentOutputDirectives
                 "Evidence only the landed build or live host can show: availability=post-landing, owner=operator, no store or tests; it is a post-landing check and never holds landing. " +
                 "Gate tests: owner=acceptance-gate; non-empty tests array of class, Class.Method or exact theory rows. Selectorless acceptance: authorized explicit answer; Operator checks stay independent. " +
                 "Host alone binds goal/task/dispatch brief version. Invalid batch/identity conflicts or out-of-range criteria reject all; fix diagnostics and replan. " +
+                "When repository evidence contradicts a criterion, use PLANNER_BRIEF_AMENDMENT: with one JSON object containing criterion_index (1-based), defect, evidence (path:line), proposed_text and optional fallback_text, report the amendment in blockers, and re-emit evidence lines after the ruling because this round raises only the owner question. " +
                 "backticked verification commands with TEST-VERIFIABLE or REAL-WORLD-DEPENDENT, and explicit stop conditions. " +
                 "Cited repository paths must exist unless explicitly marked as a new file to create. " +
                 "Cite every path as a concrete repository-relative file, never a wildcard pattern, and before finishing confirm each cited path exists, for example with `git ls-files <path>`, unless it is marked as a new file. " +
@@ -191,10 +192,14 @@ public static class AgentOutputDirectives
             .Select(line => line["PLANNER_EVIDENCE_REQUEST:".Length..].Trim()).ToArray();
         var question = lines.Select(line => TryReadDirective(line.Trim(), "HUMAN_INPUT:") ??
             TryReadDirective(line.Trim(), "HUMAN INPUT:")).FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));
+        var amendment = PlannerBriefAmendmentRequest.TryParse(lines);
+        if (amendment is { IsMalformed: true }) return amendment;
+        if (amendment is not null && evidenceLines.Length == 0)
+            return PlannerBriefAmendmentRequest.Resolve(amendment, question);
         if (evidenceLines.Length == 0)
             return new(question is null ? null : new HumanInputDirective(question,
                 HumanInputRequest.BuildQuestionFingerprint(question)), null);
-        if (role is not null && role != AgentRole.Planner || evidenceLines.Length > 1 && role != AgentRole.Planner)
+        if (role is not null && role != AgentRole.Planner || evidenceLines.Length > 1 && role is null && amendment is null)
             return new(null, "PLANNER_EVIDENCE_REQUEST is valid only for the Planner role");
         if (evidenceLines.Length > 16 || evidenceLines.Sum(value => (long)System.Text.Encoding.UTF8.GetByteCount(value)) > 65536)
             return MalformedEvidenceRequest("batch exceeds 16 lines or 65536 UTF-8 payload bytes; split the requirements in a new planning round");
@@ -215,6 +220,7 @@ public static class AgentOutputDirectives
             return MalformedEvidenceRequest("substantive HUMAN_INPUT and Planner evidence are ambiguous; use evidence lines for every requirement");
         var validated = PlannerEvidenceRequestMerger.TryMerge(requests)!;
         if (validated.IsMalformed) return validated;
+        if (amendment is not null) return PlannerBriefAmendmentRequest.Resolve(amendment, question);
         if (requests.Count == 0 && question is not null)
             return new(new HumanInputDirective(question, HumanInputRequest.BuildQuestionFingerprint(question)), null);
         if (requests.Count == 0) return new(null, null);
