@@ -11,9 +11,14 @@ using Scenario = SubscriptionCooldownSubstitutionTests.Scenario;
 public sealed class SubscriptionCooldownSubstitutionScenarioTests
 {
     [Xunit.Theory]
-    [Xunit.InlineData(false)]
-    [Xunit.InlineData(true)]
-    public async Task Conduct_ClassifiedCooldown_StartsAlternateAcrossReload(bool reload)
+    [Xunit.InlineData(false, false, false)]
+    [Xunit.InlineData(true, false, false)]
+    [Xunit.InlineData(false, true, false)]
+    [Xunit.InlineData(true, true, false)]
+    [Xunit.InlineData(false, true, true)]
+    [Xunit.InlineData(true, true, true)]
+    public async Task Conduct_ClassifiedCooldown_StartsAlternateAcrossReload(
+        bool reload, bool offline, bool rejectedFirst)
     {
         using var scenario = new Scenario();
         var goal = scenario.NewGoal();
@@ -24,6 +29,16 @@ public sealed class SubscriptionCooldownSubstitutionScenarioTests
         var sourceVerification = Assert.Single(original.VerificationHistory);
         Assert.True(DispatchFailureClassifier.IsRecoverableSubscriptionLimitFailure(sourceVerification));
         Assert.NotEqual(ProviderFailureKind.BudgetExhausted, sourceVerification.ProviderFailureKind);
+        if (offline) scenario.Agents = [scenario.Primary with { Status = AgentStatus.Offline }, scenario.Alternate];
+        if (rejectedFirst)
+        {
+            var rejected = scenario.Alternate with
+            {
+                Id = new("rejected-alternate"),
+                Subscription = scenario.Alternate.Subscription! with { WorkerProfileName = "missing-profile" }
+            };
+            scenario.Agents = [scenario.Agents[0], rejected, scenario.Alternate];
+        }
         var repository = InfrastructureTestSupport.CreateMigratedStateRepository(scenario.Workspace.SqliteStatePath);
         await repository.SaveAsync(scenario.Kernel);
         if (reload)
@@ -85,12 +100,15 @@ public sealed class SubscriptionCooldownSubstitutionScenarioTests
         Assert.Contains($"receipt={scenario.Receipt(goal)}", evt.Message, StringComparison.Ordinal);
         Assert.Contains($"source dispatch={sourceDispatch.DispatchedAt:O}", evt.Message, StringComparison.Ordinal);
         Assert.Contains($"reset={reset:O}", evt.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(currentGoal.Timeline, item => item.Message.Contains(OfflineAssignedAgentRedelegation.Marker, StringComparison.Ordinal));
         Assert.True(scenario.AuthProbes > 0);
 
         await repository.SaveAsync(scenario.Kernel);
         var restored = await repository.LoadAsync();
         var restoredGoal = restored.GetGoal(goal.Id);
         Assert.Equal(evt, Assert.Single(restoredGoal.Timeline, item => item.Kind == ProgressKind.ProviderHoldSubstituted));
+        // Returning the primary to Available must not remove its persisted provider cooldown.
+        scenario.Agents = [scenario.Primary, scenario.Alternate];
         var sibling = restored.AddTask(goal.Id, AgentRole.Planner, "Another provider request.", scenario.Agents);
         Assert.Equal(scenario.Primary.Id, sibling.AssignedAgentId);
         Assert.True(DispatchFailureClassifier.TryGetProviderSubscriptionCooldown(
@@ -110,25 +128,34 @@ public sealed class SubscriptionCooldownSubstitutionScenarioTests
         Assert.Empty(await intents.ListForGoalAsync(goal.Id.Value, cancellationToken: Xunit.TestContext.Current.CancellationToken));
     }
 
-    [Xunit.Fact]
-    public void Prepare_UnfinishedDependency_DoesNotSubstituteOrStart()
+    [Xunit.Theory]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public void Prepare_UnfinishedDependency_OnlyStartsReadyResearcher(bool offline)
     {
         using var scenario = new Scenario();
         var goal = scenario.NewGoal();
         scenario.Limit(goal);
         var task = goal.Tasks.Single();
-        scenario.Kernel.AddTask(goal.Id, AgentRole.Researcher, "Research first.");
+        if (offline) scenario.Agents = [scenario.Primary with { Status = AgentStatus.Offline }, scenario.Alternate];
+        var researcher = scenario.Alternate with { Id = new("codex-researcher"), Role = AgentRole.Researcher };
+        scenario.Agents = [..scenario.Agents, researcher];
+        var ready = scenario.Kernel.AddTask(goal.Id, AgentRole.Researcher, "Research first.", [researcher]);
+        Assert.Equal(WorkTaskStatus.Assigned, ready.Status);
         var launches = 0;
-        var result = Start(scenario, goal, _ =>
+        using var worker = new ProviderHoldFallbackScenarioTests.PreparationWorker();
+        var result = Start(scenario, goal, requested =>
         {
             launches++;
-            throw new InvalidOperationException("Dependency-blocked work must not start.");
+            return worker.Start(requested);
         });
-        Assert.Empty(result.Dispatches);
-        Assert.Equal(0, launches);
+        Assert.Equal(ready.Id, Assert.Single(result.Dispatches).Task.Id);
+        Assert.Single(result.Processes.Tasks);
+        Assert.Equal(1, launches);
         Assert.Equal(scenario.Primary.Id, task.AssignedAgentId);
         Assert.NotNull(task.SubscriptionRetryAfter);
         Assert.DoesNotContain(goal.Timeline, evt => evt.Kind == ProgressKind.ProviderHoldSubstituted);
+        Assert.DoesNotContain(goal.Timeline, evt => evt.Message.Contains(OfflineAssignedAgentRedelegation.Marker, StringComparison.Ordinal));
         Assert.Contains(result.BlockedDiagnostics, diagnostic => diagnostic.Reason == "unmet-dependency");
     }
 
@@ -136,6 +163,9 @@ public sealed class SubscriptionCooldownSubstitutionScenarioTests
     [Xunit.InlineData("pin")]
     [Xunit.InlineData("no-alternate")]
     [Xunit.InlineData("preflight-rejected")]
+    [Xunit.InlineData("offline-pin")]
+    [Xunit.InlineData("offline-no-alternate")]
+    [Xunit.InlineData("offline-preflight-rejected")]
     public void Prepare_IneligibleSubstitution_DoesNotStart(string control)
     {
         using var scenario = new Scenario();
@@ -143,9 +173,14 @@ public sealed class SubscriptionCooldownSubstitutionScenarioTests
         scenario.Limit(goal);
         var task = goal.Tasks.Single();
         var reset = task.SubscriptionRetryAfter;
+        if (control.StartsWith("offline-", StringComparison.Ordinal))
+        {
+            scenario.Agents = [scenario.Primary with { Status = AgentStatus.Offline }, scenario.Alternate];
+            control = control["offline-".Length..];
+        }
         if (control == "pin") scenario.Kernel.ReassignTaskAgent(goal.Id, task.Id, scenario.Primary);
-        if (control == "no-alternate") scenario.Agents = [scenario.Primary];
-        if (control == "preflight-rejected") scenario.Agents = [scenario.Primary,
+        if (control == "no-alternate") scenario.Agents = [scenario.Agents[0]];
+        if (control == "preflight-rejected") scenario.Agents = [scenario.Agents[0],
             scenario.Alternate with { Subscription = scenario.Alternate.Subscription! with { WorkerProfileName = "missing-profile" } }];
         var launchCount = 0;
         var result = Start(scenario, goal, _ =>
@@ -158,6 +193,49 @@ public sealed class SubscriptionCooldownSubstitutionScenarioTests
         Assert.Equal(scenario.Primary.Id, task.AssignedAgentId);
         Assert.Equal(reset, task.SubscriptionRetryAfter);
         Assert.DoesNotContain(goal.Timeline, evt => evt.Kind == ProgressKind.ProviderHoldSubstituted);
+        Assert.DoesNotContain(goal.Timeline, evt => evt.Message.Contains(OfflineAssignedAgentRedelegation.Marker, StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact]
+    public void Prepare_OfflineSubstitutedAgent_PreservesSharedBound()
+    {
+        using var scenario = new Scenario();
+        var goal = scenario.NewGoal();
+        scenario.Limit(goal);
+        var task = goal.Tasks.Single();
+        scenario.Resolver().ApplyBatch(goal, [task.Id]);
+        Assert.Equal(scenario.Alternate.Id, task.AssignedAgentId);
+        var substitution = Assert.Single(goal.Timeline, evt => evt.Kind == ProgressKind.ProviderHoldSubstituted);
+        scenario.Clock.UtcNow = scenario.Clock.UtcNow.AddMinutes(1);
+        scenario.Limit(goal, provider: "OpenAI");
+        scenario.Kernel.AcknowledgeSubscriptionLimitReview(goal.Id, task.Id,
+            "Acknowledge repeated limits to isolate the automatic substitution bound.");
+        var reset = task.SubscriptionRetryAfter;
+        Assert.NotNull(reset);
+        var third = Scenario.Agent("third", "Ollama", "codex-oss-cli", "qwen3-coder");
+        var researcher = third with { Id = new("oss-researcher"), Role = AgentRole.Researcher };
+        scenario.Agents = [scenario.Primary, scenario.Alternate with { Status = AgentStatus.Offline }, third, researcher];
+        var scratch = AgentOrchestratorKernel.FromSnapshot(scenario.Kernel.ExportSnapshot(), scenario.Clock);
+        var trial = scratch.ReassignTaskAgent(goal.Id, task.Id, third);
+        var preflight = scenario.Preflight(scratch.GetGoal(goal.Id), trial, scratch.Goals);
+        Assert.True(preflight.Allowed, string.Join("\n", preflight.Findings));
+        var ready = scenario.Kernel.AddTask(goal.Id, AgentRole.Researcher, "Independent research.", [researcher]);
+        using var worker = new ProviderHoldFallbackScenarioTests.PreparationWorker();
+        var launches = 0;
+
+        var result = Start(scenario, goal, requested =>
+        {
+            launches++;
+            return worker.Start(requested);
+        });
+
+        Assert.Equal(ready.Id, Assert.Single(result.Dispatches).Task.Id);
+        Assert.Single(result.Processes.Tasks);
+        Assert.Equal(1, launches);
+        Assert.Equal(scenario.Alternate.Id, task.AssignedAgentId);
+        Assert.Equal(reset, task.SubscriptionRetryAfter);
+        Assert.Equal(substitution, Assert.Single(goal.Timeline, evt => evt.Kind == ProgressKind.ProviderHoldSubstituted));
+        Assert.DoesNotContain(goal.Timeline, evt => evt.Message.Contains(OfflineAssignedAgentRedelegation.Marker, StringComparison.Ordinal));
     }
 
     [Xunit.Fact]
