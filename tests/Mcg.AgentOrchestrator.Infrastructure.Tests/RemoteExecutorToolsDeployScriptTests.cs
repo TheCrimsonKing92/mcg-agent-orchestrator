@@ -4,8 +4,8 @@ using System.Text.Json;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Infrastructure;
 
-// Real PowerShell contract. Every process, file, and environment value is fixture-owned.
-[Collection("IsolatedProcessSpawning")]
+// Parallel safe: real PowerShell processes and files are fixture-owned; child environments
+// are allow-listed. No shared isolated .NET root or collection fixture is needed.
 public sealed class RemoteExecutorToolsDeployScriptTests
 {
     [Fact]
