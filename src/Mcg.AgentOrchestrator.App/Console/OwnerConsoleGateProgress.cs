@@ -43,10 +43,10 @@ internal sealed record OwnerConsoleGateProgress(bool Live, string Kind,
     internal static OwnerConsoleGateProgress Build(DateTimeOffset now, IEnumerable<OwnerConductEvent> events,
         IReadOnlyList<OwnerConsoleGateManifestLane> manifest, IEnumerable<OwnerConsoleGateDuration> durations,
         Func<string, string?>? title = null, IReadOnlyDictionary<string, double>? quietSeconds = null,
-        OwnerConsoleGateLaneResolver? lanes = null)
+        OwnerConsoleGateLaneResolver? lanes = null, int? capacity = null)
     {
         var parsed = events.OrderBy(item => item.Timestamp).Select(item => new Observation(item, Tokens(item.Detail))).ToArray();
-        var breakdownConcurrency = BreakdownConcurrency(parsed);
+        var breakdownConcurrency = BreakdownConcurrency(parsed) ?? Math.Max(1, capacity ?? 1);
         var gates = new Dictionary<string, Gate>(StringComparer.Ordinal);
         DateTimeOffset? lastEnd = null;
         foreach (var item in parsed)
@@ -241,7 +241,7 @@ internal sealed record OwnerConsoleGateProgress(bool Live, string Kind,
     private static bool IsDone(OwnerConsoleGateLane row) => row.State is OwnerConsoleGateLaneState.Done or OwnerConsoleGateLaneState.Cached;
     private static TimeSpan Nonnegative(TimeSpan value) => value < TimeSpan.Zero ? TimeSpan.Zero : value;
     private static string Prefix(string id) => id.Trim()[..Math.Min(8, id.Trim().Length)];
-    private static int BreakdownConcurrency(Observation[] parsed)
+    private static int? BreakdownConcurrency(Observation[] parsed)
     {
         var newest = parsed.LastOrDefault(item => item.Event.Detail.StartsWith("PHASE_PROGRESS ", StringComparison.Ordinal) &&
             item.Get("phase") == "gate-phase-breakdown");
@@ -250,9 +250,9 @@ internal sealed record OwnerConsoleGateProgress(bool Live, string Kind,
             var separator = field.IndexOf('=');
             if (separator < 0 || !field[..separator].Equals("shard_concurrency_effective", StringComparison.Ordinal)) continue;
             return int.TryParse(field[(separator + 1)..], NumberStyles.Integer, CultureInfo.InvariantCulture, out var value) &&
-                value >= 1 ? value : 1;
+                value >= 1 ? value : null;
         }
-        return 1;
+        return null;
     }
 
     private static Dictionary<string, string> Tokens(string detail) => Fields.Matches(detail).Cast<Match>()
