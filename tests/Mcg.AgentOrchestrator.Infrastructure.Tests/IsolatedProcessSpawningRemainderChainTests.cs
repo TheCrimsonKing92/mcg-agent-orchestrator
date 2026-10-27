@@ -27,7 +27,8 @@ public sealed class IsolatedProcessSpawningRemainderChainTests
         typeof(CandidateIdentityComputationTests),
         typeof(CandidateIdentityProjectHomeTests),
         typeof(AcceptanceSharedApparatusRealProcessControlTests),
-        typeof(AcceptanceMtpFilterResponseFileManagedTests)
+        typeof(AcceptanceMtpFilterResponseFileManagedTests),
+        typeof(RemoteFirstFocusedEvidenceNormalizedResultTests)
     ];
 
     private static readonly Type[] DeferredContextTypes =
@@ -123,11 +124,19 @@ public sealed class IsolatedProcessSpawningRemainderChainTests
     // Sum of all nine passing classifier cases; a single gate sample, not a five-gate mean.
     private const double FocusedEvidenceInterruptionGateSeconds = 0.0111781;
 
+    // Native Remainder gate on candidate bd9f72310ed9aaaee1894422de7fb1d297e7a3b4:
+    // attempt c5e54e91-0-20261027171340845-6ade9644b91c4488b2b87f6f2a9b0cc2,
+    // infrastructure-tests-remainder.trx SHA256
+    // 6BE4649034341AC57C8BFD06B3CB409077364F79C434A002F626FC237A041597.
+    // Sum of all 13 passing normalization cases; a single gate sample, not a five-gate mean.
+    private const double NormalizedResultGateSeconds = 12.4667215;
+
     private static readonly IReadOnlyDictionary<string, double> PlanningSeconds = MeanSeconds
         .Concat(DeferredContextSamples.Select(sample => new KeyValuePair<string, double>(
             sample.Key, Math.Max(sample.Value.Focused, sample.Value.NativeGate))))
         .Append(new(nameof(RemoteFirstFocusedEvidencePermitReleaseScenarioTests), PermitReleaseScenarioGateSeconds))
         .Append(new(nameof(FocusedEvidenceInterruptionTests), FocusedEvidenceInterruptionGateSeconds))
+        .Append(new(nameof(RemoteFirstFocusedEvidenceNormalizedResultTests), NormalizedResultGateSeconds))
         .ToDictionary(row => row.Key, row => row.Value, StringComparer.Ordinal);
 
     [Xunit.Fact]
@@ -136,7 +145,7 @@ public sealed class IsolatedProcessSpawningRemainderChainTests
         foreach (var type in MovedTypes)
             Xunit.Assert.Equal(SplitCollection, DeclaredCollection(type));
         var members = RunnableTypes().Where(type => DeclaredCollection(type) == SplitCollection).ToArray();
-        Xunit.Assert.Equal(15, members.Length);
+        Xunit.Assert.Equal(16, members.Length);
         Xunit.Assert.Equal(MovedTypes.Select(type => type.FullName).Order(StringComparer.Ordinal),
             members.Select(type => type.FullName).Order(StringComparer.Ordinal));
 
@@ -205,7 +214,9 @@ public sealed class IsolatedProcessSpawningRemainderChainTests
     {
         var (sums, unlisted) = Score(RemainderMembers(), PlanningSeconds);
         Xunit.Assert.Empty(unlisted);
-        Xunit.Assert.InRange(sums[SplitCollection], 225.3 - 0.05, 225.3 + 0.05);
+        Xunit.Assert.InRange(sums[SplitCollection],
+            225.3 + NormalizedResultGateSeconds - 0.05,
+            225.3 + NormalizedResultGateSeconds + 0.05);
         Xunit.Assert.InRange(sums[OriginalCollection],
             229.4 + PermitReleaseScenarioGateSeconds + FocusedEvidenceInterruptionGateSeconds - 0.05,
             229.4 + PermitReleaseScenarioGateSeconds + FocusedEvidenceInterruptionGateSeconds + 0.05);
