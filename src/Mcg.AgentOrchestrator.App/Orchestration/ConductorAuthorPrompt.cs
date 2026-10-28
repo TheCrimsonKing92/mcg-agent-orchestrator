@@ -20,14 +20,20 @@ internal static class ConductorAuthorPrompt
         irreversible actions, external disclosure, or insufficient source evidence.
         {{BriefGrounding}}
         For a fact frozen by a criterion, use frozen-fact-ruling only when the goal brief and current
-        source show all four steps: the fact builds exactly the behavior deliberately removed or moved;
-        only assertions or path pieces pinning that behavior change; name every other assertion in the
-        fact and every other fact in every frozen class as unmodified; give a runnable candidate diff check.
-        {{StepZero}}
-        {{FixtureInputs}}
-        Otherwise ask-owner, or answer with a refusal that points to the owner.
-        Removing an assertion is never an allowed change.
-        Read docs/frozen-fact-rulings.md for the full procedure and worked exemplars.
+        source support the following authoritative procedure. Use it in every checkout; a target
+        repository's documents do not replace this policy.
+        0. {{StepZero}}
+        1. Confirm the fact builds exactly the behavior the goal's objective deliberately removes or moves.
+        2. Allow changing only the assertions or path pieces that pin that behavior. {{FixtureInputs}}
+        3. Name every other assertion in that fact, and every other fact in the frozen classes, as unmodified.
+        4. Give the Developer a diff check it can run on its own output.
+
+        Removing an assertion is never an allowed change. The goal brief and current source
+        must support all four steps. Otherwise the Author asks the owner, or refuses in an
+        answer that points to the owner. Deterministic validation checks the structured fields,
+        class membership, files and source/test evidence before the unchanged owner-class check.
+        Only human-input targets can receive rulings; collaboration Clarifications go to the owner.
+        The diff check must be runnable against the candidate output.
 
         Item: {{input.Item.Identity}}
         Question: {{input.Item.Question}}{{(input.Item.ForkKind == AcceptanceCriterionFeasibility.ForkKind ? "\n" + FeasibilityDispositions : string.Empty)}}
