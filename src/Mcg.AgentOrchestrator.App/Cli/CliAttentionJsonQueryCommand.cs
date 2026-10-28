@@ -12,21 +12,11 @@ internal static class CliAttentionJsonQueryCommand
         !CliCommandHelp.IsCommandSpecificHelp(args);
 
     internal static void Execute(IReadOnlyList<string> args, IOrchestratorStateQueries stateQueries,
-        OrchestratorWorkspace workspace, TimeProvider? time = null)
+        OrchestratorWorkspace workspace, TimeProvider? time = null, CancellationToken cancellationToken = default)
     {
-        var metadata = stateQueries.ListGoalMetadataAsync().GetAwaiter().GetResult();
-        var ids = metadata.Select(goal => new GoalId(goal.Id)).ToArray();
-        var kernel = ids.Length == 0
-            ? new AgentOrchestratorKernel()
-            : stateQueries.LoadGoalsAsync(ids).GetAwaiter().GetResult();
-        var itemsDb = Path.Combine(workspace.OrchestratorDirectory, "collaboration-items.db");
-        IReadOnlyList<CollaborationItem> items = File.Exists(itemsDb)
-            ? CollaborationItemStore.OpenExisting(workspace.OrchestratorDirectory)
-                .GetAttentionQueueAsync().GetAwaiter().GetResult()
-            : [];
-        var waits = CliCommandHandlers.HumanWaitsForAttention(kernel, null, includeHistory: false);
-        items = CliCommandHandlers.CollaborationItemsForAttention(items, kernel, null, includeHistory: false);
-        Console.WriteLine(AttentionAgentReadView.Render(waits, items, time,
-            ProviderUsageHoldView.Read(kernel.Goals, (time ?? TimeProvider.System).GetUtcNow()), kernel.Goals));
+        var context = AttentionJsonReadContext.ReadAsync(stateQueries, workspace,
+            (time ?? TimeProvider.System).GetUtcNow(), cancellationToken).GetAwaiter().GetResult();
+        Console.WriteLine(AttentionAgentReadView.Render(context.Waits, context.Items, time,
+            context.ProviderHolds, gateEvidence: context.GateEvidence, ownerQuestions: context.OwnerQuestions));
     }
 }

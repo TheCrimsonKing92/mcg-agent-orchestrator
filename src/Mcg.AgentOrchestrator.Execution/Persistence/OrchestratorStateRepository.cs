@@ -5,6 +5,14 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 public interface IOrchestratorStateQueries
 {
     /// <summary>
+    /// Reads attention policy inputs without full goal/task snapshot materialization. Null explicitly
+    /// denotes an unsupported capability; failures and cancellation must propagate to the caller.
+    /// Archive payload scans, when necessary, are accounted separately from full snapshot loads.
+    /// </summary>
+    Task<AttentionReadProjection?> ReadAttentionProjectionAsync(CancellationToken cancellationToken = default) =>
+        Task.FromResult<AttentionReadProjection?>(null);
+
+    /// <summary>
     /// Reads every goal row as stored, archived goals as metadata-only summaries, all human-input
     /// requests and active practices, without a write lock or write tag.
     /// </summary>
@@ -79,6 +87,22 @@ public interface IOrchestratorStateQueries
 
 public sealed record TerminalOwnerQuestionHold(
     string GoalId, string Identity, string State, string Blocker, DateTimeOffset StartedAt);
+
+public sealed record AttentionGoalReadFacts(string GoalId, GoalStatus Status, int BriefVersion,
+    bool HasWaitingTasks = false);
+public sealed record AttentionGateEvidence(string GoalId, GateTestObligation Obligation);
+public sealed record AttentionOwnerQuestionEvidence(string GoalId, GoalHoldSnapshot Hold, IReadOnlyList<string> TaskIds);
+
+/// <summary>Physical history reads and sparse adapters, not full GoalSnapshot/TaskSnapshot loads.</summary>
+public sealed record AttentionProjectionReadCounts(int HotRows, int ArchivePayloadsRead,
+    int ArchivePayloadsDecoded, int ProviderTasks, int OwnerQuestionTasks);
+
+public sealed record AttentionReadProjection(
+    IReadOnlyList<AttentionGoalReadFacts> Goals,
+    IReadOnlyList<AttentionGateEvidence> GateEvidence,
+    IReadOnlyList<AttentionOwnerQuestionEvidence> OwnerQuestions,
+    IReadOnlyList<ProviderUsageGoalEvidence> ProviderEvidence,
+    AttentionProjectionReadCounts Reads);
 
 public sealed record AcceptanceQueueFact(string GoalId, GoalPriority Priority,
     DateTimeOffset VerifiedAt, DateTimeOffset CreatedAt);
