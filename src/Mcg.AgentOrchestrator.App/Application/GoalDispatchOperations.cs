@@ -87,6 +87,7 @@ internal sealed partial class GoalDispatchOperations
         var intentAdmission = intentStore.CaptureAdmission(goal.Id.Value, task.Id.Value,
             TaskGraphIdentity.Compute(goal), workspace.SqliteStatePath);
         EnsureRefinedForTask(kernel, workspace, providers, goal, task);
+        EnsureDeveloperTestLaneReadiness(kernel.GetGoal(goal.Id), workspace, [task.Id]);
         var subscriptionMetadata = TryBuildProfileSubscriptionMetadata(goal, task, profile, agents,
             subscriptionProfiles, ResolveCascadeTesterCheapFirst(workspace, cascadeTesterCheapFirst, conductorPolicy),
             ResolveCascadeCheapModelAlias(workspace, cascadeCheapModelAlias, conductorPolicy), cascadeMechanicalReworkCheap: ResolveCascadeMechanicalReworkCheap(workspace, cascadeMechanicalReworkCheap, conductorPolicy));
@@ -441,6 +442,7 @@ internal sealed partial class GoalDispatchOperations
         var safeBatch = DispatchReadinessRules.SelectFirstParallelSafeAssignedBatch(goal, agents, excludedTaskIds: held);
         EnsureRefinedForSelectedTasks(kernel, workspace, providers, goal, safeBatch.TaskIds);
         goal = kernel.GetGoal(goal.Id);
+        EnsureDeveloperTestLaneReadiness(goal, workspace, safeBatch.TaskIds);
         var home = _resolveHome(workspace);
         var batch = WorkerProfileDispatcher.PrepareSubscriptionReadyBatch(
             kernel,
@@ -485,6 +487,7 @@ internal sealed partial class GoalDispatchOperations
         var intentAdmission = intentStore.CaptureAdmission(goal.Id.Value, task.Id.Value,
             TaskGraphIdentity.Compute(goal), workspace.SqliteStatePath);
         EnsureRefinedForTask(kernel, workspace, providers, goal, task);
+        EnsureDeveloperTestLaneReadiness(kernel.GetGoal(goal.Id), workspace, [task.Id]);
         var home = _resolveHome(workspace);
         var prepared = WorkerProfileDispatcher.PrepareSubscriptionTask(
             kernel,
@@ -553,6 +556,24 @@ internal sealed partial class GoalDispatchOperations
         var alias = explicitValue ?? policy?.CascadeCheapModelAlias ??
             ConductorAutonomyPolicy.LoadFromOrchestratorDirectory(new DirectoryInfo(workspace.OrchestratorDirectory)).CascadeCheapModelAlias;
         return !string.IsNullOrWhiteSpace(alias) ? alias : throw new ArgumentException("cascadeCheapModelAlias must not be empty.");
+    }
+
+    private static void EnsureDeveloperTestLaneReadiness(
+        Goal goal, OrchestratorWorkspace workspace, IReadOnlyCollection<TaskId> taskIds)
+    {
+        var blocker = DeveloperTestLaneBlocker(goal, workspace, taskIds);
+        if (blocker is not null) throw new InvalidOperationException(blocker);
+    }
+
+    private static string? DeveloperTestLaneBlocker(
+        Goal goal, OrchestratorWorkspace workspace, IReadOnlyCollection<TaskId> taskIds)
+    {
+        if (!goal.Tasks.Any(task => taskIds.Contains(task.Id) && task.RequiredRole == AgentRole.Developer)) return null;
+        var blockers = GoalReadinessPreflight.PlannedTestLaneFindings(goal,
+            workspace.ResolveExecutionDirectory(goal.Id), workspace.ProjectHomeDirectoryOrNull)
+            .Where(finding => finding.Severity == GoalReadinessSeverity.Blocker).ToArray();
+        return blockers.Length == 0 ? null : "Goal readiness preflight blocked Developer dispatch. " +
+            string.Join("; ", blockers.Select(finding => $"{finding.Kind}: {finding.Message}"));
     }
 
     private static void EnsureRefinedForSelectedTasks(

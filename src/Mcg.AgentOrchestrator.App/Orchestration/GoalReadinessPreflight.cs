@@ -107,7 +107,8 @@ public static class GoalReadinessPreflight
         WorkerProfileCatalog? profiles = null,
         Func<string, GoalId, string?>? resolveWorktree = null,
         IReadOnlyCollection<Goal>? providerHoldScope = null,
-        DateTimeOffset? now = null)
+        DateTimeOffset? now = null,
+        string? projectHomeDirectory = null)
     {
         var findings = new List<GoalReadinessFinding>();
         var text = $"{goal.Objective}\n{string.Join('\n', goal.Tasks.Select(task => $"{task.Description}\n{task.VerificationPlan}"))}";
@@ -126,6 +127,17 @@ public static class GoalReadinessPreflight
             <= 3 => "medium",
             _ => "high"
         };
+
+        var plannedTestLanes = PlannedTestLaneFindings(goal, worktree ?? executionDirectory, projectHomeDirectory);
+        var developers = goal.Tasks.Where(task => task.RequiredRole == AgentRole.Developer).ToArray();
+        // Scout planning can repair the brief. Developer admission below always uses the blocking findings.
+        var planningFirst = developers.Length > 0 && developers.All(task =>
+            DispatchReadinessRules.BuildIncompleteEarlierStageDependencies(goal, task).Length > 0);
+        findings.AddRange(plannedTestLanes.Select(finding => planningFirst &&
+            finding.Kind == LaneSubstringCollisionCheck.Rule &&
+            finding.Severity == GoalReadinessSeverity.Blocker
+                ? finding with { Severity = GoalReadinessSeverity.Warning }
+                : finding));
 
         if (requiresWorkspace && worktree is null)
         {
@@ -262,6 +274,10 @@ public static class GoalReadinessPreflight
             : "";
         throw new InvalidOperationException($"Goal readiness preflight blocked unattended start. {blockerText}.{confirmation}");
     }
+
+    internal static IReadOnlyList<GoalReadinessFinding> PlannedTestLaneFindings(
+        Goal goal, string repositoryRoot, string? projectHomeDirectory = null) =>
+        BriefPlannedTestLaneReadiness.Evaluate(goal, repositoryRoot, projectHomeDirectory);
 
     private static GoalReadinessRecommendation BuildRecommendation(
         bool hardBlockers,

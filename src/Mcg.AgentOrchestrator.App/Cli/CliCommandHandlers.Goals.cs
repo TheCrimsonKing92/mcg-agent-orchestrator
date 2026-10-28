@@ -985,7 +985,8 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 context.Workspace.ExecutionDirectory,
                 context.WorkerProfiles,
                 context.Worktrees.TryResolve,
-                readinessHoldScope));
+                readinessHoldScope,
+                projectHomeDirectory: context.Workspace.ProjectHomeDirectoryOrNull));
             return readinessSweep.Changed;
 
         case "goal-recovery":
