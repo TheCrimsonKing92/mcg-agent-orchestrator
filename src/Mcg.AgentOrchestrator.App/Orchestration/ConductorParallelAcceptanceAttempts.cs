@@ -164,6 +164,8 @@ internal sealed record ConductorParallelAcceptanceAttempt(
     public string? ProjectName { get; init; }
     public string? ReplayContextFingerprint { get; init; }
     public string? ReplayResultFingerprint { get; init; }
+    public string? FocusedExecutionBasisIdentity { get; init; }
+    public FindingEvidenceReceipt? OriginalFocusedReceipt { get; init; }
     public DateTimeOffset? ReplayLandedAt { get; init; }
     public DateTimeOffset? OwnerProcessStartedAt { get; init; }
     public string? OwnerExecutablePath { get; init; }
@@ -182,7 +184,8 @@ internal sealed record ConductorFocusedEvidenceRequestContext(
     bool RunBaselineArm = false,
     FocusedEvidenceRunResult? CandidateEvidenceBeforeBaseline = null,
     FindingEvidenceNegativeControl? NegativeControl = null,
-    IReadOnlyList<string>? RevertPaths = null, FindingEvidenceMutation? Mutation = null);
+    IReadOnlyList<string>? RevertPaths = null, FindingEvidenceMutation? Mutation = null,
+    string? ExecutionBasisIdentity = null, string? ReceiptId = null);
 
 internal sealed record ConductorParallelAcceptanceAttemptDecision(
     ConductorParallelAcceptanceAttemptDecisionKind Kind,
@@ -1585,6 +1588,7 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
             var artifact = ToArtifact(run);
             WriteResult(attempt.ResultPath, artifact);
             var resultFingerprint = HashReplayResult(JsonSerializer.Serialize(artifact, JsonOptions));
+            var originalFocusedReceipt = CaptureOriginalFocusedReceipt(attempt, run);
             _resultPublishedForTests?.Invoke(attempt);
             var outcome = OutcomeFor(run, attempt.Kind);
             var claimedTerminal = TryPersistTerminal(attempt, current => current with
@@ -1597,6 +1601,7 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
                 Detail = AcceptanceRunDetail(run),
                 TestResultPaths = ResultTestPaths(run),
                 ReplayResultFingerprint = resultFingerprint,
+                OriginalFocusedReceipt = originalFocusedReceipt,
                 TransientFailureCount = IsBoundedTransientFailure(outcome, AcceptanceRunDetail(run))
                     ? CountConsecutiveTransientFailures(current) + 1
                     : current.TransientFailureCount
@@ -2222,6 +2227,7 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
                 .Select(disposition => disposition.Disposition)
                 .FirstOrDefault(disposition => disposition.StartsWith("executed-", StringComparison.Ordinal)),
             FindingRoundFingerprint: requestContext?.FindingRoundFingerprint,
+            FocusedEvidenceReceiptId: requestContext?.ReceiptId,
             FocusedEvidenceRequestDispositions: requestContext?.RequestDispositions,
             PolicyJson: policy.ToJson(),
             StableSlotExhaustionPolicy: stableSlotExhaustionPolicy,
@@ -2233,6 +2239,7 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
             StateDirectory = _stateDirectory,
             ProjectName = _projectName,
             ReplayContextFingerprint = BuildReplayContextFingerprint(candidate.Goal),
+            FocusedExecutionBasisIdentity = requestContext?.ExecutionBasisIdentity,
             HolderContractVersion = _usesDurableHolderLease ? 1 : 0,
             HolderCandidateKey = _usesDurableHolderLease ? candidate.CandidateKey : null
         };
