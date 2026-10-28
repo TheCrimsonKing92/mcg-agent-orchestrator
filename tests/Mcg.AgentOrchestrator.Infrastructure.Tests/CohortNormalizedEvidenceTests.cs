@@ -6,6 +6,64 @@ using Mcg.AgentOrchestrator.Infrastructure;
 public sealed class CohortNormalizedEvidenceTests
 {
     [Theory]
+    [InlineData("missing-required-check")]
+    [InlineData("missing-required-path")]
+    [InlineData("unexplained-path")]
+    public void AdvisoryArtifacts_CannotReplaceRequiredCoverage(string fault)
+    {
+        using var fixture = new CohortNormalizedFixture();
+        var required = fixture.Normalized();
+        var advisory = fixture.Trx() with { Advisory = true };
+        var verification = fixture.Verification(required, advisory);
+        verification = fault switch
+        {
+            "missing-required-check" => verification with { RequiredTestCheckNames = [required.Name, advisory.Name] },
+            "missing-required-path" => verification with { TestResultPaths = advisory.TestResultPaths },
+            _ => verification with { TestResultPaths = [.. verification.TestResultPaths!, fixture.Normalized("orphan").NormalizedTestResultPaths![0]] }
+        };
+        AssertRejected(verification);
+    }
+
+    [Theory]
+    [InlineData(false, "source-attempt")]
+    [InlineData(true, "")]
+    public void TrxCarry_RequiresExplicitAuthorizationAndSourceIdentity(bool authorized, string attempt)
+    {
+        using var fixture = new CohortNormalizedFixture();
+        var trx = fixture.Trx() with { TestResultAttemptId = attempt, TestResultIsExplicitCrossAttemptReuse = authorized };
+        var classified = AcceptanceCohortVerificationClassifier.ClassifyCohortVerificationResult(
+            fixture.Verification(fixture.Normalized(), trx));
+        Assert.Equal(AcceptanceCohortGateOutcome.InfrastructureFailure, classified.Outcome);
+    }
+
+    [Theory]
+    [InlineData("failed")]
+    [InlineData("error")]
+    [InlineData("skipped")]
+    [InlineData("empty")]
+    [InlineData("unrelated")]
+    [InlineData("duplicate-source")]
+    [InlineData("missing")]
+    [InlineData("malformed")]
+    public void MultiFileCompanionFaults_CannotPass(string fault)
+    {
+        using var fixture = new CohortNormalizedFixture();
+        var trx = fixture.TrxWithCompanions();
+        var path = trx.NormalizedTestResultPaths![1];
+        if (fault == "missing") File.Delete(path);
+        else if (fault == "malformed") File.WriteAllText(path, "{");
+        else
+        {
+            var id = fault == "unrelated" ? "other" : fault == "duplicate-source" ? "first" : "second";
+            NormalizedTestResultWriter.Write(path, "trx", fault == "empty" ? [] : [CohortNormalizedFixture.Record(id, fault)]);
+        }
+        var classified = AcceptanceCohortVerificationClassifier.ClassifyCohortVerificationResult(
+            fixture.Verification(fixture.Normalized(), trx));
+        Assert.Equal(fault is "failed" or "error" ? AcceptanceCohortGateOutcome.Failed :
+            AcceptanceCohortGateOutcome.InfrastructureFailure, classified.Outcome);
+    }
+
+    [Theory]
     [InlineData("failed")]
     [InlineData("error")]
     [InlineData("skipped")]

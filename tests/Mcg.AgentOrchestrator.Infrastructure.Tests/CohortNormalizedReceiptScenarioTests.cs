@@ -6,6 +6,84 @@ using Mcg.AgentOrchestrator.Infrastructure;
 public sealed class CohortNormalizedReceiptScenarioTests
 {
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void AdvisoryArtifacts_DoNotRejectRequiredEvidenceOrEnterCustody(bool normalized)
+    {
+        using var fixture = new CohortNormalizedFixture();
+        var required = fixture.Normalized();
+        var advisory = (normalized ? fixture.Normalized("advisory") : fixture.Trx()) with
+            { Advisory = true, Passed = false, ExitCode = 7 };
+        var verification = fixture.Verification(required, advisory);
+        Assert.Equal(2, verification.TestResultPaths!.Count);
+        Assert.Equal(new[] { required.Name }, verification.RequiredTestCheckNames);
+        var receipt = fixture.Save(verification);
+        Assert.Equal(required.Name, Assert.Single(receipt.GateChecks).CheckName);
+        Assert.Single(receipt.GateTestResultPaths);
+        Directory.Delete(fixture.SourceRoot, recursive: true);
+        var reopened = new CohortAcceptanceStore(fixture.StorePath).TryReadReceipt(receipt.Identity.Value)!;
+        Assert.True(reopened.HasAuthoritativeLandingEvidence);
+        Assert.Equal(1, Assert.Single(reopened.GateChecks).ExecutedTestCount);
+    }
+
+    [Fact]
+    public void VerifiedPartitionCarry_PreservesSourceLineageThroughCustodyAndReadback()
+    {
+        using var fixture = new CohortNormalizedFixture();
+        var lane = new GoalAcceptanceVerifier.AcceptanceManifestCheck
+        {
+            Name = "infrastructure tests: alpha", Type = "dotnet-test", Runner = "vstest",
+            Project = "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
+            Arguments = ["--filter", "FullyQualifiedName~AlphaTests"]
+        };
+        var options = new AcceptancePartitionVerdictCacheOptions(null, fixture.Root, [lane], 5, true,
+            _ => "combined-tree", _ => "main-sha", _ => "combined-commit", () => "source-attempt",
+            () => "manifest-a", () => true, ResolveClosureHash: _ => null,
+            ResolveChangedFiles: (_, _, _) => [], ResolveDisjointLandingFacts: _ => null,
+            MemberGoalIds: fixture.Identity.Members.Select(member => member.GoalId.Value).ToArray(), EmitDiagnostic: _ => { });
+        var first = Assert.IsType<AcceptancePartitionVerdictCache>(AcceptancePartitionVerdictCache.Create(options));
+        Assert.Null(first.TryReuse(lane));
+        first.RecordExecution(lane, fixture.Trx(runOrdinal: 0) with { Name = lane.Name, TestResultAttemptId = "source-attempt" });
+        Assert.NotNull(first.CompleteAttempt());
+        var next = Assert.IsType<AcceptancePartitionVerdictCache>(AcceptancePartitionVerdictCache.Create(
+            options with { ResolveAttemptId = () => "attempt" }));
+        var reused = Assert.IsType<AcceptanceCheckResult>(next.TryReuse(lane));
+        Assert.True(reused.TestResultIsExplicitCrossAttemptReuse);
+        Assert.Equal("source-attempt", reused.TestResultAttemptId);
+        Assert.Contains("reuse_rule=pair", reused.ResultSummary);
+        var required = fixture.Normalized();
+        var receipt = fixture.Save(fixture.Verification(required, reused));
+        Directory.Delete(fixture.SourceRoot, recursive: true);
+        var reopened = new CohortAcceptanceStore(fixture.StorePath).TryReadReceipt(receipt.Identity.Value)!;
+        Assert.True(reopened.HasAuthoritativeLandingEvidence);
+        var carried = Assert.Single(reopened.GateChecks, check => check.CheckName == lane.Name);
+        Assert.Equal("source-attempt", carried.AttemptId);
+        Assert.Equal(0, carried.RunOrdinal);
+        Assert.Equal(1, carried.ExecutedTestCount);
+        Assert.Equal(2, reopened.GateChecks.Sum(check => check.ExecutedTestCount));
+    }
+
+    [Fact]
+    public void MultiFileTrxCompanions_RetainAssociationsWithoutDoubleCounting()
+    {
+        using var fixture = new CohortNormalizedFixture();
+        var trx = fixture.TrxWithCompanions();
+        var receipt = fixture.Save(fixture.Verification(fixture.Normalized(), trx));
+        Assert.Equal(3, receipt.GateChecks.Sum(check => check.ExecutedTestCount));
+        var retained = Assert.Single(receipt.GateChecks, check => check.Format == AcceptanceCohortCheckEvidence.TrxFormat);
+        Assert.Equal(2, retained.Artifacts.Count);
+        Assert.Equal(2, retained.SupplementalArtifacts.Count);
+        Assert.All(retained.SupplementalArtifacts, artifact =>
+            Assert.Single(new NormalizedTestResultSource().Read(artifact.Path).Records));
+        Directory.Delete(fixture.SourceRoot, recursive: true);
+        Sweep(fixture);
+        var reopened = new CohortAcceptanceStore(fixture.StorePath).TryReadReceipt(receipt.Identity.Value)!;
+        Assert.True(reopened.HasAuthoritativeLandingEvidence);
+        Assert.Equal(3, CohortTestResultEvidence.Assess(reopened.GateChecks).ExecutedTestCount);
+        Assert.Equal(receipt.GateEvidenceArtifacts, reopened.GateEvidenceArtifacts);
+    }
+
+    [Theory]
     [InlineData(false, 0)]
     [InlineData(true, 0)]
     [InlineData(false, 1)]

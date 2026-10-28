@@ -29,25 +29,38 @@ internal sealed class CohortNormalizedFixture : IDisposable
         { CohortEvidence = evidence, NormalizedTestResultPaths = [path], CrosswalkDiagnostics = [] };
     }
 
-    internal AcceptanceCheckResult Trx(int runOrdinal = 1)
+    internal AcceptanceCheckResult Trx(int runOrdinal = 1, string name = "dotnet", string id = "local-id")
     {
-        var path = Path.Combine(SourceRoot, "dotnet.trx");
-        File.WriteAllText(path, """
+        var path = Path.Combine(SourceRoot, name + ".trx");
+        File.WriteAllText(path, $"""
             <TestRun xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">
-              <Results><UnitTestResult testId="local-id" testName="test" outcome="Passed" /></Results>
+              <Results><UnitTestResult testId="{id}" testName="{id}" outcome="Passed" /></Results>
               <ResultSummary><Counters total="1" executed="1" passed="1" failed="0" /></ResultSummary>
             </TestRun>
             """);
-        return new("dotnet", true, 0, null, TestResultPaths: [path], TestResultAttemptId: "attempt", TestResultRunOrdinal: runOrdinal,
+        return new(name, true, 0, null, TestResultPaths: [path], TestResultAttemptId: "attempt", TestResultRunOrdinal: runOrdinal,
             ExecutedTestCount: 1);
     }
 
+    internal AcceptanceCheckResult TrxWithCompanions()
+    {
+        var first = Trx(name: "dotnet-first", id: "first");
+        var second = Trx(name: "dotnet-second", id: "second");
+        var check = first with { Name = "dotnet", TestResultPaths = [first.TestResultPaths![0], second.TestResultPaths![0]],
+            ExecutedTestCount = 2 };
+        foreach (var path in check.TestResultPaths)
+            check = NormalizedGateResultStep.Apply(check, path, NormalizedGateResultStep.TrxSourceLabel);
+        Assert.Null(check.NormalizedTestResultWriteFailure);
+        Assert.Equal(2, check.NormalizedTestResultPaths!.Count);
+        return check;
+    }
+
     internal AcceptanceVerificationResult Verification(params AcceptanceCheckResult[] checks) => new(true, false, 0, null,
-        Checks: checks, TestResultPaths: checks.SelectMany(check => check.NormalizedTestResultPaths ?? check.TestResultPaths ?? []).ToArray())
+        Checks: checks, TestResultPaths: AcceptanceVerificationResult.CollectTestResultPaths(checks))
     {
         AttemptId = "attempt",
-        RequiredCrosswalkChecks = checks.Where(check => check.CohortEvidence is not null).Select(check => check.Name).ToArray(),
-        RequiredTestCheckNames = checks.Select(check => check.Name).ToArray()
+        RequiredCrosswalkChecks = checks.Where(check => !check.Advisory && check.CohortEvidence is not null).Select(check => check.Name).ToArray(),
+        RequiredTestCheckNames = checks.Where(check => !check.Advisory).Select(check => check.Name).ToArray()
     };
 
     internal AcceptanceCohortReceipt Save(AcceptanceVerificationResult result, bool red = false)

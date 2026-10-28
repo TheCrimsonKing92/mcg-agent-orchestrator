@@ -33,7 +33,10 @@ internal static class CohortDeclaredCheckEvidence
         foreach (var check in checks.Where(check => !required.Contains(check.Name, StringComparer.Ordinal) &&
                      check.TestResultPaths is { Count: > 0 }))
         {
-            if (check.TestResultAttemptId != result.AttemptId || check.TestResultRunOrdinal < 0) return null;
+            // The partition cache has already proved applicability for explicit carry. Keep
+            // its source attempt, just as structural coverage does, rather than rebinding it.
+            if (string.IsNullOrWhiteSpace(check.TestResultAttemptId) || check.TestResultRunOrdinal < 0 ||
+                (check.TestResultAttemptId != result.AttemptId && !check.TestResultIsExplicitCrossAttemptReuse)) return null;
             var paths = GroupedReceiptTestResultPaths.Resolve(result with { Checks = [check] },
                 AcceptanceCohortVerificationClassifier.NormalizeCohortTestResultPaths(check.TestResultPaths)).Paths;
             if (!AcceptanceCohortGateEvidence.HasCoherentTrxEvidence(paths)) return null;
@@ -46,9 +49,16 @@ internal static class CohortDeclaredCheckEvidence
                     .Select(path => CohortTestResultEvidence.Capture(path, AcceptanceCohortCheckEvidence.NormalizedFormat)).ToArray()
             });
         }
-        // No required aggregate artifact can vanish when switching from legacy TRX to declarations.
-        var resolved = GroupedReceiptTestResultPaths.Resolve(result,
-            AcceptanceCohortVerificationClassifier.NormalizeCohortTestResultPaths(result.TestResultPaths)).Paths;
+        // The aggregate includes advisory artifacts too. Exclude only artifacts owned
+        // exclusively by advisory checks; missing required or unexplained paths still fail.
+        var requiredPaths = new HashSet<string>(AcceptanceVerificationResult.CollectTestResultPaths(checks)
+            .Select(Path.GetFullPath), StringComparer.OrdinalIgnoreCase);
+        var advisoryOnlyPaths = new HashSet<string>(AcceptanceVerificationResult.CollectTestResultPaths(
+                (result.Checks ?? []).Where(check => check.Advisory)).Select(Path.GetFullPath)
+            .Where(path => !requiredPaths.Contains(path)), StringComparer.OrdinalIgnoreCase);
+        var aggregate = AcceptanceCohortVerificationClassifier.NormalizeCohortTestResultPaths(result.TestResultPaths)
+            .Where(path => !advisoryOnlyPaths.Contains(path)).ToArray();
+        var resolved = GroupedReceiptTestResultPaths.Resolve(result with { Checks = checks }, aggregate).Paths;
         if (!SamePaths(sources.SelectMany(s => s.Artifacts).Select(a => a.Path), resolved)) return null;
         if (result.RequiredTestCheckNames.Any(name => !Covered(name, new HashSet<string>(StringComparer.Ordinal)))) return null;
         return sources;

@@ -34,22 +34,8 @@ public static class CohortTestResultEvidence
                     return new(false, false, total);
                 var ids = new HashSet<string>(StringComparer.Ordinal);
                 var executed = new HashSet<string>(StringComparer.Ordinal);
+                var sourceIds = new List<HashSet<string>>();
                 var count = 0;
-                foreach (var supplemental in check.SupplementalArtifacts)
-                {
-                    if (supplemental.Kind is not (AcceptanceCohortCheckEvidence.NormalizedFormat or AcceptanceCohortCheckEvidence.TrxFormat) ||
-                        !paths.Add(supplemental.Path) || !IsOwnedPath(check.ArtifactRoot, supplemental.Path) ||
-                        !AcceptanceCohortGateEvidence.IsContentBoundArtifact(supplemental)) return new(false, false, total);
-                    if (supplemental.Kind == AcceptanceCohortCheckEvidence.TrxFormat &&
-                        !AcceptanceCohortGateEvidence.HasCoherentTrxEvidence([supplemental.Path])) return new(false, false, total);
-                    var read = supplemental.Kind == AcceptanceCohortCheckEvidence.NormalizedFormat
-                        ? new NormalizedTestResultSource().Read(supplemental.Path) : new TrxTestResultSource().Read(supplemental.Path);
-                    if (read.Status != TestResultReadStatus.Readable ||
-                        read.Records.Select(r => r.Id).Distinct(StringComparer.Ordinal).Count() != read.Records.Count ||
-                        read.Records.Count(r => r.Status != TestResultStatus.Skipped) != check.ExecutedTestCount)
-                        return new(false, false, total);
-                    if (read.Records.Any(r => r.Status is TestResultStatus.Failed or TestResultStatus.Error)) passed = false;
-                }
                 foreach (var artifact in check.Artifacts)
                 {
                     if (artifact.Kind != check.Format || !paths.Add(artifact.Path) ||
@@ -60,12 +46,42 @@ public static class CohortTestResultEvidence
                         return new(false, false, total);
                     var read = normalized ? new NormalizedTestResultSource().Read(artifact.Path) : new TrxTestResultSource().Read(artifact.Path);
                     if (read.Status != TestResultReadStatus.Readable) return new(false, false, total);
+                    sourceIds.Add(read.Records.Select(record => record.Id).ToHashSet(StringComparer.Ordinal));
                     foreach (var record in read.Records)
                     {
                         if (string.IsNullOrWhiteSpace(record.Id) || !ids.Add(record.Id)) return new(false, false, total);
                         if (record.Status is TestResultStatus.Failed or TestResultStatus.Error) passed = false;
                         if (record.Status != TestResultStatus.Skipped) { count++; executed.Add(record.Id); }
                     }
+                }
+                // Companions represent the same check, possibly split across source files.
+                // Validate each representation together, and count only authoritative records.
+                foreach (var representation in check.SupplementalArtifacts.GroupBy(artifact => artifact.Kind))
+                {
+                    var supplementalIds = new HashSet<string>(StringComparer.Ordinal);
+                    var supplementalCount = 0;
+                    foreach (var supplemental in representation)
+                    {
+                        if (supplemental.Kind is not (AcceptanceCohortCheckEvidence.NormalizedFormat or AcceptanceCohortCheckEvidence.TrxFormat) ||
+                            !paths.Add(supplemental.Path) || !IsOwnedPath(check.ArtifactRoot, supplemental.Path) ||
+                            !AcceptanceCohortGateEvidence.IsContentBoundArtifact(supplemental)) return new(false, false, total);
+                        if (supplemental.Kind == AcceptanceCohortCheckEvidence.TrxFormat &&
+                            !AcceptanceCohortGateEvidence.HasCoherentTrxEvidence([supplemental.Path])) return new(false, false, total);
+                        var read = supplemental.Kind == AcceptanceCohortCheckEvidence.NormalizedFormat
+                            ? new NormalizedTestResultSource().Read(supplemental.Path) : new TrxTestResultSource().Read(supplemental.Path);
+                        if (read.Status != TestResultReadStatus.Readable ||
+                            read.Records.Any(record => string.IsNullOrWhiteSpace(record.Id) || !supplementalIds.Add(record.Id)))
+                            return new(false, false, total);
+                        // TRX companions are produced per source file. Bind by record identity,
+                        // so association survives custody relocation without trusting filenames.
+                        if (check.Format == AcceptanceCohortCheckEvidence.TrxFormat &&
+                            supplemental.Kind == AcceptanceCohortCheckEvidence.NormalizedFormat &&
+                            !sourceIds.Any(source => source.SetEquals(read.Records.Select(record => record.Id))))
+                            return new(false, false, total);
+                        supplementalCount = checked(supplementalCount + read.Records.Count(record => record.Status != TestResultStatus.Skipped));
+                        if (read.Records.Any(record => record.Status is TestResultStatus.Failed or TestResultStatus.Error)) passed = false;
+                    }
+                    if (supplementalCount != count) return new(false, false, total);
                 }
                 if (count <= 0 || count != check.ExecutedTestCount ||
                     check.SelectedTestIds.Any(string.IsNullOrWhiteSpace) ||
