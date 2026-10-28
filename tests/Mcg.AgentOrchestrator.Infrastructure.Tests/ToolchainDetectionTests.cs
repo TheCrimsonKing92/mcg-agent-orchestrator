@@ -266,14 +266,24 @@ public sealed class ToolchainDetectionTests
             var context = WorkerContextArtifacts.Write(goal, task, root);
             var broker = File.ReadAllText(Path.Combine(context, "workflow-brokers.md"));
 
-            // These existing checklist dependencies stay outside the Go Developer repair.
             Xunit.Assert.Contains("- build-test-selection", broker, StringComparison.Ordinal);
             Xunit.Assert.Contains($"  Suggested command shape: `{command}`", broker, StringComparison.Ordinal);
             Xunit.Assert.Contains("- static-policy-checks", broker, StringComparison.Ordinal);
-            Xunit.Assert.Contains("  Artifact: deterministic-verification.md", broker, StringComparison.Ordinal);
             Xunit.Assert.Contains("- acceptance-evidence", broker, StringComparison.Ordinal);
-            Xunit.Assert.Contains("  Artifact: deterministic-verification.md plus current-task.md", broker, StringComparison.Ordinal);
-            Xunit.Assert.DoesNotContain("Local command-result reporting", broker, StringComparison.Ordinal);
+            if (marker == "package.json" && role == AgentRole.Developer)
+            {
+                Xunit.Assert.Contains("  Artifact: current-task.md plus source-survey.md", broker, StringComparison.Ordinal);
+                Xunit.Assert.Contains("  Artifact: source-survey.md plus diff-summary.md", broker, StringComparison.Ordinal);
+                Xunit.Assert.Contains("  Artifact: current-task.md plus diff-summary.md", broker, StringComparison.Ordinal);
+                Xunit.Assert.DoesNotContain("deterministic-verification.md", broker, StringComparison.Ordinal);
+                Xunit.Assert.Contains("Local command-result reporting does not authorize a formal acceptance verdict", broker, StringComparison.Ordinal);
+            }
+            else
+            {
+                Xunit.Assert.Contains("  Artifact: deterministic-verification.md", broker, StringComparison.Ordinal);
+                Xunit.Assert.Contains("  Artifact: deterministic-verification.md plus current-task.md", broker, StringComparison.Ordinal);
+                Xunit.Assert.DoesNotContain("Local command-result reporting", broker, StringComparison.Ordinal);
+            }
             Xunit.Assert.DoesNotContain("- build-only", broker, StringComparison.Ordinal);
         }
         finally
