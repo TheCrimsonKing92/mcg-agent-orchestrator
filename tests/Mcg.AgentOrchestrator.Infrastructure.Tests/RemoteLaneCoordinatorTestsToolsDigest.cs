@@ -34,7 +34,7 @@ public sealed class RemoteLaneCoordinatorTestsToolsDigest
             Project = "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
             Arguments = ["--filter", FakeSshRemoteLaneTransport.Request.Filter]
         };
-        var outcome = await coordinator.RunRemoteAsync(check, entry, TimeSpan.FromMinutes(10), default);
+        var outcome = await coordinator.RunRemoteAsync(check, entry, TimeSpan.FromMinutes(10), TimeSpan.FromMinutes(10), default);
         Assert.Equal(1, submissions);
         Assert.Null(outcome.Handle);
         Assert.Null(outcome.Accepted);

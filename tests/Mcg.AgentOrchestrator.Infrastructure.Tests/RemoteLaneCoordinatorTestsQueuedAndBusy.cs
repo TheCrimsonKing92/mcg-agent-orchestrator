@@ -69,7 +69,7 @@ public sealed class RemoteLaneCoordinatorTestsQueuedAndBusy
         };
         using var coordinator = CreateCoordinator(fake, executor, entry);
         Assert.Equal(entry, coordinator.TryClaimIdleExecutor());
-        var outcome = await coordinator.RunRemoteAsync(Check(), entry, TimeSpan.FromMinutes(10), default);
+        var outcome = await coordinator.RunRemoteAsync(Check(), entry, TimeSpan.FromMinutes(10), TimeSpan.FromMinutes(10), default);
         Assert.Null(outcome.Handle);
         Assert.Null(outcome.Accepted);
         var ledger = RemoteExecutorHealthLedger.ResolveStorePath(fake.Root);
@@ -149,7 +149,7 @@ public sealed class RemoteLaneCoordinatorTestsQueuedAndBusy
         }
 
         internal Task<RemoteLaneOutcome> Start() => _run = Task.Run(() =>
-            Coordinator.RunRemoteAsync(Check(), _entry, TimeSpan.FromMinutes(10), Stop.Token));
+            Coordinator.RunRemoteAsync(Check(), _entry, TimeSpan.FromMinutes(10), TimeSpan.FromMinutes(10), Stop.Token));
         internal async Task Poll(string state, string heartbeat)
         {
             await Completed(_submitted.Task, "ssh handle submitted");
