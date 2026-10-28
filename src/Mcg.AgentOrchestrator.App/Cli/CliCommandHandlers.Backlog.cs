@@ -217,8 +217,8 @@ private static bool? TryExecuteBacklogCommand(string command, IReadOnlyList<stri
             var store = BacklogStore.OpenReadOnly(context.Workspace.BacklogStorePath);
             var item = store.GetByIdPrefixAsync(parts[1]).GetAwaiter().GetResult()
                 ?? throw new InvalidOperationException($"No backlog item found with id prefix '{parts[1]}'.");
-            if (HasCliConfirmation(parts, "--json"))
-            { Console.WriteLine(BacklogShowAgentReadView.Serialize(BacklogShowAgentReadView.Read(context, store, item))); return false; }
+            if (HasCliConfirmation(parts, "--json") || HasCliConfirmation(parts, "--summary"))
+            { BacklogItemSummaryView.Write(BacklogShowAgentReadView.Read(context, store, item), HasCliConfirmation(parts, "--summary"), HasCliConfirmation(parts, "--json")); return false; }
             Console.WriteLine($"Id:      {item.Id}");
             Console.WriteLine($"Title:   {item.Title}");
             Console.WriteLine($"Status:  {item.Status}");
