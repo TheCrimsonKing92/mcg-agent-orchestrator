@@ -4,7 +4,7 @@ using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 // Parallel-safe: each launcher has fixture-owned stores, repositories, slots and contained children.
-public sealed class WorkerBuildRequestLauncherContractTests
+public sealed class BuildRequestLauncherContractTests
 {
     [Theory]
     [InlineData(false, WorkerBuildOutcome.Success, 0)]
