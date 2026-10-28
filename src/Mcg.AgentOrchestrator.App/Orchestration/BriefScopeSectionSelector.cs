@@ -83,7 +83,8 @@ internal static class BriefScopeSectionSelector
 
     public static bool IsRepositoryNeutralPath(string token) =>
         IsSafePathToken(token) && HasFileOrDirectoryShape(token) &&
-        token.All(character => char.IsLetterOrDigit(character) || character is '/' or '.' or '_' or '-') &&
+        // Reject citation and prose delimiters without restricting repository/package labels.
+        token.IndexOfAny(['#', ',', ';', '\'', '"']) < 0 && !token.EndsWith(')') &&
         token.TrimEnd('/').Split('/').All(segment => segment.Length > 0 && segment != "...") &&
         !token.EndsWith("//", StringComparison.Ordinal);
 
