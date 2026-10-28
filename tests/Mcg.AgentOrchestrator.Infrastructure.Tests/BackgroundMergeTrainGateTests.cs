@@ -5,7 +5,8 @@ using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
 using System.Text.Json;
 
-public sealed class BackgroundMergeTrainGateTests : AcceptanceCohortWorkflowTests
+public sealed class BackgroundMergeTrainGateTests(CohortCandidateTemplate template)
+    : AcceptanceCohortWorkflowTests, IClassFixture<CohortCandidateTemplate>
 {
     [Fact]
     public void PlannerConflict_EscalatesWhileAnotherTrainOccupiesAcceptanceWidth()
@@ -308,26 +309,135 @@ public sealed class BackgroundMergeTrainGateTests : AcceptanceCohortWorkflowTest
         }
     }
 
-    private static (string Repo, AgentOrchestratorKernel Kernel, Goal[] Goals) CreateReadyTrain()
+    [Fact]
+    public void CandidateCopy_RealConstruction_PreservesTopologyAndTrainOutcome()
     {
-        var repo = CreateReducedAcceptanceCohortRepository();
-        AddAcceptanceManifest(repo);
+        var fresh = CreateReducedAcceptanceCohortRepository();
+        var (copy, copyKernel, copyGoals) = CreateReadyTrain();
+        var (sibling, _, siblingGoals) = CreateReadyTrain();
+        try
+        {
+            // This arm deliberately uses the original builders, independently of the recipe.
+            AddAcceptanceManifest(fresh);
+            var freshKernel = new AgentOrchestratorKernel();
+            var freshGoals = new[]
+            {
+                CreateCompletedGoal(freshKernel, "First train member", fresh),
+                CreateCompletedGoal(freshKernel, "Second train member", fresh),
+                CreateCompletedGoal(freshKernel, "Third train member", fresh)
+            };
+            string[] paths = ["tests/Mcg.AgentOrchestrator.Core.Tests/RestartFirst.cs",
+                "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/RestartSecond.cs",
+                "tests/Mcg.AgentOrchestrator.Dashboard.Tests/RestartThird.cs"];
+            string[] contents = ["first", "second", "third"];
+            var mainTree = RunGitOutput(fresh, "rev-parse", "main^{tree}").Trim();
+            Assert.Equal(mainTree, RunGitOutput(copy, "rev-parse", "main^{tree}").Trim());
+            for (var index = 0; index < freshGoals.Length; index++)
+            {
+                var goal = freshGoals[index];
+                var candidate = CreateWorktreeCandidate(fresh, goal.Id, paths[index], contents[index]);
+                freshKernel.RecordGoalRefinement(goal.Id, new RefinedSpec(goal.Objective,
+                    ["The full acceptance gate passes"], VerificationClass.TestVerifiable, [], [])
+                    { AcceptanceGateOwnedAcceptanceCriteria = ["The full acceptance gate passes"] });
+                freshKernel.MapCriterionEvidenceOwner(goal.Id, 0, 1, CriterionEvidenceOwner.Acceptance,
+                    "test", CriterionEvidenceScopes.FullAcceptanceGate, expectedCandidateSha: candidate);
+                var worktree = Assert.IsType<string>(GoalWorktrees.TryResolve(copy, copyGoals[index].Id));
+                Assert.StartsWith(copy + Path.DirectorySeparatorChar, worktree, StringComparison.OrdinalIgnoreCase);
+                Assert.Empty(RunGitOutput(worktree, "status", "--porcelain").Trim());
+                Assert.Equal(contents[index], File.ReadAllText(Path.Combine(worktree, paths[index])));
+                Assert.Equal(RunGitOutput(fresh, "rev-parse", candidate + "^{tree}").Trim(),
+                    RunGitOutput(worktree, "rev-parse", "HEAD^{tree}").Trim());
+                Assert.Equal(mainTree, RunGitOutput(worktree, "rev-parse", "HEAD^1^{tree}").Trim());
+                Assert.Equal(mainTree, RunGitOutput(fresh, "rev-parse", candidate + "^1^{tree}").Trim());
+                Assert.Equal(paths[index], RunGitOutput(worktree, "diff", "--name-only", "main...HEAD").Trim());
+                Assert.Equal(RunGitOutput(fresh, "diff", "--name-only", "main..." + candidate).Trim(),
+                    RunGitOutput(worktree, "diff", "--name-only", "main...HEAD").Trim());
+            }
+            var topology = RunGitOutput(copy, "worktree", "list", "--porcelain");
+            Assert.DoesNotContain("prunable", topology, StringComparison.Ordinal);
+            var worktrees = topology.Split('\n').Where(line => line.StartsWith("worktree ", StringComparison.Ordinal))
+                .Select(line => Path.GetFullPath(line[9..].Trim())).ToArray();
+            Assert.Equal(4, worktrees.Length);
+            Assert.Contains(Path.GetFullPath(copy), worktrees, StringComparer.OrdinalIgnoreCase);
+            Assert.All(worktrees, path =>
+            {
+                Assert.True(Path.GetFullPath(path).Equals(Path.GetFullPath(copy), StringComparison.OrdinalIgnoreCase) ||
+                    path.StartsWith(copy + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase));
+                Assert.Empty(RunGitOutput(path, "status", "--porcelain").Trim());
+            });
+
+            var prepared = template.TemplatePath("ready-train");
+            var preparedHead = RunGitOutput(prepared, "rev-parse", "main").Trim();
+            var preparedState = File.ReadAllBytes(OrchestratorWorkspace.ForDirectory(prepared).SqliteStatePath);
+            var freshOutcome = Run(fresh, freshKernel, freshGoals);
+            var copyOutcome = Run(copy, copyKernel, copyGoals);
+            Assert.Equal(freshOutcome, copyOutcome);
+            Assert.Equal(MergeTrainGateOutcome.Passed, copyOutcome.Outcome);
+            Assert.Equal(0, copyOutcome.Ejections);
+            Assert.Equal(1, copyOutcome.Runs);
+            Assert.All(copyGoals, goal => Assert.Equal(GoalStatus.Completed, goal.Status));
+            Assert.Equal(preparedHead, RunGitOutput(prepared, "rev-parse", "main").Trim());
+            Assert.Equal(preparedHead, RunGitOutput(sibling, "rev-parse", "main").Trim());
+            Assert.Equal(preparedState, File.ReadAllBytes(OrchestratorWorkspace.ForDirectory(prepared).SqliteStatePath));
+            for (var index = 0; index < copyGoals.Length; index++)
+            {
+                var original = RunGitOutput(prepared, "rev-parse", GoalWorktrees.BranchName(copyGoals[index].Id)).Trim();
+                var copiedTree = Assert.IsType<string>(GoalWorktrees.TryResolve(sibling, siblingGoals[index].Id));
+                File.WriteAllText(Path.Combine(copiedTree, "independent.txt"), "copy only");
+                RunGit(copiedTree, "add", "independent.txt");
+                RunGit(copiedTree, "commit", "-m", "Mutate copy only");
+                Assert.Equal(original, RunGitOutput(prepared, "rev-parse", GoalWorktrees.BranchName(copyGoals[index].Id)).Trim());
+                Assert.NotEqual(original, RunGitOutput(sibling, "rev-parse", GoalWorktrees.BranchName(siblingGoals[index].Id)).Trim());
+            }
+            File.WriteAllText(Path.Combine(copy, "independent.txt"), "main copy only");
+            RunGit(copy, "add", "independent.txt");
+            RunGit(copy, "commit", "-m", "Mutate copied main");
+            Assert.Equal(preparedHead, RunGitOutput(prepared, "rev-parse", "main").Trim());
+            Assert.Equal(preparedHead, RunGitOutput(sibling, "rev-parse", "main").Trim());
+        }
+        finally
+        {
+            DeleteDirectory(fresh);
+            DeleteDirectory(copy);
+            DeleteDirectory(sibling);
+        }
+
+        static (MergeTrainGateOutcome Outcome, int Ejections, int Runs, string Members) Run(
+            string repo, AgentOrchestratorKernel kernel, Goal[] goals)
+        {
+            var verifier = new SequenceAcceptanceVerifier([new(true, false, 0, null,
+                TestResultPaths: [WritePassingTrx(repo, "contract-green.trx")])]);
+            var driver = new ConductorDriver(kernel, OrchestratorWorkspace.ForDirectory(repo), verifier,
+                AgentCatalog.Default().Agents, WorkerProfileCatalog.Default(), cleanupHooks: CreateIsolatedCleanupContext(repo).Hooks);
+            var result = driver.RunMergeTrain(ProjectTrainSelection(driver, goals), goals, ConductorAutonomyPolicy.Permissive);
+            Assert.Equal(3, result.MemberResults.Count);
+            Assert.All(goals, goal => Assert.Equal(GoalStatus.Completed, goal.Status));
+            return (Assert.IsType<MergeTrainReceipt>(result.Receipt).Outcome, result.Ejections.Count, verifier.RunCount,
+                string.Join(",", goals.Select(goal => result.MemberResults[goal.Id.Value].Outcome.GetType().FullName)));
+        }
+    }
+
+    private (string Repo, AgentOrchestratorKernel Kernel, Goal[] Goals) CreateReadyTrain()
+    {
+        var copy = template.Copy("ready-train", 3, (preparedRepo, ids) =>
+        {
+            AddAcceptanceManifest(preparedRepo);
+            CreateWorktreeCandidate(preparedRepo, ids[0],
+                "tests/Mcg.AgentOrchestrator.Core.Tests/RestartFirst.cs", "first");
+            CreateWorktreeCandidate(preparedRepo, ids[1],
+                "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/RestartSecond.cs", "second");
+            CreateWorktreeCandidate(preparedRepo, ids[2],
+                "tests/Mcg.AgentOrchestrator.Dashboard.Tests/RestartThird.cs", "third");
+        });
+        var repo = copy.Repo;
         var kernel = new AgentOrchestratorKernel();
         var goals = new[]
         {
-            CreateCompletedGoal(kernel, "First train member", repo),
-            CreateCompletedGoal(kernel, "Second train member", repo),
-            CreateCompletedGoal(kernel, "Third train member", repo)
+            copy.CreateCompletedGoal(kernel, 0, "First train member"),
+            copy.CreateCompletedGoal(kernel, 1, "Second train member"),
+            copy.CreateCompletedGoal(kernel, 2, "Third train member")
         };
-        var candidates = new[]
-        {
-            CreateWorktreeCandidate(repo, goals[0].Id,
-                "tests/Mcg.AgentOrchestrator.Core.Tests/RestartFirst.cs", "first"),
-            CreateWorktreeCandidate(repo, goals[1].Id,
-                "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/RestartSecond.cs", "second"),
-            CreateWorktreeCandidate(repo, goals[2].Id,
-                "tests/Mcg.AgentOrchestrator.Dashboard.Tests/RestartThird.cs", "third")
-        };
+        var candidates = copy.Revisions;
         foreach (var (goal, candidate) in goals.Zip(candidates))
         {
             kernel.RecordGoalRefinement(goal.Id, new RefinedSpec(goal.Objective,

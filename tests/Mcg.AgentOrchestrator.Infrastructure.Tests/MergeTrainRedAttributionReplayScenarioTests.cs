@@ -8,7 +8,8 @@ using Microsoft.Data.Sqlite;
 using Fixture = RepositoryTestReachTests.RepositoryFixture;
 
 // Parallel-safe: each scenario owns its git repositories, worktrees, stores and hooks.
-public sealed class MergeTrainRedAttributionReplayScenarioTests : AcceptanceCohortWorkflowTests
+public sealed class MergeTrainRedAttributionReplayScenarioTests(CohortCandidateTemplate template)
+    : AcceptanceCohortWorkflowTests, IClassFixture<CohortCandidateTemplate>
 {
     private const string Alpha = "AlphaReachTests";
     private const string Zebra = "ZebraReachTests";
@@ -297,46 +298,29 @@ public sealed class MergeTrainRedAttributionReplayScenarioTests : AcceptanceCoho
     private void WithTrain(int count, bool shared, bool ownership, Action<Scenario> assert,
         bool readOnlyChild = false, bool gateOnly = true)
     {
-        var repo = CreateReducedAcceptanceCohortRepository();
+        // The ownership-only recipe has one consumer; retain its fresh construction.
+        var copy = ownership ? null : template.Copy($"reach-{count}-{shared}", count, (preparedRepo, ids) =>
+        {
+            PrepareReachBase(preparedRepo, shared);
+            for (var index = 0; index < ids.Length; index++)
+                PrepareReachMember(preparedRepo, ids[index], index, ownership);
+        });
+        var repo = copy?.Repo ?? CreateReducedAcceptanceCohortRepository();
         var cleanup = CreateIsolatedCleanupContext(repo);
         try
         {
-            AddAcceptanceManifest(repo);
-            Fixture.Populate(repo);
-            Fixture.WriteAt(repo, Fixture.Intermediate, "public class Intermediate { private ChangedSource value; " +
-                (shared ? "private OtherSource other; " : string.Empty) + "}");
-            foreach (var name in new[] { Alpha, Zebra })
-                Fixture.WriteAt(repo, $"{FailuresDirectory}/{name}.cs", TestSource(name));
-            RunGit(repo, "add", "src", "tests");
-            RunGit(repo, "commit", "-m", "Add source reach fixture");
+            if (copy is null) PrepareReachBase(repo, shared);
             var kernel = new AgentOrchestratorKernel();
             var goals = Enumerable.Range(0, count).Select(index =>
             {
-                var goal = CreateCompletedGoal(kernel, $"Reach train member {index}", repo);
+                var goal = copy?.CreateCompletedGoal(kernel, index, $"Reach train member {index}")
+                    ?? CreateCompletedGoal(kernel, $"Reach train member {index}", repo);
                 kernel.RecordGoalRefinement(goal.Id, new RefinedSpec(goal.Objective,
                     ["The full acceptance gate passes"], VerificationClass.TestVerifiable, [], [])
                 {
                     AcceptanceGateOwnedAcceptanceCriteria = ["The full acceptance gate passes"]
                 });
-                if (index == 0)
-                {
-                    CreateWorktreeCandidate(repo, goal.Id, Fixture.Source, "public class ChangedSource { public bool Changed => true; }");
-                    CreateWorktreeCandidate(repo, goal.Id, EvidenceTest,
-                        "public class MemberEvidenceTests { [Xunit.Fact] public void Runs() { } }");
-                }
-                else if (index == 1)
-                {
-                    CreateWorktreeCandidate(repo, goal.Id, Fixture.Other, "public class OtherSource { public bool Changed => true; }");
-                    // App source alone has no serialized resource; give D independent admission evidence.
-                    CreateWorktreeCandidate(repo, goal.Id, PartnerTest,
-                        "public class PartnerEvidenceTests { [Xunit.Fact] public void Runs() { } }");
-                    if (ownership)
-                        foreach (var name in new[] { Alpha, Zebra })
-                            CreateWorktreeCandidate(repo, goal.Id, $"{FailuresDirectory}/{name}.cs", TestSource(name) + " // owned");
-                }
-                else
-                    CreateWorktreeCandidate(repo, goal.Id, NewestTest,
-                        "public class NewestMemberTests { [Xunit.Fact] public void Runs() { } }");
+                if (copy is null) PrepareReachMember(repo, goal.Id, index, ownership);
                 return goal;
             }).ToArray();
             var paths = MergeTrainReachAttributionTests.Trx(repo, Zebra + ".Fails", Alpha + ".Fails");
@@ -383,6 +367,41 @@ public sealed class MergeTrainRedAttributionReplayScenarioTests : AcceptanceCoho
             assert(new Scenario(repo, driver, selection, goals, result, verifier, kernel, childKernel));
         }
         finally { DeleteDirectory(repo); }
+    }
+
+    private static void PrepareReachBase(string repo, bool shared)
+    {
+        AddAcceptanceManifest(repo);
+        Fixture.Populate(repo);
+        Fixture.WriteAt(repo, Fixture.Intermediate, "public class Intermediate { private ChangedSource value; " +
+            (shared ? "private OtherSource other; " : string.Empty) + "}");
+        foreach (var name in new[] { Alpha, Zebra })
+            Fixture.WriteAt(repo, $"{FailuresDirectory}/{name}.cs", TestSource(name));
+        RunGit(repo, "add", "src", "tests");
+        RunGit(repo, "commit", "-m", "Add source reach fixture");
+    }
+
+    private static void PrepareReachMember(string repo, GoalId id, int index, bool ownership)
+    {
+        if (index == 0)
+        {
+            CreateWorktreeCandidate(repo, id, Fixture.Source, "public class ChangedSource { public bool Changed => true; }");
+            CreateWorktreeCandidate(repo, id, EvidenceTest,
+                "public class MemberEvidenceTests { [Xunit.Fact] public void Runs() { } }");
+        }
+        else if (index == 1)
+        {
+            CreateWorktreeCandidate(repo, id, Fixture.Other, "public class OtherSource { public bool Changed => true; }");
+            // App source alone has no serialized resource; give D independent admission evidence.
+            CreateWorktreeCandidate(repo, id, PartnerTest,
+                "public class PartnerEvidenceTests { [Xunit.Fact] public void Runs() { } }");
+            if (ownership)
+                foreach (var name in new[] { Alpha, Zebra })
+                    CreateWorktreeCandidate(repo, id, $"{FailuresDirectory}/{name}.cs", TestSource(name) + " // owned");
+        }
+        else
+            CreateWorktreeCandidate(repo, id, NewestTest,
+                "public class NewestMemberTests { [Xunit.Fact] public void Runs() { } }");
     }
 
     private static string TestSource(string name) =>
