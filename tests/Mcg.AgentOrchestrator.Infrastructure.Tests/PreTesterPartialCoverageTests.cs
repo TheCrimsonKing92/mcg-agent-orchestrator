@@ -132,7 +132,6 @@ public sealed class PreTesterPartialCoverageTests
     [Trait("Category", "CrossTick")]
     [InlineData("changed-trx")]
     [InlineData("missing-result")]
-    [InlineData("newer-red")]
     [InlineData("newer-rejected")]
     [InlineData("newer-incomplete")]
     public void InFlightInvalidationRetainsCAndSchedulesOnlyInvalidB(string invalidation)
@@ -187,6 +186,56 @@ public sealed class PreTesterPartialCoverageTests
                 new([new(Project, "BetaTests"), new(Project, "GammaTests")])));
         scenario.Tick(driver);
         Assert.Equal(3, scenario.Requests.Count);
+    }
+
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
+    [Trait("Category", "CrossTick")]
+    public void InFlightNewerRedRetainsCAndRoutesOriginalBetaFailureToDeveloper()
+    {
+        using var scenario = new Scenario();
+        var original = scenario.RunPreTester();
+        var originalBytes = File.ReadAllText(original.ResultPath);
+        scenario.Report("BetaTests", "GammaTests");
+        var gate = new ConductorParallelAcceptanceAttemptCompletionGateForTests();
+        var driver = scenario.Driver(gate);
+        scenario.Tick(driver);
+        var pending = gate.RequiredHandleForTests(scenario.Goal.Id.Value);
+        Assert.Equal(["GammaTests"], Classes(pending.Attempt.FocusedEvidenceRequest!));
+        var red = scenario.RecordNewerBeta("red");
+        var redBytes = JsonSerializer.Serialize(red);
+
+        scenario.Tick(driver);
+        Assert.Equal(1, gate.HeldCount);
+        Assert.Equal(ReviewFindingState.Open, scenario.Finding.State);
+        pending.CompleteForTests();
+        scenario.Tick(driver);
+        var retainedC = scenario.Verification.FindingEvidenceReceipts!.Single(receipt =>
+            receipt.Request.Selections.SingleOrDefault()?.TestClass == "GammaTests");
+        Assert.True(retainedC.Passed);
+        var retainedCBytes = JsonSerializer.Serialize(retainedC);
+        Assert.Equal("reused-pre-tester-invalidated:pending-execution", scenario.Finding.EvidenceOutcome!.DecisionReason);
+
+        scenario.Tick(driver);
+
+        // An already executed RED follows the existing Developer route; invalid artifacts
+        // and unusable results in the theory above still require a fresh B-only repair.
+        Assert.Equal(0, gate.HeldCount);
+        Assert.Equal(2, scenario.Requests.Count);
+        Assert.Equal(["GammaTests"], Classes(scenario.Requests[1]));
+        Assert.Equal(ReviewFindingState.Open, scenario.Finding.State);
+        Assert.NotEqual(WorkTaskStatus.Completed, scenario.Tester.Status);
+        Assert.False(FindingReceiptClosureDiagnosis.Evaluate(scenario.Goal, scenario.Tester, CandidateSha).IsClosable);
+        Assert.Equal(redBytes, JsonSerializer.Serialize(scenario.Verification.FindingEvidenceReceipts!
+            .Single(receipt => receipt.ReceiptId == red.ReceiptId)));
+        Assert.Equal(retainedCBytes, JsonSerializer.Serialize(scenario.Verification.FindingEvidenceReceipts!
+            .Single(receipt => receipt.ReceiptId == retainedC.ReceiptId)));
+        Assert.Equal(originalBytes, File.ReadAllText(original.ResultPath));
+        var developer = scenario.Goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
+        Assert.Contains(scenario.Goal.Timeline, item => item.Kind == ProgressKind.TaskRetried &&
+            item.TaskId == developer.Id && item.Message.Contains("ACTIONABLE_CANDIDATE_RED", StringComparison.Ordinal) &&
+            item.Message.Contains($"candidate_sha={CandidateSha};", StringComparison.Ordinal) &&
+            item.Message.Contains($"receipt_id={red.ReceiptId};", StringComparison.Ordinal) &&
+            item.Message.Contains("BetaTests.Fails", StringComparison.Ordinal));
     }
 
     [Theory(Timeout = TestHangGuard.WholeTestMilliseconds)]
@@ -259,7 +308,7 @@ public sealed class PreTesterPartialCoverageTests
             var green = Green(request);
             return outcome switch
             {
-                "red" => CandidateRedFindingEvidence(request, Candidate, "GammaTests.Fails"),
+                "red" => CandidateRedFindingEvidence(request, Candidate, Classes(request).Single() + ".Fails"),
                 "rejected" => new FocusedEvidenceRunResult(request, false, false, "rejected", []),
                 "incomplete" => green with { Passed = false },
                 "not-run" => green with { Arms = green.Arms!.Select(arm => arm.Arm == FindingEvidenceArm.Candidate
@@ -295,7 +344,7 @@ public sealed class PreTesterPartialCoverageTests
                 DateTimeOffset.UtcNow, StandardOutputPath: Path.Combine(Root, "worker.out.log"), WorkerResultPresent: true, ReviewedCommit: Candidate));
         }
 
-        public void RecordNewerBeta(string outcome)
+        public FindingEvidenceReceipt RecordNewerBeta(string outcome)
         {
             var request = new FindingEvidenceRequest([new(Project, "BetaTests")]);
             var evidence = Unsuccessful(Project + ":BetaTests", outcome);
@@ -308,6 +357,7 @@ public sealed class PreTesterPartialCoverageTests
                 fingerprint, ConductorDriver.BuildFindingEvidenceExecutionBasisIdentity(Settings));
             Kernel.RecordFindingEvidenceOutcome(Goal.Id, Tester.Id, "mixed",
                 new(true, receipt.ReceiptId, ResultReason: FindingEvidenceOutcomeReason.Unknown), receipt);
+            return receipt;
         }
 
         public void Invalidate(ConductorParallelAcceptanceAttempt attempt, string control)
