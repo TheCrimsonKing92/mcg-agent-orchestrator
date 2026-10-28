@@ -124,6 +124,34 @@ public sealed class OwnerConsoleGoalChangeSummaryTests
     }
 
     [Theory]
+    [InlineData(true, "Backlog slice: High priority: Fix the lane", "High priority: Fix the lane")]
+    [InlineData(true, "Backlog slice: Backlog slice: Fix the lane", "Fix the lane")]
+    [InlineData(false, "Backlog slice: Owner wording", "Backlog slice: Owner wording")]
+    [InlineData(false, "Owner console: keep this colon", "Owner console: keep this colon")]
+    public async Task BriefFallback_UsesReadableHeadingInSelectedPreviewAndDetail(
+        bool generated, string heading, string expected)
+    {
+        var objective = "\r\n  " + heading + "\r\nBody" + (generated
+            ? "\r\n" + BacklogIntakePlanner.TargetScopeHeadingLine + "\r\n" + BacklogIntakePlanner.UnknownScopeMarkerLine
+            : "");
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal(new GoalId("11111111-summary"), objective,
+            [new(TaskId.New(), "Build", AgentRole.Developer)]);
+
+        var rendered = await RenderSelectedGoalAsync(new TestGoal(kernel.ExportGoalSnapshot(goal.Id)), new());
+
+        Assert.Contains("Expected from brief — " + expected, rendered.Preview);
+        Assert.Contains("  • " + expected + Environment.NewLine, rendered.Detail);
+        Assert.Contains("  • Body" + Environment.NewLine, rendered.Detail);
+        Assert.Contains("Source: authoritative brief v1", rendered.Detail);
+        if (generated)
+        {
+            Assert.DoesNotContain(BacklogIntakePlanner.GeneratedHeadingPrefix, rendered.Preview);
+            Assert.DoesNotContain(BacklogIntakePlanner.GeneratedHeadingPrefix, rendered.Detail);
+        }
+    }
+
+    [Theory]
     [InlineData("passed", "passed")]
     [InlineData("gate-passed", "passed")]
     [InlineData("failed", "failed")]

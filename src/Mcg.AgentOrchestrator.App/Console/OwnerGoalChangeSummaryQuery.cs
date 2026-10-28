@@ -170,7 +170,11 @@ internal sealed class OwnerGoalChangeSummaryQuery(
             goal.AuthoritativeRefinedSpecVersion?.BriefVersion == goal.AuthoritativeBrief.Version
             ? EffectiveAcceptanceCriteriaVersion.BuildSnapshot(current, goal.EffectiveAcceptanceCriteriaCorrections)
             : goal.AuthoritativeBrief.Text.Replace("\r", "").Split('\n')
-                .Where(line => !string.IsNullOrWhiteSpace(line) && !line.TrimStart().StartsWith('#')).Take(6).ToArray();
+                .Where(line => !string.IsNullOrWhiteSpace(line))
+                // Use the same generated-heading detection as the title, only on the brief's heading.
+                .Select((line, index) => index == 0 && !line.TrimStart().StartsWith('#')
+                    ? OwnerGoalTitle.From(goal.AuthoritativeBrief.Text) : line)
+                .Where(line => !line.TrimStart().StartsWith('#')).Take(6).ToArray();
         return new(reason + "; Expected from brief", expectations.Take(5).Select(BoundItem).ToArray(),
             $"authoritative brief v{goal.AuthoritativeBrief.Version}" +
             (goal.AuthoritativeRefinedSpecVersion is { } version ? $"; spec v{version.Version}" : ""),
