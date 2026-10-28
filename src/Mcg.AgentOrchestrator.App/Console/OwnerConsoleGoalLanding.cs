@@ -5,7 +5,8 @@ namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 // Wording is a read-only projection of the current landing state, with history last.
 internal static class OwnerConsoleGoalLanding
 {
-    internal static string? Line(Goal goal, int? queuePosition, TimeZoneInfo zone)
+    internal static string? Line(Goal goal, int? queuePosition, TimeZoneInfo zone,
+        bool includeFailureHistory = true)
     {
         if (goal.Status == GoalStatus.Completed)
         {
@@ -21,7 +22,7 @@ internal static class OwnerConsoleGoalLanding
             return started is { } time ? "gate running since " + Time(time, zone) : null;
         }
         if (queuePosition is { } position) return $"waiting for the gate ({Ordinal(position)})";
-        return goal.RetainedAcceptanceFailure is { } failure
+        return includeFailureHistory && goal.RetainedAcceptanceFailure is { } failure
             ? $"last gate failed {Time(failure.OccurredAt, zone)}: {failure.FailedChecks.FirstOrDefault() ?? "acceptance check"}"
             : null;
     }

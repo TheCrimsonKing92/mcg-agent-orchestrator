@@ -342,6 +342,7 @@ public sealed class OwnerConsoleGoalChangeSummaryTests
             Assert.Equal(2, reads);
             Assert.Contains("Verified: " + expected, preview);
             Assert.Contains("Verified: " + expected, detail);
+            Assert.DoesNotContain("Landing: last gate failed", detail);
             if (expected == "failed") Assert.Contains("retained-check", detail);
             else
             {

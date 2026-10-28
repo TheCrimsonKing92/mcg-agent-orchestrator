@@ -37,8 +37,11 @@ internal static class OwnerConsoleGoalDetailFormatter
         if (stage != goal.Status.ToString()) output.WriteLine("Stage: " + stage);
         var role = OwnerConsoleGoalDetail.Stage(goal);
         if (role != "-") output.WriteLine("Role: " + role);
+        // A committed-candidate summary owns failure applicability. Retained history alone
+        // must not reintroduce a superseded failure as the current landing state.
         if (goal.Status != GoalStatus.Completed && (OwnerConsoleVerifyingGate.Landing(detail, zone) ??
-            OwnerConsoleGoalLanding.Line(goal, detail.LandingQueuePosition, zone)) is { } landing)
+            OwnerConsoleGoalLanding.Line(goal, detail.LandingQueuePosition, zone,
+                includeFailureHistory: detail.Changes?.Candidate is null)) is { } landing)
             output.WriteLine("Landing: " + landing);
         if (detail.Gate is null && (goal.Status != GoalStatus.Verifying || detail.GateObserved) &&
             OwnerConsoleLandingBlockerText.Detail(goal, zone) is { } blocker)
