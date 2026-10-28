@@ -52,21 +52,24 @@ internal sealed partial class ConductorDriver
         GoalLifecycleState fromState, out ConductorAdvanceResult result)
     {
         result = null!;
-        if (goal.Tasks.Any(task => task.LastDispatch?.FindingEvidenceReviewContinuation is not null &&
-            task.LastProcess is null && task.Status == WorkTaskStatus.Running && FindingEvidenceContinuationCoordinator.FindingEvidenceContinuationInvalid(this, goal, task)))
+        var preparedHold = FindingEvidenceContinuationCoordinator.HoldInvalidFindingEvidenceContinuation(this, goal,
+            goal.Tasks.Where(task => task.LastDispatch?.FindingEvidenceReviewContinuation is not null &&
+                task.LastProcess is null && task.Status == WorkTaskStatus.Running), fromState,
+            "Finding evidence continuation held: prepared dispatch evidence no longer qualifies.");
+        if (preparedHold is not null)
         {
-            result = MakeResult(goal.Id.Value, goalPrefix, policy, new ConductorAdvanceOutcome.Held(fromState,
-                "Finding evidence continuation held: prepared dispatch evidence no longer qualifies."));
+            result = MakeResult(goal.Id.Value, goalPrefix, policy, preparedHold);
             return true;
         }
         if (fromState != GoalLifecycleState.WorkspaceReady) { ResetUnchangedCandidateHold(goal.Id); return false; }
         FindingEvidenceContinuationCoordinator.PrepareReadyFindingEvidenceContinuations(this, goal, policy);
         var ready = ReadyCandidateTasks(goal);
         if (ready.Length == 0) { ResetUnchangedCandidateHold(goal.Id); return false; }
-        if (ready.Any(task => FindingEvidenceContinuationCoordinator.FindingEvidenceContinuationInvalid(this, goal, task)))
+        var readyHold = FindingEvidenceContinuationCoordinator.HoldInvalidFindingEvidenceContinuation(this, goal, ready, fromState,
+            "Finding evidence continuation held: selected evidence no longer qualifies for the recorded review decision.");
+        if (readyHold is not null)
         {
-            result = MakeResult(goal.Id.Value, goalPrefix, policy, new ConductorAdvanceOutcome.Held(fromState,
-                "Finding evidence continuation held: selected evidence no longer qualifies for the recorded review decision."));
+            result = MakeResult(goal.Id.Value, goalPrefix, policy, readyHold);
             return true;
         }
         var (identity, failure) = _resolveCandidateIdentity(goal);

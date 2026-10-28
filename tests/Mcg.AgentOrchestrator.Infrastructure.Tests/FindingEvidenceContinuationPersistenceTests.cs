@@ -6,10 +6,12 @@ using Mcg.AgentOrchestrator.Core.Conductor;
 public sealed class FindingEvidenceContinuationPersistenceTests
 {
     [Theory]
-    [InlineData("intact")]
-    [InlineData("missing")]
-    [InlineData("corrupt")]
-    public void EquivalentCopyCannotMaskUnavailableClaimedArtifactsAfterReload(string original)
+    [InlineData("intact", false)]
+    [InlineData("missing", false)]
+    [InlineData("corrupt", false)]
+    [InlineData("missing", true)]
+    [InlineData("corrupt", true)]
+    public void EquivalentCopyCannotMaskUnavailableClaimedArtifactsAfterReload(string original, bool prepared)
     {
         using var fixture = new FreshFindingEvidenceFixture();
         var receipt = fixture.Receipt();
@@ -17,6 +19,10 @@ public sealed class FindingEvidenceContinuationPersistenceTests
         Assert.True(fixture.Select(out var claimed, out var reason), reason);
         fixture.Kernel.RecordFindingEvidenceReviewContinuation(fixture.Goal.Id, fixture.Reviewer.Id, claimed!);
         fixture.Kernel.RetryTaskAutomatically(fixture.Goal.Id, fixture.Reviewer.Id, claimed!.Render(), RetryCause.NewTestFinding);
+        if (prepared)
+            fixture.Kernel.RecordTaskDispatch(fixture.Goal.Id, fixture.Reviewer.Id,
+                new TaskDispatchRecord("fixture", "review", fixture.Root, FreshFindingEvidenceFixture.Now.AddMinutes(10),
+                    CandidateIdentity: fixture.Identity, FindingEvidenceReviewContinuation: claimed));
         var copy = fixture.Receipt(id: "equivalent-copy");
         fixture.Attach(copy);
         Assert.Equal(FindingEvidenceReviewContext.ExecutionIdentity(receipt), FindingEvidenceReviewContext.ExecutionIdentity(copy));
@@ -36,7 +42,28 @@ public sealed class FindingEvidenceContinuationPersistenceTests
         else Assert.Equal("claimed-review-evidence-unavailable", reason);
         var result = driver.AdvanceOnce(fixture.Goal, ConductorAutonomyPolicy.Permissive);
         Assert.Equal(valid ? 1 : 0, fixture.Launches);
-        if (!valid) Assert.IsType<ConductorAdvanceOutcome.Held>(result.Outcome);
+        if (!valid)
+        {
+            var held = Assert.IsType<ConductorAdvanceOutcome.Held>(result.Outcome);
+            Assert.Equal(prepared
+                ? "Finding evidence continuation held: prepared dispatch evidence no longer qualifies."
+                : "Finding evidence continuation held: selected evidence no longer qualifies for the recorded review decision.", held.Reason);
+            var decision = Assert.IsType<PolicyDecisionRecord>(held.Decision);
+            Assert.Equal("finding-evidence-continuation", decision.Stage);
+            Assert.Equal("Hold", decision.Action);
+            Assert.Equal("claimed-review-evidence-unavailable", decision.DiscriminatingEvidence);
+            Assert.Equal(held.Reason, decision.Reason);
+            var facts = decision.Facts.ToDictionary(fact => fact.Name, fact => fact.Value);
+            Assert.Equal(fixture.Goal.Id.Value, facts["goalId"]);
+            Assert.Equal(fixture.Reviewer.Id.Value, facts["taskId"]);
+            Assert.Equal(FreshFindingEvidenceFixture.Candidate, facts["candidateSha"]);
+            Assert.Equal(fixture.Identity.Canonical, facts["candidateIdentity"]);
+            Assert.Equal(claimed.DecisionKey, facts["decisionKey"]);
+            Assert.Equal(claimed.Key, facts["continuationKey"]);
+            Assert.Equal(claimed.PriorVerificationAt.ToString("O"), facts["priorVerificationAt"]);
+            Assert.Equal(claimed.PriorDispatchAt.ToString("O"), facts["priorDispatchAt"]);
+            Assert.Equal(System.Text.Json.JsonSerializer.Serialize(claimed.Selections), facts["selections"]);
+        }
     }
 
     [Theory]

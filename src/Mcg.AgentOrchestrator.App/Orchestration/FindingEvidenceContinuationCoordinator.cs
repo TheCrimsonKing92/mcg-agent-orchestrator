@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
@@ -67,10 +68,46 @@ internal static class FindingEvidenceContinuationCoordinator
     }
 
     internal static bool FindingEvidenceContinuationInvalid(ConductorDriver driver, Goal goal, TaskSpec task) =>
-        task.PendingRetryCause == RetryCause.NewTestFinding && task.FindingEvidenceReviewContinuation is { } claimed &&
-        (!TrySelectFindingEvidenceContinuation(driver, goal, task, out var current, out _) || current!.Key != claimed.Key ||
-         !current.Selections.Select(selection => selection.Canonical).Order(StringComparer.Ordinal)
-             .SequenceEqual(claimed.Selections.Select(selection => selection.Canonical).Order(StringComparer.Ordinal)));
+        FindingEvidenceContinuationInvalid(driver, goal, task, out _);
+
+    private static bool FindingEvidenceContinuationInvalid(ConductorDriver driver, Goal goal, TaskSpec task, out string reason)
+    {
+        reason = string.Empty;
+        if (task.PendingRetryCause != RetryCause.NewTestFinding || task.FindingEvidenceReviewContinuation is not { } claimed)
+            return false;
+        if (!TrySelectFindingEvidenceContinuation(driver, goal, task, out var current, out reason)) return true;
+        if (current!.Key == claimed.Key && current.Selections.Select(selection => selection.Canonical).Order(StringComparer.Ordinal)
+                .SequenceEqual(claimed.Selections.Select(selection => selection.Canonical).Order(StringComparer.Ordinal))) return false;
+        reason = "claimed-review-evidence-selection-changed";
+        return true;
+    }
+
+    internal static ConductorAdvanceOutcome.Held? HoldInvalidFindingEvidenceContinuation(
+        ConductorDriver driver, Goal goal, IEnumerable<TaskSpec> tasks, GoalLifecycleState state, string reason)
+    {
+        foreach (var task in tasks)
+        {
+            if (!FindingEvidenceContinuationInvalid(driver, goal, task, out var failure)) continue;
+            var claimed = task.FindingEvidenceReviewContinuation!;
+            return new ConductorAdvanceOutcome.Held(state, reason)
+            {
+                Decision = new PolicyDecisionRecord("finding-evidence-continuation", "Hold", 0, failure, reason,
+                    Array.AsReadOnly<PolicyDecisionFact>(
+                    [
+                        new("goalId", goal.Id.Value),
+                        new("taskId", task.Id.Value),
+                        new("candidateSha", claimed.CandidateSha),
+                        new("candidateIdentity", claimed.CandidateIdentity.Canonical),
+                        new("decisionKey", claimed.DecisionKey),
+                        new("continuationKey", claimed.Key),
+                        new("priorVerificationAt", claimed.PriorVerificationAt.ToString("O")),
+                        new("priorDispatchAt", claimed.PriorDispatchAt.ToString("O")),
+                        new("selections", JsonSerializer.Serialize(claimed.Selections))
+                    ]))
+            };
+        }
+        return null;
+    }
 
     internal static void PrepareReadyFindingEvidenceContinuations(ConductorDriver driver, Goal goal, ConductorAutonomyPolicy policy)
     {
