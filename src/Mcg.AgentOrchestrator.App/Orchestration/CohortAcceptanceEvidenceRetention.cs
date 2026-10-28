@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.Json;
+using Mcg.AgentOrchestrator.Core;
 using Microsoft.Data.Sqlite;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
@@ -50,13 +51,14 @@ internal static class CohortAcceptanceEvidenceRetention
             if (!receipts.TryGetValue(cohortId, out var receipt))
             {
                 if (Directory.EnumerateDirectories(directory).Any(child =>
-                    Directory.EnumerateFiles(child).Any(IsTrx)))
+                    Directory.EnumerateFiles(child).Any(IsResultArtifact)))
                     Keep(directory, EvidenceRetentionAction.RetainedUndecidable,
                         EvidenceOwnerResolution.Unrecorded, "cohort-receipt-not-recorded", decisions);
                 continue;
             }
 
-            var candidates = receipt.Paths.Where(IsTrx).Select(Path.GetFullPath)
+            var candidates = receipt.Paths.Where(path => path.EndsWith(".trx", StringComparison.OrdinalIgnoreCase) ||
+                    receipt.NormalizedPaths.Contains(path, StringComparer.OrdinalIgnoreCase)).Select(Path.GetFullPath)
                 .Where(path => IsDirectCustodyFile(path, directory) && File.Exists(path))
                 .Order(StringComparer.Ordinal).ToArray();
             if (candidates.Length == 0) continue;
@@ -113,7 +115,7 @@ internal static class CohortAcceptanceEvidenceRetention
         using var command = connection.CreateCommand();
         command.CommandText = """
             SELECT cohort_id, outcome, valid_for_landing, gate_exit_code, completed_at,
-                   attribution, attribution_source, gate_test_result_paths_json FROM cohort_receipts
+                   attribution, attribution_source, gate_test_result_paths_json, gate_evidence_artifacts_json FROM cohort_receipts
             """;
         using var reader = command.ExecuteReader();
         var receipts = new Dictionary<string, Receipt>(StringComparer.Ordinal);
@@ -126,14 +128,17 @@ internal static class CohortAcceptanceEvidenceRetention
                 DateTimeOffset.Parse(completed, CultureInfo.InvariantCulture),
                 reader.IsDBNull(5) ? null : reader.GetString(5),
                 reader.IsDBNull(6) ? null : reader.GetString(6),
-                reader.IsDBNull(7) ? [] : JsonSerializer.Deserialize<string[]>(reader.GetString(7)) ?? []);
+                reader.IsDBNull(7) ? [] : JsonSerializer.Deserialize<string[]>(reader.GetString(7)) ?? [],
+                (reader.IsDBNull(8) ? [] : JsonSerializer.Deserialize<AcceptanceCohortEvidenceArtifact[]>(reader.GetString(8)) ?? [])
+                    .Where(artifact => artifact.Kind == AcceptanceCohortCheckEvidence.NormalizedFormat).Select(artifact => artifact.Path).ToArray());
             if (!receipts.TryAdd(reader.GetString(0), receipt))
                 throw new InvalidOperationException("Duplicate cohort receipt identity.");
         }
         return receipts;
     }
 
-    private static bool IsTrx(string path) => path.EndsWith(".trx", StringComparison.OrdinalIgnoreCase);
+    private static bool IsResultArtifact(string path) => path.EndsWith(".trx", StringComparison.OrdinalIgnoreCase) ||
+        path.EndsWith(".ctrf.json", StringComparison.OrdinalIgnoreCase);
 
     private static bool IsDirectCustodyFile(string path, string directory)
     {
@@ -148,5 +153,5 @@ internal static class CohortAcceptanceEvidenceRetention
             action, path, null, owner, reason));
 
     private sealed record Receipt(bool LandingEvidence, DateTimeOffset CompletedAt,
-        string? Attribution, string? AttributionSource, string[] Paths);
+        string? Attribution, string? AttributionSource, string[] Paths, string[] NormalizedPaths);
 }

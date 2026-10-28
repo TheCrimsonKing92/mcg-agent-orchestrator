@@ -16,6 +16,13 @@ public abstract class CliTaskQueryTestSupport
     {
         private readonly AgentOrchestratorKernel _kernel = Clone(kernel);
 
+        public Task<IReadOnlyCollection<GoalId>> ListBacklogRelatedGoalIdsAsync(
+            IReadOnlyCollection<string> ids, CancellationToken cancellationToken = default) =>
+            Task.FromResult(RelatedGoals(_kernel, ids));
+
+        public Task<IReadOnlyList<SimilarityDocument>> ListCompletedGoalSimilarityDocumentsAsync(
+            CancellationToken cancellationToken = default) => Task.FromResult(SimilarityDocuments(_kernel));
+
         public Task<IReadOnlyList<HumanInputRequestSnapshot>> ListOpenHumanInputRequestsAsync(
             CancellationToken cancellationToken = default) => Task.FromResult(OpenRequests(_kernel));
 
@@ -91,6 +98,29 @@ public abstract class CliTaskQueryTestSupport
 
         public List<string> LoadedGoalIds { get; } = [];
 
+        public List<string> RequestedGoalIds { get; } = [];
+
+        public int BacklogRelationshipQueryCount { get; private set; }
+
+        public int SimilarityProjectionCount { get; private set; }
+
+        public Task<IReadOnlyCollection<GoalId>> ListBacklogRelatedGoalIdsAsync(
+            IReadOnlyCollection<string> ids, CancellationToken cancellationToken = default)
+        {
+            ObserveWriteOperationTag();
+            BacklogRelationshipQueryCount++;
+            return Task.FromResult(RelatedGoals(_kernel, ids));
+        }
+
+        public Task<IReadOnlyList<SimilarityDocument>> ListCompletedGoalSimilarityDocumentsAsync(
+            CancellationToken cancellationToken = default)
+        {
+            ObserveWriteOperationTag();
+            SimilarityProjectionCount++;
+            return Task.FromResult<IReadOnlyList<SimilarityDocument>>(SimilarityDocuments(_kernel)
+                .Where(document => !UnavailableGoalIds.Contains(document.Id)).ToArray());
+        }
+
         public void SeedOutboxMessage(OrchestratorStateOutboxMessage message) => _outbox.Add(message.Id, message);
 
         public bool HasOutboxMessage(string id) => _outbox.ContainsKey(id);
@@ -108,6 +138,7 @@ public abstract class CliTaskQueryTestSupport
         {
             ObserveWriteOperationTag();
             LoadGoalsCount++;
+            RequestedGoalIds.AddRange(goalIds.Select(id => id.Value));
             if (DisappearSelectedGoals)
                 return Task.FromResult(new AgentOrchestratorKernel());
 
@@ -287,6 +318,20 @@ public abstract class CliTaskQueryTestSupport
             throw new InvalidOperationException("State writes are not allowed for this test.");
         }
     }
+
+    private static IReadOnlyCollection<GoalId> RelatedGoals(AgentOrchestratorKernel kernel,
+        IReadOnlyCollection<string> ids) => kernel.Goals
+        .Where(goal => goal.SourceBacklogItemId is { } itemId && ids.Contains(itemId))
+        .Select(goal => goal.Id).ToArray();
+
+    private static IReadOnlyList<SimilarityDocument> SimilarityDocuments(AgentOrchestratorKernel kernel) =>
+        kernel.Goals.Where(goal => goal.Status == GoalStatus.Completed).Select(goal => new SimilarityDocument(
+            "goal", goal.Id.Value, goal.Status.ToString(),
+            goal.Objective.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .FirstOrDefault() ?? "-",
+            goal.MetadataTerminatedAt ?? goal.MetadataCreatedAt ??
+                goal.Timeline.OrderBy(evt => evt.OccurredAt).LastOrDefault()?.OccurredAt ?? DateTimeOffset.MinValue,
+            goal.Objective)).ToArray();
 
     private static AgentOrchestratorKernel FilterGoals(
         AgentOrchestratorKernel kernel,

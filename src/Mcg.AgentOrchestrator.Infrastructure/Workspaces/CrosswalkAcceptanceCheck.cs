@@ -25,6 +25,7 @@ internal sealed class CrosswalkAcceptanceCheck(
         var selected = Array.Empty<string>();
         IReadOnlyList<TestResult> records = [];
         string[] paths = [];
+        Mcg.AgentOrchestrator.Core.AcceptanceCohortCheckEvidence? cohortEvidence = null;
         int? exitCode = null;
         int? discovered = null;
         CommandResult? lastProcess = null;
@@ -94,6 +95,10 @@ internal sealed class CrosswalkAcceptanceCheck(
                     throw new IOException("Crosswalk normalized receipt could not be read back.");
                 records = persisted.Records;
                 paths = [path];
+                cohortEvidence = new(check.Name, Mcg.AgentOrchestrator.Core.AcceptanceCohortCheckEvidence.NormalizedFormat,
+                    check.Project ?? "", owner.RunId, invocation.Ordinal, exitCode, directory, selected,
+                    records.Count(record => record.Status != TestResultStatus.Skipped),
+                    [CohortTestResultEvidence.Capture(path, Mcg.AgentOrchestrator.Core.AcceptanceCohortCheckEvidence.NormalizedFormat)]);
                 if (records.Any(record => string.IsNullOrWhiteSpace(record.Id)))
                     diagnostics.Add(new(CrosswalkDiagnosticCategory.MalformedResults, "Normalized IDs must be nonblank."));
                 var executed = records.Where(record => record.Status is TestResultStatus.Passed or TestResultStatus.Failed or TestResultStatus.Error)
@@ -149,7 +154,7 @@ internal sealed class CrosswalkAcceptanceCheck(
                 DiscoveredTestCount: discovered, ProcessStderr: string.Concat(stderr), ProcessStderrPath: lastProcess?.StderrPath,
                 GateHeartbeatPath: heartbeatPath, ChildProcessId: lastProcess?.ChildProcessId, ChildProcessStartedAt: lastProcess?.ChildProcessStartedAt,
                 SkippedTestIdentities: records.Where(r => r.Status == TestResultStatus.Skipped).Select(r => r.Id).ToArray())
-            { NormalizedTestResultPaths = paths, CrosswalkDiagnostics = diagnostics.ToArray() };
+            { NormalizedTestResultPaths = paths, CrosswalkDiagnostics = diagnostics.ToArray(), CohortEvidence = cohortEvidence };
         }
     }
 

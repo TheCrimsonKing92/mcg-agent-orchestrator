@@ -84,9 +84,15 @@ public sealed class CliBacklogRouteParityTests : CliTaskQueryTestSupport
                 var actual = Execute(args, probe, seed.Workspace, skipReadOnlyRoute: false);
                 Xunit.Assert.NotEmpty(expected);
                 Xunit.Assert.Equal(expected, actual);
-                Xunit.Assert.Equal(1, probe.ListGoalMetadataCount);
-                Xunit.Assert.Equal(1, probe.LoadGoalsCount);
-                Xunit.Assert.Equal([CliBacklogReadOnlyRouteTests.CompletedGoalId], probe.LoadedGoalIds);
+                Xunit.Assert.Equal(0, probe.ListGoalMetadataCount);
+                Xunit.Assert.Empty(probe.LoadedGoalIds);
+                if (args[0] == "backlog-similar")
+                {
+                    Xunit.Assert.Empty(probe.RequestedGoalIds);
+                    Xunit.Assert.Equal(1, probe.SimilarityProjectionCount);
+                }
+                else
+                    Xunit.Assert.Equal([linkedId], probe.RequestedGoalIds);
                 Xunit.Assert.Equal(0, probe.FullLoadAttempts);
                 if (args.SequenceEqual(new[] { "backlog-show", seed.Prerequisite.Id[..8] }))
                     Xunit.Assert.DoesNotContain("Linked goals:", actual);
