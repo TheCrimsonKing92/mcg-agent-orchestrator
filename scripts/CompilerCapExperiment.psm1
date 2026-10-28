@@ -137,7 +137,11 @@ function Get-CapEnvironment {
 
 function Get-CapNormalizedPath {
     param([string]$Path, $Plan, $Arm)
-    $value = $Path.Replace('\','/')
+    if ([string]::IsNullOrEmpty($Path)) { return $Path }
+    # MSBuild can report the same location relative to the declared repository or absolute.
+    # Resolve both against that context, never the runner's working directory. GetFullPath
+    # also reconciles dot segments without erasing distinct locations outside the repository.
+    $value = [IO.Path]::GetFullPath($Path, $Plan.RepositoryRoot).Replace('\','/')
     foreach ($prefix in @(@($Arm.OutputRoot,'<owned>'), @($Plan.RepositoryRoot,'<repo>'))) {
         $root = $prefix[0].Replace('\','/').TrimEnd('/')
         if ($value.Equals($root, [StringComparison]::OrdinalIgnoreCase)) { return $prefix[1] }
@@ -399,7 +403,8 @@ function Read-CapBuildEvents {
 }
 
 function Invoke-CapNativePhase {
-    param([string]$Executable, [string[]]$Arguments, [string]$Root, [string]$EvidenceRoot, [int]$TimeoutSeconds, [string]$Compiler, [System.Collections.IDictionary]$Environment)
+    param([string]$Executable, [string[]]$Arguments, [string]$Root, [string]$EvidenceRoot, [int]$TimeoutSeconds, [string]$Compiler,
+        [System.Collections.IDictionary]$Environment, [System.Collections.IDictionary]$ProcessFixture)
     # The diagnostic wrapper's optional observation seam calls this bounded executor. Ordinary
     # diagnostic calls retain their existing behavior. Job close kills only this phase's children.
     Import-Module (Join-Path $PSScriptRoot 'MtpTestRunner.psm1')
@@ -408,6 +413,26 @@ function Invoke-CapNativePhase {
     $owner = Get-Content -LiteralPath (Join-Path $runRoot 'owner.json') -Raw | ConvertFrom-Json -AsHashtable
     if ($owner.Root -ne $runRoot -or $owner.OwnerPid -ne $PID -or $owner.OwnerStartUtc -ne (Get-Process -Id $PID).StartTime.ToUniversalTime().ToString('O')) { throw 'observation-owner-identity-mismatch' }
     $null = Assert-CapOwnedPath $EvidenceRoot $runRoot
+    $deadlineEvent = $null
+    $deadlineEventName = ''
+    if ($null -ne $ProcessFixture) {
+        # Explicit, temp-owned test boundary: substitute only the executable and deadline wait.
+        # Launch, argument forwarding, job assignment, pipes and cleanup still execute below.
+        $fixtureBase = Split-Path -Parent $Root
+        $null = Assert-CapOwnedPath $fixtureBase ([IO.Path]::GetTempPath())
+        if ($ProcessFixture.Contract -ne 'compiler-cap-native-process-fixture-v1' -or
+            -not (Test-Path -LiteralPath (Join-Path $fixtureBase '.compiler-cap-test-fixture')) -or
+            $Root -ne (Join-Path $fixtureBase 'source')) { throw 'native-process-fixture-ownership-required' }
+        $script = Assert-CapOwnedPath $ProcessFixture.Script $fixtureBase
+        $null = Assert-CapOwnedPath $EvidenceRoot (Join-Path $fixtureBase 'experiments')
+        if ($ProcessFixture.DeadlineAfterReady) {
+            $deadlineEventName = [string]$ProcessFixture.DeadlineEventName
+            if ($deadlineEventName -notmatch '^Local\\compiler-cap-[a-f0-9]{32}$') { throw 'invalid-fixture-deadline-event' }
+            $deadlineEvent = [Threading.EventWaitHandle]::OpenExisting($deadlineEventName)
+        }
+        $Executable = (Get-Process -Id $PID).Path
+        $Arguments = @('-NoProfile','-NonInteractive','-File',$script,$EvidenceRoot,$deadlineEventName) + $Arguments
+    }
     foreach ($key in @('DOTNET_CLI_HOME','NUGET_HTTP_CACHE_PATH','NUGET_SCRATCH','TEMP','TMP','TMPDIR')) {
         $path = Assert-CapOwnedPath $Environment[$key] (Split-Path -Parent $EvidenceRoot)
         [void][IO.Directory]::CreateDirectory($path)
@@ -450,7 +475,16 @@ try {
     $stderrFile = [IO.FileStream]::new($request.Stderr, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::Read, 1, $true)
     $stdout = $process.StandardOutput.BaseStream.CopyToAsync($stdoutFile)
     $stderr = $process.StandardError.BaseStream.CopyToAsync($stderrFile)
-    if (-not $process.WaitForExit($request.TimeoutSeconds * 1000)) {
+    if ($request.FixtureDeadlineEvent) {
+        # A controlled deadline signal replaces elapsed time only in explicit process fixtures.
+        # The test signals after retaining ready process handles; timeout/cleanup is shared.
+        $deadline = [Threading.EventWaitHandle]::OpenExisting($request.FixtureDeadlineEvent)
+        try {
+            if (-not $deadline.WaitOne(120000)) { throw 'fixture-deadline-was-not-signalled' }
+            $completed = $false
+        } finally { $deadline.Dispose() }
+    } else { $completed = $process.WaitForExit($request.TimeoutSeconds * 1000) }
+    if (-not $completed) {
         $result.Status = 'timeout'
         # The owning parent terminates the job after reading this terminal receipt.
     } else {
@@ -470,7 +504,8 @@ finally {
 '@
     [IO.File]::WriteAllText($guardianPath, $guardian)
     [IO.File]::WriteAllText($requestPath, (@{ Executable = $Executable; Arguments = $Arguments; Root = $Root; TimeoutSeconds = $TimeoutSeconds;
-        Gate = $gatePath; Completion = $completionPath; Stdout = (Join-Path $EvidenceRoot 'build.stdout.log'); Stderr = (Join-Path $EvidenceRoot 'build.stderr.log') } | ConvertTo-Json -Depth 8))
+        Gate = $gatePath; Completion = $completionPath; FixtureDeadlineEvent = $deadlineEventName;
+        Stdout = (Join-Path $EvidenceRoot 'build.stdout.log'); Stderr = (Join-Path $EvidenceRoot 'build.stderr.log') } | ConvertTo-Json -Depth 8))
     $shell = (Get-Process -Id $PID).Path
     $info = [Diagnostics.ProcessStartInfo]::new($shell)
     $info.WorkingDirectory = $Root
@@ -503,15 +538,18 @@ finally {
         Priority = $null; Affinity = $null; DefaultCpuSet = $null; PowerPlan = $null; Throttling = $null }
     $reason = ''
     try {
-        $cpu = @(Get-CimInstance -ClassName Win32_Processor -OperationTimeoutSec 2 -ErrorAction Stop)
-        $hostFacts.Hardware = ($cpu | ForEach-Object { "$($_.Name):$($_.ProcessorId)" }) -join ';'
-        $hostFacts.LogicalProcessors = [int](($cpu | Measure-Object NumberOfLogicalProcessors -Sum).Sum)
-        try { $hostFacts.PowerPlan = Invoke-CapReadProcess 'powercfg.exe' @('/getactivescheme') $Root } catch { }
+        if ($null -eq $ProcessFixture) {
+            $cpu = @(Get-CimInstance -ClassName Win32_Processor -OperationTimeoutSec 2 -ErrorAction Stop)
+            $hostFacts.Hardware = ($cpu | ForEach-Object { "$($_.Name):$($_.ProcessorId)" }) -join ';'
+            $hostFacts.LogicalProcessors = [int](($cpu | Measure-Object NumberOfLogicalProcessors -Sum).Sum)
+            try { $hostFacts.PowerPlan = Invoke-CapReadProcess 'powercfg.exe' @('/getactivescheme') $Root } catch { }
+        }
         $clock.Start()
         if (-not $process.Start()) { throw 'phase-start-failed' }
         $identity = [ordered]@{ Pid = $process.Id; StartUtc = $process.StartTime.ToUniversalTime().ToString('O'); Image = $process.MainModule.FileName }
         # Assignment is fail-closed. If it fails, finally kills the exact retained process handle.
         $job.Assign($process)
+        if ($job.IsEmpty) { throw 'owned-job-empty-after-assignment' }
         [IO.File]::WriteAllText($gatePath, 'job-assigned')
         $process.StandardInput.Close()
         $stdout = $process.StandardOutput.ReadToEndAsync()
@@ -520,6 +558,9 @@ finally {
         $hostFacts.Affinity = $process.ProcessorAffinity.ToString()
         while (-not $process.WaitForExit(250)) {
             if ($clock.Elapsed.TotalSeconds -ge ($TimeoutSeconds + 30 + 10)) { $status = 'timeout'; break }
+            # Process fixtures exercise lifecycle only; they never enumerate machine processes
+            # or claim compiler/host measurement evidence.
+            if ($null -ne $ProcessFixture) { continue }
             # Observational snapshots cannot prove complete population/lifetimes. Keep them, but
             # never promote their sums to total compiler CPU or an eligible sampled peak.
             $now = $clock.Elapsed.TotalSeconds
@@ -584,6 +625,7 @@ finally {
         }
         $job.Dispose()
         $process.Dispose()
+        if ($null -ne $deadlineEvent) { $deadlineEvent.Dispose() }
     }
     if (-not $cleanup) { $status = 'cleanup-failure' }
     $outputComplete = $outputComplete -and $childOutputComplete
@@ -707,9 +749,19 @@ function Invoke-CompilerCapExperiment {
                 if ($null -ne $fixture) {
                     if ($phaseIndex -ge $fixture.Phases.Count) { throw 'fixture-phase-evidence-missing' }
                     $phase = $fixture.Phases[$phaseIndex]
-                    # No executable fixture content, processes, native helper import or fallback.
                     if ((Get-CapField $phase 'Identity' $source | ConvertTo-Json -Compress) -cne ($source | ConvertTo-Json -Compress)) { throw 'candidate-or-sdk-or-input-mismatch' }
-                    [IO.File]::WriteAllText((Join-Path $phaseRoot 'fixture-phase.json'), ($phase | ConvertTo-Json -Depth 32))
+                    $processFixture = Get-CapField $fixture 'NativeProcess' $null
+                    if ($null -ne $processFixture) {
+                        $phase = & (Join-Path $PSScriptRoot 'Invoke-WorkerBuildDiagnostic.ps1') -CompilerCapObservation @{
+                            Executable = $sdk.Executable; Root = $RepositoryRoot; EvidenceRoot = $phaseRoot; Compiler = $sdk.Compiler;
+                            Environment = $invocation.Environment; ProcessFixture = $processFixture
+                        } -TimeoutSeconds $timeout -Arguments $arguments
+                        # Keep report-state fixtures separate from executed lifecycle evidence.
+                        # No supplied observation can make process-fixture measurements eligible.
+                    } else {
+                        # Pure report fixtures have no executable content or native fallback.
+                        [IO.File]::WriteAllText((Join-Path $phaseRoot 'fixture-phase.json'), ($phase | ConvertTo-Json -Depth 32))
+                    }
                 } else {
                     $phase = & (Join-Path $PSScriptRoot 'Invoke-WorkerBuildDiagnostic.ps1') -CompilerCapObservation @{
                         Executable = $sdk.Executable; Root = $RepositoryRoot; EvidenceRoot = $phaseRoot; Compiler = $sdk.Compiler; Environment = $invocation.Environment
@@ -725,7 +777,9 @@ function Invoke-CompilerCapExperiment {
                 }
                 if ($phaseName -eq 'build') {
                     $record.WallTime = New-CapMetric $phase.ElapsedSeconds 'seconds'
-                    $record.Observation = if ($null -ne $fixture) { $phase.Observation } else { Get-CapNativeObservation $plan $arm $phase }
+                    $record.Observation = if ($null -ne $fixture -and $null -eq (Get-CapField $fixture 'NativeProcess' $null)) {
+                        $phase.Observation
+                    } else { Get-CapNativeObservation $plan $arm $phase }
                     $record.Measurements = ConvertTo-CapMeasurements $record.Observation $plan $arm
                 }
                 $current = Get-CapSourceIdentity $RepositoryRoot -Fixture:($null -ne $fixture)

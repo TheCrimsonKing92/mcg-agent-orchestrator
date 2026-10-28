@@ -6,6 +6,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed class CompilerCapExperimentContractTests
 {
+    // Parallel-safe: every process, event and artifact belongs to a unique fixture root.
     [Xunit.Fact]
     public void DefaultEntryPointPlansWithoutCreatingOutputsOrLaunchingBuilds()
     {
@@ -209,6 +210,145 @@ public sealed class CompilerCapExperimentContractTests
     }
 
     [Xunit.Theory]
+    [Xunit.InlineData("equivalent", true)]
+    [Xunit.InlineData("different-file", false)]
+    [Xunit.InlineData("different-project", false)]
+    [Xunit.InlineData("outside-root", false)]
+    [Xunit.InlineData("distinct-outside-roots", false)]
+    public void RelativeAndAbsoluteDiagnosticsPreserveLocationIdentity(string scenario, bool matches)
+    {
+        using var fixture = new Fixture();
+        var repository = Path.Combine(fixture.Root, "source");
+        var baseline = fixture.Baseline["Diagnostics"]![0]!;
+        var treatment = fixture.Treatment["Diagnostics"]![0]!;
+        treatment["Project"] = Path.Combine(repository, "src", ".", "App.csproj");
+        treatment["File"] = Path.Combine(repository, "src", "nested", "..", "Program.cs");
+        if (scenario == "different-file") treatment["File"] = Path.Combine(repository, "src", "Other.cs");
+        if (scenario == "different-project") treatment["Project"] = Path.Combine(repository, "src", "Other.csproj");
+        if (scenario is "outside-root" or "distinct-outside-roots")
+            treatment["File"] = Path.Combine(fixture.Root, "outside-one", "src", "Program.cs");
+        if (scenario == "distinct-outside-roots")
+            baseline["File"] = Path.Combine(fixture.Root, "outside-two", "src", "Program.cs");
+
+        var result = fixture.Invoke(run: true);
+        Assert.True(result.ExitCode == 0, result.Stdout + result.Stderr);
+        var report = fixture.Report();
+        var comparison = report["Comparisons"]![0]!;
+        Assert.Equal(matches, comparison["DiagnosticsMatch"]!.GetValue<bool>());
+        Assert.Equal(matches ? "exploratory promising" : "inconclusive", comparison["Verdict"]!.GetValue<string>());
+        if (matches)
+        {
+            Assert.Equal(report["Arms"]![0]!["Measurements"]!["Diagnostics"]!.ToJsonString(),
+                report["Arms"]![1]!["Measurements"]!["Diagnostics"]!.ToJsonString());
+            Assert.Contains("<repo>/src/Program.cs", report["Arms"]![0]!["Measurements"]!["Diagnostics"]!.ToJsonString(), StringComparison.Ordinal);
+        }
+        else Assert.Contains("diagnostic-multiset-mismatch", comparison["Reasons"]!.ToJsonString(), StringComparison.Ordinal);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(0)]
+    [Xunit.InlineData(23)]
+    public void NativeProcessForwardsArgumentsDrainsBothPipesAndRetainsExit(int exitCode)
+    {
+        using var fixture = new Fixture();
+        fixture.EnableNativeProcess(exitCode);
+        var before = fixture.SourceDigest();
+        var result = fixture.Invoke(run: true);
+        Assert.Equal(exitCode == 0 ? 0 : 1, result.ExitCode);
+        var report = fixture.Report();
+        Assert.Equal(exitCode == 0 ? "completed" : "terminated", report["Status"]!.GetValue<string>());
+        var invocations = report["Invocations"]!.AsArray();
+        Assert.Equal(exitCode == 0 ? 6 : 1, invocations.Count);
+        foreach (var invocation in invocations)
+        {
+            var phase = invocation!["Result"]!;
+            Assert.Equal("completed", phase["Status"]!.GetValue<string>());
+            Assert.Equal(exitCode, phase["ExitCode"]!.GetValue<int>());
+            Assert.True(phase["CleanupConfirmed"]!.GetValue<bool>());
+            Assert.True(phase["OutputComplete"]!.GetValue<bool>());
+            var root = Path.Combine(Path.GetDirectoryName(fixture.ReportPath)!,
+                invocation["Arm"]!.GetValue<string>(), invocation["Phase"]!.GetValue<string>());
+            var receipt = JsonNode.Parse(File.ReadAllText(Path.Combine(root, "child.json")))!;
+            Assert.True(receipt["InJob"]!.GetValue<bool>());
+            Assert.Equal("job-assigned", receipt["Gate"]!.GetValue<string>());
+            Assert.Equal(invocation["Arguments"]!.ToJsonString(), receipt["Arguments"]!.ToJsonString());
+            Assert.Equal(invocation["Environment"]!["DOTNET_CLI_HOME"]!.GetValue<string>(), receipt["CliHome"]!.GetValue<string>());
+            Assert.True(string.IsNullOrEmpty(receipt["ProcessorCount"]?.GetValue<string>()));
+            Assert.Equal(phase["Process"]!.ToJsonString(), receipt["Process"]!.ToJsonString());
+            var request = JsonNode.Parse(File.ReadAllText(Path.Combine(root, "request.json")))!;
+            Assert.Equal(WorkerShell.Executable, request["Executable"]!.GetValue<string>(), ignoreCase: true);
+            Assert.Equal(invocation["Arguments"]!.AsArray().Select(a => a!.GetValue<string>()),
+                request["Arguments"]!.AsArray().Skip(6).Select(a => a!.GetValue<string>()));
+            Assert.Equal(new string('O', 131072) + "stdout-tail", File.ReadAllText(Path.Combine(root, "build.stdout.log")));
+            Assert.Equal(new string('E', 131072) + "stderr-tail", File.ReadAllText(Path.Combine(root, "build.stderr.log")));
+        }
+        Assert.Equal(before, fixture.SourceDigest());
+        Assert.Equal("shared sentinel", File.ReadAllText(Path.Combine(fixture.Root, "shared-output.txt")));
+        Assert.All(report["Comparisons"]!.AsArray(), c => Assert.Equal("inconclusive", c!["Verdict"]!.GetValue<string>()));
+        if (exitCode != 0)
+        {
+            Assert.Equal("skipped", report["Arms"]![1]!["Status"]!.GetValue<string>());
+            Assert.Equal("skipped", report["Arms"]![2]!["Status"]!.GetValue<string>());
+        }
+    }
+
+    [Xunit.Fact]
+    public async Task NativeDeadlineTerminatesOwnedChildAndDescendantWithoutRetry()
+    {
+        using var fixture = new Fixture();
+        var deadlineName = "Local\\compiler-cap-" + Guid.NewGuid().ToString("N");
+        var readyName = "Local\\compiler-cap-ready-" + Guid.NewGuid().ToString("N");
+        using var deadline = new EventWaitHandle(false, EventResetMode.ManualReset, deadlineName);
+        using var ready = new EventWaitHandle(false, EventResetMode.ManualReset, readyName);
+        fixture.EnableNativeProcess(0, deadlineName, readyName);
+        var invocation = Task.Run(() => fixture.Invoke(run: true));
+        Process? child = null;
+        Process? descendant = null;
+        try
+        {
+            Assert.True(ready.WaitOne(TestHangGuard.HangSafetyBound), "Native fixture did not publish its child/descendant ready receipt.");
+            var phaseRoot = Path.Combine(fixture.Root, "experiments", "fixture-run", "baseline", "setup");
+            var receipt = JsonNode.Parse(File.ReadAllText(Path.Combine(phaseRoot, "child.json")))!;
+            Assert.True(receipt["InJob"]!.GetValue<bool>());
+            child = RetainOwnedProcess(receipt["Process"]!);
+            descendant = RetainOwnedProcess(receipt["Descendant"]!);
+            Assert.False(child.HasExited);
+            Assert.False(descendant.HasExited);
+            deadline.Set(); // Controlled deadline; never rely on a short wall-clock timeout.
+            var result = await invocation;
+            Assert.NotEqual(0, result.ExitCode);
+            var report = fixture.Report();
+            Assert.Equal("terminated", report["Status"]!.GetValue<string>());
+            var phase = Assert.Single(report["Invocations"]!.AsArray())!["Result"]!;
+            Assert.Equal("timeout", phase["Status"]!.GetValue<string>());
+            Assert.Null(phase["ExitCode"]);
+            Assert.True(phase["CleanupConfirmed"]!.GetValue<bool>());
+            Assert.True(child.WaitForExit((int)TestHangGuard.Bound.TotalMilliseconds), "Owned child did not exit after job cleanup.");
+            Assert.True(descendant.WaitForExit((int)TestHangGuard.Bound.TotalMilliseconds), "Owned descendant did not exit after job cleanup.");
+            Assert.True(File.Exists(Path.Combine(phaseRoot, "completion.json")));
+            Assert.True(File.Exists(Path.Combine(phaseRoot, "request.json")));
+            Assert.Equal("skipped", report["Arms"]![1]!["Status"]!.GetValue<string>());
+            Assert.Equal("skipped", report["Arms"]![2]!["Status"]!.GetValue<string>());
+        }
+        finally
+        {
+            deadline.Set();
+            await invocation;
+            child?.Dispose();
+            descendant?.Dispose();
+        }
+    }
+
+    private static Process RetainOwnedProcess(JsonNode identity)
+    {
+        var process = Process.GetProcessById(identity["Pid"]!.GetValue<int>());
+        _ = process.Handle; // Retain the OS handle before deadline/cleanup; never re-query a recycled PID.
+        Assert.Equal(identity["StartUtc"]!.GetValue<string>(), process.StartTime.ToUniversalTime().ToString("O"));
+        Assert.Equal(identity["Image"]!.GetValue<string>(), process.MainModule!.FileName);
+        return process;
+    }
+
+    [Xunit.Theory]
     [Xunit.InlineData(0, "timeout", 0, true, true)]
     [Xunit.InlineData(0, "cancelled", 0, true, true)]
     [Xunit.InlineData(0, "completed", 1, true, true)]
@@ -324,7 +464,64 @@ public sealed class CompilerCapExperimentContractTests
             if (systemRoot is not null) { info.Environment["SYSTEMROOT"] = systemRoot; info.Environment["WINDIR"] = systemRoot; }
             info.Environment["TEMP"] = Path.GetTempPath();
             info.Environment["TMP"] = Path.GetTempPath();
-            return TestChildProcessCapture.Run(info);
+            return TestChildProcessCapture.Run(info, hangBound: Data.ContainsKey("NativeProcess") ? TestHangGuard.HangSafetyBound : TestHangGuard.Bound);
+        }
+
+        public void EnableNativeProcess(int exitCode, string deadlineName = "", string readyName = "")
+        {
+            var script = Path.Combine(Root, "bounded process & adapter.ps1");
+            File.WriteAllText(script, """
+                param([string]$EvidenceRoot, [string]$DeadlineEventName)
+                Set-StrictMode -Version Latest
+                $ErrorActionPreference = 'Stop'
+                Add-Type -TypeDefinition @'
+                using System;
+                using System.Runtime.InteropServices;
+                public static class FixtureJob {
+                    [DllImport("kernel32.dll", SetLastError=true)]
+                    public static extern bool IsProcessInJob(IntPtr process, IntPtr job, out bool result);
+                }
+                '@
+                $self = Get-Process -Id $PID
+                $inJob = $false
+                if (-not [FixtureJob]::IsProcessInJob($self.Handle, [IntPtr]::Zero, [ref]$inJob)) { throw 'job-query-failed' }
+                $receipt = [ordered]@{
+                    InJob = $inJob; Gate = [IO.File]::ReadAllText((Join-Path $EvidenceRoot 'start-owned'))
+                    Arguments = @($args); CliHome = $env:DOTNET_CLI_HOME; ProcessorCount = $env:DOTNET_PROCESSOR_COUNT
+                    Process = [ordered]@{ Pid = $PID; StartUtc = $self.StartTime.ToUniversalTime().ToString('O'); Image = $self.Path }
+                    Descendant = $null
+                }
+                $arm = Split-Path -Parent $EvidenceRoot
+                [void][IO.Directory]::CreateDirectory((Join-Path $arm 'outputs'))
+                [void][IO.Directory]::CreateDirectory((Join-Path $arm 'packages'))
+                if ($DeadlineEventName) {
+                    $info = [Diagnostics.ProcessStartInfo]::new($self.Path)
+                    $info.UseShellExecute = $false
+                    $info.CreateNoWindow = $true
+                    foreach ($arg in @('-NoProfile','-NonInteractive','-Command', '[Threading.EventWaitHandle]::new($false, [Threading.EventResetMode]::ManualReset).WaitOne(120000)')) { $info.ArgumentList.Add($arg) }
+                    $descendant = [Diagnostics.Process]::Start($info)
+                    $receipt.Descendant = [ordered]@{ Pid = $descendant.Id; StartUtc = $descendant.StartTime.ToUniversalTime().ToString('O'); Image = $descendant.MainModule.FileName }
+                }
+                [IO.File]::WriteAllText((Join-Path $EvidenceRoot 'child.json'), ($receipt | ConvertTo-Json -Depth 10))
+                if ($DeadlineEventName) {
+                    $ready = [Threading.EventWaitHandle]::OpenExisting('__READY__')
+                    [void]$ready.Set()
+                    $ready.Dispose()
+                    # Only owned job termination should end this wait; timeout is a hang guard.
+                    [void][Threading.EventWaitHandle]::new($false, [Threading.EventResetMode]::ManualReset).WaitOne(120000)
+                    throw 'owned-fixture-was-not-terminated'
+                }
+                [Console]::Out.Write(('O' * 131072) + 'stdout-tail')
+                [Console]::Error.Write(('E' * 131072) + 'stderr-tail')
+                exit __EXIT__
+                """.Replace("__READY__", readyName, StringComparison.Ordinal)
+                   .Replace("__EXIT__", exitCode.ToString(System.Globalization.CultureInfo.InvariantCulture), StringComparison.Ordinal));
+            Data["Sdk"]!["Executable"] = WorkerShell.Executable;
+            Data["NativeProcess"] = new JsonObject
+            {
+                ["Contract"] = "compiler-cap-native-process-fixture-v1", ["Script"] = script,
+                ["DeadlineAfterReady"] = deadlineName.Length != 0, ["DeadlineEventName"] = deadlineName
+            };
         }
 
         public JsonNode Report() => JsonNode.Parse(File.ReadAllText(ReportPath))!;

@@ -156,14 +156,26 @@ evidence. This protocol does not rewrite those historical receipts.
 
 ## Verification
 
-`CompilerCapExperimentContractTests` exercises the real entrypoint with an
-explicit data-only, bounded fixture adapter. Fixtures require an owned marker
-under the OS temporary directory and a separate miniature source root. They
-cannot launch native processes or fall back to the real workload; their reports
-are permanently labeled `synthetic-fixture`. Tests control raw counters,
-identities and phase results; production report logic computes the verdicts.
-Negative controls change thresholds, diagnostics, coverage, counters and host
-facts independently. No wall-clock timing decides a test verdict.
+`CompilerCapExperimentContractTests` exercises the real entrypoint with explicit
+bounded fixtures. Fixtures require an owned marker under the OS temporary
+directory and a separate miniature source root. Their reports are permanently
+labeled `synthetic-fixture`; they never fall back to the real workload.
+Data-only fixtures control counters, identities and phase results; production
+report logic computes the verdicts. Negative controls change thresholds,
+diagnostics, coverage, counters and host facts independently. Diagnostic tests
+compare repository-relative and absolute paths, owned roots and distinct outside
+locations while preserving project, source location and duplicate identities.
+
+A separate opt-in `NativeProcess` fixture launches only a bounded PowerShell
+child script under its temporary owner. It passes the planned build argument
+array through the real diagnostic observation seam, guardian and owned job.
+Tests check child receipts, both drained pipes, nonzero exit propagation and
+cleanup. The deadline test signals an event after retaining the ready child's
+and descendant's process handles, then verifies both handles exit after owned
+job termination. Only the deadline wait and executable are substituted; fixtures
+do not supply lifecycle success booleans. They skip machine process enumeration
+and provide no eligible compiler/host measurement evidence. No short wall-clock
+timeout decides a test verdict; finite waits are hang guards.
 
 Acceptance executes these tests and `WorkerBuildDiagnosticDefaultsTests` on the
 exact candidate, then all unchanged normal manifest gates. Developer builds the
