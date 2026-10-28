@@ -17,6 +17,10 @@ public interface IOrchestratorStateQueries
 
     Task<IReadOnlyList<GoalSummary>> ListGoalMetadataAsync(CancellationToken cancellationToken = default);
 
+    /// <summary>Queue ordering facts only; never hydrates unrelated goal snapshots.</summary>
+    Task<IReadOnlyList<AcceptanceQueueFact>> ListAcceptanceQueueFactsAsync(CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyList<AcceptanceQueueFact>>([]);
+
     /// <summary>Reads board columns with bounded terminal history and objective prefixes, in listing order.</summary>
     async Task<IReadOnlyList<GoalSummary>> ListGoalBoardRowsAsync(
         GoalBoardRowQuery query, CancellationToken cancellationToken = default)
@@ -65,6 +69,9 @@ public interface IOrchestratorStateQueries
 
 public sealed record TerminalOwnerQuestionHold(
     string GoalId, string Identity, string State, string Blocker, DateTimeOffset StartedAt);
+
+public sealed record AcceptanceQueueFact(string GoalId, GoalPriority Priority,
+    DateTimeOffset VerifiedAt, DateTimeOffset CreatedAt);
 
 public interface IOrchestratorStateRepository : IOrchestratorStateQueries
 {

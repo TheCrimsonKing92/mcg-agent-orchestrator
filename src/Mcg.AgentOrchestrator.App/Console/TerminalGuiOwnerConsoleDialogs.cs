@@ -79,20 +79,12 @@ internal sealed class TerminalGuiOwnerConsoleDialogs(IApplication app, Cancellat
 
     public async Task ShowGoalAsync(OwnerConsoleGoalDialog goal) => await OnUiAsync(() =>
     {
-        using var dialog = new OwnerConsoleTextDialog(goal.Title, goal.Current.Text, goal.Current.ChoiceLines, goal.Page);
         var acting = false;
-        var close = new Button { Text = "Close", IsDefault = true };
-        close.Accepting += (_, args) => { args.Handled = true; app.RequestStop(dialog); };
-        dialog.AddButton(close);
-        var buttons = new Dictionary<char, Button>();
-        foreach (var row in OwnerConsoleDialogBindings.GoalDetail.Where(row => row.Command != "quit"))
-        {
-            var key = row.Key!.Value;
-            var binding = OwnerConsoleBindings.ForDialogKey(OwnerConsoleScope.GoalDetail, key, row.Ctrl)!;
-            var button = new Button { Text = OwnerConsoleDialogBindings.Label(binding) };
-            button.Accepting += async (_, args) => { args.Handled = true; await ActAsync(() => goal.HandleKeyAsync(key)); };
-            buttons.Add(key, button); dialog.AddConditionalButton(button);
-        }
+        OwnerConsoleTextDialog? built = null;
+        var construction = goal.CreateView(() => app.RequestStop(built!), key => ActAsync(() => goal.HandleKeyAsync(key)));
+        using var dialog = construction.Dialog;
+        built = dialog;
+        var buttons = construction.Buttons;
         void Refresh()
         {
             foreach (var button in buttons.Values) button.Visible = goal.Actions.Contains(button.Text.ToString());

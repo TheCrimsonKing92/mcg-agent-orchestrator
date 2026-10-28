@@ -23,6 +23,11 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
     private readonly ListView _decisions = new() { Width = Dim.Fill(), Height = Dim.Fill() };
     private readonly Label _emptyDecisions = new() { Text = "Nothing needs you right now.", Width = Dim.Fill(), Height = 1, Visible = false };
     private readonly TableView _board = new() { Width = Dim.Fill(), Height = Dim.Fill() };
+    private readonly Label _preview = new() { Width = Dim.Fill(), Height = 3 };
+    private readonly OwnerConsoleSelectedGoalSummary _summary;
+    private OwnerConsoleSelectedGoalPreview _selectedPreview = new(null, null);
+    internal string PreviewText => _preview.Text;
+    internal Task PreviewLoad => _summary.LastLoad;
     private readonly ListView _activity = new() { Width = Dim.Fill(), Height = Dim.Fill() };
     private readonly FrameView _decisionsFrame;
     private readonly FrameView _boardFrame;
@@ -89,9 +94,12 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
             label => Invoke(() => { if (!_token.IsCancellationRequested) SetWorking("command", label); }),
             message => Invoke(() => { if (!_token.IsCancellationRequested) ShowNotice(message, OwnerConsoleNoticeSeverity.Failure, OwnerConsoleNoticeSource.Action); }), options,
             message => Invoke(() => { if (!_token.IsCancellationRequested) ShowNotice(message, OwnerConsoleNoticeSeverity.Success, OwnerConsoleNoticeSource.Action); }));
-        _decisionsFrame = new FrameView { Title = "DECISIONS", Y = 1, Width = Dim.Fill(), Height = Dim.Percent(25) };
-        _boardFrame = new FrameView { Title = "BOARD", Y = Pos.Bottom(_decisionsFrame), Width = Dim.Fill(), Height = Dim.Percent(40) };
-        _activityFrame = new FrameView { Title = "ACTIVITY", Y = Pos.Bottom(_boardFrame), Width = Dim.Fill(), Height = Dim.Fill(3) };
+        _summary = new(controller.LoadGoalSummaryAsync, Invoke, preview =>
+        { _selectedPreview = preview; RenderPreview(); }, _token);
+        _decisionsFrame = new FrameView { Title = "DECISIONS", Y = 1, Width = Dim.Fill(), Height = Dim.Percent(20) };
+        _boardFrame = new FrameView { Title = "BOARD", Y = Pos.Bottom(_decisionsFrame), Width = Dim.Fill(), Height = Dim.Percent(33) };
+        _preview.Y = Pos.Bottom(_boardFrame);
+        _activityFrame = new FrameView { Title = "ACTIVITY", Y = Pos.Bottom(_preview), Width = Dim.Fill(), Height = Dim.Fill(3) };
         _decisionsFrame.Add(_decisions, _emptyDecisions);
         _boardFrame.Add(_board);
         _activityFrame.Add(_activity);
@@ -103,7 +111,9 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
         _epicHint.X = Pos.AnchorEnd(OwnerConsoleEpicFormatter.KeyHint.Length);
         _hints.Width = Dim.Fill(OwnerConsoleEpicFormatter.KeyHint.Length + 2);
         EpicView = new(controller, Invoke, token);
-        Window.Add(_status, _decisionsFrame, _boardFrame, _activityFrame, _notice, _hints, _epicHint, _command, EpicView, GateView);
+        Window.Add(_status, _decisionsFrame, _boardFrame, _preview, _activityFrame, _notice, _hints, _epicHint, _command, EpicView, GateView);
+        _preview.ViewportChanged += (_, _) => RenderPreview();
+        RenderPreview();
         _notice.ViewportChanged += (_, _) => RenderNotices();
         _decisions.ValueChanged += (_, _) =>
         {
@@ -184,7 +194,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
             RenderDecisions();
             RenderBoard();
             var index = Array.FindIndex(model.Board.ToArray(), row => row.GoalId == SelectedGoalId);
-            SelectBoard(index < 0 ? _selectedBoardIndex : index);
+            SelectBoard(index < 0 ? _selectedBoardIndex : index, refresh: true);
             RenderActivity();
             RenderHints();
             NoticeStrip.RefreshSucceeded();
@@ -658,18 +668,21 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
         : OwnerConsoleKeyHints.Hint(FocusedPane,
             _controller.SelectedDecision is { } decision && OwnerConsoleScreenController.AnswersInConsole(decision), _follow.Following);
 
-    private void SelectBoard(int index)
+    private void SelectBoard(int index, bool refresh = false)
     {
         using var trace = _diagnostics?.Begin("select-board", TraceState);
         if (_controller.Model is not { Board.Length: > 0 } model)
-        { _selectedBoardIndex = -1; SelectedGoalId = null; return; }
+        { _selectedBoardIndex = -1; SelectedGoalId = null; _summary.Select(null); return; }
         _selectedBoardIndex = Math.Clamp(index, 0, model.Board.Length - 1);
         SelectedGoalId = model.Board[_selectedBoardIndex].GoalId;
+        _summary.Select(SelectedGoalId, refresh);
         if (_board.Value?.SelectedCell.Y != _selectedBoardIndex)
             _board.SetSelection(0, _selectedBoardIndex, false);
         _board.EnsureCursorIsVisible();
         RenderOverflow();
     }
+
+    private void RenderPreview() => _preview.Text = OwnerConsoleBoardRenderer.Preview(_selectedPreview, _preview.Viewport.Width);
 
     private void Invoke(Action action)
     {
@@ -702,6 +715,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
     public void Dispose()
     {
         _lifetime.Cancel();
+        _summary.Dispose();
         _noticeExpiryTimer?.Dispose();
         _controller.Dispose();
         if (_keyboard is not null) _keyboard.KeyDown -= OnKeyDown;

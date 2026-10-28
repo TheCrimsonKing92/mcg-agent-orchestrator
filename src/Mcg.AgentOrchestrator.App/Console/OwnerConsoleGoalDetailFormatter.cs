@@ -37,13 +37,15 @@ internal static class OwnerConsoleGoalDetailFormatter
         if (stage != goal.Status.ToString()) output.WriteLine("Stage: " + stage);
         var role = OwnerConsoleGoalDetail.Stage(goal);
         if (role != "-") output.WriteLine("Role: " + role);
-        if ((OwnerConsoleVerifyingGate.Landing(detail, zone) ??
+        if (goal.Status != GoalStatus.Completed && (OwnerConsoleVerifyingGate.Landing(detail, zone) ??
             OwnerConsoleGoalLanding.Line(goal, detail.LandingQueuePosition, zone)) is { } landing)
             output.WriteLine("Landing: " + landing);
         if (detail.Gate is null && (goal.Status != GoalStatus.Verifying || detail.GateObserved) &&
             OwnerConsoleLandingBlockerText.Detail(goal, zone) is { } blocker)
             output.WriteLine("Landing blocker: " + blocker);
         if (detail.Gate is { } liveGate) output.WriteLine("Gate: " + OwnerGoalDetailGateLine.Text(liveGate));
+        if (detail.Changes is { } changes)
+            foreach (var line in changes.DetailLines()) output.WriteLine(line);
         output.WriteLine("Tasks:");
         foreach (var task in goal.Tasks) output.WriteLine($"  {task.RequiredRole}: {task.Status}");
         if (goal.CurrentHold is { } hold)

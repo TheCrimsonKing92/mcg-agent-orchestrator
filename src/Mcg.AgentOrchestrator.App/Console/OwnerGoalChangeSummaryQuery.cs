@@ -1,0 +1,256 @@
+using System.Text;
+using System.Text.RegularExpressions;
+using System.Globalization;
+using Mcg.AgentOrchestrator.App.Orchestration;
+using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Infrastructure;
+
+namespace Mcg.AgentOrchestrator.App.OwnerConsole;
+
+// Selected-goal composition only. No worker polling, provider calls, writes, or peer snapshots.
+internal sealed class OwnerGoalChangeSummaryQuery(
+    Func<string, CancellationToken, Task<GoalPromotionFact?>>? promotion = null,
+    Func<string, string, CancellationToken, Task<CommittedGoalChanges>>? changes = null,
+    Func<TaskVerificationRecord, CancellationToken, Task<string?>>? artifact = null)
+{
+    internal const int MaxArtifactBytes = 1_056_000;
+    private readonly object _cacheGate = new();
+    private readonly SemaphoreSlim _diffRead = new(1, 1);
+    private (string Base, string Candidate, Task<CommittedGoalChanges> Read)? _committed;
+
+    internal static OwnerGoalChangeSummaryQuery ForWorkspace(OrchestratorWorkspace workspace) => new(
+        async (id, token) =>
+        {
+            using var session = new SqliteReadSession(workspace.SqliteStatePath);
+            return (await SqliteOrchestratorStateRepository.ReadEpicMetadataAsync(session.Connection,
+                [id], false, token)).SingleOrDefault()?.PromotionFact;
+        },
+        (basis, candidate, token) => Task.Run(() => GoalChangesReader.ReadCommittedRange(
+            workspace.RootDirectory, basis, candidate), token));
+
+    internal async Task<OwnerGoalChangeSummary> LoadAsync(Goal goal, CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();
+        GoalPromotionFact? landed = null;
+        string? promotionFailure = promotion is null ? "promotion query unavailable" : null;
+        try { if (promotion is not null) landed = await promotion(goal.Id.Value, token); }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        { promotionFailure = ex.GetType().Name; }
+        if (landed is not null && landed.GoalId != goal.Id.Value)
+        { landed = null; promotionFailure = "mismatched goal identity"; }
+
+        var dispatch = goal.Tasks.SelectMany(task => task.DispatchHistory)
+            .Where(item => FullRevision(item.ResultCommit)).OrderByDescending(item => item.DispatchedAt).FirstOrDefault();
+        var candidate = landed is not null && (dispatch is null || dispatch.DispatchedAt <= landed.PromotedAt)
+            ? landed.CandidateRevision : dispatch?.ResultCommit;
+        candidate ??= FullRevision(goal.MetadataResultCommit) ? goal.MetadataResultCommit : null;
+        var basis = landed is not null && landed.CandidateRevision == candidate ? landed.PriorMainRevision : dispatch?.BaseCommit;
+        var planned = await PlannedAsync(goal, token);
+        var observed = new OwnerGoalSummarySection("unavailable — no committed comparison", [], "recorded dispatch/promotion identities");
+        if (candidate is not null && FullRevision(basis) && changes is not null)
+        {
+            try
+            {
+                Task<CommittedGoalChanges> read;
+                lock (_cacheGate)
+                {
+                    if (_committed is not { } cached || cached.Base != basis || cached.Candidate != candidate ||
+                        cached.Read.IsCanceled || cached.Read.IsFaulted)
+                        _committed = (basis!, candidate, ReadChangesAsync(basis!, candidate, token));
+                    read = _committed.Value.Read;
+                }
+                var facts = await read.WaitAsync(token);
+                observed = facts.Available
+                    ? new(facts.TotalFiles == 0 ? "observed empty committed range" : $"observed {facts.TotalFiles} files (file scope: {FileAreas(facts.Files)})",
+                        facts.Files.Take(20).Select(BoundItem).ToArray(),
+                        $"Git {basis}..{candidate}; " + (landed is null ? "latest dispatch range, not whole-goal coverage" : "promotion range"),
+                        Math.Max(0, facts.TotalFiles - 20), facts.Files.Take(20).Where(item => item.Length > 360).ToArray())
+                    : new("unavailable — " + facts.Reason, [], $"Git {basis}..{candidate}");
+                // Retry an unavailable observation on the next refresh; never cache it as an empty diff.
+                if (!facts.Available) lock (_cacheGate) { if (_committed?.Read == read) _committed = null; }
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                observed = new("unavailable — " + ex.GetType().Name, [], $"Git {basis}..{candidate}");
+                lock (_cacheGate) _committed = null;
+            }
+        }
+        var reported = await ReportedAsync(goal, candidate, token);
+        var landing = landed is null
+            ? promotionFailure is null ? "landing not recorded" : "landing unavailable — " + promotionFailure
+            : $"landed candidate {landed.CandidateRevision} at {landed.PromotedAt:yyyy-MM-dd HH:mm} UTC; main {landed.PromotedMainRevision}; {landed.Provenance}";
+        return new(goal.Id.Value, goal.AuthoritativeBrief.Version, EffectiveAcceptanceCriteriaVersion.ComputeForGoal(goal),
+            candidate, planned, observed, reported, Verified(goal, candidate), landing);
+    }
+
+    private async Task<CommittedGoalChanges> ReadChangesAsync(string basis, string candidate, CancellationToken token)
+    {
+        await _diffRead.WaitAsync(token).ConfigureAwait(false);
+        try { return await changes!(basis, candidate, token).ConfigureAwait(false); }
+        finally { _diffRead.Release(); }
+    }
+
+    private async Task<OwnerGoalSummarySection> PlannedAsync(Goal goal, CancellationToken token)
+    {
+        var task = goal.Tasks.Where(task => task.RequiredRole == AgentRole.Planner)
+            .OrderByDescending(task => task.LastDispatch?.DispatchedAt).FirstOrDefault();
+        var reason = task is null || task.Status is WorkTaskStatus.Pending or WorkTaskStatus.Running
+            ? "planning pending" : "planning unavailable";
+        var verification = task?.LastVerification;
+        var dispatch = task?.LastDispatch;
+        if (task?.Status == WorkTaskStatus.Completed && verification?.Succeeded == true && dispatch is not null)
+        {
+            if (dispatch.BriefVersion != goal.AuthoritativeBrief.Version || goal.RefinedSpec is not { } spec ||
+                goal.AuthoritativeRefinedSpecVersion?.BriefVersion != goal.AuthoritativeBrief.Version ||
+                !EffectiveAcceptanceCriteriaVersion.IsCapturedHashCurrent(spec, goal.EffectiveAcceptanceCriteriaCorrections,
+                    verification.AcceptanceCriteriaVersionHash) ||
+                verification.DispatchStartedAt != dispatch.DispatchedAt)
+                reason = "planning stale — brief/criteria/dispatch association unavailable";
+            else
+            {
+                try
+                {
+                    var text = await ReadArtifactAsync(verification, token);
+                    if (text is not null && PlannerOutputContract.TryExtractDurablePlan(text, out var plan, out _) &&
+                        PlannerOutputContract.SplitRequiredSections(plan).TryGetValue("acceptance criterion mapping", out var body))
+                    {
+                        var mapping = PlannerOutputContract.SelectCriterionMappings(body);
+                        if (mapping.Count == spec.AcceptanceCriteria.Count &&
+                            Enumerable.Range(1, spec.AcceptanceCriteria.Count).All(mapping.ContainsKey))
+                        {
+                            var bullets = mapping.OrderBy(pair => pair.Key).Select(pair =>
+                                (Number: pair.Key, Plan: PlanField(pair.Value))).ToArray();
+                            if (bullets.All(item => !string.IsNullOrWhiteSpace(item.Plan)))
+                            {
+                                var items = bullets.GroupBy(item => item.Plan, StringComparer.OrdinalIgnoreCase)
+                                    .Select(group => group.Key! + " [criteria " + string.Join(",", group.Select(item => item.Number)) + "]").ToArray();
+                                return new("completed plan", items.Take(5).Select(BoundItem).ToArray(),
+                                    Source(verification, dispatch) + $"; brief v{dispatch.BriefVersion}; criteria {verification.AcceptanceCriteriaVersionHash}",
+                                    Math.Max(0, items.Length - 5), items.Take(5).Where(item => item.Length > 360).ToArray());
+                            }
+                        }
+                        reason = "planning stale — criterion mapping incomplete or incompatible";
+                    }
+                    else reason = "planning unavailable — missing, oversized or unreadable durable artifact";
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                { reason = "planning unavailable — " + ex.GetType().Name; }
+            }
+        }
+        var expectations = goal.RefinedSpec is { } current &&
+            goal.AuthoritativeRefinedSpecVersion?.BriefVersion == goal.AuthoritativeBrief.Version
+            ? EffectiveAcceptanceCriteriaVersion.BuildSnapshot(current, goal.EffectiveAcceptanceCriteriaCorrections)
+            : goal.AuthoritativeBrief.Text.Replace("\r", "").Split('\n')
+                .Where(line => !string.IsNullOrWhiteSpace(line) && !line.TrimStart().StartsWith('#')).Take(6).ToArray();
+        return new(reason + "; Expected from brief", expectations.Take(5).Select(BoundItem).ToArray(),
+            $"authoritative brief v{goal.AuthoritativeBrief.Version}" +
+            (goal.AuthoritativeRefinedSpecVersion is { } version ? $"; spec v{version.Version}" : ""),
+            Math.Max(0, expectations.Count - 5), expectations.Take(5).Where(item => item.Length > 360).ToArray());
+    }
+
+    private async Task<OwnerGoalSummarySection> ReportedAsync(Goal goal, string? candidate, CancellationToken token)
+    {
+        var task = goal.Tasks.Where(task => task.RequiredRole == AgentRole.Developer &&
+                candidate is not null && string.Equals(task.LastDispatch?.ResultCommit, candidate, StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(task => task.LastDispatch!.DispatchedAt).FirstOrDefault();
+        if (task?.LastVerification is not { } record || task.LastDispatch is not { } dispatch ||
+            record.DispatchStartedAt != dispatch.DispatchedAt)
+            return new("unavailable — no candidate-bound structured implementation summary", [], "worker result");
+        try
+        {
+            var text = await ReadArtifactAsync(record, token);
+            if (text is not null && WorkerResultParser.TryParseFields(text, out var fields, out _) &&
+                fields.TryGetValue("summary", out var summary) && !string.IsNullOrWhiteSpace(summary) &&
+                fields.TryGetValue("commit", out var commit) &&
+                (string.Equals(commit, candidate, StringComparison.OrdinalIgnoreCase) ||
+                 string.Equals(commit, "none", StringComparison.OrdinalIgnoreCase)))
+                return new("worker-reported; not proof of behavior", [BoundItem(summary)], Source(record, dispatch) + "; candidate " + candidate,
+                    ExpandedItems: summary.Length > 360 ? [summary] : null);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        { return new("unavailable — " + ex.GetType().Name, [], Source(record, dispatch)); }
+        return new("unavailable — structured summary absent or association unknown", [], Source(record, dispatch));
+    }
+
+    private static OwnerGoalSummarySection Verified(Goal goal, string? candidate)
+    {
+        var obligations = goal.CriterionEvidenceObligations.Where(item =>
+            item.CriterionVersion == goal.AuthoritativeRefinedSpecVersion?.Version && item.State != CriterionEvidenceState.Repaired).ToArray();
+        var applicable = obligations.Where(item => item.CandidateSha == candidate && candidate is not null &&
+            (item.State == CriterionEvidenceState.Failed || item.HasSatisfiedEvidenceFor(candidate)) &&
+            (item.ExpectedCandidateSha is null || item.ExpectedCandidateSha == candidate)).ToArray();
+        var lines = applicable.Select(item => $"{item.DisplayLabel}: {item.State}; {item.RequiredScope}; receipt {item.ReceiptId}").Take(10).ToList();
+        var failed = applicable.Any(item => item.State == CriterionEvidenceState.Failed);
+        var all = obligations.Length > 0 && obligations.All(item => item.HasSatisfiedEvidenceFor(candidate));
+        var state = candidate is null ? "unavailable — candidate unknown" : failed ? "failed — applicable criterion receipt" :
+            all ? "passed — applicable criterion receipts" : "pending — changed candidate lacks complete applicable receipts";
+        if (candidate is not null && goal.RetainedAcceptanceFailure is { } failure && failure.BranchHeadSha == candidate)
+        {
+            state = "failed — recorded acceptance (main " + (failure.MainHeadSha ?? "unknown") + ")";
+            lines.AddRange(failure.FailedChecks.Take(5).Select(BoundItem));
+        }
+        if (obligations.Any(item => item.Owner == CriterionEvidenceOwner.Operator && !item.HasSatisfiedEvidenceFor(candidate)))
+            lines.Add("Operator obligation outstanding");
+        if (candidate is not null)
+            foreach (var task in goal.Tasks)
+                foreach (var receipt in task.VerificationHistory.SelectMany(record => record.FindingEvidenceReceipts ?? [])
+                             .GroupBy(item => item.ReceiptId).Select(group => group.Last())
+                             .Where(item => item.Accepted && item.CandidateSha == candidate).Take(5))
+                    lines.Add($"Focused execution: {(FindingEvidenceReceiptSelector.SuppliedReceiptsPassAtCandidate(task, candidate, [receipt.ReceiptId]) ? "passed" : "failed")}; receipt {receipt.ReceiptId}; full acceptance tracked separately");
+        return new(state, lines.Take(20).ToArray(), "criterion obligations/acceptance failure; candidate " + (candidate ?? "unknown"),
+            Math.Max(0, applicable.Length - 10) + Math.Max(0, lines.Count - 20));
+    }
+
+    private async Task<string?> ReadArtifactAsync(TaskVerificationRecord record, CancellationToken token)
+    {
+        if (artifact is not null)
+        {
+            var text = await artifact(record, token).WaitAsync(token);
+            return text is not null && Encoding.UTF8.GetByteCount(text) <= MaxArtifactBytes ? text : null;
+        }
+        if (record.AuthoritativeStandardOutput is { } output && Encoding.UTF8.GetByteCount(output) <= MaxArtifactBytes &&
+            (record.StandardOutputPath is null || output.Contains(PlannerOutputContract.DurablePlanBeginMarker, StringComparison.Ordinal) || output.Contains("WORKER_RESULT:", StringComparison.Ordinal)))
+            return output;
+        if (record.StandardOutputPath is not { } path) return null;
+        await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete,
+            4096, FileOptions.Asynchronous | FileOptions.SequentialScan);
+        if (stream.Length > MaxArtifactBytes) return null;
+        var bytes = new byte[MaxArtifactBytes + 1];
+        var length = 0;
+        while (length < bytes.Length)
+        {
+            var read = await stream.ReadAsync(bytes.AsMemory(length), token);
+            if (read == 0) break;
+            length += read;
+        }
+        return length > MaxArtifactBytes ? null : new UTF8Encoding(false, true).GetString(bytes, 0, length);
+    }
+
+    private static string Source(TaskVerificationRecord record, TaskDispatchRecord dispatch) =>
+        (record.StandardOutputPath ?? "retained structured worker artifact") + $"; dispatch {dispatch.DispatchedAt:O}";
+
+    private static string? PlanField(string mapping)
+    {
+        var match = Regex.Match(mapping, @"(?:^|;)\s*plan\s*=\s*(?<plan>.*?)(?=;\s*[\w_-]+\s*=|$)", RegexOptions.IgnoreCase);
+        return match.Success ? match.Groups["plan"].Value.Trim() : null;
+    }
+
+    private static bool FullRevision(string? value) => value is { Length: 40 or 64 } && value.All(Uri.IsHexDigit);
+    private static string FileAreas(IReadOnlyList<string> files)
+    {
+        var areas = files.Take(100).Select(file =>
+        {
+            var path = file.Length > 2 ? file[2..].Replace('\\', '/') : file;
+            var slash = path.LastIndexOf('/');
+            return slash < 0 ? "repository root" : path[..slash];
+        }).Distinct(StringComparer.Ordinal).ToArray();
+        return string.Join(", ", areas.Take(5).Select(BoundItem)) + (areas.Length > 5 ? "; more areas omitted" : "");
+    }
+    private static string BoundItem(string text)
+    {
+        var plain = text.Replace('\r', ' ').Replace('\n', ' ').Replace('{', ' ').Replace('}', ' ').Trim();
+        if (plain.Length <= 360) return plain;
+        var end = StringInfo.ParseCombiningCharacters(plain).TakeWhile(index => index <= 359).LastOrDefault();
+        return plain[..end] + "… [full text in cited source / expanded text below]";
+    }
+}
