@@ -5,6 +5,7 @@ using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
+using Microsoft.Data.Sqlite;
 using Xunit;
 
 [Collection(CliTestCollections.ConsoleSerialized)]
@@ -228,6 +229,51 @@ public sealed class CliAttentionJsonReadOnlyRouteTests : CliTaskQueryTestSupport
             .Where(path => !allowedReadSidecars.Contains(path))
             .ToDictionary(path => Path.GetRelativePath(root, path),
                 path => Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path))));
+
+    [Theory]
+    [InlineData("attention", "--json")]
+    [InlineData("attention", "list", "--json")]
+    public async Task SqliteJsonAliases_ReadWhileBothStoreWritersAreHeld(params string[] args)
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(root);
+            StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath);
+            var seed = new AgentOrchestratorKernel();
+            var live = seed.CreateGoal("Writer-held JSON");
+            var wait = seed.RequestHumanInput(live.Id, null, "Choose");
+            var parked = seed.CreateGoal("Parked JSON item");
+            seed.ParkGoal(parked.Id, "Owner parked");
+            await new SqliteOrchestratorStateRepository(workspace.SqliteStatePath).SaveAsync(seed);
+            var store = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
+            await store.RaiseAsync(CollaborationItemType.Decision, parked.Id.Value, "Parked", "Keep raised");
+            var global = await store.RaiseAsync(CollaborationItemType.Decision, null, "Global", "Keep raised");
+            var itemsDb = Path.Combine(workspace.OrchestratorDirectory, "collaboration-items.db");
+            var beforeItems = JsonSerializer.Serialize(await store.ListAsync());
+            var before = Snapshot(root, [workspace.SqliteStatePath + "-wal", workspace.SqliteStatePath + "-shm", itemsDb + "-wal", itemsDb + "-shm"]);
+            await using var stateWriter = new SqliteConnection($"Data Source={workspace.SqliteStatePath};Pooling=False");
+            await using var itemsWriter = new SqliteConnection($"Data Source={itemsDb};Pooling=False");
+            await stateWriter.OpenAsync();
+            await itemsWriter.OpenAsync();
+            // Successful acquisition is the deterministic gate; no polling or elapsed-time assertion.
+            using var stateTransaction = stateWriter.BeginTransaction(deferred: false);
+            using var itemsTransaction = itemsWriter.BeginTransaction(deferred: false);
+            var queries = SqliteOrchestratorStateRepository.OpenReadOnly(workspace.SqliteStatePath);
+            var output = CaptureConsole(() => CliAttentionJsonQueryCommand.Execute(args, queries, workspace));
+            using var json = JsonDocument.Parse(output);
+            var payload = json.RootElement.GetProperty("payload");
+            Assert.Equal(wait.Id.Value, Assert.Single(payload.GetProperty("waits").EnumerateArray()).GetProperty("id").GetString());
+            Assert.Equal(global.Id, Assert.Single(payload.GetProperty("items").EnumerateArray()).GetProperty("id").GetString());
+            Assert.Equal(beforeItems, JsonSerializer.Serialize(await store.ListAsync()));
+            stateTransaction.Rollback();
+            itemsTransaction.Rollback();
+            var after = Snapshot(root, [workspace.SqliteStatePath + "-wal", workspace.SqliteStatePath + "-shm", itemsDb + "-wal", itemsDb + "-shm"]);
+            Assert.Equal(before.Keys.Order(), after.Keys.Order());
+            foreach (var (path, hash) in before) Assert.Equal(hash, after[path]);
+        }
+        finally { Directory.Delete(root, true); }
+    }
 
     private static void AssertNoWrites(ProbeStateRepository repository)
     {
