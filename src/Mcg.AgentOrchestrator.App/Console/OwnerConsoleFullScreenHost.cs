@@ -162,7 +162,8 @@ internal static class OwnerConsoleFullScreenHost
                     Path.Combine(workspace.OrchestratorDirectory, "owner-console-settings.json"));
                 var controller = new OwnerConsoleScreenController(questions, new AttentionAnswerHandlerAdapter(workspace),
                     new TerminalGuiOwnerConsoleDialogs(app, token), new OwnerGoalDetailQuery(state,
-                        new GoalEventFileTail(workspace.GoalLifecycleEventsDirectory), summary: OwnerGoalChangeSummaryQuery.ForWorkspace(workspace)),
+                        new GoalEventFileTail(workspace.GoalLifecycleEventsDirectory), summary: OwnerGoalChangeSummaryQuery.ForWorkspace(workspace),
+                        evidence: new(Path.Combine(workspace.OrchestratorDirectory, "pre-review-evidence-attempts"), clock)),
                     new CliConductorConsoleAdapter(workspace), new CliOwnerDigestConsoleAdapter(workspace),
                     new OwnerDigestSummaryAdapter(workspace), clock, new WorkspaceEpicProgressSource(workspace),
                     resolutions: new OwnerQuestionResolutionReader(state, new GoalEventFileTail(workspace.GoalLifecycleEventsDirectory),
