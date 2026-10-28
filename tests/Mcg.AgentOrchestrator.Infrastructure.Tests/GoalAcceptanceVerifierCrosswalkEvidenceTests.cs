@@ -164,11 +164,17 @@ public sealed class GoalAcceptanceVerifierCrosswalkEvidenceTests
     {
         using var fixture = new CrosswalkAcceptanceFixture();
         var check = await fixture.RunAsync();
-        var classification = AcceptanceCohortVerificationClassifier.ClassifyCohortVerificationResult(
+        Assert.True(check.Passed);
+        Assert.Equal(0, check.TestResultRunOrdinal);
+        var classified = AcceptanceCohortVerificationClassifier.ClassifyCohortVerificationResultWithPaths(
             new(true, false, 0, null, Checks: [check], TestResultPaths: check.NormalizedTestResultPaths)
             {
                 AttemptId = check.TestResultAttemptId, RequiredCrosswalkChecks = [check.Name], RequiredTestCheckNames = [check.Name]
             });
-        Assert.Equal(AcceptanceCohortGateOutcome.Passed, classification.Outcome);
+        Assert.Equal(AcceptanceCohortGateOutcome.Passed, classified.Classification.Outcome);
+        var evidence = Assert.Single(classified.Checks);
+        Assert.Equal(0, evidence.RunOrdinal);
+        Assert.Equal(1, evidence.ExecutedTestCount);
+        Assert.Equal(check.NormalizedTestResultPaths, classified.NormalizedTestResultPaths);
     }
 }

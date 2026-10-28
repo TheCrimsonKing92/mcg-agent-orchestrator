@@ -89,6 +89,17 @@ public sealed class CohortNormalizedEvidenceTests
     }
 
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void NegativeRunOrdinal_CannotSatisfyDeclaredEvidence(bool trx)
+    {
+        using var fixture = new CohortNormalizedFixture();
+        var normalized = fixture.Normalized(runOrdinal: trx ? 0 : -1);
+        var verification = trx ? fixture.Verification(normalized, fixture.Trx(runOrdinal: -1)) : fixture.Verification(normalized);
+        AssertRejected(verification);
+    }
+
+    [Theory]
     [InlineData(true)]
     [InlineData(false)]
     public void InvalidTrx_DoesNotFallBackToNormalizedPeer(bool missing)

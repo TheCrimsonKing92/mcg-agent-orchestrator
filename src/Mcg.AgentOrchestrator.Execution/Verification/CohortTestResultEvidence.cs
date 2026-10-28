@@ -29,7 +29,7 @@ public static class CohortTestResultEvidence
             foreach (var check in checks)
             {
                 if (string.IsNullOrWhiteSpace(check.CheckName) || string.IsNullOrWhiteSpace(check.AttemptId) ||
-                    check.RunOrdinal <= 0 || check.ExitCode is null || check.Artifacts.Count == 0 ||
+                    check.RunOrdinal < 0 || check.ExitCode is null || check.Artifacts.Count == 0 ||
                     check.Format is not (AcceptanceCohortCheckEvidence.NormalizedFormat or AcceptanceCohortCheckEvidence.TrxFormat))
                     return new(false, false, total);
                 var ids = new HashSet<string>(StringComparer.Ordinal);

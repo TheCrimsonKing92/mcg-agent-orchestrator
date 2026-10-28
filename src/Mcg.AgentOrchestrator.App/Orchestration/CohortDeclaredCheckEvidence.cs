@@ -33,7 +33,7 @@ internal static class CohortDeclaredCheckEvidence
         foreach (var check in checks.Where(check => !required.Contains(check.Name, StringComparer.Ordinal) &&
                      check.TestResultPaths is { Count: > 0 }))
         {
-            if (check.TestResultAttemptId != result.AttemptId || check.TestResultRunOrdinal <= 0) return null;
+            if (check.TestResultAttemptId != result.AttemptId || check.TestResultRunOrdinal < 0) return null;
             var paths = GroupedReceiptTestResultPaths.Resolve(result with { Checks = [check] },
                 AcceptanceCohortVerificationClassifier.NormalizeCohortTestResultPaths(check.TestResultPaths)).Paths;
             if (!AcceptanceCohortGateEvidence.HasCoherentTrxEvidence(paths)) return null;

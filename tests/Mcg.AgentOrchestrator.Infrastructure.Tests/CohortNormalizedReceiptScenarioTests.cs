@@ -6,13 +6,15 @@ using Mcg.AgentOrchestrator.Infrastructure;
 public sealed class CohortNormalizedReceiptScenarioTests
 {
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public void Lifecycle_RealParsingCustodyRetentionAndReopenedReadback(bool mixed)
+    [InlineData(false, 0)]
+    [InlineData(true, 0)]
+    [InlineData(false, 1)]
+    [InlineData(true, 1)]
+    public void Lifecycle_RealParsingCustodyRetentionAndReopenedReadback(bool mixed, int runOrdinal)
     {
         using var fixture = new CohortNormalizedFixture();
-        var normalized = fixture.Normalized(mixed ? "zzz-crosswalk" : "crosswalk");
-        var verification = mixed ? fixture.Verification(normalized, fixture.Trx()) : fixture.Verification(normalized);
+        var normalized = fixture.Normalized(mixed ? "zzz-crosswalk" : "crosswalk", runOrdinal: runOrdinal);
+        var verification = mixed ? fixture.Verification(normalized, fixture.Trx(runOrdinal)) : fixture.Verification(normalized);
         var originals = verification.Checks!.ToDictionary(check => check.Name,
             check => File.ReadAllBytes((check.NormalizedTestResultPaths ?? check.TestResultPaths!)[0]));
         var receipt = fixture.Save(verification);
@@ -24,7 +26,7 @@ public sealed class CohortNormalizedReceiptScenarioTests
         {
             Assert.Equal("attempt", check.AttemptId);
             Assert.Equal(receipt.Identity.Value, check.CohortId);
-            Assert.Equal(1, check.RunOrdinal);
+            Assert.Equal(runOrdinal, check.RunOrdinal);
             var artifact = Assert.Single(check.Artifacts);
             Assert.True(AcceptanceCohortGateEvidence.IsContentBoundArtifact(artifact));
             Assert.Equal(originals[check.CheckName], File.ReadAllBytes(artifact.Path));
@@ -38,6 +40,7 @@ public sealed class CohortNormalizedReceiptScenarioTests
         Assert.Equal(receipt.Identity.Value, reopened.Identity.Value);
         Assert.Equal(receipt.Identity.Members, reopened.Identity.Members);
         Assert.Equal(receipt.GateEvidenceArtifacts, reopened.GateEvidenceArtifacts);
+        Assert.All(reopened.GateChecks, check => Assert.Equal(runOrdinal, check.RunOrdinal));
         Assert.Equal(receipt.GateChecks.Sum(c => c.ExecutedTestCount), reopened.GateChecks.Sum(c => c.ExecutedTestCount));
         Assert.Single(new CohortAcceptanceStore(fixture.StorePath).ReadPassedReceiptsForGoal(receipt.Identity.Members[0].GoalId));
     }

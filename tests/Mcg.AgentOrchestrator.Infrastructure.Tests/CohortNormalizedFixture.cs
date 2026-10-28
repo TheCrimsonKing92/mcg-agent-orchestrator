@@ -16,20 +16,20 @@ internal sealed class CohortNormalizedFixture : IDisposable
     internal CohortNormalizedFixture() => Directory.CreateDirectory(SourceRoot);
 
     internal AcceptanceCheckResult Normalized(string name = "crosswalk", string id = "same opaque ID",
-        string status = "passed", string[]? selected = null)
+        string status = "passed", string[]? selected = null, int runOrdinal = 1)
     {
         var records = status == "empty" ? Array.Empty<TestResult>() : new[] { Record(id, status) };
         var path = Path.Combine(SourceRoot, name + ".ctrf.json");
         NormalizedTestResultWriter.Write(path, "crosswalk", records);
         var evidence = new AcceptanceCohortCheckEvidence(name, AcceptanceCohortCheckEvidence.NormalizedFormat,
-            "project", "attempt", 1, 0, SourceRoot, selected ?? [id], records.Count(r => r.Status != TestResultStatus.Skipped),
+            "project", "attempt", runOrdinal, 0, SourceRoot, selected ?? [id], records.Count(r => r.Status != TestResultStatus.Skipped),
             [CohortTestResultEvidence.Capture(path, AcceptanceCohortCheckEvidence.NormalizedFormat)]);
-        return new(name, true, 0, null, TestProjectPath: "project", TestResultAttemptId: "attempt", TestResultRunOrdinal: 1,
+        return new(name, true, 0, null, TestProjectPath: "project", TestResultAttemptId: "attempt", TestResultRunOrdinal: runOrdinal,
             ExecutedTestCount: evidence.ExecutedTestCount)
         { CohortEvidence = evidence, NormalizedTestResultPaths = [path], CrosswalkDiagnostics = [] };
     }
 
-    internal AcceptanceCheckResult Trx()
+    internal AcceptanceCheckResult Trx(int runOrdinal = 1)
     {
         var path = Path.Combine(SourceRoot, "dotnet.trx");
         File.WriteAllText(path, """
@@ -38,7 +38,7 @@ internal sealed class CohortNormalizedFixture : IDisposable
               <ResultSummary><Counters total="1" executed="1" passed="1" failed="0" /></ResultSummary>
             </TestRun>
             """);
-        return new("dotnet", true, 0, null, TestResultPaths: [path], TestResultAttemptId: "attempt", TestResultRunOrdinal: 1,
+        return new("dotnet", true, 0, null, TestResultPaths: [path], TestResultAttemptId: "attempt", TestResultRunOrdinal: runOrdinal,
             ExecutedTestCount: 1);
     }
 
