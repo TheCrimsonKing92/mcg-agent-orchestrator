@@ -35,6 +35,10 @@ public interface IOrchestratorStateQueries
         CancellationToken cancellationToken = default) =>
         throw new NotSupportedException("This repository does not support goal similarity projections.");
 
+    /// <summary>Queue ordering facts only; never hydrates unrelated goal snapshots.</summary>
+    Task<IReadOnlyList<AcceptanceQueueFact>> ListAcceptanceQueueFactsAsync(CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyList<AcceptanceQueueFact>>([]);
+
     /// <summary>Reads board columns with bounded terminal history and objective prefixes, in listing order.</summary>
     async Task<IReadOnlyList<GoalSummary>> ListGoalBoardRowsAsync(
         GoalBoardRowQuery query, CancellationToken cancellationToken = default)
@@ -99,6 +103,9 @@ public sealed record AttentionReadProjection(
     IReadOnlyList<AttentionOwnerQuestionEvidence> OwnerQuestions,
     IReadOnlyList<ProviderUsageGoalEvidence> ProviderEvidence,
     AttentionProjectionReadCounts Reads);
+
+public sealed record AcceptanceQueueFact(string GoalId, GoalPriority Priority,
+    DateTimeOffset VerifiedAt, DateTimeOffset CreatedAt);
 
 public interface IOrchestratorStateRepository : IOrchestratorStateQueries
 {

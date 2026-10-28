@@ -30,8 +30,35 @@ public sealed record DispatchLiveChangeSnapshot(
     IReadOnlyList<string> DisplayFiles,
     int RemainingFileCount);
 
+public sealed record CommittedGoalChanges(bool Available, IReadOnlyList<string> Files,
+    int TotalFiles, string? Reason = null);
+
 public static class GoalChangesReader
 {
+    // Immutable range only. Failure must not look like a confirmed empty change set.
+    public static CommittedGoalChanges ReadCommittedRange(string repository, string basis, string candidate)
+    {
+        if (!IsRevision(basis) || !IsRevision(candidate))
+            return new(false, [], 0, "full comparison revisions unavailable");
+        var result = GitCli.Run(repository, 20_000, "diff", "--no-ext-diff", "--no-renames", "--name-status", "-z", basis, candidate, "--");
+        return ParseCommittedRange(result);
+    }
+
+    internal static CommittedGoalChanges ParseCommittedRange(GitCli.GitResult result)
+    {
+        if (!result.Succeeded || result.DrainTimedOut)
+            return new(false, [], 0, "committed diff unavailable (Git exit " + result.ExitCode + ")");
+        var fields = result.Output.Split('\0', StringSplitOptions.RemoveEmptyEntries);
+        if (fields.Length % 2 != 0) return new(false, [], 0, "incomplete committed diff");
+        var files = new List<string>();
+        for (var index = 0; index < fields.Length && files.Count < 100; index += 2)
+            files.Add(fields[index] + " " + fields[index + 1]);
+        return new(true, files, fields.Length / 2);
+    }
+
+    private static bool IsRevision(string revision) =>
+        revision.Length is 40 or 64 && revision.All(Uri.IsHexDigit);
+
     internal static Func<string, string[], GitCli.GitResult> RunGit { get; set; } =
         (dir, args) => GitCli.Run(dir, args);
 

@@ -1,4 +1,5 @@
 using Mcg.AgentOrchestrator.Infrastructure;
+using Terminal.Gui.Views;
 
 namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 
@@ -32,6 +33,26 @@ internal sealed class OwnerConsoleGoalDialog : IDisposable
     internal string? RequestedGateGoalId { get; private set; }
     internal event Action? Changed;
     internal event Action? CloseRequested;
+
+    // Shared production construction path for Terminal.Gui layout/input verification.
+    internal (OwnerConsoleTextDialog Dialog, Dictionary<char, Button> Buttons) CreateView(
+        Action close, Func<char, Task> action)
+    {
+        var dialog = new OwnerConsoleTextDialog(Title, Current.Text, Current.ChoiceLines, Page);
+        var closeButton = new Button { Text = "Close", IsDefault = true };
+        closeButton.Accepting += (_, args) => { args.Handled = true; close(); };
+        dialog.AddButton(closeButton);
+        var buttons = new Dictionary<char, Button>();
+        foreach (var row in OwnerConsoleDialogBindings.GoalDetail.Where(row => row.Command != "quit"))
+        {
+            var key = row.Key!.Value;
+            var binding = OwnerConsoleBindings.ForDialogKey(OwnerConsoleScope.GoalDetail, key, row.Ctrl)!;
+            var button = new Button { Text = OwnerConsoleDialogBindings.Label(binding), Visible = Actions.Contains(OwnerConsoleDialogBindings.Label(binding)) };
+            button.Accepting += async (_, args) => { args.Handled = true; await action(key); };
+            buttons.Add(key, button); dialog.AddConditionalButton(button);
+        }
+        return (dialog, buttons);
+    }
     internal IReadOnlyList<string> Actions => OwnerConsoleDialogBindings.GoalDetail
         .Where(row => row.Command switch
         {
@@ -98,7 +119,8 @@ internal sealed class OwnerConsoleGoalDialog : IDisposable
                 var content = await _load(token).WaitAsync(token).ConfigureAwait(false);
                 await ApplyAsync(() =>
                 {
-                    if (content is null && _contentLoaded) return; // The goal disappeared; retain the last known page.
+                    if (content is null && _contentLoaded)
+                    { Page.Replace(StaleSummaryText(Current.Text), Current.ChoiceLines); Changed?.Invoke(); return; }
                     if (content is not null) _contentLoaded = true;
                     content ??= OwnerConsoleGoalDetailLoading.Unavailable(null);
                     Current = content;
@@ -112,7 +134,7 @@ internal sealed class OwnerConsoleGoalDialog : IDisposable
                 await ApplyAsync(() =>
                 {
                     if (_contentLoaded)
-                        Page.Replace(Current.Text + Environment.NewLine + "Refresh failed: " + ex.Message, Current.ChoiceLines);
+                        Page.Replace(StaleSummaryText(Current.Text) + Environment.NewLine + "Refresh failed: " + ex.Message, Current.ChoiceLines);
                     else
                     {
                         Current = OwnerConsoleGoalDetailLoading.Unavailable(ex);
@@ -122,6 +144,13 @@ internal sealed class OwnerConsoleGoalDialog : IDisposable
                 }, revision, token).ConfigureAwait(false);
             }
         }
+    }
+
+    private static string StaleSummaryText(string text)
+    {
+        foreach (var heading in new[] { "Planned:", "Changed:", "Reported:", "Verified:", "Candidate:", "Promotion:" })
+            text = text.Replace(Environment.NewLine + heading, Environment.NewLine + heading + " [stale — refresh unavailable]", StringComparison.Ordinal);
+        return text;
     }
 
     private async Task ApplyAsync(Action apply, int revision, CancellationToken token)

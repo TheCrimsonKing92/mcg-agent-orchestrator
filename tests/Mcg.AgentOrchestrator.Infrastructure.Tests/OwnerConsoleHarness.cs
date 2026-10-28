@@ -61,6 +61,20 @@ internal sealed class OwnerConsoleHarness
     internal sealed class FakeState(AgentOrchestratorKernel kernel) : IOrchestratorStateQueries
     {
         internal readonly List<string> Calls = [];
+        internal int AcceptanceQueueReadCount;
+        public Task<IReadOnlyList<AcceptanceQueueFact>> ListAcceptanceQueueFactsAsync(CancellationToken cancellationToken = default)
+        {
+            AcceptanceQueueReadCount++;
+            return Task.FromResult<IReadOnlyList<AcceptanceQueueFact>>(kernel.Goals.Where(goal =>
+                goal.Status == GoalStatus.Verified && goal.CurrentHold is null).Select(goal => new AcceptanceQueueFact(
+                    goal.Id.Value, GoalEffectivePriorityIndex.EffectiveLevel(goal),
+                    goal.Timeline.Where(item => item.Kind == ProgressKind.GoalPolicyDecision &&
+                            item.Message.Contains("Verified", StringComparison.OrdinalIgnoreCase)).Select(item => item.OccurredAt)
+                        .DefaultIfEmpty(goal.Tasks.Select(task => task.LastVerification?.CompletedAt ?? DateTimeOffset.MinValue)
+                            .DefaultIfEmpty().Max()).Min(),
+                    goal.Timeline.FirstOrDefault()?.OccurredAt ?? DateTimeOffset.MinValue)).ToArray());
+        }
+
         public Task<IReadOnlyList<GoalSummary>> ListGoalMetadataAsync(CancellationToken cancellationToken = default)
         {
             Calls.Add("metadata");

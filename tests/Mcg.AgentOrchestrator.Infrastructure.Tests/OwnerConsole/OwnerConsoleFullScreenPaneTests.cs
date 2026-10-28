@@ -87,6 +87,7 @@ public sealed class OwnerConsoleFullScreenPaneTests
         var status = view.StatusText;
         var board = view.SelectedGoalId;
         var hints = view.HintText;
+        await view.PreviewLoad.WaitAsync(TestContext.Current.CancellationToken);
         var calls = harness.State.Calls.ToArray();
 
         foreach (var key in new[] { Key.Enter, new Key('a'), new Key('r') })

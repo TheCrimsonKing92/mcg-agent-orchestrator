@@ -310,16 +310,12 @@ public static partial class WorkerProfileDispatcher
             dispatchVariables,
             dispatchedAt);
         contextPackageReceipt = WorkerRetryFeedbackPromptGuard.Validate(goal, task, contextPackage, contextPackageReceipt, preparation.PromptPath);
-        var retryContextFingerprint = RetryContextFingerprintFactory.Build(
-            goal,
-            task,
-            providerName,
-            modelName,
-            paidRoute,
+        var retryContextFingerprint = FindingEvidenceDispatchContext.RetryFingerprint(goal, task, providerName, modelName, paidRoute,
             priorDispatch?.ResultCommit ?? priorDispatch?.BaseCommit ?? task.LastVerification?.ReviewedCommit,
             targetContext?.HeadCommit ?? priorDispatch?.BaseCommit,
             currentMainIdentity);
         WorkerBuildScopeDispatchPreparation.Prepare(goal, task, workingDirectory, integrationBranch);
+        var reviewEvidenceContext = FindingEvidenceDispatchContext.Capture(goal, task, targetContext?.HeadCommit, dispatchedAt, usesTypedContextPackage);
         kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
             profile.Name,
             preparation.Command,
@@ -346,6 +342,8 @@ public static partial class WorkerProfileDispatcher
             PaidRoute: paidRoute,
             ClaudeCredentialSourceDirectory: claudeCredentialSelection?.DirectoryPath,
             ClaudeCredentialSourceIsExplicit: claudeCredentialSelection?.IsExplicitSource ?? false,
+            FindingEvidenceReviewContext: reviewEvidenceContext,
+            FindingEvidenceReviewContinuation: FindingEvidenceDispatchContext.Continuation(task),
             ShadowDecision: shadowRecorder?.Record(task.RequiredRole, goal.Objective, task.Description, reviewerScopeChangedFiles, providerName, modelName, reasoningEffort)),
             allowPendingRecordedDispatchRefresh);
         ReviewerChangedExistingTestScope.RecordConductEvent(goal, task, changedExistingTests, promptRoot, dispatchedAt, allowPendingRecordedDispatchRefresh);

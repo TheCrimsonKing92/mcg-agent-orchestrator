@@ -483,12 +483,10 @@ public sealed class ConductorDriverTestsFindingEvidenceReuse : IDisposable
             recordFindingEvidenceOutcome: (goalId, taskId, id, outcome, receipt) => kernel.RecordFindingEvidenceOutcome(goalId, taskId, id, outcome, receipt));
         driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
         Assert.NotEmpty(reviewer.VerificationHistory.SelectMany(verification => verification.FindingEvidenceReceipts ?? []));
-        var method = typeof(ConductorDriver).GetMethod("TryResolveFindingEvidenceCoverage",
-            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
-        object?[] arguments =
-            [reviewer, finding.EvidenceRequest! with { Selections = [] }, candidateSha, "basis", null, null, null];
-        Assert.Equal(false, method.Invoke(driver, arguments));
-        Assert.Empty(Assert.IsAssignableFrom<IReadOnlyList<FindingEvidenceReceipt>>(arguments[4]));
+        Assert.False(ConductorDriver.TryResolveFindingEvidenceCoverage(
+            reviewer, finding.EvidenceRequest! with { Selections = [] }, candidateSha, "basis",
+            out var receipts, out _, out _));
+        Assert.Empty(receipts);
     }
 
     [Xunit.Theory]

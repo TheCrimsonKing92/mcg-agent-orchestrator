@@ -5,8 +5,17 @@ using Mcg.AgentOrchestrator.App.Orchestration;
 namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 
 internal sealed class OwnerGoalDetailQuery(IOrchestratorStateQueries state, IGoalEventTail tail,
-    Func<OwnerConsoleGateProgress?>? gate = null)
+    Func<OwnerConsoleGateProgress?>? gate = null, OwnerGoalChangeSummaryQuery? summary = null)
 {
+    private readonly OwnerGoalChangeSummaryQuery _summary = summary ?? new();
+
+    internal async Task<OwnerGoalChangeSummary?> LoadSummaryAsync(string goalId, CancellationToken token)
+    {
+        var selected = await state.LoadGoalsAsync([new GoalId(goalId)], token);
+        var goal = selected.Goals.SingleOrDefault(item => item.Id.Value == goalId);
+        return goal is null ? null : await _summary.LoadAsync(goal, token);
+    }
+
     internal Task<string?> ResolveGoalIdAsync(string idOrPrefix, OwnerConsoleCapturedOutput output,
         CancellationToken cancellationToken) =>
         OwnerConsoleGoalDetail.ResolveAsync(state, idOrPrefix, output, cancellationToken);
@@ -19,18 +28,17 @@ internal sealed class OwnerGoalDetailQuery(IOrchestratorStateQueries state, IGoa
         int? position = null;
         if (goal.Status == GoalStatus.Verified && goal.CurrentHold is null)
         {
-            var metadata = await state.ListGoalMetadataAsync(cancellationToken);
-            var ids = metadata.Where(item => item.Status == nameof(GoalStatus.Verified)).Select(item => new GoalId(item.Id)).ToArray();
-            var queued = await state.LoadGoalsAsync(ids, cancellationToken);
-            var ordered = ConductorBatchLoop.OrderParallelAcceptanceEligibleGoals(queued.Goals
-                .Where(item => item.Status == GoalStatus.Verified && item.CurrentHold is null).ToArray());
-            var index = ordered.ToList().FindIndex(item => item.Id == goal.Id);
+            var queued = await state.ListAcceptanceQueueFactsAsync(cancellationToken);
+            var ordered = queued.OrderByDescending(item => item.Priority).ThenBy(item => item.VerifiedAt)
+                .ThenBy(item => item.CreatedAt).ThenBy(item => item.GoalId, StringComparer.Ordinal).ToList();
+            var index = ordered.FindIndex(item => item.GoalId == goalId);
             if (index >= 0) position = index + 1;
         }
         var roles = goal.Tasks.ToDictionary(task => task.Id.Value, task => task.RequiredRole);
         var events = tail.ReadLast(goalId, 100)
             .Select(line => OwnerGoalLifecycleEvent.TryParse(line, goalId, out var item) ? item : null)
             .Where(item => item is not null).Select(item => OwnerGoalLifecycleEvent.WithRole(item!, roles)).ToArray();
-        return new OwnerGoalDetailSnapshot(goal, position, events).WithGate(gate?.Invoke());
+        return new OwnerGoalDetailSnapshot(goal, position, events,
+            Changes: await _summary.LoadAsync(goal, cancellationToken)).WithGate(gate?.Invoke());
     }
 }

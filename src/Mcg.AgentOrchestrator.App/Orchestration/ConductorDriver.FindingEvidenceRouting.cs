@@ -432,13 +432,33 @@ internal sealed partial class ConductorDriver
                 System.Text.Encoding.UTF8.GetBytes(string.Join("\u001d", values)))).ToLowerInvariant()[..16];
     }
 
-    internal static FailedGoalFindingObservation BuildCappedFindingEvidenceDeliveryRetry(
+    private FailedGoalFindingObservation BuildQualifiedFindingEvidenceDeliveryRetry(
         Goal goal,
         TaskSpec task,
         string candidateSha,
         IReadOnlyList<ReviewFinding> findings,
         IReadOnlyList<string> receiptIds,
         string summary)
+    {
+        if (task.RequiredRole == AgentRole.Reviewer && task.LastVerification?.CandidateIdentity is not null &&
+            ReviewFindings.GetOpenBlockingFindings(task.LastVerification.MergedReviewFindings ?? [], goal.EffectiveAcceptanceCriteriaCorrections)
+                .All(finding => finding.Category == FindingCategory.TestEvidence))
+        {
+            var currentTask = (_cohortKernel ?? _conductorTickKernel)?.GetTask(goal.Id, task.Id) ?? task;
+            if (FindingEvidenceContinuationCoordinator.TrySelectFindingEvidenceContinuation(this, goal, currentTask, out var continuation, out var reason))
+                return FailedGoalFindingObservation.Routed(
+                    FailedGoalFindingObservationKind.FindingEvidenceDeliveryRecorded, task.Id,
+                    BuildFailedGoalAttemptIdentity(task), continuation!.Render(), null,
+                    observedCause: RetryCause.NewTestFinding) with { EvidenceContinuation = continuation };
+            return FailedGoalFindingObservation.Observed(FailedGoalFindingObservationKind.FindingEvidencePending,
+                $"Reviewer evidence continuation held: {reason}; candidate_sha={candidateSha}.");
+        }
+        return BuildCappedFindingEvidenceDeliveryRetry(goal, task, candidateSha, findings, receiptIds, summary);
+    }
+
+    internal static FailedGoalFindingObservation BuildCappedFindingEvidenceDeliveryRetry(
+        Goal goal, TaskSpec task, string candidateSha, IReadOnlyList<ReviewFinding> findings,
+        IReadOnlyList<string> receiptIds, string summary)
     {
         var findingIds = findings.Select(finding => finding.StableId).Distinct(StringComparer.Ordinal).ToArray();
         var receipts = receiptIds.Where(id => !string.IsNullOrWhiteSpace(id)).Distinct(StringComparer.Ordinal).ToArray();

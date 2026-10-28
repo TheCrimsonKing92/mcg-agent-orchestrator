@@ -2,6 +2,9 @@ using System.Collections.Immutable;
 
 namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 
+internal sealed record OwnerConsoleSelectedGoalPreview(string? GoalId, OwnerGoalChangeSummary? Summary,
+    string? Unavailable = null);
+
 internal sealed record OwnerConsoleViewModel(
     OwnerConsoleStatus Status, ImmutableArray<OwnerConsoleDecision> Decisions,
     ImmutableArray<OwnerConsoleBoardRow> Board, ImmutableArray<OwnerConsoleActivityItem> Activity,

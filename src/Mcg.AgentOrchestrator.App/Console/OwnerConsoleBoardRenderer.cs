@@ -9,6 +9,15 @@ internal static class OwnerConsoleBoardRenderer
 {
     private const int PriorityColumn = 3;
 
+    internal static string Preview(OwnerConsoleSelectedGoalPreview preview, int width)
+    {
+        IReadOnlyList<string> lines = preview.Summary?.PreviewLines ??
+            (preview.GoalId is null ? ["Select a goal for Planned / Changed / Verified"] :
+                preview.Unavailable is { } error ? ["Planned / Changed / Verified unavailable: " + error] :
+                ["Planned: loading…", "Changed: loading…", "Verified: loading… (Enter: Goal detail)"]);
+        return string.Join('\n', lines.Select(line => OwnerConsoleLineFitter.Fit(line, OwnerConsoleLineSpans.None, width)));
+    }
+
     internal static void Render(DataTable table, TableView view, IReadOnlyList<OwnerConsoleBoardRow> rows,
         int paneWidth, int titleWidth)
     {

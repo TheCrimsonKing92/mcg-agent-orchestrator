@@ -133,6 +133,9 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
         finally { ModelApplied -= Refresh; }
     }
 
+    internal Task<OwnerGoalChangeSummary?> LoadGoalSummaryAsync(string goalId, CancellationToken token) =>
+        _goalDetail.LoadSummaryAsync(goalId, token);
+
     internal async Task ShowGoalDetailAsync(string goalId, OwnerConsoleScreenOperation? operation = null,
         CancellationToken cancellationToken = default)
     {
