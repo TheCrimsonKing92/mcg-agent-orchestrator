@@ -84,6 +84,9 @@ public sealed class RemoteLaneDeadlineTests
                 Assert.Single(RemoteExecutorHealthLedger.ReadAll(fixture.Ledger)).Outcome);
             Assert.Equal(TimeSpan.FromSeconds(901), fixture.Clock.GetUtcNow() - started);
             Assert.True(fixture.Clock.GetUtcNow() - started < CheckTimeout);
+            Assert.Same(handle, outcome.Handle);
+            Assert.False(handle.IsAbandoned);
+            fixture.PollLateOnce(outcome);
             Assert.True(handle.IsAbandoned);
         }
         finally
@@ -166,6 +169,8 @@ public sealed class RemoteLaneDeadlineTests
 
         internal Task<RemoteLaneOutcome> RunAsync(TimeSpan deadline, CancellationToken token) =>
             _coordinator.RunRemoteAsync(_check, _entry, CheckTimeout, deadline, token);
+
+        internal void PollLateOnce(RemoteLaneOutcome outcome) => _coordinator.PollLateOnce(outcome);
 
         public void Dispose()
         {
