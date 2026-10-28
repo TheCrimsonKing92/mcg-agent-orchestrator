@@ -99,12 +99,15 @@ next [goal-id] --full
 ```text
 goal <objective>
 goal --brief-file <path>
+goal --brief-file <path> --summary
 goal --brief-file <path> --depends-on <goal-prefix>
 goal <objective> --simple
 goal --brief-file <path> --simple
 ```
 
 `goal <objective>` creates and activates a goal for delegation; the automatic default is the Scout pipeline (Planner → Developer → Tester → Reviewer). Scout is the only multi-role intake; goals created earlier with a Researcher task still run. Pass `--brief-file <path>` to read the objective from a file instead of the command line — useful for long multi-line briefs.
+
+Pass `--summary` for a compact text receipt after standalone creation commits: outcome, full goal id, persisted status, selected pipeline, task ids/status/roles, and confirmed epic/backlog links. It omits the brief and JSON plan, displays at most ten task rows with titles limited to 120 Unicode characters (including an ellipsis when shortened), and reports omitted tasks. Warnings remain complete. Keyed replay describes the existing durable goal. Existing input, pipeline, role, link, dependency, request-key and autonomy options remain available; `--simple`, `--run`, `--from-backlog` and other command aliases reject summary mode before mutation. Without `--summary`, output is unchanged.
 
 Pass `--simple` to create a single-Developer goal (equivalent to `simple-goal`). `simple-goal <objective>` and `simple-goal --brief-file <path>` are the direct single-task forms.
 
