@@ -886,7 +886,7 @@ public sealed class ConductorBatchLoopTestsWatchProgress : ConductorBatchLoopTes
         Assert.Contains("(task 1/", human);
         Assert.Contains("running 2m0s", human);
         Assert.Contains("state=working", human);
-        Assert.Contains("worker pid=222 alive", human);
+        Assert.Contains("owned process pid=222 alive", human);
         Assert.DoesNotContain("pid=111", human);
         Assert.Contains("+42B stdout", human);
         Assert.Contains("last progress 15s ago", human);
@@ -922,7 +922,7 @@ public sealed class ConductorBatchLoopTestsWatchProgress : ConductorBatchLoopTes
         var human = lines.Single(line => line.StartsWith($"[{goal.Id.Value[..8]}] {task.RequiredRole}", StringComparison.Ordinal));
         Assert.Contains("pid=unknown", machine);
         Assert.Contains("liveness=\"NO LIVE WORKER\"", machine);
-        Assert.Contains("worker pid=unknown NO LIVE WORKER", human);
+        Assert.Contains("owned process pid=unknown NO LIVE WORKER", human);
     }
 
     [Xunit.Theory(DisplayName = "WatchProgress_suppresses_conductor_process_ids")]
@@ -952,7 +952,7 @@ public sealed class ConductorBatchLoopTestsWatchProgress : ConductorBatchLoopTes
         var machine = lines.Single(line => line.StartsWith("WATCH_PROGRESS ", StringComparison.Ordinal));
         var human = lines.Single(line => line.StartsWith($"[{goal.Id.Value[..8]}]", StringComparison.Ordinal));
         Assert.Contains("pid=333", machine);
-        Assert.Contains("worker pid=333 alive", human);
+        Assert.Contains("owned process pid=333 alive", human);
         Assert.DoesNotContain($"pid={conductorProcessId}", machine);
         Assert.DoesNotContain($"pid={conductorProcessId}", human);
     }

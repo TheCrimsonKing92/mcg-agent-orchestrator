@@ -166,6 +166,8 @@ internal sealed record ConductorParallelAcceptanceAttempt(
     public string? ReplayResultFingerprint { get; init; }
     public string? FocusedExecutionBasisIdentity { get; init; }
     public FindingEvidenceReceipt? OriginalFocusedReceipt { get; init; }
+    public SourceRevertedCandidateObservation? PartialSourceRevertCandidate { get; init; }
+    public DateTimeOffset? PartialSourceRevertRestorationCompletedAt { get; init; }
     public DateTimeOffset? ReplayLandedAt { get; init; }
     public DateTimeOffset? OwnerProcessStartedAt { get; init; }
     public string? OwnerExecutablePath { get; init; }
@@ -674,7 +676,11 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
             policy,
             (attemptCandidate, _, lease, cancellationToken, _) => ConductorParallelAcceptanceRunResult.Focused(
                 attemptCandidate,
-                runFocusedEvidence(attemptCandidate.Goal, request, lease, cancellationToken)),
+                runFocusedEvidence.Target is SourceRevertFocusedRunner scoped
+                    ? scoped.RunWithContinuation(attemptCandidate.Goal, request, lease, cancellationToken,
+                        CreateSourceRevertContinuation(ReadCanonicalAttempt(TryReadLatest(candidate.Goal.Id.Value)!.MetadataPath,
+                            candidate.Goal.Id.Value), candidate, requestContext?.RunBaselineArm ?? false))
+                    : runFocusedEvidence(attemptCandidate.Goal, request, lease, cancellationToken)),
             PreReviewEvidenceDispatchKind,
             request,
             requestContext,
@@ -1374,8 +1380,11 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
 
                 RunPreReviewEvidenceAttempt(
                     coordinator, activeAttempt, candidate, policy,
-                    (attemptCandidate, request, lease, runBaselineArm, cancellationToken) =>
-                        driver.RunPreReviewBaselineArmFocusedEvidence(
+                    (attemptCandidate, request, lease, runBaselineArm, cancellationToken, continuation) =>
+                        continuation is not null
+                        ? driver.RunContinuableSourceRevertEvidence(attemptCandidate, request, lease, cancellationToken,
+                            activeAttempt.FocusedEvidenceRevertPaths!, continuation)
+                        : driver.RunPreReviewBaselineArmFocusedEvidence(
                             attemptCandidate, request, lease, runBaselineArm, cancellationToken,
                             activeAttempt.FocusedEvidenceNegativeControl, activeAttempt.FocusedEvidenceRevertPaths, activeAttempt.FocusedEvidenceMutation));
             }
@@ -1436,6 +1445,16 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
         ConductorAutonomyPolicy policy,
         Func<ConductorParallelAcceptanceCandidate, string, DotnetBuildEnvironmentLease?, bool, CancellationToken,
             ConductorParallelAcceptanceRunResult> runner)
+        => RunPreReviewEvidenceAttempt(coordinator, attempt, candidate, policy,
+            (c, request, lease, baseline, token, _) => runner(c, request, lease, baseline, token));
+
+    internal static void RunPreReviewEvidenceAttempt(
+        ConductorParallelAcceptanceAttemptCoordinator coordinator,
+        ConductorParallelAcceptanceAttempt attempt,
+        ConductorParallelAcceptanceCandidate candidate,
+        ConductorAutonomyPolicy policy,
+        Func<ConductorParallelAcceptanceCandidate, string, DotnetBuildEnvironmentLease?, bool, CancellationToken,
+            SourceRevertedEvidenceContinuation?, ConductorParallelAcceptanceRunResult> runner)
     {
         if (!string.Equals(attempt.Kind, PreReviewEvidenceDispatchKind, StringComparison.Ordinal) ||
             string.IsNullOrWhiteSpace(attempt.FocusedEvidenceRequest))
@@ -1448,7 +1467,8 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
         coordinator.RunAttempt(
             attempt, candidate, policy,
             (attemptCandidate, _, lease, cancellationToken, _) =>
-                runner(attemptCandidate, attempt.FocusedEvidenceRequest, lease, runBaselineArm, cancellationToken));
+                runner(attemptCandidate, attempt.FocusedEvidenceRequest, lease, runBaselineArm, cancellationToken,
+                    coordinator.CreateSourceRevertContinuation(attempt, candidate, runBaselineArm)));
     }
 
     private void RunAttemptWithArtifactLease(
