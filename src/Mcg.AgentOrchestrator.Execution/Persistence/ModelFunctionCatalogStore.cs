@@ -68,6 +68,13 @@ public static class ModelFunctionCatalogStore
             Subscription = binding.Subscription is null ? null : binding.Subscription with
             {
                 ModelAlias = EffectiveModelAssignment.Normalize(binding.Model.ProviderName, binding.Subscription.ModelAlias)
+            },
+            SubscriptionFallback = binding.SubscriptionFallback is null ? null : binding.SubscriptionFallback with
+            {
+                // The alternate can have a different provider from the primary binding.
+                ModelAlias = EffectiveModelAssignment.Normalize(
+                    string.Equals(binding.SubscriptionFallback.WorkerProfileName, "codex-cli", StringComparison.OrdinalIgnoreCase)
+                        ? "OpenAI" : null, binding.SubscriptionFallback.ModelAlias)
             }
         }).ToArray());
 

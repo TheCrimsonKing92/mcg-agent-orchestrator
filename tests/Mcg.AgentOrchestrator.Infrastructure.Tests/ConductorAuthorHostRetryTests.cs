@@ -13,6 +13,113 @@ public sealed class ConductorAuthorHostRetryTests
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
     private static readonly DateTimeOffset Now = DateTimeOffset.Parse("2026-10-02T17:00:00Z");
 
+    [Xunit.Theory]
+    [Xunit.InlineData("answer")]
+    [Xunit.InlineData("invalid-answer")]
+    [Xunit.InlineData("ask-owner")]
+    [Xunit.InlineData("repeated-exhaustion")]
+    [Xunit.InlineData("prior-failure")]
+    public async Task Real_round_fallback_shares_host_budget_and_preserves_checked_Agent_intents(string scenario)
+    {
+        using var harness = new Harness();
+        var goal = harness.Kernel.CreateGoal("Choose runtime");
+        var item = await harness.Raise(goal);
+        var calls = 0;
+        var model = new ClaudeConductorAuthorModelRound(Path.Combine(harness.Root, "receipts"), (request, _) =>
+        {
+            calls++;
+            if (scenario == "prior-failure")
+                return Task.FromResult(calls == 1 ? new WorkerProcessRunResult(1, "", "ordinary process failure") :
+                    new WorkerProcessRunResult(1, ConductorAuthorModelRoundCatalogTests.Exhausted, ""));
+            if (calls == 1) return Task.FromResult(new WorkerProcessRunResult(1, ConductorAuthorModelRoundCatalogTests.Exhausted, ""));
+            Xunit.Assert.StartsWith("codex exec --json", request.Command);
+            if (scenario == "repeated-exhaustion")
+                return Task.FromResult(new WorkerProcessRunResult(1, "", "ERROR: reached your usage limit"));
+            var output = scenario switch
+            {
+                "invalid-answer" => "{\"kind\":\"answer\",\"text\":\"Use Windows\"}",
+                "ask-owner" => "{\"kind\":\"ask-owner\",\"question\":\"Which runtime?\",\"recommendation\":\"Use Windows\"}",
+                _ => Answer
+            };
+            return Task.FromResult(new WorkerProcessRunResult(0, ConductorAuthorModelRoundCatalogTests.CodexAnswer(output), ""));
+        }, ConductorAuthorModelRoundCatalogTests.FallbackCatalog(), _ => true);
+        var host = harness.NewHost(model);
+        // Await each tracked invocation; extra ticks prove terminal claims cannot redispatch.
+        for (var tick = 0; tick < 5; tick++)
+        {
+            host.ServiceTick(harness.Kernel);
+            foreach (var round in host.CurrentRounds)
+            {
+                try { await Await(round, "Author provider round completed"); }
+                catch (ConductorModelRoundException) { }
+            }
+        }
+        Xunit.Assert.Equal(2, calls);
+        Xunit.Assert.Empty(host.CurrentRounds);
+        var intents = await harness.Intents.ListForGoalAsync(goal.Id.Value);
+        if (scenario == "answer")
+        {
+            var intent = Xunit.Assert.Single(intents);
+            Xunit.Assert.Equal(OperatorActorKind.Agent, intent.ActorKind);
+            var payload = JsonSerializer.Deserialize<AnswerOperatorIntentPayload>(intent.PayloadJson, Json)!;
+            Xunit.Assert.Equal(OperatorActorKind.Agent, payload.ActorKind);
+            Xunit.Assert.Equal(item.Id, payload.TargetId);
+            Xunit.Assert.Contains("src/Runtime.cs:12", payload.EvidenceReferences!);
+            Xunit.Assert.Equal("runtime", payload.Precedent);
+        }
+        else Xunit.Assert.Empty(intents);
+        if (scenario == "ask-owner")
+        {
+            var hold = goal.CurrentHold;
+            Xunit.Assert.NotNull(hold);
+            Xunit.Assert.Equal("author-owner-question", hold.State);
+            Xunit.Assert.Contains($"item=Clarification:{item.Id}", hold.Blocker);
+            Xunit.Assert.Contains("reason=model-ask-owner", hold.Blocker);
+            Xunit.Assert.Contains("question=Which runtime?", hold.Blocker);
+            Xunit.Assert.Contains("recommendation=Use Windows", hold.Blocker);
+        }
+        using var connection = harness.OpenClaims();
+        using var query = connection.CreateCommand();
+        query.CommandText = "SELECT attempt, outcome FROM author_claims";
+        using var reader = query.ExecuteReader();
+        Xunit.Assert.True(reader.Read());
+        Xunit.Assert.Equal(2, reader.GetInt32(0));
+        if (scenario == "ask-owner") Xunit.Assert.Equal("owner-question", reader.GetString(1));
+        Xunit.Assert.NotEqual("retryable", reader.GetString(1));
+        Xunit.Assert.NotEqual("in-flight", reader.GetString(1));
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("missing")]
+    [Xunit.InlineData("unsupported")]
+    [Xunit.InlineData("unavailable")]
+    public async Task Exhaustion_without_eligible_alternate_is_terminal_across_ticks_and_restart(string shape)
+    {
+        using var harness = new Harness();
+        var goal = harness.Kernel.CreateGoal("Choose runtime");
+        await harness.Raise(goal);
+        var calls = 0;
+        var catalog = shape == "missing" ? ConductorRoundModelResolverTests.Catalog(ModelFunctionPurposes.ConductorAuthor) :
+            ConductorAuthorModelRoundCatalogTests.FallbackCatalog(shape == "unsupported" ? new("api-cli", "paid") : null);
+        var model = new ClaudeConductorAuthorModelRound(Path.Combine(harness.Root, "receipts"), (_, _) =>
+        {
+            calls++;
+            return Task.FromResult(new WorkerProcessRunResult(1, ConductorAuthorModelRoundCatalogTests.Exhausted, ""));
+        }, catalog, _ => shape != "unavailable");
+        var host = harness.NewHost(model);
+        host.ServiceTick(harness.Kernel);
+        foreach (var round in host.CurrentRounds)
+            await Xunit.Assert.ThrowsAsync<ConductorModelRoundException>(() => Await(round, "terminal exhausted Author round completed"));
+        host.ServiceTick(harness.Kernel);
+        host.Stop();
+        var successor = harness.NewHost(model);
+        for (var tick = 0; tick < 3; tick++) successor.ServiceTick(harness.Kernel);
+        Xunit.Assert.Equal(1, calls);
+        Xunit.Assert.Empty(successor.CurrentRounds);
+        Xunit.Assert.Empty(await harness.Intents.ListForGoalAsync(goal.Id.Value));
+        Xunit.Assert.Contains("terminal=", File.ReadAllText(harness.ConductPath));
+    }
+
     [Xunit.Fact]
     public async Task Timed_out_round_is_retried_once_and_answer_is_submitted()
     {
@@ -181,6 +288,22 @@ public sealed class ConductorAuthorHostRetryTests
         Xunit.Assert.Equal(2, reader.GetInt32(3));
     }
 
+    [Xunit.Fact]
+    public void Fallback_reservation_is_single_use_and_survives_store_reopen()
+    {
+        using var harness = new Harness();
+        var item = new ConductorAuthorItem(OperatorAnswerTargetKind.Clarification, "item", "goal", "Question", "runtime");
+        var store = new ConductorAuthorClaimStore(harness.ClaimsPath);
+        Xunit.Assert.True(store.TryClaim(item, Now));
+        Xunit.Assert.True(store.TryConsumeFallbackAttempt(item.Identity, 1));
+        var successor = new ConductorAuthorClaimStore(harness.ClaimsPath);
+        Xunit.Assert.Equal(2, successor.Attempt(item.Identity));
+        Xunit.Assert.False(successor.TryConsumeFallbackAttempt(item.Identity, 1));
+        Xunit.Assert.False(successor.TryConsumeFallbackAttempt(item.Identity, 2));
+        Xunit.Assert.False(successor.Release(item.Identity));
+        Xunit.Assert.False(new ConductorAuthorClaimStore(harness.ClaimsPath).TryClaim(item, Now));
+    }
+
     private static async Task<T> Await<T>(Task<T> task, string eventName)
     {
         try { return await task.WaitAsync(TimeSpan.FromSeconds(30)).ConfigureAwait(false); }
@@ -224,6 +347,7 @@ public sealed class ConductorAuthorHostRetryTests
         internal SqliteOperatorIntentStore Intents { get; }
         internal string ConductPath => _workspace.ConductEventsLogPath;
         internal string ClaimsPath => Path.Combine(_workspace.OrchestratorDirectory, "author-claims.db");
+        internal string Root => _root;
 
         internal Harness()
         {
