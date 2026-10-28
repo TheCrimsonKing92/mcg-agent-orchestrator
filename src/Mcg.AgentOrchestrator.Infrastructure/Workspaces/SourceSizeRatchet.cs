@@ -67,7 +67,7 @@ internal static class SourceSizeRatchet
             // Goal 56ff780e adds three lines at the existing shard-progress seam to carry the result,
             // outcome and failed-test count to the owner gate view; measured 4976 lines, no extra headroom.
             // Goal bd3c0539 adds one settled-check progress call.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs", 4505),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs", 4497),
             // Goal c0cfa8ae test telemetry collaborator measured at 423 lines.
             // Goal 402c1005 moved TRX completion inspection and shard decisions into AcceptanceShardCompletionAdjudicator.
             // Goal ad3fafc0 extracted run ownership publication and stale-receipt clearing into AcceptanceTestRunPreparation.
@@ -82,7 +82,7 @@ internal static class SourceSizeRatchet
             // Goal 40cc558d keeps direct SDK selection, bounded missing-executable fallback, and pipe recustody at the capture lifecycle boundary; measured candidate is 635 lines.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.ProcessRunner.cs", 198),
             // Goal e3bb2a77 extracted acceptance child invocation into its own owner.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceCheckProcessInvoker.cs", 548),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceCheckProcessInvoker.cs", 545),
             // Goal 682f25a1 re-derived this row after integrating goal c2eae988, whose acceptance
             // cancellation seam had already added 74 net lines before the multi-file ratchet landed.
             // Raised for goal a22c7293: slice admission must run where all dispatch paths converge.
@@ -577,7 +577,7 @@ internal static class SourceSizeRatchet
             // Goal bd3c0539 adds three lane progress call lines across existing partials.
             // Measured 8683 lines in the same 28 partials after integrating main at 6dff3b77a.
             // Goal 3651d0e4: the offer-context call site binds the remote-lane occupancy owner.
-            new SourceClassCeiling("GoalAcceptanceVerifier", 8169, 27),
+            new SourceClassCeiling("GoalAcceptanceVerifier", 8161, 27),
             // Goal d647b5f3 extracts premise-invalid clarification construction to PremiseInvalidClarification.
             // Goal 439c80ae extracts Reviewer evidence brief projection to ReviewerEvidenceBriefSection;
             // measured 9319 total lines across the existing 27 partial files, with no extra headroom.
@@ -607,7 +607,7 @@ internal static class SourceSizeRatchet
             // Raised by 5 lines for goal e4c3d077: expose locked role-report evidence closure at landing.
             // Goal 60609951: persisted capability substitution beside the existing budget substitution (+16 lines).
             // Goal 2e546ce9: criteria-changing revision invokes evidence supersession (+3 measured lines, no headroom).
-            new SourceClassCeiling("AgentOrchestratorKernel", 9346, 28),
+            new SourceClassCeiling("AgentOrchestratorKernel", 9338, 28),
             // Goal d6033045 extracted the pre-admission receipt pass to PassedMergeTrainReceiptAdmission; goal 1d0f2317
             // adds one admission predicate to exclude stream-complete children before slot reservation. Measured 9255.
             // Goal 679eee57 added a one-line tick call to the separately owned ConductorExperimentWatch (+1); goal 80de5cb2 extracted

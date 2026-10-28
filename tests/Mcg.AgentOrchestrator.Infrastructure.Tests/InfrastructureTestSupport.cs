@@ -213,6 +213,13 @@ internal static WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult RunGit
     var processStarted = false;
     int? childProcessId = null;
     DateTimeOffset? childStartedAt = null;
+    var observation = new GitProbeObservationRecorder(seam);
+    var timedOut = false;
+    var drainTimedOut = false;
+    var drainFailed = false;
+    var standardOutputCapture = CapturedStream.Empty;
+    var standardErrorCapture = CapturedStream.Empty;
+    int? observedExitCode = null;
     try
     {
         process = new Process { StartInfo = startInfo };
@@ -227,7 +234,8 @@ internal static WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult RunGit
                     Executable = startInfo.FileName,
                     Arguments = startInfo.ArgumentList.ToArray(),
                     RepositoryDirectory = Path.GetFullPath(workingDirectory),
-                    EnvironmentContract = environmentContract
+                    EnvironmentContract = environmentContract,
+                    Observations = observation.Snapshot
                 };
         }
 
@@ -242,27 +250,28 @@ internal static WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult RunGit
         }
 
         process.StandardInput.Close();
-        var outputTask = CaptureStreamAsync(process.StandardOutput.BaseStream);
-        var errorTask = CaptureStreamAsync(process.StandardError.BaseStream);
-        var timedOut = false;
+        var outputTask = CaptureStreamAsync(seam?.CaptureStream?.Invoke(process.StandardOutput.BaseStream)
+            ?? process.StandardOutput.BaseStream);
+        var errorTask = CaptureStreamAsync(seam?.CaptureStream?.Invoke(process.StandardError.BaseStream)
+            ?? process.StandardError.BaseStream);
         using (var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(60)))
         {
-            try
+            timedOut = observation.Wait(() =>
             {
                 process.WaitForExitAsync(timeout.Token).GetAwaiter().GetResult();
-            }
-            catch (OperationCanceledException)
+                return true;
+            }, isDeadlineCancellation: ex => ex is OperationCanceledException && timeout.IsCancellationRequested) == false;
+            if (timedOut)
             {
-                timedOut = true;
                 try { process.Kill(entireProcessTree: true); } catch { }
             }
         }
 
         var drainTask = Task.WhenAll(outputTask, errorTask);
-        var drainCompleted = Task.WhenAny(drainTask, Task.Delay(TimeSpan.FromSeconds(5)))
-            .GetAwaiter()
-            .GetResult() == drainTask;
-        var drainFailed =
+        var drainCompleted = (seam?.WaitForDrain ?? (run => run()))(() =>
+            Task.WhenAny(drainTask, Task.Delay(TimeSpan.FromSeconds(5))).GetAwaiter().GetResult() == drainTask);
+        drainTimedOut = !drainCompleted;
+        drainFailed =
             (drainCompleted && drainTask.IsFaulted) ||
             outputTask.IsFaulted ||
             errorTask.IsFaulted;
@@ -272,19 +281,22 @@ internal static WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult RunGit
                 new[] { outputTask.Exception?.GetBaseException().Message, errorTask.Exception?.GetBaseException().Message }
                     .Where(message => !string.IsNullOrWhiteSpace(message)))
             : string.Empty;
-        var standardOutputCapture = outputTask.IsCompletedSuccessfully ? outputTask.Result : CapturedStream.Empty;
-        var standardErrorCapture = errorTask.IsCompletedSuccessfully ? errorTask.Result : CapturedStream.Empty;
+        standardOutputCapture = outputTask.IsCompletedSuccessfully ? outputTask.Result : CapturedStream.Empty;
+        standardErrorCapture = errorTask.IsCompletedSuccessfully ? errorTask.Result : CapturedStream.Empty;
+        observedExitCode = observation.ReadExitCode(() => process.HasExited ? process.ExitCode : null);
         var standardOutput = Encoding.UTF8.GetString(standardOutputCapture.Prefix);
         var childStandardError = Encoding.UTF8.GetString(standardErrorCapture.Prefix);
         var standardError = errorTask.IsCompletedSuccessfully
             ? string.Join(" | ", new[] { childStandardError, drainError }.Where(value => !string.IsNullOrWhiteSpace(value)))
             : drainError;
+        standardError = string.Join(" | ", new[] { standardError, observation.Snapshot.FailureMessages }
+            .Where(value => !string.IsNullOrWhiteSpace(value)));
         var boundedOutput = WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult.BoundDiagnostic(standardOutput);
         var boundedError = WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult.BoundDiagnostic(standardError);
         return new WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult(
             command,
             ProcessStarted: true,
-            ExitCode: process.HasExited ? process.ExitCode : null,
+            ExitCode: observedExitCode,
             StandardOutput: boundedOutput,
             StandardError: boundedError,
             DrainTimedOut: !drainCompleted,
@@ -302,48 +314,45 @@ internal static WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult RunGit
             ChildStartedAt: childStartedAt,
             Classification: ClassifyGitProbe(
                 processStarted: true,
-                process.HasExited ? process.ExitCode : null,
+                observedExitCode,
                 timedOut,
                 drainTimedOut: !drainCompleted,
-                drainFailed));
+                drainFailed,
+                observation.Snapshot.Failed),
+            Observations: observation.Snapshot);
     }
     catch (Exception ex)
     {
-        int? observedExitCode = null;
-        if (processStarted && process is not null)
+        if (processStarted && process is not null && !observation.Snapshot.Exit.Attempted)
         {
-            try
-            {
-                observedExitCode = process.HasExited ? process.ExitCode : null;
-            }
-            catch (InvalidOperationException)
-            {
-                // The parent-side observation failed after the start seam reported success.
-                // That is apparatus evidence, not a child nonzero exit.
-            }
+            observedExitCode = observation.ReadExitCode(() => process.HasExited ? process.ExitCode : null);
         }
 
+        var standardOutput = Encoding.UTF8.GetString(standardOutputCapture.Prefix);
+        var boundedOutput = WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult.BoundDiagnostic(standardOutput);
         var boundedError = WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult.BoundDiagnostic(ex.Message);
         return new WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult(
             command,
             processStarted,
             observedExitCode,
-            string.Empty,
+            boundedOutput,
             boundedError,
-            DrainTimedOut: false,
-            TimedOut: false,
-            DrainFailed: false,
+            DrainTimedOut: drainTimedOut,
+            TimedOut: timedOut,
+            DrainFailed: drainFailed,
             EnvironmentContract: environmentContract,
             Executable: startInfo.FileName,
             Arguments: startInfo.ArgumentList.ToArray(),
             RepositoryDirectory: Path.GetFullPath(workingDirectory),
+            StandardOutputByteCount: standardOutputCapture.ByteCount,
+            StandardOutputTruncated: standardOutputCapture.PrefixTruncated || boundedOutput.Length != standardOutput.Length,
             StandardErrorByteCount: Encoding.UTF8.GetByteCount(ex.Message),
             StandardErrorTruncated: boundedError.Length != ex.Message.Length,
             ChildProcessId: childProcessId,
             ChildStartedAt: childStartedAt,
-            Classification: processStarted
-                ? WorkerDispatchTestsSeededRepositoryFactory.GitProbeClassification.ProcessObservationFailure
-                : WorkerDispatchTestsSeededRepositoryFactory.GitProbeClassification.LaunchFailure);
+            Classification: ClassifyGitProbe(processStarted, observedExitCode, timedOut,
+                drainTimedOut, drainFailed, observationFailed: true),
+            Observations: observation.Snapshot);
     }
     finally
     {
@@ -374,6 +383,13 @@ private static WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult RunGitP
     var processStarted = false;
     int? childProcessId = null;
     DateTimeOffset? childStartedAt = null;
+    var seam = GitProbeSeamScope.Value;
+    var observation = new GitProbeObservationRecorder(seam);
+    var timedOut = false;
+    var drainFailed = false;
+    var standardOutputCapture = CapturedStream.Empty;
+    var standardErrorCapture = CapturedStream.Empty;
+    int? observedExitCode = null;
     try
     {
         launch = OwnedProcessGroup.StartSuspendedContainedWithFileCapture(
@@ -396,22 +412,34 @@ private static WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult RunGitP
         }
 
         launch.Resume();
-        var timedOut = !launch.WaitForOwnedExit(TimeSpan.FromSeconds(60));
+        timedOut = observation.Wait(() => launch.WaitForOwnedExit(TimeSpan.FromSeconds(60))) == false;
         if (timedOut)
         {
             launch.Group.Kill();
-            _ = launch.WaitForOwnedExit(TimeSpan.FromSeconds(5));
+            _ = observation.Wait(() => launch.WaitForOwnedExit(TimeSpan.FromSeconds(5)), cleanup: true);
         }
 
         beforeCaptureRead?.Invoke(standardOutputPath, standardErrorPath);
         beforeExitObservation?.Invoke(launch);
-        var standardOutputCapture = CaptureStreamAsync(standardOutputStream).GetAwaiter().GetResult();
-        var standardErrorCapture = CaptureStreamAsync(standardErrorStream).GetAwaiter().GetResult();
+        try
+        {
+            standardOutputCapture = CaptureStreamAsync(seam?.CaptureStream?.Invoke(standardOutputStream)
+                ?? standardOutputStream).GetAwaiter().GetResult();
+            standardErrorCapture = CaptureStreamAsync(seam?.CaptureStream?.Invoke(standardErrorStream)
+                ?? standardErrorStream).GetAwaiter().GetResult();
+        }
+        catch
+        {
+            drainFailed = true;
+            throw;
+        }
+        observedExitCode = observation.ReadExitCode(launch.TryReadOwnedExitCode);
         var standardOutput = Encoding.UTF8.GetString(standardOutputCapture.Prefix);
-        var standardError = Encoding.UTF8.GetString(standardErrorCapture.Prefix);
+        var standardError = string.Join(" | ", new[]
+            { Encoding.UTF8.GetString(standardErrorCapture.Prefix), observation.Snapshot.FailureMessages }
+            .Where(value => !string.IsNullOrWhiteSpace(value)));
         var boundedOutput = WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult.BoundDiagnostic(standardOutput);
         var boundedError = WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult.BoundDiagnostic(standardError);
-        var observedExitCode = launch.TryReadOwnedExitCode();
         return new WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult(
             command,
             ProcessStarted: true,
@@ -436,45 +464,42 @@ private static WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult RunGitP
                 observedExitCode,
                 timedOut,
                 drainTimedOut: false,
-                drainFailed: false));
+                drainFailed: false,
+                observation.Snapshot.Failed),
+            Observations: observation.Snapshot);
     }
     catch (Exception ex)
     {
-        int? observedExitCode = null;
-        if (processStarted && launch is not null)
+        if (processStarted && launch is not null && !observation.Snapshot.Exit.Attempted)
         {
-            try
-            {
-                observedExitCode = launch.TryReadOwnedExitCode();
-            }
-            catch (Exception observationFailure)
-                when (observationFailure is InvalidOperationException or System.ComponentModel.Win32Exception)
-            {
-                // The parent-side observation failed after the native launch created the Git child.
-            }
+            observedExitCode = observation.ReadExitCode(launch.TryReadOwnedExitCode);
         }
 
+        var standardOutput = Encoding.UTF8.GetString(standardOutputCapture.Prefix);
+        var boundedOutput = WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult.BoundDiagnostic(standardOutput);
         var boundedError = WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult.BoundDiagnostic(ex.Message);
         return new WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult(
             command,
             processStarted,
             observedExitCode,
-            string.Empty,
+            boundedOutput,
             boundedError,
             DrainTimedOut: false,
-            TimedOut: false,
-            DrainFailed: false,
+            TimedOut: timedOut,
+            DrainFailed: drainFailed,
             EnvironmentContract: environmentContract,
             Executable: startInfo.FileName,
             Arguments: startInfo.ArgumentList.ToArray(),
             RepositoryDirectory: repositoryDirectory,
+            StandardOutputByteCount: standardOutputCapture.ByteCount,
+            StandardOutputTruncated: standardOutputCapture.PrefixTruncated || boundedOutput.Length != standardOutput.Length,
             StandardErrorByteCount: Encoding.UTF8.GetByteCount(ex.Message),
             StandardErrorTruncated: boundedError.Length != ex.Message.Length,
             ChildProcessId: childProcessId,
             ChildStartedAt: childStartedAt,
-            Classification: processStarted
-                ? WorkerDispatchTestsSeededRepositoryFactory.GitProbeClassification.ProcessObservationFailure
-                : WorkerDispatchTestsSeededRepositoryFactory.GitProbeClassification.LaunchFailure);
+            Classification: ClassifyGitProbe(processStarted, observedExitCode, timedOut,
+                drainTimedOut: false, drainFailed, observationFailed: true),
+            Observations: observation.Snapshot);
     }
     finally
     {
@@ -569,7 +594,8 @@ private static WorkerDispatchTestsSeededRepositoryFactory.GitProbeClassification
     int? exitCode,
     bool timedOut,
     bool drainTimedOut,
-    bool drainFailed)
+    bool drainFailed,
+    bool observationFailed = false)
 {
     if (!processStarted)
         return WorkerDispatchTestsSeededRepositoryFactory.GitProbeClassification.LaunchFailure;
@@ -579,6 +605,10 @@ private static WorkerDispatchTestsSeededRepositoryFactory.GitProbeClassification
         return WorkerDispatchTestsSeededRepositoryFactory.GitProbeClassification.DrainTimeout;
     if (drainFailed)
         return WorkerDispatchTestsSeededRepositoryFactory.GitProbeClassification.DrainFailure;
+    // Truthful classification only. The intermittent mechanism remains undetermined in backlog
+    // 22c3bce5389945cfba06bf2e6fb9c207; valid output cannot replace a confirmed zero exit.
+    if (observationFailed || exitCode is null)
+        return WorkerDispatchTestsSeededRepositoryFactory.GitProbeClassification.ProcessObservationFailure;
     return exitCode == 0
         ? WorkerDispatchTestsSeededRepositoryFactory.GitProbeClassification.Success
         : WorkerDispatchTestsSeededRepositoryFactory.GitProbeClassification.NonZeroExit;
@@ -764,4 +794,3 @@ internal sealed class CapturingHandler : HttpMessageHandler
         return _responseFactory(request);
     }
 }
-
