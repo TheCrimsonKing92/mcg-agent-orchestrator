@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using Mcg.AgentOrchestrator.App.Cli;
@@ -21,7 +20,7 @@ public sealed class GoalCreationSummaryTests : CliCommandTestBase
         Directory.CreateDirectory(Path.Combine(fixture.Root, "src"));
         File.WriteAllText(Path.Combine(fixture.Root, "src", "Receipt.cs"), "// fixture");
         const string marker = "DISTINCTIVE_BRIEF_BODY_709d6f";
-        var objective = "Update src/Receipt.cs with compact receipts. Read SKILL.md. Ask the operator to login to GitHub.\n\n" +
+        var objective = "Update src/Receipt.cs with compact receipts. Read SKILL.md for café 東京. Ask the operator to login to GitHub.\n\n" +
             marker + "\n" + string.Concat(Enumerable.Repeat("Preserve the complete input in durable state.\n", 300));
         var brief = Path.Combine(fixture.Root, "brief.txt");
         File.WriteAllText(brief, objective);
@@ -317,20 +316,18 @@ public sealed class GoalCreationSummaryTests : CliCommandTestBase
     private static async Task<CliProcessResult> RunIsolatedApp(Fixture fixture, params string[] args)
     {
         var root = fixture.Root;
-        // A Windows CREATE_NO_WINDOW child has no console code page; .NET writes
-        // using the system ANSI code page. Decode that encoding without changing
-        // the test host's console or registering a process-wide encoding provider.
-        var outputEncoding = Encoding.UTF8;
-        if (OperatingSystem.IsWindows())
-        {
-            var codePage = (int)GetACP();
-            outputEncoding = CodePagesEncodingProvider.Instance.GetEncoding(codePage) ?? Encoding.GetEncoding(codePage);
-        }
+        // Pin both ends of this fixture's transport; a parent-side decoder does not
+        // select the child's Console encoding. Keep the test host's console untouched.
+        const string probeName = "Mcg.AgentOrchestrator.IsolatedDotnetProbe";
+        var probeDirectory = FixtureProbeLocator.FindDirectory(typeof(GoalCreationSummaryTests), probeName, probeName + ".dll");
+        Assert.True(probeDirectory is not null, "CLI encoding startup hook missing. Tried: " + string.Join(", ",
+            FixtureProbeLocator.TriedPaths(typeof(GoalCreationSummaryTests), probeName, probeName + ".dll")));
+        var encodingReceipt = Path.Combine(root, "cli-output-encoding.txt");
         var start = new ProcessStartInfo(ResolveDotnetHostPath())
         {
             WorkingDirectory = root, UseShellExecute = false, CreateNoWindow = true,
             RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true,
-            StandardOutputEncoding = outputEncoding, StandardErrorEncoding = outputEncoding
+            StandardOutputEncoding = Encoding.UTF8, StandardErrorEncoding = Encoding.UTF8
         };
         start.Environment.Clear();
         foreach (var name in new[] { "PATH", "SystemRoot", "WINDIR", "TEMP", "TMP", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "ProgramFiles", "ProgramFiles(x86)", "DOTNET_ROOT" })
@@ -339,6 +336,8 @@ public sealed class GoalCreationSummaryTests : CliCommandTestBase
         start.Environment[DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable] = Path.Combine(root, "test-dotnet");
         start.Environment["OLLAMA_BASE_URL"] = "http://127.0.0.1:1";
         start.Environment["LLAMA_CPP_BASE_URL"] = "http://127.0.0.1:1";
+        start.Environment["DOTNET_STARTUP_HOOKS"] = Path.Combine(probeDirectory!, probeName + ".dll");
+        start.Environment["MCG_CLI_OUTPUT_ENCODING_RECEIPT"] = encodingReceipt;
         start.ArgumentList.Add(typeof(CliPersistentStateRunner).Assembly.Location);
         foreach (var arg in args) start.ArgumentList.Add(arg);
         using var process = Process.Start(start) ?? throw new InvalidOperationException("App process did not start.");
@@ -354,6 +353,8 @@ public sealed class GoalCreationSummaryTests : CliCommandTestBase
             throw new TimeoutException("Summary CLI fixture did not produce a process-exit receipt.");
         }
         var result = new CliProcessResult(process.ExitCode, await stdout, await stderr);
+        Assert.True(File.Exists(encodingReceipt), "CLI child did not acknowledge its output encoding. " + result.Stderr);
+        Assert.Equal("65001", File.ReadAllText(encodingReceipt));
         // Creation may launch a fixture-owned refinement child. Its redirected log handles
         // stay open until exit; wait for their release before reading state or deleting stores.
         var logs = Directory.Exists(fixture.Workspace.LogDirectory)
@@ -380,9 +381,6 @@ public sealed class GoalCreationSummaryTests : CliCommandTestBase
         }
         return result;
     }
-
-    [DllImport("kernel32.dll", ExactSpelling = true)]
-    private static extern uint GetACP();
 
     private sealed class Fixture : IDisposable
     {
