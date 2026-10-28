@@ -35,7 +35,8 @@ internal static class CliReadinessQueryCommand
             context.Workspace.ExecutionDirectory,
             context.WorkerProfiles,
             context.Worktrees.TryResolve,
-            diagnosisHoldScope));
+            diagnosisHoldScope,
+            projectHomeDirectory: context.Workspace.ProjectHomeDirectoryOrNull));
         return false;
     }
 
