@@ -75,6 +75,7 @@ internal sealed class OwnerGoalChangeSummaryQuery(
         var basis = promotionRange ? landed!.PriorMainRevision : contributing?.BaseCommit ?? dispatch?.BaseCommit;
         var planned = await PlannedAsync(goal, token);
         var observed = new OwnerGoalSummarySection("unavailable — no committed comparison", [], "recorded dispatch/promotion identities");
+        var previewChanges = new OwnerGoalPreviewChanges(OwnerGoalPreviewChangeKind.None, [], 0);
         if (candidate is not null && FullRevision(basis) && changes is not null)
         {
             try
@@ -88,6 +89,9 @@ internal sealed class OwnerGoalChangeSummaryQuery(
                     read = _committed.Value.Read;
                 }
                 var facts = await read.WaitAsync(token);
+                previewChanges = new(!facts.Available ? OwnerGoalPreviewChangeKind.Unavailable :
+                    facts.TotalFiles == 0 ? OwnerGoalPreviewChangeKind.None : OwnerGoalPreviewChangeKind.Listed,
+                    facts.Files, facts.TotalFiles);
                 observed = facts.Available
                     ? new(facts.TotalFiles == 0 ? "observed empty committed range" : $"observed {facts.TotalFiles} files (file scope: {FileAreas(facts.Files)})",
                         facts.Files.Take(20).Select(BoundItem).ToArray(),
@@ -99,6 +103,7 @@ internal sealed class OwnerGoalChangeSummaryQuery(
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
+                previewChanges = new(OwnerGoalPreviewChangeKind.Unavailable, [], 0);
                 observed = new("unavailable — " + ex.GetType().Name, [], $"Git {basis}..{candidate}");
                 lock (_cacheGate) _committed = null;
             }
@@ -107,9 +112,12 @@ internal sealed class OwnerGoalChangeSummaryQuery(
         var landing = landed is null
             ? promotionFailure is null ? "landing not recorded" : "landing unavailable — " + promotionFailure
             : $"landed candidate {landed.CandidateRevision} at {landed.PromotedAt:yyyy-MM-dd HH:mm} UTC; main {landed.PromotedMainRevision}; {landed.Provenance}";
-        var verified = await VerifiedAsync(goal, candidate, landed, token);
+        var (verified, previewEvidence) = await VerifiedAsync(goal, candidate, landed, token);
         return new(goal.Id.Value, goal.AuthoritativeBrief.Version, EffectiveAcceptanceCriteriaVersion.ComputeForGoal(goal),
-            candidate, planned, observed, reported, verified, landing);
+            candidate, planned, observed, reported, verified, landing)
+        {
+            Preview = new(OwnerGoalTitle.Full(goal.Objective), previewChanges, previewEvidence)
+        };
     }
 
     private async Task<CommittedGoalChanges> ReadChangesAsync(string basis, string candidate, CancellationToken token)
@@ -205,7 +213,7 @@ internal sealed class OwnerGoalChangeSummaryQuery(
         return new("unavailable — structured summary absent or association unknown", [], Source(record, dispatch));
     }
 
-    private async Task<OwnerGoalSummarySection> VerifiedAsync(Goal goal, string? candidate,
+    private async Task<(OwnerGoalSummarySection Section, OwnerGoalPreviewEvidence? Preview)> VerifiedAsync(Goal goal, string? candidate,
         GoalPromotionFact? landed, CancellationToken token)
     {
         GoalOperationJournalEntry? outcome = null;
@@ -236,11 +244,15 @@ internal sealed class OwnerGoalChangeSummaryQuery(
         var all = obligations.Length > 0 && obligations.All(item => item.HasSatisfiedEvidenceFor(candidate));
         var state = candidate is null ? "unavailable — candidate unknown" : failed ? "failed — applicable criterion receipt" :
             all ? "passed — applicable criterion receipts" : "pending — changed candidate lacks complete applicable receipts";
+        OwnerGoalPreviewEvidence? previewEvidence = null;
         if (outcome is not null)
         {
             var passed = outcome.Status == GoalOperationStatus.Completed &&
                 (string.Equals(outcome.AcceptanceOutcome, "passed", StringComparison.OrdinalIgnoreCase) ||
                  GoalOperationJournalGatePassedOutcome.Matches(outcome));
+            if (passed || outcome.Status == GoalOperationStatus.Failed || outcome.AcceptanceOutcome == "failed")
+                previewEvidence = new(OwnerGoalPreviewEvidenceKind.Gate, passed, outcome.At,
+                    passed ? null : outcome.FailedCheckNames?.FirstOrDefault(name => !string.IsNullOrWhiteSpace(name)));
             state = passed
                 ? failed ? state : obligations.Length == 0 || all ? "passed — applicable full acceptance" :
                     "pending — full acceptance passed; criterion evidence outstanding"
@@ -256,6 +268,8 @@ internal sealed class OwnerGoalChangeSummaryQuery(
         {
             if (expectedMain is not null && string.Equals(failure.MainHeadSha, expectedMain, StringComparison.OrdinalIgnoreCase))
             {
+                previewEvidence = new(OwnerGoalPreviewEvidenceKind.Gate, false, failure.OccurredAt,
+                    failure.FailedChecks.FirstOrDefault(name => !string.IsNullOrWhiteSpace(name)));
                 state = "failed — recorded acceptance (main " + failure.MainHeadSha + ")";
                 lines.AddRange(failure.FailedChecks.Take(5).Select(BoundItem));
             }
@@ -271,8 +285,20 @@ internal sealed class OwnerGoalChangeSummaryQuery(
                              .GroupBy(item => item.ReceiptId).Select(group => group.Last())
                              .Where(item => item.Accepted && item.CandidateSha == candidate).Take(5))
                     lines.Add($"Focused execution: {(FindingEvidenceReceiptSelector.SuppliedReceiptsPassAtCandidate(task, candidate, [receipt.ReceiptId]) ? "passed" : "failed")}; receipt {receipt.ReceiptId}; full acceptance tracked separately");
-        return new(state, lines.Take(20).ToArray(), "criterion obligations/acceptance run events/retained failure; candidate " + (candidate ?? "unknown"),
-            Math.Max(0, applicable.Length - 10) + Math.Max(0, lines.Count - 20));
+        if (previewEvidence is null && candidate is not null)
+        {
+            var focused = goal.Tasks.SelectMany(task => task.VerificationHistory.SelectMany(record =>
+                    (record.FindingEvidenceReceipts ?? []).Select(receipt => (Task: task, Record: record, Receipt: receipt))))
+                .Where(item => item.Receipt.Accepted &&
+                    string.Equals(item.Receipt.CandidateSha, candidate, StringComparison.OrdinalIgnoreCase))
+                .OrderByDescending(item => item.Record.CompletedAt).FirstOrDefault();
+            if (focused.Receipt is not null)
+                previewEvidence = new(OwnerGoalPreviewEvidenceKind.Focused,
+                    FindingEvidenceReceiptSelector.SuppliedReceiptsPassAtCandidate(focused.Task, candidate, [focused.Receipt.ReceiptId]),
+                    focused.Record.CompletedAt);
+        }
+        return (new(state, lines.Take(20).ToArray(), "criterion obligations/acceptance run events/retained failure; candidate " + (candidate ?? "unknown"),
+            Math.Max(0, applicable.Length - 10) + Math.Max(0, lines.Count - 20)), previewEvidence);
     }
 
     private async Task<string?> ReadArtifactAsync(TaskVerificationRecord record, CancellationToken token)

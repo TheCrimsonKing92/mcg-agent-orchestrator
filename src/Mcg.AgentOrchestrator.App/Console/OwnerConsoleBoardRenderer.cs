@@ -9,14 +9,9 @@ internal static class OwnerConsoleBoardRenderer
 {
     private const int PriorityColumn = 3;
 
-    internal static string Preview(OwnerConsoleSelectedGoalPreview preview, int width)
-    {
-        IReadOnlyList<string> lines = preview.Summary?.PreviewLines ??
-            (preview.GoalId is null ? ["Select a goal for Planned / Changed / Verified"] :
-                preview.Unavailable is { } error ? ["Planned / Changed / Verified unavailable: " + error] :
-                ["Planned: loading…", "Changed: loading…", "Verified: loading… (Enter: Goal detail)"]);
-        return string.Join('\n', lines.Select(line => OwnerConsoleLineFitter.Fit(line, OwnerConsoleLineSpans.None, width)));
-    }
+    internal static string Preview(OwnerConsoleSelectedGoalPreview preview, int width,
+        string? stage = null, TimeZoneInfo? zone = null) =>
+        string.Join('\n', OwnerConsoleSelectedPreview.Lines(preview, stage, zone ?? TimeZoneInfo.Local, width));
 
     internal static void Render(DataTable table, TableView view, IReadOnlyList<OwnerConsoleBoardRow> rows,
         int paneWidth, int titleWidth)
@@ -27,13 +22,13 @@ internal static class OwnerConsoleBoardRenderer
         var widestTitle = cells.Select(row => row[2].GetColumns()).DefaultIfEmpty().Max();
         var widths = Enumerable.Range(0, table.Columns.Count).Select(column =>
             Math.Max(table.Columns[column].ColumnName.GetColumns(), cells.Select(row => row[column].GetColumns()).DefaultIfEmpty().Max())).ToArray();
-        var showPriority = true;
+        var showPriority = rows.Any(row => row.Priority is { Length: > 0 } and not "Normal");
         if (paneWidth > 0)
         {
             for (var column = 0; column < widths.Length; column++)
                 if (column != 2) widths[column] = Math.Min(widths[column], Math.Max(table.Columns[column].ColumnName.Length, paneWidth / 6));
             titleWidth = Math.Max(1, paneWidth - widths.Where((_, column) => column != 2).Sum() - widths.Length - 1);
-            if (titleWidth < Math.Min(OwnerConsoleLineFitter.MinimumTitleColumns, widestTitle))
+            if (!showPriority || titleWidth < Math.Min(OwnerConsoleLineFitter.MinimumTitleColumns, widestTitle))
             {
                 showPriority = false;
                 titleWidth = Math.Max(1, paneWidth - widths.Where((_, column) => column != 2 && column != PriorityColumn).Sum() - 6 - 1);

@@ -31,6 +31,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
     private readonly ListView _activity = new() { Width = Dim.Fill(), Height = Dim.Fill() };
     private readonly FrameView _decisionsFrame;
     private readonly FrameView _boardFrame;
+    private readonly FrameView _previewFrame;
     private readonly FrameView _activityFrame;
     private readonly TextField _command = new() { Y = Pos.AnchorEnd(1), Width = Dim.Fill(), Height = 1 };
     private readonly Label _hints = new() { Y = Pos.AnchorEnd(2), Width = Dim.Fill(), Height = 1 };
@@ -99,10 +100,11 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
         { _selectedPreview = preview; RenderPreview(); }, _token);
         _decisionsFrame = new FrameView { Title = "DECISIONS", Y = 1, Width = Dim.Fill(), Height = Dim.Percent(20) };
         _boardFrame = new FrameView { Title = "BOARD", Y = Pos.Bottom(_decisionsFrame), Width = Dim.Fill(), Height = Dim.Percent(33) };
-        _preview.Y = Pos.Bottom(_boardFrame);
-        _activityFrame = new FrameView { Title = "ACTIVITY", Y = Pos.Bottom(_preview), Width = Dim.Fill(), Height = Dim.Fill(3) };
+        _previewFrame = new FrameView { Title = "SELECTED", Y = Pos.Bottom(_boardFrame), Width = Dim.Fill(), Height = 5 };
+        _activityFrame = new FrameView { Title = "ACTIVITY", Y = Pos.Bottom(_previewFrame), Width = Dim.Fill(), Height = Dim.Fill(3) };
         _decisionsFrame.Add(_decisions, _emptyDecisions);
         _boardFrame.Add(_board);
+        _previewFrame.Add(_preview);
         _activityFrame.Add(_activity);
         _board.Table = new DataTableSource(BoardTable);
         _board.Style.AlwaysShowHeaders = true;
@@ -112,7 +114,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
         _epicHint.X = Pos.AnchorEnd(OwnerConsoleEpicFormatter.KeyHint.Length);
         _hints.Width = Dim.Fill(OwnerConsoleEpicFormatter.KeyHint.Length + 2);
         EpicView = new(controller, Invoke, token);
-        Window.Add(_status, _decisionsFrame, _boardFrame, _preview, _activityFrame, _notice, _hints, _epicHint, _command, EpicView, GateView);
+        Window.Add(_status, _decisionsFrame, _boardFrame, _previewFrame, _activityFrame, _notice, _hints, _epicHint, _command, EpicView, GateView);
         _preview.ViewportChanged += (_, _) => RenderPreview();
         RenderPreview();
         _notice.ViewportChanged += (_, _) => RenderNotices();
@@ -222,6 +224,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
         using var trace = _diagnostics?.Begin("board-source-replacement", TraceState);
         if (_controller.Model is not { } model) return;
         OwnerConsoleBoardRenderer.Render(BoardTable, _board, model.Board, _board.Viewport.Width, _boardTitleWidth);
+        RenderPreview();
     }
 
     private void RenderDecisions()
@@ -683,7 +686,12 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
         RenderOverflow();
     }
 
-    private void RenderPreview() => _preview.Text = OwnerConsoleBoardRenderer.Preview(_selectedPreview, _preview.Viewport.Width);
+    private void RenderPreview()
+    {
+        _previewFrame.Title = OwnerConsoleSelectedPreview.Title(_selectedPreview.GoalId);
+        var stage = _controller.Model?.Board.FirstOrDefault(row => row.GoalId == _selectedPreview.GoalId)?.Stage;
+        _preview.Text = OwnerConsoleBoardRenderer.Preview(_selectedPreview, _preview.Viewport.Width, stage, _clock.LocalTimeZone);
+    }
 
     private void Invoke(Action action)
     {
