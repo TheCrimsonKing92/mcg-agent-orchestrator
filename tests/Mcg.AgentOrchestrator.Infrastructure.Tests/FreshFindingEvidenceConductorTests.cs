@@ -2,7 +2,7 @@ using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
 
-public sealed class ConductorDriverTestsFreshFindingEvidence
+public sealed class FreshFindingEvidenceConductorTests
 {
     [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Trait("Category", "CrossTick")]
