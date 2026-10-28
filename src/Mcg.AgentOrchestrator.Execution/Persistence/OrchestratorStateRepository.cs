@@ -12,6 +12,10 @@ public interface IOrchestratorStateQueries
     Task<AttentionReadProjection?> ReadAttentionProjectionAsync(CancellationToken cancellationToken = default) =>
         Task.FromResult<AttentionReadProjection?>(null);
 
+    /// <summary>Selective reads are additive; legacy implementations retain their original capability and semantics.</summary>
+    Task<AttentionReadProjection?> ReadAttentionProjectionAsync(AttentionProjectionReadOptions options,
+        CancellationToken cancellationToken) => ReadAttentionProjectionAsync(cancellationToken);
+
     /// <summary>
     /// Reads every goal row as stored, archived goals as metadata-only summaries, all human-input
     /// requests and active practices, without a write lock or write tag.
