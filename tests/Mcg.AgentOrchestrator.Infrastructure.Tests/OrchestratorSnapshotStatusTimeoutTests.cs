@@ -244,6 +244,7 @@ public sealed class OrchestratorSnapshotStatusTimeoutTests
                 FileName = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "WindowsPowerShell", "v1.0", "powershell.exe"),
                 WorkingDirectory = Root,
                 UseShellExecute = false,
+                RedirectStandardInput = true,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 CreateNoWindow = true
@@ -256,7 +257,15 @@ public sealed class OrchestratorSnapshotStatusTimeoutTests
             startInfo.Environment["MCG_ORCHESTRATOR_DOTNET_PATH"] = Host;
             foreach (var argument in new[] { "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", script })
                 startInfo.ArgumentList.Add(argument);
-            return TestChildProcessCapture.Run(startInfo, TimeSpan.FromSeconds(120));
+            return TestChildProcessCapture.Run(startInfo, TimeSpan.FromSeconds(120), start: info =>
+            {
+                var child = Process.Start(info)
+                    ?? throw new InvalidOperationException("Failed to start prepared-runtime fixture PowerShell.");
+                // Native commands invoked by PowerShell must see EOF, rather than inheriting
+                // the test host's input handle. Output drains and owned-tree cleanup stay in capture.
+                child.StandardInput.Close();
+                return child;
+            });
         }
 
         public string[][] Calls()
