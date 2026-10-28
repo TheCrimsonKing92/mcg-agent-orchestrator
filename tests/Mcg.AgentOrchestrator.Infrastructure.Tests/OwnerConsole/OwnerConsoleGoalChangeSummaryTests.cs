@@ -77,10 +77,16 @@ public sealed class OwnerConsoleGoalChangeSummaryTests
         var artifactReads = 0;
         var diffReads = 0;
         var promotionReads = 0;
-        var summary = new OwnerGoalChangeSummaryQuery((id, token) =>
+        var loadEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var layoutComplete = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var summary = new OwnerGoalChangeSummaryQuery(async (id, token) =>
         {
             Assert.Equal(goal.Id.Value, id); promotionReads++;
-            return Task.FromResult<GoalPromotionFact?>(phase == "landed" ? Promotion(goal) : null);
+            loadEntered.TrySetResult();
+            // Without a UI dispatcher, publication runs inline on the loader thread.
+            // Keep it behind this fixture's initial layout of the same preview label.
+            await layoutComplete.Task.WaitAsync(token);
+            return phase == "landed" ? Promotion(goal) : null;
         }, (basis, candidate, token) =>
         {
             Assert.Equal(Basis, basis); Assert.Equal(Candidate, candidate); diffReads++;
@@ -91,10 +97,21 @@ public sealed class OwnerConsoleGoalChangeSummaryTests
         var dialogs = new Dialogs();
         using var controller = Controller(harness, dialogs, detailQuery);
         using IApplication app = Terminal.Gui.App.Application.Create();
+        Assert.False(app.Initialized);
         using var view = new OwnerConsoleFullScreenView(app, controller, () => Task.CompletedTask);
         view.Render(Model(goal));
-        view.Window.Layout(new Size(100, 40));
-        await view.PreviewLoad.WaitAsync(Token);
+        var previewLoad = view.PreviewLoad;
+        try
+        {
+            await TestHangGuard.WaitAsync(loadEntered.Task, "lifecycle summary load entered");
+            Assert.False(previewLoad.IsCompleted);
+            Assert.Contains("Planned: loading", view.PreviewText);
+            view.Window.Layout(new Size(100, 40));
+            Assert.False(previewLoad.IsCompleted);
+            Assert.Same(previewLoad, view.PreviewLoad);
+        }
+        finally { layoutComplete.TrySetResult(); }
+        await TestHangGuard.WaitAsync(previewLoad, "lifecycle preview publication after initial layout");
 
         Assert.Contains(planned, view.PreviewText);
         Assert.Contains(verified, view.PreviewText);

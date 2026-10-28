@@ -53,6 +53,7 @@ internal static partial class CliPersistentStateRunner
         ConductorLoopLeaseController? startupLoopLease = null,
         Func<AgentOrchestratorKernel, Action<AgentOrchestratorKernel>, CliExecutionContext>? createLifecycleContext = null)
     {
+        CliCommandHelp.ValidateGoalCreationOptions(args);
         if (CliArgumentParser.IsAskGoal(args))
             return CliAskGoalCommand.Execute(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel);
         if (!skipReadOnlyRoute && CliReadOnlyCommandRunner.TryExecute(args, stateRepository, workspace, providers, channel, ref agents, ref workerProfiles, ref currentGoal, out var readOnlyResult))
@@ -2039,27 +2040,8 @@ internal static partial class CliPersistentStateRunner
             intakeRecord = reservation.Record;
             if (reservation.Kind == GoalIntakeReservationKind.Replay)
             {
-                GoalIntakeReceiptTextView.PrintGoalIntakeReceipt(reservation.Record);
-                if (reservation.Record.State == GoalIntakeRequestStates.Created)
-                {
-                    var replayKernel = stateRepository.LoadAsync().GetAwaiter().GetResult();
-                    currentGoal = replayKernel.Goals.FirstOrDefault(goal =>
-                        goal.Id.Value.Equals(reservation.Record.GoalId, StringComparison.Ordinal));
-                    if (currentGoal is null)
-                    {
-                        throw new InvalidOperationException(
-                            $"GOAL_INTAKE_RECEIPT_INVALID requestKey={request.RequestKey} reason=created-goal-missing");
-                    }
-                    GoalTextView.PrintGoal(currentGoal);
-                    return false;
-                }
-                if (reservation.Record.State == GoalIntakeRequestStates.Failed)
-                {
-                    throw new InvalidOperationException(
-                        $"GOAL_INTAKE_REPLAY_FAILED requestKey={request.RequestKey} " +
-                        $"failureCode={reservation.Record.FailureCode} detail={reservation.Record.FailureDetail}");
-                }
-
+                GoalIntakeReplayReceipt.Print(reservation.Record, request.RequestKey, stateRepository,
+                    workspace.PortfolioStorePath, GoalCreationSummaryView.IsRequested(args), ref currentGoal);
                 return false;
             }
         }
@@ -2104,7 +2086,7 @@ internal static partial class CliPersistentStateRunner
                 .GetAwaiter()
                 .GetResult();
             committedSnapshot = preparedSnapshot;
-            if (intakeRecord is not null)
+            if (intakeRecord is not null && !GoalCreationSummaryView.IsRequested(args))
                 GoalIntakeReceiptTextView.PrintGoalIntakeReceipt(intakeRecord);
             try
             {
@@ -2138,7 +2120,7 @@ internal static partial class CliPersistentStateRunner
                 refinementCollaborationItemRaise: deferredCollaborationWriter.RaiseAsync,
                 reportGoalCreationProgress: () =>
                 {
-                    if (intakeRecord is not null)
+                    if (intakeRecord is not null && !GoalCreationSummaryView.IsRequested(args))
                         GoalIntakeReceiptTextView.PrintGoalIntakeReceipt(intakeRecord);
                 });
             if (committedSnapshot is null)
