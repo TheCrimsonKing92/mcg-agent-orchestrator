@@ -47,7 +47,12 @@ public sealed record DispatchOutcome(
 public sealed record ProviderSubscriptionCooldown(
     string ProviderName,
     TaskId SourceTaskId,
-    DateTimeOffset RetryAfter);
+    DateTimeOffset RetryAfter)
+{
+    public string BindingKey { get; init; } = "";
+    public string EvidenceReceipt { get; init; } = "";
+    public DateTimeOffset DispatchStartedAt { get; init; }
+}
 
 public sealed record ProviderBudgetExhaustionHold(
     string ProviderName,
@@ -2550,21 +2555,50 @@ public static partial class DispatchFailureClassifier
         cooldown = default!;
         foreach (var task in goal.Tasks)
         {
-            if (task.Id == candidateTaskId ||
-                task.LastDispatch is not { ProviderName: { Length: > 0 } dispatchProviderName } ||
-                !dispatchProviderName.Equals(providerName, StringComparison.OrdinalIgnoreCase) ||
-                !IsSubscriptionRetryDeferred(task, now, out var retryAfter))
-            {
-                continue;
-            }
-
-            if (cooldown is null || retryAfter > cooldown.RetryAfter)
-            {
-                cooldown = new ProviderSubscriptionCooldown(dispatchProviderName, task.Id, retryAfter);
-            }
+            // Provider authority belongs to the failed dispatch, independently of the task's
+            // current assignment, latest dispatch or task-local deferral release.
+            foreach (var verification in task.VerificationHistory)
+                if ((task.Id != candidateTaskId ||
+                     task.SubscriptionDeferralReleasedAt is { } releasedAt && verification.CompletedAt <= releasedAt) &&
+                    TryGetSubscriptionCooldown(task, verification, now, out var observed) &&
+                    observed.ProviderName.Equals(providerName, StringComparison.OrdinalIgnoreCase) &&
+                    (cooldown is null || observed.RetryAfter > cooldown.RetryAfter))
+                    cooldown = observed;
         }
 
         return cooldown is not null;
+    }
+
+    public static bool TryGetTaskSubscriptionCooldown(
+        TaskSpec task, DateTimeOffset now, out ProviderSubscriptionCooldown cooldown)
+    {
+        cooldown = default!;
+        return IsSubscriptionRetryDeferred(task, now, out var retryAfter) &&
+            task.VerificationHistory.LastOrDefault() is { } verification &&
+            TryGetSubscriptionCooldown(task, verification, now, out cooldown) &&
+            cooldown.RetryAfter == retryAfter;
+    }
+
+    private static bool TryGetSubscriptionCooldown(TaskSpec task, TaskVerificationRecord verification,
+        DateTimeOffset now, out ProviderSubscriptionCooldown cooldown)
+    {
+        cooldown = default!;
+        if (verification.Succeeded || !IsRecoverableSubscriptionLimitFailure(verification) ||
+            !TryGetSubscriptionLimitRetryAfter(verification, out var retryAfter) || retryAfter <= now)
+            return false;
+        var dispatch = FindDispatchForVerification(task, verification);
+        if (dispatch?.ProviderName is not { Length: > 0 } providerName ||
+            !IsSubscriptionProviderCliDispatch(dispatch) ||
+            (verification.DispatchStartedAt is { } startedAt && dispatch.DispatchedAt != startedAt))
+            return false;
+        cooldown = new(providerName, task.Id, retryAfter)
+        {
+            BindingKey = BuildProviderBindingKey(providerName, dispatch.ClaudeCredentialSourceDirectory).Key,
+            EvidenceReceipt = !string.IsNullOrWhiteSpace(verification.StandardErrorPath)
+                ? verification.StandardErrorPath : $"verification:{verification.CompletedAt:O}",
+            DispatchStartedAt = dispatch.DispatchedAt
+        };
+        return true;
     }
 
     public static bool TryGetProviderBudgetExhaustionHold(

@@ -45,6 +45,13 @@ internal static class AcceptanceCohortVerificationClassifier
                     result.OutputTail ?? "Acceptance verification did not report an exit code."),
                 normalizedTestResultPaths);
         }
+        if (result.Checks?.Any(check => check.CrosswalkDiagnostics is not null) == true)
+        {
+            return new ClassifiedCohortVerification(InfrastructureClassification(
+                AcceptanceCohortInfrastructureReasonCodes.TrxEvidenceIncoherent,
+                "Crosswalk normalized-only evidence is incompatible with this TRX-required cohort consumer. Use standalone acceptance; cohort normalized evidence support is required."),
+                normalizedTestResultPaths);
+        }
         if (!AcceptanceCohortGateEvidence.HasCoherentTrxEvidence(normalizedTestResultPaths))
         {
             var classification = IsSourceSizeContentFailure(result)

@@ -35,8 +35,35 @@ public static partial class AcceptanceCriterionOwnershipMarker
             return DeclaredEvidenceOwner.None;
         }
 
-        return AcceptanceGateOwnershipRegex().IsMatch(string.Join(" ", trailingSentences))
+        // An explicit Acceptance declaration is authority in its own right. Source-role
+        // ownership in the same criterion does not replace its execution-evidence owner.
+        return explicitOwners.Any(match => IsAcceptanceOwner(match.Groups["owner"].Value)) ||
+               AcceptanceGateOwnershipRegex().IsMatch(string.Join(" ", trailingSentences))
             ? new(DeclaredEvidenceOwnerKind.AcceptanceGate, null)
             : new(DeclaredEvidenceOwnerKind.Worker, explicitOwners[0].Groups["owner"].Value);
+    }
+
+    private static bool IsAcceptanceOwner(string owner) =>
+        owner.Equals("gate", StringComparison.OrdinalIgnoreCase) ||
+        owner.StartsWith("acceptance", StringComparison.OrdinalIgnoreCase);
+
+    public static bool HasConflictingDeclaredEvidenceOwners(string? criterion)
+    {
+        var sentences = ExtractTrailingSentences(criterion);
+        var owners = sentences
+            .SelectMany(sentence => ExplicitOwnerSentenceRegex().Matches(sentence).Cast<Match>())
+            .Select(match => match.Groups["owner"].Value)
+            .ToArray();
+        // Marker declarations may accompany explicit owner sentences. Require a
+        // clause boundary so descriptive mentions do not become ownership claims.
+        var clauses = sentences.SelectMany(sentence => sentence.Split(';'))
+            .Select(clause => clause.Trim())
+            .Select(clause => clause.StartsWith("the ", StringComparison.OrdinalIgnoreCase) ? clause[4..] : clause)
+            .ToArray();
+        var acceptanceDeclared = owners.Any(IsAcceptanceOwner) ||
+                                 clauses.Any(clause => AcceptanceGateOwnershipRegex().Match(clause) is { Success: true, Index: 0 });
+        var operatorDeclared = owners.Any(owner => owner.Equals("operator", StringComparison.OrdinalIgnoreCase)) ||
+                               clauses.Any(clause => OperatorOwnershipRegex().Match(clause) is { Success: true, Index: 0 });
+        return acceptanceDeclared && operatorDeclared;
     }
 }
