@@ -39,7 +39,8 @@ internal static class FindingEvidenceReceiptSelector
             foreach (var source in goal.Tasks.Where(task => task.RequiredRole is AgentRole.Tester or AgentRole.Reviewer))
             {
                 if (source.Id != reviewer.Id && source.Status != WorkTaskStatus.Completed) continue;
-                var record = source.LastVerification ?? source.VerificationHistory.LastOrDefault();
+                var current = source.LastVerification ?? source.VerificationHistory.LastOrDefault();
+                var record = ResolveEvidenceVerification(source, current, finding.StableId);
                 if (record?.DispatchStartedAt is not { } sourceDispatch ||
                     !string.Equals(record.ReviewedCommit, candidateSha, StringComparison.OrdinalIgnoreCase) ||
                     !CandidateIdentity.AreSameCandidate(record.CandidateIdentity, identity) ||
@@ -89,6 +90,57 @@ internal static class FindingEvidenceReceiptSelector
         reason = "complete-newly-applicable-evidence-round";
         return true;
     }
+
+    // Receipt closure is a decision over an existing worker round, not a new execution round.
+    // Recover only its explicitly retained finding/outcome and receipt lineage, never arbitrary history.
+    private static TaskVerificationRecord? ResolveEvidenceVerification(TaskSpec source,
+        TaskVerificationRecord? current, string findingId)
+    {
+        if (source.RequiredRole != AgentRole.Tester || current?.Command != "conductor finding-receipt-closure")
+            return current;
+        var finding = current.MergedReviewFindings?.SingleOrDefault(item => item.StableId == findingId);
+        if (finding is not { State: ReviewFindingState.Resolved, EvidenceOutcome.ReceiptId: { Length: > 0 } receiptId } ||
+            current.FindingEvidenceReceipts?.Any(receipt => receipt.ReceiptId == receiptId) != true) return null;
+        return source.VerificationHistory.LastOrDefault(record =>
+            record.Command != "conductor finding-receipt-closure" && record.CompletedAt <= current.CompletedAt &&
+            string.Equals(record.ReviewedCommit, current.ReviewedCommit, StringComparison.OrdinalIgnoreCase) &&
+            (current.DispatchStartedAt is null || current.DispatchStartedAt == record.DispatchStartedAt) &&
+            record.MergedReviewFindings?.Any(item => item.StableId == findingId &&
+                item.EvidenceOutcome?.ReceiptId == receiptId &&
+                item.EvidenceOutcome.RequestedSelectionIdentity == finding.EvidenceOutcome.RequestedSelectionIdentity &&
+                item.EvidenceOutcome is { Honoured: true, ResultReason: FindingEvidenceOutcomeReason.ValidEvidence } &&
+                item.EvidenceRequest is not null && finding.EvidenceRequest is not null &&
+                ConductorDriver.BuildFindingEvidenceIdentity(item.EvidenceRequest) ==
+                    ConductorDriver.BuildFindingEvidenceIdentity(finding.EvidenceRequest)) == true &&
+            record.FindingEvidenceReceipts?.Any(receipt => receipt.ReceiptId == receiptId) == true);
+    }
+
+    // The canonical transition intentionally ignores receipt copies and file locations. Launch
+    // still needs the exact claimed receipt and its retained artifacts to remain authoritative.
+    internal static bool ClaimedSelectionsRemainValid(Goal goal, FindingEvidenceReviewContinuation claimed,
+        FindingEvidenceReviewContinuation validated, string executionBasis) =>
+        claimed.Selections.Count > 0 && claimed.Selections.All(selection =>
+        {
+            var source = goal.Tasks.SingleOrDefault(task => task.Id.Value == selection.SourceTaskId);
+            var origin = source?.VerificationHistory.SingleOrDefault(record =>
+                record.CompletedAt == selection.SourceVerificationAt && record.DispatchStartedAt == selection.SourceDispatchAt);
+            var receipt = origin?.FindingEvidenceReceipts?.LastOrDefault(item => item.ReceiptId == selection.ReceiptId);
+            var equivalent = validated.Selections.SingleOrDefault(item => item.Canonical == selection.Canonical);
+            var validatedReceipt = origin?.FindingEvidenceReceipts?.LastOrDefault(item => item.ReceiptId == equivalent?.ReceiptId);
+            var executed = validatedReceipt?.RequestDispositions?.Where(item =>
+                item.Decision == FindingEvidenceRequestDecision.Executed).ToArray();
+            return origin is not null && source!.DispatchHistory.Any(dispatch =>
+                    dispatch.GoalId == goal.Id && dispatch.DispatchedAt == selection.SourceDispatchAt) &&
+                CandidateIdentity.AreSameCandidate(origin.CandidateIdentity, claimed.CandidateIdentity) &&
+                WorkerResultBlockers.TryFindReviewFindingRound(origin, out var round, out _) &&
+                ConductorDriver.BuildFindingRoundFingerprint(source.Id, origin.CompletedAt, round) == selection.FindingRoundFingerprint &&
+                receipt is not null && executed is { Length: > 0 } && validatedReceipt is not null &&
+                ConductorDriver.BuildFindingEvidenceIdentity(receipt.Request) ==
+                    ConductorDriver.BuildFindingEvidenceIdentity(validatedReceipt.Request) &&
+                FindingEvidenceReviewContext.ExecutionIdentity(receipt) == selection.ExecutionIdentity &&
+                executed.All(binding => Qualifies(receipt, binding.FindingStableId, binding.RequestIdentity,
+                    selection.FindingRoundFingerprint, claimed.CandidateSha, executionBasis, validatedReceipt.Request));
+        });
 
     // Preserve the existing recorded coverage-reuse contract. Every source receipt must still
     // be complete for its OWN request; an arbitrary union of partial executions is ineligible.
@@ -153,8 +205,11 @@ internal static class FindingEvidenceReceiptSelector
             string.Equals(arm.Sha, candidateSha, StringComparison.OrdinalIgnoreCase) &&
             FindingEvidenceTrxCoverage.HasPassedSelections(arm, request)) &&
         (request.NegativeControl is null || receipt.NegativeControlOutcome == FindingEvidenceNegativeControlOutcome.Demonstrated &&
+            (receipt.Arms ?? []).Count(arm => arm.Arm == FindingEvidenceArm.SourceReverted) == 1 &&
             (receipt.Arms ?? []).Any(arm => arm is { Arm: FindingEvidenceArm.SourceReverted, Accepted: true, Passed: false,
-                Disposition: FindingEvidenceArmDisposition.Red } && string.Equals(arm.Sha, candidateSha, StringComparison.OrdinalIgnoreCase)));
+                Disposition: FindingEvidenceArmDisposition.Red, ExecutedTestCount: > 0 } && arm.NotRunSelections.Count == 0 &&
+                string.Equals(arm.Sha, candidateSha, StringComparison.OrdinalIgnoreCase) &&
+                FindingEvidenceTrxCoverage.HasRedSelections(arm, request)));
 
     internal static bool SuppliedReceiptsPassAtCandidate(
         TaskSpec task, string candidateSha, IReadOnlyList<string> receiptIds)

@@ -1,8 +1,44 @@
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
+using Mcg.AgentOrchestrator.App.Orchestration;
+using Mcg.AgentOrchestrator.Core.Conductor;
 
 public sealed class FindingEvidenceContinuationPersistenceTests
 {
+    [Theory]
+    [InlineData("intact")]
+    [InlineData("missing")]
+    [InlineData("corrupt")]
+    public void EquivalentCopyCannotMaskUnavailableClaimedArtifactsAfterReload(string original)
+    {
+        using var fixture = new FreshFindingEvidenceFixture();
+        var receipt = fixture.Receipt();
+        fixture.Attach(receipt);
+        Assert.True(fixture.Select(out var claimed, out var reason), reason);
+        fixture.Kernel.RecordFindingEvidenceReviewContinuation(fixture.Goal.Id, fixture.Reviewer.Id, claimed!);
+        fixture.Kernel.RetryTaskAutomatically(fixture.Goal.Id, fixture.Reviewer.Id, claimed!.Render(), RetryCause.NewTestFinding);
+        var copy = fixture.Receipt(id: "equivalent-copy");
+        fixture.Attach(copy);
+        Assert.Equal(FindingEvidenceReviewContext.ExecutionIdentity(receipt), FindingEvidenceReviewContext.ExecutionIdentity(copy));
+        var path = receipt.Arms!.Single().TestResultPaths!.Single();
+        if (original == "missing") File.Delete(path);
+        if (original == "corrupt") File.AppendAllText(path, "corrupt");
+        fixture.Reload();
+        Assert.True(fixture.Select(out var copySelection, out reason), reason);
+        Assert.Equal(copy.ReceiptId, Assert.Single(copySelection!.Selections).ReceiptId);
+        var driver = fixture.Driver();
+
+        var valid = FindingEvidenceContinuationCoordinator.TrySelectFindingEvidenceContinuation(driver,
+            fixture.Goal, fixture.Reviewer, out var selected, out reason);
+
+        Assert.Equal(original == "intact", valid);
+        if (valid) Assert.Equal(receipt.ReceiptId, Assert.Single(selected!.Selections).ReceiptId);
+        else Assert.Equal("claimed-review-evidence-unavailable", reason);
+        var result = driver.AdvanceOnce(fixture.Goal, ConductorAutonomyPolicy.Permissive);
+        Assert.Equal(valid ? 1 : 0, fixture.Launches);
+        if (!valid) Assert.IsType<ConductorAdvanceOutcome.Held>(result.Outcome);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

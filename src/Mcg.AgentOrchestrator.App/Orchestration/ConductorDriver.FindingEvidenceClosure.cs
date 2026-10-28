@@ -42,9 +42,12 @@ internal sealed partial class ConductorDriver
                 kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord(
                     "conductor finding-receipt-closure", prior.WorkingDirectory, 0, OutsideDiffFindingRerun.ClosureOutput(note, resolved.Values), "", _utcNow(),
                     ReviewedCommit: reviewedSha,
+                    CandidateIdentity: prior.CandidateIdentity,
+                    DispatchStartedAt: prior.DispatchStartedAt,
                     MergedReviewFindings: prior.MergedReviewFindings!
                         .Select(finding => resolved.GetValueOrDefault(finding.StableId, finding)).ToArray(),
-                    FindingEvidenceReceipts: prior.FindingEvidenceReceipts));
+                    FindingEvidenceReceipts: prior.FindingEvidenceReceipts,
+                    FindingEvidenceRequestDispositions: prior.FindingEvidenceRequestDispositions));
                 if (currentTask.Status != WorkTaskStatus.Completed)
                     throw new InvalidOperationException($"Receipt closure did not complete Tester task {task.Id}.");
                 kernel.RecordTaskNote(goal.Id, task.Id, note);

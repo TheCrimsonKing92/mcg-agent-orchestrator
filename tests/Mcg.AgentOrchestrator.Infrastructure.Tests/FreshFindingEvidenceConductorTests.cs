@@ -4,6 +4,109 @@ using Mcg.AgentOrchestrator.Core.Conductor;
 
 public sealed class FreshFindingEvidenceConductorTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void TesterReceiptClosureRetainsOriginAndResumesReviewer(bool reload)
+    {
+        using var fixture = new FreshFindingEvidenceFixture();
+        fixture.ReexecuteTesterAfterVerdict(needsClosure: true);
+        Assert.Equal(WorkTaskStatus.Failed, fixture.Tester.Status);
+        var receipt = fixture.Receipt();
+        fixture.Attach(receipt);
+        var origin = fixture.Tester.LastVerification!;
+        var driver = fixture.Driver();
+        Assert.True(FindingReceiptClosureDiagnosis.Evaluate(fixture.Goal, fixture.Tester,
+            FreshFindingEvidenceFixture.Candidate).IsClosable);
+
+        driver.BuildReceiptClosureOrDeliveryRetry(fixture.Goal, fixture.Tester,
+            FreshFindingEvidenceFixture.Candidate, origin.MergedReviewFindings!, [receipt.ReceiptId], "fresh exact evidence");
+
+        Assert.Equal(WorkTaskStatus.Completed, fixture.Tester.Status);
+        Assert.Equal("conductor finding-receipt-closure", fixture.Tester.LastVerification!.Command);
+        Assert.Equal(origin.DispatchStartedAt, fixture.Tester.LastVerification.DispatchStartedAt);
+        Assert.Equal(origin.CandidateIdentity, fixture.Tester.LastVerification.CandidateIdentity);
+        if (reload) fixture.Reload();
+        Assert.True(fixture.Select(out var selected, out var reason), reason);
+        var selection = Assert.Single(selected!.Selections);
+        Assert.Equal(origin.CompletedAt, selection.SourceVerificationAt);
+        Assert.Equal(origin.DispatchStartedAt, selection.SourceDispatchAt);
+        Assert.Equal(receipt.ReceiptId, selection.ReceiptId);
+        fixture.Driver().AdvanceOnce(fixture.Goal, ConductorAutonomyPolicy.Permissive);
+        Assert.Equal(1, fixture.Launches);
+        Assert.Equal(RetryCause.NewTestFinding, Assert.Single(fixture.Causes));
+        fixture.Reload();
+        fixture.Driver().AdvanceOnce(fixture.Goal, ConductorAutonomyPolicy.Permissive);
+        Assert.Equal(1, fixture.Launches);
+    }
+
+    [Fact]
+    public void ClosedTesterWithoutAuthoritativeOriginCannotResumeReviewer()
+    {
+        using var fixture = new FreshFindingEvidenceFixture();
+        fixture.ReexecuteTesterAfterVerdict(needsClosure: true);
+        var receipt = fixture.Receipt();
+        fixture.Attach(receipt);
+        fixture.Driver().BuildReceiptClosureOrDeliveryRetry(fixture.Goal, fixture.Tester,
+            FreshFindingEvidenceFixture.Candidate, fixture.Tester.LastVerification!.MergedReviewFindings!,
+            [receipt.ReceiptId], "fresh evidence");
+        Assert.Equal(WorkTaskStatus.Completed, fixture.Tester.Status);
+        var snapshot = fixture.Kernel.ExportGoalSnapshot(fixture.Goal.Id);
+        fixture.Kernel = AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot([snapshot with
+        {
+            Tasks = snapshot.Tasks.Select(task => task.RequiredRole == AgentRole.Tester ? task with
+            {
+                VerificationHistory = [task.LastVerification!]
+            } : task).ToArray()
+        }], []));
+
+        Assert.False(fixture.Select(out _, out _));
+        var result = fixture.Driver().AdvanceOnce(fixture.Goal, ConductorAutonomyPolicy.Permissive);
+        Assert.IsType<ConductorAdvanceOutcome.Held>(result.Outcome);
+        Assert.Equal(0, fixture.Launches);
+        Assert.Empty(fixture.Causes);
+    }
+
+    [Theory]
+    [InlineData("valid")]
+    [InlineData("corrupt")]
+    [InlineData("missing")]
+    [InlineData("zero-test")]
+    [InlineData("partial")]
+    [InlineData("wrong-test")]
+    [InlineData("duplicate-arm")]
+    public void NegativeControlRequiresIntactExecutedRequestedCoverage(string control)
+    {
+        using var fixture = new FreshFindingEvidenceFixture(negativeControl: true);
+        var receipt = fixture.Receipt(redMethods: control == "wrong-test" ? ["UnrelatedGuard"] : null);
+        var green = receipt.Arms!.Single(arm => arm.Arm == FindingEvidenceArm.Candidate);
+        var red = receipt.Arms!.Single(arm => arm.Arm == FindingEvidenceArm.SourceReverted);
+        Assert.True(FindingEvidenceTrxCoverage.HasPassedSelections(green, receipt.Request));
+        Assert.True(FindingEvidenceTrxCoverage.HasContentBoundRedTrxCoverage(red, [FreshFindingEvidenceFixture.TestClass]));
+        var path = red.TestResultPaths!.Single();
+        if (control == "corrupt") File.AppendAllText(path, "corrupted");
+        if (control == "missing") File.Delete(path);
+        receipt = control switch
+        {
+            "zero-test" => receipt with { Arms = [green, red with { ExecutedTestCount = 0 }] },
+            "partial" => receipt with { Arms = [green, red with { NotRunSelections = receipt.Request.Selections }] },
+            "duplicate-arm" => receipt with { Arms = [green, red, red] },
+            _ => receipt
+        };
+        fixture.Attach(receipt);
+        Assert.Equal(control == "valid", fixture.Select(out _, out _));
+
+        var result = fixture.Driver().AdvanceOnce(fixture.Goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.Equal(control == "valid" ? 1 : 0, fixture.Launches);
+        if (control != "valid")
+        {
+            Assert.IsType<ConductorAdvanceOutcome.Held>(result.Outcome);
+            Assert.Empty(fixture.Causes);
+        }
+        else Assert.Equal(RetryCause.NewTestFinding, Assert.Single(fixture.Causes));
+    }
+
     [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Trait("Category", "CrossTick")]
     public void HeldSameCandidateResumesOnceWithExactFreshReceipt()

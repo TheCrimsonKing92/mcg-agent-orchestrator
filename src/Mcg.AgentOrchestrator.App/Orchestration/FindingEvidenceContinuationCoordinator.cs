@@ -24,7 +24,16 @@ internal static class FindingEvidenceContinuationCoordinator
             BuildFindingEvidenceExecutionBasisIdentity(settings), out continuation, out reason);
         // Equivalent copies retain the exact batch already claimed for delivery.
         if (selected && reviewer.FindingEvidenceReviewContinuation is { } claimed && claimed.Key == continuation!.Key)
+        {
+            if (!FindingEvidenceReceiptSelector.ClaimedSelectionsRemainValid(goal, claimed, continuation!,
+                    BuildFindingEvidenceExecutionBasisIdentity(settings)))
+            {
+                continuation = null;
+                reason = "claimed-review-evidence-unavailable";
+                return false;
+            }
             continuation = claimed;
+        }
         else if (selected && reviewer.FindingEvidenceReviewContinuation?.DecisionKey == continuation!.DecisionKey)
         {
             continuation = null;

@@ -28,7 +28,7 @@ internal sealed class FreshFindingEvidenceFixture : IDisposable
     };
 
     internal FreshFindingEvidenceFixture(bool twoRequests = false, bool retryReview = true, bool sourceFinding = false,
-        bool compositeRequest = false)
+        bool compositeRequest = false, bool negativeControl = false)
     {
         Directory.CreateDirectory(Root);
         Kernel = new AgentOrchestratorKernel(new FixedClock(Now.AddMinutes(5)));
@@ -44,6 +44,14 @@ internal sealed class FreshFindingEvidenceFixture : IDisposable
             findings[1] = Finding("second-request", "OtherTests");
         }
         if (sourceFinding) findings[0] = findings[0] with { Category = FindingCategory.Correctness };
+        if (negativeControl) findings[0] = findings[0] with
+        {
+            EvidenceRequest = findings[0].EvidenceRequest! with
+            {
+                NegativeControl = FindingEvidenceNegativeControl.RevertSrc,
+                RevertPaths = ["src/Guard.cs"]
+            }
+        };
         Record(tester, findings.Select(item => item with { State = ReviewFindingState.Resolved }).ToArray(),
             Now.AddMinutes(-4), Now.AddMinutes(-3), "pass");
         var old = Receipt(FindingId, ["OldGuard"], "finding-evidence-ae20831594d6ef6afe9a1bed");
@@ -74,7 +82,7 @@ internal sealed class FreshFindingEvidenceFixture : IDisposable
     }
 
     internal FindingEvidenceReceipt Receipt(string findingId = FindingId, string[]? methods = null,
-        string id = "finding-evidence-332750923bcdeeab8ae826d8")
+        string id = "finding-evidence-332750923bcdeeab8ae826d8", string[]? redMethods = null)
     {
         var record = Tester.LastVerification!;
         Assert.True(WorkerResultBlockers.TryFindReviewFindingRound(record, out var round, out var diagnostic), diagnostic);
@@ -85,6 +93,18 @@ internal sealed class FreshFindingEvidenceFixture : IDisposable
         var requestId = ConductorDriver.BuildFindingEvidenceIdentity(request);
         methods ??= findingId == FindingId ? ["One", "Two", "Three", "Four", "Five", ExactTest] : ["ExactGuard"];
         var testClass = findingId == FindingId ? TestClass : "OtherTests";
+        var arms = new List<FindingEvidenceArmReceipt> { ArmReceipt(methods, testClass, red: false) };
+        if (request.NegativeControl is not null) arms.Add(ArmReceipt(redMethods ?? methods, testClass, red: true));
+        var disposition = new FindingEvidenceRequestDisposition(findingId, requestId, "executed-green",
+            Decision: FindingEvidenceRequestDecision.Executed, CandidateSha: Candidate, FindingRoundFingerprint: roundId,
+            SourceReceiptIds: [id], ExecutionBasisIdentity: basis);
+        return new(id, Candidate, request, true, true, "six exact tests passed", arms,
+            [disposition], roundId, basis,
+            NegativeControlOutcome: request.NegativeControl is null ? null : FindingEvidenceNegativeControlOutcome.Demonstrated);
+    }
+
+    private FindingEvidenceArmReceipt ArmReceipt(string[] methods, string testClass, bool red)
+    {
         XNamespace trx = "http://microsoft.com/schemas/VisualStudio/TeamTest/2010";
         var path = Path.Combine(Root, Guid.NewGuid().ToString("N") + ".trx");
         new XDocument(new XElement(trx + "TestRun",
@@ -92,19 +112,15 @@ internal sealed class FreshFindingEvidenceFixture : IDisposable
                 new XAttribute("id", index), new XAttribute("name", method),
                 new XElement(trx + "TestMethod", new XAttribute("className", testClass), new XAttribute("name", method))))),
             new XElement(trx + "Results", methods.Select((method, index) => new XElement(trx + "UnitTestResult",
-                new XAttribute("testId", index), new XAttribute("testName", testClass + "." + method), new XAttribute("outcome", "Passed")))),
+                new XAttribute("testId", index), new XAttribute("testName", testClass + "." + method), new XAttribute("outcome", red ? "Failed" : "Passed")))),
             new XElement(trx + "ResultSummary", new XElement(trx + "Counters",
                 new XAttribute("total", methods.Length), new XAttribute("executed", methods.Length),
-                new XAttribute("passed", methods.Length), new XAttribute("failed", 0))))).Save(path);
+                new XAttribute("passed", red ? 0 : methods.Length), new XAttribute("failed", red ? methods.Length : 0))))).Save(path);
         var bytes = File.ReadAllBytes(path);
-        var disposition = new FindingEvidenceRequestDisposition(findingId, requestId, "executed-green",
-            Decision: FindingEvidenceRequestDecision.Executed, CandidateSha: Candidate, FindingRoundFingerprint: roundId,
-            SourceReceiptIds: [id], ExecutionBasisIdentity: basis);
-        return new(id, Candidate, request, true, true, "six exact tests passed",
-            [new(FindingEvidenceArm.Candidate, Candidate, FindingEvidenceArmDisposition.Green, true, true, "executed",
-                ExecutedTestCount: methods.Length, TestResultPaths: [path],
-                ReceiptArtifacts: [new("trx", path, Convert.ToHexStringLower(SHA256.HashData(bytes)), bytes.Length)])],
-            [disposition], roundId, basis);
+        return new(red ? FindingEvidenceArm.SourceReverted : FindingEvidenceArm.Candidate, Candidate,
+                 red ? FindingEvidenceArmDisposition.Red : FindingEvidenceArmDisposition.Green, true, !red, "executed",
+                 ExecutedTestCount: methods.Length, TestResultPaths: [path],
+                 ReceiptArtifacts: [new("trx", path, Convert.ToHexStringLower(SHA256.HashData(bytes)), bytes.Length)]);
     }
 
     internal void Attach(FindingEvidenceReceipt receipt, string findingId = FindingId) =>
@@ -112,14 +128,15 @@ internal sealed class FreshFindingEvidenceFixture : IDisposable
             new FindingEvidenceOutcome(true, receipt.ReceiptId, ResultReason: FindingEvidenceOutcomeReason.ValidEvidence,
                 RequestedSelectionIdentity: ConductorDriver.BuildFindingEvidenceIdentity(receipt.Request)), receipt);
 
-    internal void ReexecuteTesterAfterVerdict()
+    internal void ReexecuteTesterAfterVerdict(bool needsClosure = false)
     {
         // A new worker round requests new execution; the old conductor-owned outcome
         // is not worker-authored input or evidence for that execution.
         var findings = Tester.LastVerification!.MergedReviewFindings!
-            .Select(finding => finding with { EvidenceOutcome = null }).ToArray();
+            .Select(finding => finding with { EvidenceOutcome = null,
+                State = needsClosure ? ReviewFindingState.Open : finding.State }).ToArray();
         Kernel.RetryTask(Goal.Id, Tester.Id, "Run the exact requested guard", RetryCause.NewTestFinding, invalidateDownstream: false);
-        Record(Tester, findings, Now.AddMinutes(1), Now.AddMinutes(2), "pass");
+        Record(Tester, findings, Now.AddMinutes(1), Now.AddMinutes(2), needsClosure ? "needs-work" : "pass");
     }
 
     internal void RecordCompositeReuse(FindingEvidenceReceipt first, FindingEvidenceReceipt second)
