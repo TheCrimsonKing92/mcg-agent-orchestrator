@@ -141,6 +141,19 @@ public sealed class BaseBuildCacheProjectReuseTests(ITestOutputHelper output) : 
         Assert.NotNull(completed.Run.Result.ResultSummary);
         var summary = completed.Run.Result.ResultSummary!;
         Assert.DoesNotContain("unresolved-build-inputs", summary);
+        var fields = summary.Split(' ').Where(token => token.Contains('='))
+            .Select(token => token.Split('=', 2)).ToDictionary(pair => pair[0], pair => pair[1]);
+        foreach (var phaseName in new[] { "identity_resolution", "identity_revalidation", "run_build_commands", "cache_restore_copy", "cache_capture_publish" })
+        {
+            Assert.True(long.TryParse(fields[phaseName + "_ms"], NumberStyles.None, CultureInfo.InvariantCulture, out _));
+            Assert.True(int.TryParse(fields[phaseName + "_count"], NumberStyles.None, CultureInfo.InvariantCulture, out var count));
+            Assert.Equal(count == 0 ? "not_run" : "measured", fields[phaseName + "_status"]);
+        }
+        Assert.Equal("1", fields["identity_resolution_count"]);
+        Assert.Equal(commands.Count.ToString(CultureInfo.InvariantCulture), fields["run_build_commands_count"]);
+        Assert.Equal("complete", fields["build_phase_accounting_status"]);
+        Assert.True(long.TryParse(fields["build_phase_residual_ms"], NumberStyles.None, CultureInfo.InvariantCulture, out _));
+        Assert.Equal("managed_check_exclusive_of_cache", fields["run_build_commands_scope"]);
         output.WriteLine($"REUSE {slot} Csc={compilerCalls} {summary}");
         return new(environment, summary, compilerCalls, commands);
     }
