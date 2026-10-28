@@ -61,7 +61,6 @@ public sealed partial class SqliteOrchestratorStateRepository
                 Console.Error.WriteLine($"QUARANTINED goal {ShortGoalId(id)}: JsonException: deserialized goal snapshot was null");
                 continue;
             }
-            ValidateSimilarityTaskCount(fields);
             ValidateSimilarityDomain(fields, () => reader.GetStream(1));
             if (fields is { IsMetadataOnly: true })
             {
@@ -75,7 +74,6 @@ public sealed partial class SqliteOrchestratorStateRepository
                 using var stream = GoalSnapshotArchiveCodec.OpenDecodedStream(value);
                 if (stream is not null)
                     fields = ReadGoalSimilarityFields(stream, () => GoalSnapshotArchiveCodec.OpenDecodedStream(value)!);
-                ValidateSimilarityTaskCount(fields);
                 ValidateSimilarityDomain(fields, () => GoalSnapshotArchiveCodec.OpenDecodedStream(value)!);
             }
             if (fields is not { Status: GoalStatus.Completed }) continue;
@@ -115,19 +113,11 @@ public sealed partial class SqliteOrchestratorStateRepository
         }
     }
 
-    private static void ValidateSimilarityTaskCount(GoalSimilarityFields? fields)
-    {
-        // Reconstruction runs after hot deserialization/quarantine, so this domain
-        // failure must escape for both hot and archived full goals.
-        if (fields is { IsMetadataOnly: false, Tasks.Count: 0 })
-            throw new ArgumentException("A goal must have at least one task.", "tasks");
-    }
-
     private static void ValidateSimilarityDomain(GoalSimilarityFields? fields, Func<Stream> reopenStream)
     {
         if (fields is not null && !string.IsNullOrWhiteSpace(fields.Objective) &&
-            (fields.IsMetadataOnly || fields is { Tasks.RequiresReconstruction: false, Timeline.HasNullEntry: false }
-                && !fields.Domain.RequiresReconstruction)) return;
+            (fields.IsMetadataOnly || fields is { Tasks: { Count: > 0, RequiresReconstruction: false }, Timeline.HasNullEntry: false }
+                && !fields.Domain.RequiresReconstruction(fields.Objective.Trim()))) return;
 
         // These are reconstruction failures, not deserialization failures. Replay only
         // suspect documents, outside hot quarantine, so Core owns the exception contract.
@@ -182,8 +172,14 @@ public sealed partial class SqliteOrchestratorStateRepository
                 nameof(GoalSnapshot.SourceBacklogCoverage) => projection.TokenType != JsonTokenType.Null,
                 nameof(GoalSnapshot.ExplicitDisposition) => JsonSerializer.Deserialize<GoalExplicitDisposition>(ref projection, options),
                 nameof(GoalSnapshot.ParkedLifecycleStatus) => JsonSerializer.Deserialize<GoalStatus?>(ref projection, options),
-                nameof(GoalSnapshot.BriefVersions) or nameof(GoalSnapshot.RefinedSpecVersions) =>
-                    HasInvalidSimilarityVersionChain(ref projection, options),
+                nameof(GoalSnapshot.BriefVersions) => ReadSimilarityVersionChain(ref projection, options, brief: true),
+                nameof(GoalSnapshot.RefinedSpecVersions) => ReadSimilarityVersionChain(ref projection, options, brief: false),
+                nameof(GoalSnapshot.RefinedSpec) => projection.TokenType != JsonTokenType.Null &&
+                    HasInvalidSimilarityMembers(ref projection, [], ["Decisions", "OpenQuestions"]),
+                nameof(GoalSnapshot.EffectiveAcceptanceCriteriaCorrections) => HasInvalidSimilarityCorrections(ref projection),
+                nameof(GoalSnapshot.LatestAcceptanceFailure) => projection.TokenType != JsonTokenType.Null &&
+                    HasInvalidSimilarityMembers(ref projection, [], ["FailedChecks"]),
+                nameof(GoalSnapshot.GateTestObligations) => HasNullSimilarityEntry(ref projection),
                 _ => null
             };
         }
@@ -203,16 +199,22 @@ public sealed partial class SqliteOrchestratorStateRepository
         [JsonIgnore] public SimilarityDomainFields Domain { get; } = new();
     }
 
-    // Retain only cross-member validation facts; discarded text/spec payloads stay streamed.
+    // Retain cross-member facts and the authoritative text of multi-version briefs;
+    // other discarded text/spec payloads stay streamed.
     private sealed class SimilarityDomainFields
     {
         private bool? _blankSourceId;
         private bool _hasCoverage;
         private GoalExplicitDisposition? _disposition;
         private GoalStatus? _parkedStatus;
-        private bool _invalidBriefChain, _invalidSpecChain;
+        private SimilarityVersionChain? _briefChain, _specChain;
+        private bool _invalidSpec, _invalidCorrections, _invalidFailure, _nullObligation;
 
-        internal bool RequiresReconstruction => _invalidBriefChain || _invalidSpecChain ||
+        internal bool RequiresReconstruction(string objective) =>
+            _briefChain?.Invalid == true || _specChain?.Invalid == true ||
+            _briefChain is { Count: > 1 } && !string.Equals(_briefChain.LatestText, objective, StringComparison.Ordinal) ||
+            (_specChain is not { Count: > 0 } && _invalidSpec) ||
+            _invalidCorrections || _invalidFailure || _nullObligation ||
             _blankSourceId == true || _blankSourceId is null && _hasCoverage ||
             (_disposition?.Action == GoalExplicitDispositionAction.Park
                 ? _parkedStatus is null or GoalStatus.Parked : _parkedStatus is not null);
@@ -225,29 +227,118 @@ public sealed partial class SqliteOrchestratorStateRepository
                 case nameof(GoalSnapshot.SourceBacklogCoverage): _hasCoverage = (bool)value!; break;
                 case nameof(GoalSnapshot.ExplicitDisposition): _disposition = (GoalExplicitDisposition?)value; break;
                 case nameof(GoalSnapshot.ParkedLifecycleStatus): _parkedStatus = (GoalStatus?)value; break;
-                case nameof(GoalSnapshot.BriefVersions): _invalidBriefChain = (bool)value!; break;
-                case nameof(GoalSnapshot.RefinedSpecVersions): _invalidSpecChain = (bool)value!; break;
+                case nameof(GoalSnapshot.BriefVersions): _briefChain = (SimilarityVersionChain)value!; break;
+                case nameof(GoalSnapshot.RefinedSpecVersions): _specChain = (SimilarityVersionChain)value!; break;
+                case nameof(GoalSnapshot.RefinedSpec): _invalidSpec = (bool)value!; break;
+                case nameof(GoalSnapshot.EffectiveAcceptanceCriteriaCorrections): _invalidCorrections = (bool)value!; break;
+                case nameof(GoalSnapshot.LatestAcceptanceFailure): _invalidFailure = (bool)value!; break;
+                case nameof(GoalSnapshot.GateTestObligations): _nullObligation = (bool)value!; break;
             }
         }
     }
 
     private sealed record SimilarityVersionLink(int Version, int? SupersededByVersion);
+    private sealed record SimilarityVersionChain(int Count, bool Invalid, string? LatestText);
 
-    private static bool HasInvalidSimilarityVersionChain(ref Utf8JsonReader reader, JsonSerializerOptions options)
+    private static SimilarityVersionChain ReadSimilarityVersionChain(
+        ref Utf8JsonReader reader, JsonSerializerOptions options, bool brief)
     {
-        if (reader.TokenType == JsonTokenType.Null) return false;
+        if (reader.TokenType == JsonTokenType.Null) return new(0, false, null);
         var links = new List<SimilarityVersionLink>();
+        var invalid = false;
+        var latestVersion = int.MinValue;
+        var latestContents = reader;
+        string? latestText = null;
         while (reader.Read() && reader.TokenType != JsonTokenType.EndArray)
         {
+            var contents = reader;
             var link = JsonSerializer.Deserialize<SimilarityVersionLink>(ref reader, options);
-            if (link is null) return true;
+            if (link is null) return new(links.Count + 1, true, null);
             links.Add(link);
+            if (brief && link.Version >= latestVersion)
+            {
+                latestVersion = link.Version;
+                latestContents = contents;
+            }
+            else if (!brief)
+            {
+                var hasSpec = false;
+                while (contents.Read() && contents.TokenType != JsonTokenType.EndObject)
+                {
+                    var spec = contents.ValueTextEquals("Spec"u8);
+                    contents.Read();
+                    if (spec)
+                    {
+                        hasSpec = true;
+                        invalid |= HasInvalidSimilarityMembers(ref contents, [], ["Decisions", "OpenQuestions"]);
+                    }
+                    contents.Skip();
+                }
+                invalid |= !hasSpec;
+            }
         }
         links.Sort((left, right) => left.Version.CompareTo(right.Version));
         for (var index = 0; index < links.Count; index++)
             if (links[index].Version != index + 1 ||
-                links[index].SupersededByVersion != (index == links.Count - 1 ? (int?)null : index + 2)) return true;
-        return false;
+                links[index].SupersededByVersion != (index == links.Count - 1 ? (int?)null : index + 2)) invalid = true;
+        // Scalar-only legacy edits are allowed for a single-version brief. Only the
+        // authoritative text of a multi-version chain participates in this invariant.
+        if (brief && links.Count > 1)
+            while (latestContents.Read() && latestContents.TokenType != JsonTokenType.EndObject)
+            {
+                var text = latestContents.ValueTextEquals("Text"u8);
+                latestContents.Read();
+                if (text) latestText = latestContents.GetString();
+                latestContents.Skip();
+            }
+        return new(links.Count, invalid, latestText);
+    }
+
+    // The typed serializer pass already checked shapes. These probes retain only facts
+    // needed to choose Core reconstruction, which owns domain errors and their order.
+    private static bool HasNullSimilarityEntry(ref Utf8JsonReader reader)
+    {
+        if (reader.TokenType == JsonTokenType.Null) return false;
+        var hasNull = false;
+        while (reader.Read() && reader.TokenType != JsonTokenType.EndArray)
+        {
+            hasNull |= reader.TokenType == JsonTokenType.Null;
+            reader.Skip();
+        }
+        return hasNull;
+    }
+
+    private static bool HasInvalidSimilarityMembers(ref Utf8JsonReader reader,
+        string[] requiredText, string[] requiredCollections)
+    {
+        if (reader.TokenType == JsonTokenType.Null) return true;
+        var missing = new HashSet<string>(requiredText.Concat(requiredCollections), StringComparer.Ordinal);
+        var invalid = false;
+        while (reader.Read() && reader.TokenType != JsonTokenType.EndObject)
+        {
+            string? member = null;
+            foreach (var name in requiredText.Concat(requiredCollections))
+                if (reader.ValueTextEquals(name)) { member = name; break; }
+            reader.Read();
+            if (member is not null)
+            {
+                missing.Remove(member);
+                invalid |= requiredText.Contains(member)
+                    ? IsBlankSimilarityText(ref reader)
+                    : reader.TokenType == JsonTokenType.Null || HasNullSimilarityEntry(ref reader);
+            }
+            reader.Skip();
+        }
+        return invalid || missing.Count > 0;
+    }
+
+    private static bool HasInvalidSimilarityCorrections(ref Utf8JsonReader reader)
+    {
+        if (reader.TokenType == JsonTokenType.Null) return false;
+        var invalid = false;
+        while (reader.Read() && reader.TokenType != JsonTokenType.EndArray)
+            invalid |= HasInvalidSimilarityMembers(ref reader, ["SupersededCriterion", "Correction", "Actor"], []);
+        return invalid;
     }
 
     private static bool IsBlankSimilarityText(ref Utf8JsonReader reader)
@@ -289,9 +380,13 @@ public sealed partial class SqliteOrchestratorStateRepository
                         while (task.Read() && task.TokenType != JsonTokenType.EndObject)
                         {
                             var description = task.ValueTextEquals("Description"u8);
+                            var history = task.ValueTextEquals("DispatchHistory"u8) ||
+                                task.ValueTextEquals("RetryAdmissionHistory"u8) || task.ValueTextEquals("VerificationHistory"u8);
                             task.Read();
                             if (description && task.TokenType is JsonTokenType.String or JsonTokenType.Null)
                                 blankDescription = IsBlankSimilarityText(ref task);
+                            if (history && task.TokenType == JsonTokenType.StartArray)
+                                requiresReconstruction |= HasNullSimilarityEntry(ref task);
                             task.Skip();
                         }
                     requiresReconstruction |= blankDescription;

@@ -457,6 +457,28 @@ public sealed class BacklogSelectiveGoalReadTests(ITestOutputHelper output) : Cl
             ("SourceBacklogItemId", "\"\"", typeof(ArgumentException)),
             ("Tasks", "[{\"Id\":\"66666666666666666666666666666666\",\"Description\":\"   \"}]", typeof(ArgumentException)),
             ("Tasks", "[{\"Id\":\"66666666666666666666666666666666\",\"Description\":\"\"}]", typeof(ArgumentException)),
+            ("Tasks", """[{"Id":"66666666666666666666666666666666","Description":"valid","DispatchHistory":[null]}]""",
+                typeof(NullReferenceException)),
+            ("Tasks", """[{"Id":"66666666666666666666666666666666","Description":"valid","RetryAdmissionHistory":[null]}]""",
+                typeof(ArgumentNullException)),
+            ("Tasks", """[{"Id":"66666666666666666666666666666666","Description":"valid","VerificationHistory":[null]}]""",
+                typeof(NullReferenceException)),
+            ("EffectiveAcceptanceCriteriaCorrections", """[{"SupersededCriterion":"old","Correction":"","Actor":"operator"}]""",
+                typeof(ArgumentException)),
+            ("EffectiveAcceptanceCriteriaCorrections", """[{"SupersededCriterion":"old","Correction":"   ","Actor":"operator"}]""",
+                typeof(ArgumentException)),
+            ("LatestAcceptanceFailure", """{"FailedChecks":null}""", typeof(ArgumentNullException)),
+            ("LatestAcceptanceFailure", """{"FailedChecks":[null]}""", typeof(NullReferenceException)),
+            ("GateTestObligations", "[null]", typeof(NullReferenceException)),
+            ("RefinedSpecVersions", """[{"Version":1,"Spec":null,"BriefVersion":1}]""", typeof(NullReferenceException)),
+            ("RefinedSpecVersions", """
+                [{"Version":1,"Spec":{"BehavioralContract":"quartz","AcceptanceCriteria":["quartz"],
+                "Decisions":null,"OpenQuestions":[]},"BriefVersion":1}]
+                """, typeof(ArgumentNullException)),
+            ("RefinedSpec", """{"BehavioralContract":"quartz","AcceptanceCriteria":["quartz"],"Decisions":null,"OpenQuestions":[]}""",
+                typeof(ArgumentNullException)),
+            ("RefinedSpec", """{"BehavioralContract":"quartz","AcceptanceCriteria":["quartz"],"Decisions":[],"OpenQuestions":null}""",
+                typeof(ArgumentNullException)),
             ("BriefVersions", "[{\"Version\":2,\"Text\":\"quartz\",\"RecordedAt\":\"2026-09-01T00:00:00Z\"}]",
                 typeof(InvalidOperationException)),
             ("RefinedSpecVersions", """
@@ -477,7 +499,7 @@ public sealed class BacklogSelectiveGoalReadTests(ITestOutputHelper output) : Cl
     {
         using var fixture = await Fixture.Create(4, 256);
         if (archive) await fixture.MakeTerminalAndArchive(CompletedId);
-        if (member is "BriefVersions" or "RefinedSpecVersions")
+        if (member is "BriefVersions" or "RefinedSpecVersions" && value.Contains("\"Version\":2", StringComparison.Ordinal))
             fixture.ReplaceSnapshotMember(CompletedId, member,
                 value.Replace("\"Version\":2", "\"Version\":1", StringComparison.Ordinal), archive);
         string[] args = ["backlog-similar", "quartz"];
@@ -503,6 +525,68 @@ public sealed class BacklogSelectiveGoalReadTests(ITestOutputHelper output) : Cl
             Assert.Equal(argument.ParamName, Assert.IsAssignableFrom<ArgumentException>(actual).ParamName);
         Assert.Empty(expectedError);
         Assert.Empty(actualError); // Reconstruction failures must escape hot quarantine too.
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Similarity_BriefObjective_PreservesHydrationFailure(bool archive)
+    {
+        using var fixture = await Fixture.Create(4, 256);
+        if (archive) await fixture.MakeTerminalAndArchive(CompletedId);
+        // Deliberately unordered: authority is the highest version, not array order.
+        const string versions = """
+            [{"Version":2,"Text":"Historical quartz match\nquartz body","SupersededByVersion":null},
+             {"Version":1,"Text":"original quartz","SupersededByVersion":2}]
+            """;
+        fixture.ReplaceSnapshotMember(CompletedId, "BriefVersions", versions, archive);
+        string[] args = ["backlog-similar", "quartz"];
+        var before = Run(args, fixture.Workspace, false);
+        Assert.Contains($"kind=goal id={CompletedId[..8]}", before.Text);
+        Assert.Equal(Run(args, fixture.Workspace, true).Text, before.Text);
+        Assert.Equal(1, before.Count("similarity-projected"));
+        Assert.Empty(before.Requested);
+        Assert.Empty(before.Deserialized);
+
+        fixture.ReplaceSnapshotMember(CompletedId, "BriefVersions",
+            versions.Replace("quartz body", "divergent body", StringComparison.Ordinal), archive);
+        AssertSimilarityDomainFailure(fixture, args, typeof(InvalidOperationException));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Similarity_InvalidMembers_PreservesFailureOrder(bool archive)
+    {
+        using var fixture = await Fixture.Create(4, 256);
+        if (archive) await fixture.MakeTerminalAndArchive(CompletedId);
+        string[] args = ["backlog-similar", "quartz"];
+        Assert.Contains($"kind=goal id={CompletedId[..8]}", Run(args, fixture.Workspace, false).Text);
+        fixture.ReplaceSnapshotMember(CompletedId, "Objective", "\"\"", archive);
+        fixture.ReplaceSnapshotMember(CompletedId, "Tasks", "[]", archive);
+        AssertSimilarityDomainFailure(fixture, args, typeof(ArgumentException), "objective");
+    }
+
+    private static void AssertSimilarityDomainFailure(Fixture fixture, string[] args, Type exceptionType,
+        string? parameter = null)
+    {
+        Exception? expected = null, actual = null;
+        var expectedError = AsyncLocalConsoleRouter.CaptureError(() =>
+            expected = Record.Exception(() => Run(args, fixture.Workspace, true)));
+        var actualError = AsyncLocalConsoleRouter.CaptureError(() =>
+            actual = Record.Exception(() => Run(args, fixture.Workspace, false)));
+        Assert.NotNull(expected);
+        Assert.NotNull(actual);
+        Assert.Equal(exceptionType, expected.GetType());
+        Assert.Equal(expected.GetType(), actual.GetType());
+        Assert.Equal(expected.Message, actual.Message);
+        if (expected is ArgumentException argument)
+        {
+            Assert.Equal(argument.ParamName, Assert.IsAssignableFrom<ArgumentException>(actual).ParamName);
+            if (parameter is not null) Assert.Equal(parameter, argument.ParamName);
+        }
+        Assert.Empty(expectedError);
+        Assert.Empty(actualError);
     }
 
     [Theory]
