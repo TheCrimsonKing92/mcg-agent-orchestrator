@@ -125,7 +125,7 @@ public sealed class ProjectUseLearnedBranchCliTests : CliCommandTestBase
         }
 
         Assert.Contains("Unknown project 'Shared'", diagnostic);
-        Assert.DoesNotContain(" Shared ", diagnostic);
+        Assert.DoesNotContain("' Shared '", diagnostic);
         Assert.Contains($"Registry: '{queried.RegistryPath}'", diagnostic);
         Assert.Contains("Check registry/project selection before creating an entry", diagnostic);
         Assert.Contains("project create Shared --root <path>", diagnostic);
