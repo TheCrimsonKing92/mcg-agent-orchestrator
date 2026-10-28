@@ -350,7 +350,7 @@ internal sealed partial class ConductorDriver
             $"finding_id={finding.StableId}; candidate_sha={receipt.CandidateSha}; receipt_id={receipt.ReceiptId}");
     }
 
-    private bool TryResolveFindingEvidenceCoverage(
+    internal static bool TryResolveFindingEvidenceCoverage(
         TaskSpec requestingTask,
         FindingEvidenceRequest normalizedRequest,
         string candidateSha,

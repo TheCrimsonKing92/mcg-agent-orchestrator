@@ -152,7 +152,8 @@ public sealed record TaskSnapshot(
     bool LatestRetryInherited = false,
     DateTimeOffset? SubscriptionDeferralReleasedAt = null,
     CompletionBuildEvidenceOperation? CompletionBuildEvidence = null,
-    IReadOnlyList<WorkerBuildInvocation>? WorkerBuildInvocations = null);
+    IReadOnlyList<WorkerBuildInvocation>? WorkerBuildInvocations = null,
+    FindingEvidenceReviewContinuation? FindingEvidenceReviewContinuation = null);
 
 public sealed record TaskExecutionSnapshot(
     string AgentId,
@@ -272,7 +273,9 @@ public sealed record TaskDispatchSnapshot(
     IReadOnlyList<string>? SelectedSkills = null,
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     WorkerBuildScopeIdentity? WorkerBuildScope = null,
-    int WorkerBuildProtocolVersion = 0);
+    int WorkerBuildProtocolVersion = 0,
+    FindingEvidenceReviewContext? FindingEvidenceReviewContext = null,
+    FindingEvidenceReviewContinuation? FindingEvidenceReviewContinuation = null);
 
 public sealed record TaskProcessSnapshot(
     int ProcessId,

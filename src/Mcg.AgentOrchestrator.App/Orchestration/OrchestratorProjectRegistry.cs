@@ -186,7 +186,7 @@ public sealed class OrchestratorProjectRegistry
         var entry = file.Projects.FirstOrDefault(project =>
             project.Name.Equals(normalizedName, StringComparison.OrdinalIgnoreCase));
         if (entry is null)
-            throw new ArgumentException($"Unknown project '{normalizedName}'. Create it with: project create {normalizedName} --root <path>");
+            throw new ArgumentException(UnknownProjectMessage(normalizedName));
 
         entry.UseLearnedIntegrationBranch = value ? true : null;
         SaveFile(file);
@@ -231,11 +231,15 @@ public sealed class OrchestratorProjectRegistry
             project.Name.Equals(normalizedName, StringComparison.OrdinalIgnoreCase));
         if (match is null)
         {
-            throw new ArgumentException($"Unknown project '{normalizedName}'. Create it with: project create {normalizedName} --root <path>");
+            throw new ArgumentException(UnknownProjectMessage(normalizedName));
         }
 
         return match;
     }
+
+    private string UnknownProjectMessage(string normalizedName) =>
+        $"Unknown project '{normalizedName}'. Registry: '{RegistryPath}'. " +
+        $"Check registry/project selection before creating an entry. Create it with: project create {normalizedName} --root <path>";
 
     private static string ResolveStoredBranch(ProjectEntry entry)
     {

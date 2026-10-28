@@ -7,8 +7,60 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal static class FindingEvidenceTrxCoverage
 {
+    internal static bool HasPassedSelections(FindingEvidenceArmReceipt arm, FindingEvidenceRequest request) =>
+        HasExecutedSelections(arm, request, requirePassed: true);
+
+    internal static bool HasRedSelections(FindingEvidenceArmReceipt arm, FindingEvidenceRequest request) =>
+        HasExecutedSelections(arm, request, requirePassed: false);
+
+    private static bool HasExecutedSelections(FindingEvidenceArmReceipt arm, FindingEvidenceRequest request, bool requirePassed)
+    {
+        var selectors = FindingEvidenceRoundPlanner.ExpandSelections(request.Selections);
+        if (selectors.Count == 0 || arm.TestResultPaths is not { Count: > 0 } paths) return false;
+        try
+        {
+            var identities = new HashSet<string>(StringComparer.Ordinal);
+            var classes = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var path in paths)
+            {
+                var document = XDocument.Load(path);
+                var definitions = document.Descendants().Where(item => item.Name.LocalName == "UnitTest")
+                    .ToDictionary(item => (string?)item.Attribute("id") ?? "", StringComparer.Ordinal);
+                foreach (var result in document.Descendants().Where(item => item.Name.LocalName == "UnitTestResult"))
+                {
+                    definitions.TryGetValue((string?)result.Attribute("testId") ?? "", out var definition);
+                    var identity = AcceptanceTrxTestIdentityResolver.Resolve(result, definition);
+                    var testClass = definition?.Descendants().FirstOrDefault(item => item.Name.LocalName == "TestMethod")
+                        ?.Attribute("className")?.Value;
+                    if (identity is not null) identities.Add(identity);
+                    if (testClass is not null) classes.Add(testClass);
+                }
+            }
+            if (requirePassed
+                ? !AcceptanceCohortGateEvidence.HasContentBoundGreenTrxEvidence(paths, arm.ReceiptArtifacts,
+                    arm.ExecutedTestCount ?? 0, classes.ToArray())
+                : !HasContentBoundRedTrxCoverage(arm, classes.ToArray())) return false;
+            foreach (var selection in selectors)
+            {
+                if (!FindingEvidenceFilterSyntax.TryGetExpandableClass(selection.TestClass, out var token, out _))
+                    return false; // Unknown coverage never grants continuation authority.
+                var matching = identities.Where(id => id == token || id.StartsWith(token + ".", StringComparison.Ordinal) ||
+                    id.EndsWith("." + token, StringComparison.Ordinal) || id.Contains("." + token + ".", StringComparison.Ordinal)).ToArray();
+                if (matching.Length == 0 || !HasExecutedIdentities(arm, matching, requirePassed)) return false;
+            }
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Xml.XmlException or ArgumentException)
+        {
+            return false;
+        }
+    }
+
     // The arm's content hashes, rather than a class-level green summary, bind this proof.
-    internal static bool HasPassedIdentities(FindingEvidenceArmReceipt arm, IReadOnlyList<string> identities)
+    internal static bool HasPassedIdentities(FindingEvidenceArmReceipt arm, IReadOnlyList<string> identities) =>
+        HasExecutedIdentities(arm, identities, requirePassed: true);
+
+    private static bool HasExecutedIdentities(FindingEvidenceArmReceipt arm, IReadOnlyList<string> identities, bool requirePassed)
     {
         if (identities.Count == 0 || arm.ExecutedTestCount is not > 0 ||
             arm.TestResultPaths is not { Count: > 0 } paths ||
@@ -45,7 +97,8 @@ internal static class FindingEvidenceTrxCoverage
                 }
             }
             return executed == arm.ExecutedTestCount && identities.All(identity =>
-                outcomes.TryGetValue(identity, out var values) && values.Count > 0 && values.All(value => value == "Passed"));
+                outcomes.TryGetValue(identity, out var values) && values.Count > 0 &&
+                values.All(value => value == "Passed" || !requirePassed && value == "Failed"));
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Xml.XmlException or
                                    ArgumentException or NotSupportedException or OverflowException)
