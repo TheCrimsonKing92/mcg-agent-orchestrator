@@ -23,11 +23,10 @@ internal static class CliBacklogQueryCommand
         ref WorkerProfileCatalog workerProfiles)
     {
         CliCommandHelp.ThrowIfInvalidFlags(args);
-        var goalIds = stateQueries.ListGoalMetadataAsync().GetAwaiter().GetResult()
-            .Select(summary => new GoalId(summary.Id)).ToArray();
-        var kernel = stateQueries.LoadGoalsAsync(goalIds).GetAwaiter().GetResult();
+        var kernel = new AgentOrchestratorKernel();
         Goal? commandGoal = null;
         CliReadOnlyQueryExecutor.Execute(args, kernel, workspace, providers, channel,
-            ref agents, ref workerProfiles, ref commandGoal);
+            ref agents, ref workerProfiles, ref commandGoal,
+            backlogReads: new BacklogQueryReadContext(stateQueries));
     }
 }

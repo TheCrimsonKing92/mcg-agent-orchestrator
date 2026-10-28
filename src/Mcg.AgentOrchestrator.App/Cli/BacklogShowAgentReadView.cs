@@ -24,7 +24,7 @@ internal static class BacklogShowAgentReadView
     {
         var claimStore = new SourceBacklogClaimStore(context.Workspace.SqliteStatePath);
         var claim = CliCommandHandlers.ResolveSourceBacklogClaimForRead(context, item.Id, out var ambiguity);
-        var linkedGoals = context.Kernel.Goals
+        var linkedGoals = CliCommandHandlers.BacklogReadGoalsForItem(context, item.Id)
             .Where(goal => string.Equals(goal.SourceBacklogItemId, item.Id, StringComparison.Ordinal))
             .OrderBy(goal => goal.Id.Value, StringComparer.Ordinal)
             .Select(goal => new LinkedGoal(goal.Id.Value, goal.Status.ToString(),

@@ -103,7 +103,8 @@ public sealed class GoalSnapshotArchive(JsonSerializerOptions serializerOptions)
     }
 
     public async Task<GoalSnapshot?> HydrateAsync(
-        SqliteConnection connection, GoalSnapshot? snapshot, CancellationToken cancellationToken = default)
+        SqliteConnection connection, GoalSnapshot? snapshot, CancellationToken cancellationToken = default,
+        Action<GoalSnapshotReadObservation>? readObserver = null)
     {
         if (snapshot is not { IsMetadataOnly: true })
             return snapshot;
@@ -114,7 +115,12 @@ public sealed class GoalSnapshotArchive(JsonSerializerOptions serializerOptions)
         try
         {
             var json = GoalSnapshotArchiveCodec.Decode(await command.ExecuteScalarAsync(cancellationToken));
-            return json is null ? snapshot : JsonSerializer.Deserialize<GoalSnapshot>(json, serializerOptions);
+            if (json is null) return snapshot;
+            readObserver?.Invoke(new("archive-attempt", snapshot.Id, json.Length));
+            var hydrated = JsonSerializer.Deserialize<GoalSnapshot>(json, serializerOptions);
+            if (hydrated is not null)
+                readObserver?.Invoke(new("archive-deserialized", snapshot.Id, json.Length));
+            return hydrated;
         }
         catch (SqliteException ex) when (ex.SqliteErrorCode == 1 &&
             ex.Message.Contains("no such table: goal_snapshot_archive", StringComparison.OrdinalIgnoreCase))

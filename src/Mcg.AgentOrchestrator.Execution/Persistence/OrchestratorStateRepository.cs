@@ -17,6 +17,16 @@ public interface IOrchestratorStateQueries
 
     Task<IReadOnlyList<GoalSummary>> ListGoalMetadataAsync(CancellationToken cancellationToken = default);
 
+    /// <summary>Persisted claim owners and all indexed legacy links for the selected backlog items.</summary>
+    Task<IReadOnlyCollection<GoalId>> ListBacklogRelatedGoalIdsAsync(
+        IReadOnlyCollection<string> backlogItemIds, CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException("This repository does not support backlog relationship queries.");
+
+    /// <summary>Completed-goal scorer inputs in the selected loader's corpus order, including archives.</summary>
+    Task<IReadOnlyList<SimilarityDocument>> ListCompletedGoalSimilarityDocumentsAsync(
+        CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException("This repository does not support goal similarity projections.");
+
     /// <summary>Queue ordering facts only; never hydrates unrelated goal snapshots.</summary>
     Task<IReadOnlyList<AcceptanceQueueFact>> ListAcceptanceQueueFactsAsync(CancellationToken cancellationToken = default) =>
         Task.FromResult<IReadOnlyList<AcceptanceQueueFact>>([]);

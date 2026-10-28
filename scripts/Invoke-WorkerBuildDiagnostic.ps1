@@ -1,4 +1,7 @@
 param(
+    # Optional experiment observation seam. Ordinary diagnostic callers are unchanged.
+    [hashtable]$CompilerCapObservation,
+
     [ValidateRange(1, 3600)]
     [int]$TimeoutSeconds = 900,
 
@@ -8,6 +11,11 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+
+if ($null -ne $CompilerCapObservation) {
+    Import-Module (Join-Path $PSScriptRoot 'CompilerCapExperiment.psm1')
+    return Invoke-CapNativePhase @CompilerCapObservation -Arguments $Arguments -TimeoutSeconds $TimeoutSeconds
+}
 
 $normalizedArguments = [System.Collections.Generic.List[string]]::new()
 for ($argumentIndex = 0; $argumentIndex -lt $Arguments.Count; $argumentIndex++) {

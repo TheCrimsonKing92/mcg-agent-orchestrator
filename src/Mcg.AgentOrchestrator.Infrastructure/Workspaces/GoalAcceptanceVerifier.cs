@@ -899,7 +899,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var failedCheck = checks.FirstOrDefault(check => !check.Advisory && !check.Passed);
         var partialCoverage = checks.FirstOrDefault(check => check.Name == AcceptanceLaneEarlyStop.ReceiptName);
         var artifactsPath = checks.LastOrDefault(check => !string.IsNullOrWhiteSpace(check.ArtifactsPath))?.ArtifactsPath;
-        var testResultPaths = CollectTestResultPaths(checks);
+        var testResultPaths = AcceptanceVerificationResult.CollectTestResultPaths(checks);
 
         var verification = new AcceptanceVerificationResult(
             Passed: failedCheck is null,
@@ -910,7 +910,15 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             Retried: retried,
             ArtifactsPath: artifactsPath,
             Checks: checks,
-            TestResultPaths: testResultPaths);
+            TestResultPaths: testResultPaths)
+        {
+            AttemptId = executionOwner.Identity.AttemptId,
+            RequiredCrosswalkChecks = effectiveChecks.Where(check => !check.Advisory &&
+                check.Type.Equals("crosswalk-test", StringComparison.OrdinalIgnoreCase)).Select(check => check.Name).ToArray(),
+            RequiredTestCheckNames = effectiveChecks.Where(check => !check.Advisory &&
+                (check.Type.Equals("crosswalk-test", StringComparison.OrdinalIgnoreCase) ||
+                 check.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase))).Select(check => check.Name).ToArray()
+        };
         if (verification.Passed)
         {
             AcceptanceLaneDurationStore.Flush();
@@ -1512,7 +1520,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         if (cacheContext?.ShouldRerunWithinAttempt(check, fresh.Result.CompletionDecision) == true)
         {
             var original = fresh.Result;
-            var originalInvocationId = BuildInvocationIdentity(check, original.TestResultRunOrdinal, currentAttemptId);
+            var originalInvocationId = AcceptanceInvocationEvidenceProvenance.BuildInvocationIdentity(check, original.TestResultRunOrdinal, currentAttemptId);
             AcceptanceRetainedDiagnostic? retainedDiagnostic = null;
             try
             {
@@ -1539,7 +1547,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             }
 
             var retryInvocation = AllocateTestTelemetryInvocation(check);
-            var retryInvocationId = BuildInvocationIdentity(check, retryInvocation.Ordinal, currentAttemptId);
+            var retryInvocationId = AcceptanceInvocationEvidenceProvenance.BuildInvocationIdentity(check, retryInvocation.Ordinal, currentAttemptId);
             cacheContext.RecordWithinAttemptRetry(
                 check,
                 original,
@@ -1571,7 +1579,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             fresh.Result.CompletionDecision?.FailedPredicate == AcceptanceShardCompletionPredicates.FailingTrx)
         {
             var finalResult = await AcceptanceLaneTestFailureRerun.ForAttempt(cacheContext, worktreePath).RunAsync(
-                check, fresh.Result, RunNarrowedCheckAsync, result => BuildInvocationIdentity(check, result.TestResultRunOrdinal, currentAttemptId),
+                check, fresh.Result, RunNarrowedCheckAsync, result => AcceptanceInvocationEvidenceProvenance.BuildInvocationIdentity(check, result.TestResultRunOrdinal, currentAttemptId),
                 cacheContext.SharedApparatusInvalidation is not null, cancellationToken).ConfigureAwait(false);
             fresh = (finalResult, fresh.Retried || finalResult.LaneRerun is not null);
         }
@@ -1628,7 +1636,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 _executionContext?.ResolveCancellationProbe(boundary: false), cancellationToken);
         var result = await (_executionContext?.TrackStarted(invocationTask) ?? invocationTask).ConfigureAwait(false);
         ThrowIfGateCancellationRequested(cancellationToken);
-        return result;
+        return AcceptanceInvocationEvidenceProvenance.Bind(result,
+            (_executionContext as AcceptanceAttemptExecutionOwner)?.Identity.AttemptId, invocation.Ordinal);
     }
 
     internal Task<(AcceptanceCheckResult Result, bool Retried)> RunInvocationForOwnerTestsAsync(
@@ -1641,12 +1650,6 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             check, worktreePath, null, null, null, null, cancellationToken,
             invocationOverride: invocation);
 
-    internal static string BuildInvocationIdentity(
-        AcceptanceManifestCheck check,
-        int ordinal,
-        string? attemptId) =>
-        $"{attemptId ?? "manual"}:{AcceptanceArtifactFileNames.Slug(check.Name)}:{ordinal.ToString(System.Globalization.CultureInfo.InvariantCulture)}";
-
     private static AcceptanceShardCompletionDecision InferPartitionCompletionDecision(AcceptanceCheckResult result) =>
         AcceptanceShardCompletionAdjudicator.InferPartition(result, IsCaptureLimitFailureName(result.Name));
 
@@ -1658,14 +1661,6 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             throw new OperationCanceledException("acceptance gate attempt cancelled by goal disposition");
         }
     }
-
-    private static IReadOnlyList<string> CollectTestResultPaths(IEnumerable<AcceptanceCheckResult> checks) =>
-        checks
-            .SelectMany(check => check.CrosswalkDiagnostics is not null
-                ? check.NormalizedTestResultPaths ?? [] : check.TestResultPaths ?? [])
-            .Where(path => !string.IsNullOrWhiteSpace(path))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToArray();
 
     internal static bool TryBuildFocusedEvidenceChecks(
         string request,

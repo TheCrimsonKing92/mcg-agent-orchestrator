@@ -236,7 +236,8 @@ internal sealed partial class ConductorDriver
                     clock.Stop();
                     var resultPaths = NormalizeCohortTestResultPaths(verification.TestResultPaths);
                     var outcome = MergeTrainTimeoutAttribution.ResolveGateOutcome(
-                        ClassifyCohortVerificationResult(verification), resultPaths, workspace.Path, members);
+                        AcceptanceCohortVerificationClassifier.ClassifyCohortVerificationResultWithPaths(
+                            verification, allowNormalized: false).Classification, resultPaths, workspace.Path, members);
                     var receiptId = $"merge-train-receipt-{identity.Value[(MergeTrainIdentity.Version.Length + 1)..]}";
                     receipt = _mergeTrainAcceptanceStore.SaveGateReceipt(new MergeTrainReceipt(
                         receiptId,
