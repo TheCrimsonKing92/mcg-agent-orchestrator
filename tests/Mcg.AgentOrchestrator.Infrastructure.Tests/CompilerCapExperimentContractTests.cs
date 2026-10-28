@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -284,7 +285,12 @@ public sealed class CompilerCapExperimentContractTests
             Assert.Equal(invocation["Arguments"]!.ToJsonString(), receipt["Arguments"]!.ToJsonString());
             Assert.Equal(invocation["Environment"]!["DOTNET_CLI_HOME"]!.GetValue<string>(), receipt["CliHome"]!.GetValue<string>());
             Assert.True(string.IsNullOrEmpty(receipt["ProcessorCount"]?.GetValue<string>()));
-            Assert.Equal(phase["Process"]!.ToJsonString(), receipt["Process"]!.ToJsonString());
+            // Identity is a set of values; JSON object property order is not significant.
+            Assert.Equal(receipt["Process"]!["Pid"]!.GetValue<int>(), phase["Process"]!["Pid"]!.GetValue<int>());
+            Assert.Equal(DateTimeOffset.Parse(receipt["Process"]!["StartUtc"]!.GetValue<string>(), CultureInfo.InvariantCulture),
+                DateTimeOffset.Parse(phase["Process"]!["StartUtc"]!.GetValue<string>(), CultureInfo.InvariantCulture));
+            Assert.Equal(receipt["Process"]!["Image"]!.GetValue<string>(), phase["Process"]!["Image"]!.GetValue<string>());
+            Assert.Equal(WorkerShell.Executable, phase["Guardian"]!["Image"]!.GetValue<string>(), ignoreCase: true);
             var request = JsonNode.Parse(File.ReadAllText(Path.Combine(root, "request.json")))!;
             Assert.Equal(WorkerShell.Executable, request["Executable"]!.GetValue<string>(), ignoreCase: true);
             Assert.Equal(invocation["Arguments"]!.AsArray().Select(a => a!.GetValue<string>()),

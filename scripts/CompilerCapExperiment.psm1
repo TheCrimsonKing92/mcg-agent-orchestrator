@@ -402,6 +402,35 @@ function Read-CapBuildEvents {
         CompilerExecutions = $starts.Count; Diagnostics = $diagnostics.ToArray(); CompilerMessages = $commands.ToArray(); Tasks = $starts }
 }
 
+function Get-CapProcessIdentity {
+    param([Diagnostics.Process]$Process)
+    if (-not ('McgCapProcessImage' -as [type])) {
+        Add-Type -TypeDefinition @'
+using System;
+using System.ComponentModel;
+using System.Diagnostics;
+using System.Runtime.InteropServices;
+using System.Text;
+using Microsoft.Win32.SafeHandles;
+public static class McgCapProcessImage {
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern bool QueryFullProcessImageName(SafeProcessHandle process, uint flags, StringBuilder image, ref uint size);
+    public static string Read(Process process) {
+        var image = new StringBuilder(32768);
+        uint size = (uint)image.Capacity;
+        if (!QueryFullProcessImageName(process.SafeHandle, 0, image, ref size))
+            throw new Win32Exception(Marshal.GetLastWin32Error(), "Owned process image query failed.");
+        return image.ToString();
+    }
+}
+'@
+    }
+    # MainModule can be unavailable before the child initializes its module list.
+    # Query the retained handle, without reopening a potentially recycled PID or
+    # substituting the requested executable for the actual process image.
+    return [ordered]@{ Pid = $Process.Id; StartUtc = $Process.StartTime.ToUniversalTime().ToString('O'); Image = [McgCapProcessImage]::Read($Process) }
+}
+
 function Invoke-CapNativePhase {
     param([string]$Executable, [string[]]$Arguments, [string]$Root, [string]$EvidenceRoot, [int]$TimeoutSeconds, [string]$Compiler,
         [System.Collections.IDictionary]$Environment, [System.Collections.IDictionary]$ProcessFixture)
@@ -451,6 +480,10 @@ param([string]$RequestFile)
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $request = Get-Content -LiteralPath $RequestFile -Raw | ConvertFrom-Json -AsHashtable
+Import-Module $request.Module
+# Initialize native support outside the measured build lifetime.
+$self = [Diagnostics.Process]::GetCurrentProcess()
+try { $null = Get-CapProcessIdentity $self } finally { $self.Dispose() }
 $gateClock = [Diagnostics.Stopwatch]::StartNew()
 while (-not [IO.File]::Exists($request.Gate)) {
     if ($gateClock.Elapsed.TotalSeconds -gt 30) { throw 'owned-launch-gate-not-released' }
@@ -473,7 +506,7 @@ try {
     $clock = [Diagnostics.Stopwatch]::StartNew()
     if (-not $process.Start()) { throw 'build-process-start-failed' }
     $process.StandardInput.Close()
-    $result.Process = @{ Pid = $process.Id; StartUtc = $process.StartTime.ToUniversalTime().ToString('O'); Image = $process.MainModule.FileName }
+    $result.Process = Get-CapProcessIdentity $process
     $stdoutFile = [IO.FileStream]::new($request.Stdout, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::Read, 1, $true)
     $stderrFile = [IO.FileStream]::new($request.Stderr, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::Read, 1, $true)
     $stdout = $process.StandardOutput.BaseStream.CopyToAsync($stdoutFile)
@@ -506,7 +539,7 @@ finally {
 }
 '@
     [IO.File]::WriteAllText($guardianPath, $guardian)
-    [IO.File]::WriteAllText($requestPath, (@{ Executable = $Executable; Arguments = $Arguments; Root = $Root; TimeoutSeconds = $TimeoutSeconds;
+    [IO.File]::WriteAllText($requestPath, (@{ Executable = $Executable; Arguments = $Arguments; Root = $Root; TimeoutSeconds = $TimeoutSeconds; Module = $PSCommandPath;
         Gate = $gatePath; Completion = $completionPath; FixtureDeadlineEvent = $deadlineEventName;
         Stdout = (Join-Path $EvidenceRoot 'build.stdout.log'); Stderr = (Join-Path $EvidenceRoot 'build.stderr.log') } | ConvertTo-Json -Depth 8))
     $shell = (Get-Process -Id $PID).Path
@@ -537,6 +570,7 @@ finally {
     $measuredElapsed = $null
     $buildIdentity = $null
     $childOutputComplete = $false
+    $started = $false
     $hostFacts = [ordered]@{ Hardware = $null; LogicalProcessors = [Environment]::ProcessorCount; OS = [Environment]::OSVersion.VersionString;
         Priority = $null; Affinity = $null; DefaultCpuSet = $null; PowerPlan = $null; Throttling = $null }
     $reason = ''
@@ -547,12 +581,15 @@ finally {
             $hostFacts.LogicalProcessors = [int](($cpu | Measure-Object NumberOfLogicalProcessors -Sum).Sum)
             try { $hostFacts.PowerPlan = Invoke-CapReadProcess 'powercfg.exe' @('/getactivescheme') $Root } catch { }
         }
+        $self = [Diagnostics.Process]::GetCurrentProcess()
+        try { $null = Get-CapProcessIdentity $self } finally { $self.Dispose() }
         $clock.Start()
         if (-not $process.Start()) { throw 'phase-start-failed' }
-        $identity = [ordered]@{ Pid = $process.Id; StartUtc = $process.StartTime.ToUniversalTime().ToString('O'); Image = $process.MainModule.FileName }
+        $started = $true
         # Assignment is fail-closed. If it fails, finally kills the exact retained process handle.
         $job.Assign($process)
         if ($job.IsEmpty) { throw 'owned-job-empty-after-assignment' }
+        $identity = Get-CapProcessIdentity $process
         [IO.File]::WriteAllText($gatePath, 'job-assigned')
         $process.StandardInput.Close()
         $stdout = $process.StandardOutput.ReadToEndAsync()
@@ -614,7 +651,7 @@ finally {
     finally {
         try {
             $cleanup = $job.TerminateAndWait(5000)
-            if ($null -ne $identity -and -not $process.HasExited) { $process.Kill($true); $cleanup = $process.WaitForExit(5000) -and $cleanup }
+            if ($started -and -not $process.HasExited) { $process.Kill($true); $cleanup = $process.WaitForExit(5000) -and $cleanup }
         } catch { $cleanup = $false }
         $clock.Stop()
         if ($null -ne $stdout -and $null -ne $stderr) {
@@ -813,4 +850,4 @@ function Invoke-CompilerCapExperiment {
     return $report
 }
 
-Export-ModuleMember -Function Invoke-CompilerCapExperiment, Invoke-CapNativePhase
+Export-ModuleMember -Function Invoke-CompilerCapExperiment, Invoke-CapNativePhase, Get-CapProcessIdentity
