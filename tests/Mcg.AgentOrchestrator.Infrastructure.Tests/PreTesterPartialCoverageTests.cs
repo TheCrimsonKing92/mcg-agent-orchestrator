@@ -7,7 +7,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 using static ConductorDriverTests;
 
 // Parallel safe: private filesystem roots, in-memory kernel, controlled attempts; no real processes.
-public sealed class ConductorDriverTestsPreTesterPartialCoverage
+public sealed class PreTesterPartialCoverageTests
 {
     private const string CandidateSha = "bbb2222";
     private const string Project = "Infrastructure.Tests";
