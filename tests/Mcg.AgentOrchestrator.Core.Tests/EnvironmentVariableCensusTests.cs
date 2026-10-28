@@ -1,5 +1,51 @@
 public sealed class EnvironmentVariableCensusTests
 {
+    // Parallel-safe: synthetic controls use only local strings and no filesystem or process state.
+    [Xunit.Fact]
+    public void FindUnlisted_MissingName_ReportsNameDespiteOtherMentions()
+    {
+        const string source = """const string Variable = "MCG_SYNTHETIC_NAME";""";
+        const string table = """
+            MCG_SYNTHETIC_NAME is mentioned here, but has no census row.
+            | Name | Reading path:line | Category | Default | Setter | Target home |
+            | --- | --- | --- | --- | --- | --- |
+            | `MCG_OTHER_NAME` | synthetic.cs:1 | setting | MCG_SYNTHETIC_NAME | tests | config |
+            """;
+
+        var missing = EnvironmentVariableCensusScanner.FindUnlisted([source], table);
+
+        Xunit.Assert.Equal(new[] { "MCG_SYNTHETIC_NAME" }, missing);
+    }
+
+    [Xunit.Fact]
+    public void FindUnlisted_ListedName_ReportsNothing()
+    {
+        const string source = """const string Variable = "MCG_SYNTHETIC_NAME";""";
+        const string table = """
+            | Name | Reading path:line | Category | Default | Setter | Target home |
+            | --- | --- | --- | --- | --- | --- |
+            | `MCG_SYNTHETIC_NAME` | synthetic.cs:1 | setting | absent | tests | config |
+            """;
+
+        var missing = EnvironmentVariableCensusScanner.FindUnlisted([source], table);
+
+        Xunit.Assert.Empty(missing);
+    }
+
+    [Xunit.Fact]
+    public void FindUnlisted_RepeatedMissingNames_ReturnsDistinctOrdinalNames()
+    {
+        string[] sources =
+        [
+            """const string Z = "MCG_Z_MISSING"; const string A = "MCG_A_MISSING";""",
+            """const string Duplicate = "MCG_Z_MISSING";"""
+        ];
+
+        var missing = EnvironmentVariableCensusScanner.FindUnlisted(sources, string.Empty);
+
+        Xunit.Assert.Equal(new[] { "MCG_A_MISSING", "MCG_Z_MISSING" }, missing);
+    }
+
     // Parallel-safe: reads the explicit candidate root without modifying files or process state.
     [Xunit.Fact]
     public void RepositorySources_AllNames_HaveCompleteUniqueCensusRows()
