@@ -245,6 +245,43 @@ public sealed class ToolchainDetectionTests
         Xunit.Assert.DoesNotContain("Invoke-IsolatedDotnet", brokers, StringComparison.Ordinal);
     }
 
+    [Xunit.Theory]
+    [Xunit.InlineData("package.json", AgentRole.Developer, "npm test (or package.json test script)")]
+    [Xunit.InlineData("pyproject.toml", AgentRole.Developer, "python -m pytest (or project test command)")]
+    [Xunit.InlineData("", AgentRole.Developer, "run the project's test suite")]
+    [Xunit.InlineData("go.mod", AgentRole.Planner, "go test ./...")]
+    [Xunit.InlineData("go.mod", AgentRole.Researcher, "go test ./...")]
+    public void WorkflowBrokers_OtherStacksAndRoles_PreserveChecklistGuidance(
+        string marker, AgentRole role, string command)
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            if (marker.Length > 0)
+                File.WriteAllText(Path.Combine(root, marker), string.Empty);
+            var kernel = new AgentOrchestratorKernel();
+            var task = new TaskSpec(TaskId.New(), "Inspect broker instructions.", role);
+            var goal = kernel.CreateGoal("Maintain broker guidance.", [task]);
+            kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+            var context = WorkerContextArtifacts.Write(goal, task, root);
+            var broker = File.ReadAllText(Path.Combine(context, "workflow-brokers.md"));
+
+            // These existing checklist dependencies stay outside the Go Developer repair.
+            Xunit.Assert.Contains("- build-test-selection", broker, StringComparison.Ordinal);
+            Xunit.Assert.Contains($"  Suggested command shape: `{command}`", broker, StringComparison.Ordinal);
+            Xunit.Assert.Contains("- static-policy-checks", broker, StringComparison.Ordinal);
+            Xunit.Assert.Contains("  Artifact: deterministic-verification.md", broker, StringComparison.Ordinal);
+            Xunit.Assert.Contains("- acceptance-evidence", broker, StringComparison.Ordinal);
+            Xunit.Assert.Contains("  Artifact: deterministic-verification.md plus current-task.md", broker, StringComparison.Ordinal);
+            Xunit.Assert.DoesNotContain("Local command-result reporting", broker, StringComparison.Ordinal);
+            Xunit.Assert.DoesNotContain("- build-only", broker, StringComparison.Ordinal);
+        }
+        finally
+        {
+            SharedTestSupport.RemoveTempDirectory(root);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "WorkerContextArtifacts_deterministic_verification_requires_worker_build_check")]
     public void WorkerContextArtifactsDeterministicVerificationRequiresWorkerBuildCheck()
     {

@@ -127,7 +127,42 @@ public sealed class WorkerWorkflowBrokerRoleDeliveryTests : WorkerDispatchTestSu
         Assert.Contains("diff-summary", actions.Keys);
         Assert.DoesNotContain("Invoke-WorkerBuildCheck", broker, StringComparison.Ordinal);
         Assert.DoesNotContain("Invoke-IsolatedDotnet", broker, StringComparison.Ordinal);
+        Assert.DoesNotContain("deterministic-verification.md", broker, StringComparison.Ordinal);
+        Assert.Contains("Run `go build ./...`, `go vet ./...` and `go test ./...`",
+            actions["build-test-selection"], StringComparison.Ordinal);
+        Assert.Contains("current-task.md", RequiredArtifacts(actions["build-test-selection"]));
+        Assert.Contains("Current recommendation:", actions["build-test-selection"], StringComparison.Ordinal);
+        Assert.Contains("generated test-impact plan", actions["build-test-selection"], StringComparison.Ordinal);
+        Assert.Contains("include the command and exit evidence", actions["build-test-selection"], StringComparison.Ordinal);
+        Assert.Contains("generated-path risk", actions["static-policy-checks"], StringComparison.Ordinal);
+        Assert.Contains("Current policy:", actions["static-policy-checks"], StringComparison.Ordinal);
+        Assert.Contains("required policy failures block acceptance", actions["static-policy-checks"], StringComparison.Ordinal);
+        Assert.Contains("never report unrun checks as passed", actions["acceptance-evidence"], StringComparison.Ordinal);
+        Assert.Contains("does not authorize a formal acceptance verdict", actions["acceptance-evidence"], StringComparison.Ordinal);
+        Assert.Contains("The acceptance gate re-runs the Go checks and decides the verdict",
+            actions["acceptance-evidence"], StringComparison.Ordinal);
+        Assert.Contains("missing acceptance evidence should become an explicit blocker", actions["acceptance-evidence"], StringComparison.Ordinal);
+        Assert.Contains("unexpected dirty files are blockers", actions["diff-summary"], StringComparison.Ordinal);
+        Assert.Contains("If a broker artifact is missing, stale, or reports a failure, report that as a blocker in WORKER_RESULT",
+            broker, StringComparison.Ordinal);
         fixture.AssertArtifactAvailable("current-task.md");
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void GoDeveloperPolicyReportsRequiredReviewWithoutGrantingAuthority(bool retry)
+    {
+        using var fixture = Prepare(AgentRole.Developer, retry, includeDotnetProject: false,
+            includeGoModule: true, requireRiskReview: true);
+        var actions = ReadActions(fixture.ReadDelivered("workflow-brokers.md"));
+        var policy = actions["static-policy-checks"];
+        // The summary alone omits required human review when no deterministic command is selected.
+        Assert.Contains("No deterministic build/test command required by current file scope.", policy, StringComparison.Ordinal);
+        Assert.Contains("human risk review; kind=manual-risk-review; required=True", policy, StringComparison.Ordinal);
+        Assert.Contains("Task text contains policy, security, migration, rollback, or permission risk signals.", policy, StringComparison.Ordinal);
+        Assert.Contains("required human review remain with their existing owners", policy, StringComparison.Ordinal);
+        Assert.All(actions.Values.SelectMany(RequiredArtifacts), fixture.AssertArtifactAvailable);
     }
 
     [Theory]
@@ -174,7 +209,7 @@ public sealed class WorkerWorkflowBrokerRoleDeliveryTests : WorkerDispatchTestSu
         .ToArray();
 
     private static DeliveryFixture Prepare(AgentRole role, bool retry,
-        bool includeDotnetProject = true, bool includeGoModule = false)
+        bool includeDotnetProject = true, bool includeGoModule = false, bool requireRiskReview = false)
     {
         var root = CreateTempDirectory();
         try
@@ -202,7 +237,8 @@ public sealed class WorkerWorkflowBrokerRoleDeliveryTests : WorkerDispatchTestSu
             File.AppendAllText(Path.Combine(workingDirectory, "fixture.txt"), "\nchanged broker fixture");
             var kernel = new AgentOrchestratorKernel();
             var task = new TaskSpec(TaskId.New(), "Keep broker artifacts satisfiable.", role);
-            var goal = kernel.CreateGoal("Repair broker instructions.", [task]);
+            var goal = kernel.CreateGoal(requireRiskReview
+                ? "Repair broker instructions with security review." : "Repair broker instructions.", [task]);
             kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
             if (retry)
             {
