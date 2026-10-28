@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Xml.Linq;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Infrastructure;
@@ -191,6 +192,17 @@ public sealed class GoalAcceptanceVerifierCrosswalkEvidenceTests
                 testCalls.Add(args);
                 GoalAcceptanceVerifierDotnetBuildSlotTestsTrustedBaselineDiscovery.WriteVstestTrx(
                     args, "Sample.Tests.Passes");
+                var resultsDirectory = args[Array.IndexOf(args, "--results-directory") + 1];
+                var fileName = args[Array.IndexOf(args, "--logger") + 1]["trx;LogFileName=".Length..];
+                var trxPath = Path.Combine(resultsDirectory, fileName);
+                var document = XDocument.Load(trxPath);
+                XNamespace ns = "http://microsoft.com/schemas/VisualStudio/TeamTest/2010";
+                foreach (var element in document.Root!.DescendantsAndSelf())
+                    element.Name = ns + element.Name.LocalName;
+                document.Root.Add(new XElement(ns + "ResultSummary", new XElement(ns + "Counters",
+                    new XAttribute("total", 1), new XAttribute("executed", 1),
+                    new XAttribute("passed", 1), new XAttribute("failed", 0))));
+                document.Save(trxPath);
                 return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0,
                     "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."));
             }
@@ -210,6 +222,9 @@ public sealed class GoalAcceptanceVerifierCrosswalkEvidenceTests
         Assert.Equal(0, solution.TestResultRunOrdinal);
         Assert.False(solution.TestResultIsExplicitCrossAttemptReuse);
         Assert.True(File.Exists(Assert.Single(solution.TestResultPaths!)));
+        Assert.True(AcceptanceCohortGateEvidence.HasCoherentTrxEvidence(solution.TestResultPaths));
+        Assert.Null(solution.NormalizedTestResultWriteFailure);
+        Assert.Single(solution.NormalizedTestResultPaths!);
         var project = Assert.Single(result.Checks, check => check.Name == "project tests");
         Assert.Equal([solution.Name], project.CoveredBy);
         Assert.Equal("covered by: solution tests", project.ResultSummary);
@@ -232,6 +247,30 @@ public sealed class GoalAcceptanceVerifierCrosswalkEvidenceTests
                 ? check with { TestResultAttemptId = invalidAttempt } : check).ToArray() };
             Assert.Equal(AcceptanceCohortGateOutcome.InfrastructureFailure,
                 AcceptanceCohortVerificationClassifier.ClassifyCohortVerification(invalid));
+        }
+
+        // A producer pass cannot compensate for an invalid declared TRX contract.
+        var retainedTrxPath = Assert.Single(solution.TestResultPaths!);
+        var validTrx = File.ReadAllText(retainedTrxPath);
+        foreach (var missingNamespace in new[] { false, true })
+        {
+            var invalidTrx = XDocument.Parse(validTrx);
+            if (missingNamespace)
+            {
+                foreach (var element in invalidTrx.Root!.DescendantsAndSelf())
+                {
+                    element.Name = element.Name.LocalName;
+                    element.Attributes().Where(attribute => attribute.IsNamespaceDeclaration).Remove();
+                }
+            }
+            else
+            {
+                invalidTrx.Descendants().Single(element => element.Name.LocalName == "Counters").Remove();
+            }
+            invalidTrx.Save(retainedTrxPath);
+            Assert.False(AcceptanceCohortGateEvidence.HasCoherentTrxEvidence(solution.TestResultPaths));
+            Assert.Equal(AcceptanceCohortGateOutcome.InfrastructureFailure,
+                AcceptanceCohortVerificationClassifier.ClassifyCohortVerification(result));
         }
     }
 
