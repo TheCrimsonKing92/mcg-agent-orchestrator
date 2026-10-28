@@ -329,35 +329,7 @@ private static string BuildLifecycleRunGoalNextCommand(
 }
 
 internal static void EnsureGoalReadinessAllowsStart(CliExecutionContext context, Goal goal, bool confirmed)
-{
-    var sweep = TerminalGoalSweep.Run(
-        context.Kernel,
-        context.Workspace.ExecutionDirectory, context.Workspace.IntegrationBranch,
-        goal.Id,
-        cleanupHooks: context.CleanupContext.Hooks,
-        orchestratorDirectory: context.Workspace.OrchestratorDirectory);
-    ConsoleViews.PrintTerminalGoalSweep(sweep);
-    TerminalGoalSweepAttention.Surface(context.Kernel, sweep, context.Workspace.OrchestratorDirectory, goal.Id);
-    goal = context.Kernel.GetGoal(goal.Id);
-    if (context.CurrentGoal?.Id == goal.Id)
-    {
-        context.CurrentGoal = goal;
-    }
-
-    var readiness = GoalReadinessPreflight.Build(
-        goal,
-        context.Agents,
-        context.Workspace.ExecutionDirectory,
-        context.WorkerProfiles,
-        context.Worktrees.TryResolve,
-        context.Kernel.Goals);
-    if (!readiness.AllowsStart(confirmed))
-    {
-        ConsoleViews.PrintGoalReadinessPreflight(readiness);
-    }
-
-    GoalReadinessPreflight.ThrowIfStartBlocked(readiness, confirmed);
-}
+    => CliLifecycleReadiness.EnsureAllowsStart(context, goal, confirmed);
 
 private static void EnsureLifecycleParallelGateAllowsStart(CliExecutionContext context, Goal goal)
 {

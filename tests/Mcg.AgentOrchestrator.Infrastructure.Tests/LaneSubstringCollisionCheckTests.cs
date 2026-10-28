@@ -256,6 +256,40 @@ public sealed class LaneSubstringCollisionCheckTests
             AcceptanceGateEngineSettings.Parse(candidateManifest ?? Manifest).InfrastructureTestLanes,
             [new AcceptanceTestClassDescriptor(name, collection)], diff ?? AddedDiff(name));
 
+    [Fact]
+    public void SubstringSelections_CaseInsensitivePatterns_PreserveEverySelectingLane()
+    {
+        var lanes = new[]
+        {
+            new AcceptanceTestLane("First", "FullyQualifiedName~worker|FullyQualifiedName~Build"),
+            new AcceptanceTestLane("Second", "FullyQualifiedName~REQUEST"),
+            new AcceptanceTestLane("Excluded", "FullyQualifiedName~Worker&FullyQualifiedName!~Qos"),
+            new AcceptanceTestLane("Remainder", "FullyQualifiedName~Worker")
+        };
+        var selections = LaneSubstringCollisionCheck.SubstringSelections(lanes,
+            new AcceptanceTestClassDescriptor(IncidentClass, null));
+
+        Assert.Equal(["First", "Second"], selections.Select(item => item.Lane.Name));
+        Assert.Equal(["*worker*", "*Build*"], selections[0].Patterns);
+        Assert.Equal(["*REQUEST*"], selections[1].Patterns);
+    }
+
+    [Fact]
+    public void SubstringSelections_CollectionOwnership_OnlyResolvesItsOwnLane()
+    {
+        var lanes = AcceptanceGateEngineSettings.Parse(Manifest).InfrastructureTestLanes;
+        var selectingLane = lanes.Single(lane => lane.Name == "Remainder balance C");
+        var multiple = new[]
+        {
+            selectingLane with { Name = "Owner", OwnedCollections = ["Owned"] },
+            selectingLane with { Name = "Other" }
+        };
+        var selection = Assert.Single(LaneSubstringCollisionCheck.SubstringSelections(multiple,
+            new AcceptanceTestClassDescriptor(IncidentClass, "Owned")));
+
+        Assert.Equal("Other", selection.Lane.Name);
+    }
+
     private static string AddedDiff(string name, string? removedName = null)
     {
         var path = "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/" + name + ".cs";
