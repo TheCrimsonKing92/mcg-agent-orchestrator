@@ -311,7 +311,9 @@ public static class DispatchProcessHost
         // see CreateClaudeCredentialResolver.
         Func<string, string?>? providerEnvironmentReader = null,
         IWorkerIntegrityLabeler? gitMetadataLabeler = null,
-        IWorkerSandboxFileSystem? sandboxFileSystem = null)
+        IWorkerSandboxFileSystem? sandboxFileSystem = null,
+        WorkerSandboxPreparer.CodexScratchScope? codexScratch = null,
+        Action<string>? seedCodexAuth = null)
     {
         if (!OperatingSystem.IsWindows())
         {
@@ -326,6 +328,11 @@ public static class DispatchProcessHost
             ExcludeSandboxFromGit(parameters.WorkingDirectory);
             return new WorkerSandboxPreparationResult(false, false);
         }
+
+        using var localScratch = codexScratch is null && parameters.Provider == WorkerSandboxProvider.Codex
+            ? preparer.OpenCodexScratch(parameters.WorkingDirectory, sandboxRoot)
+            : null;
+        codexScratch ??= localScratch;
 
         T Track<T>(string phase, Func<T> action)
         {
@@ -435,7 +442,8 @@ public static class DispatchProcessHost
                 parameters.StderrPath,
                 // The conductor's transported selection, rehydrated into the single resolver this host
                 // seeds from. No candidate evaluation happens in this process.
-                claudeCredentialResolver: CreateClaudeCredentialResolver(parameters, providerEnvironmentReader)));
+                claudeCredentialResolver: CreateClaudeCredentialResolver(parameters, providerEnvironmentReader),
+                seedCodexAuth: seedCodexAuth));
             TrackAction("materialize-ca-bundle", () => SeedWorkerCaBundle(startInfo, sandboxRoot, parameters.StderrPath));
 
             // Keep the sandbox scratch out of git's view so it never registers as a dirty/untracked path:
@@ -467,6 +475,9 @@ public static class DispatchProcessHost
                 startInfo.ArgumentList[lastIndex] = $". '{dropScript}'; {startInfo.ArgumentList[lastIndex]}";
             }
         });
+
+        if (codexScratch is not null)
+            TrackAction("validate-codex-scratch", codexScratch.ValidateAndRepair);
 
         return effectivePreparation;
     }
@@ -596,7 +607,8 @@ public static class DispatchProcessHost
         // (auth preflight) passes its resolver so seeding consumes that ONE resolved result instead of
         // computing a second selection that could disagree. It takes precedence over the three
         // accessor/reader inputs above, which only describe how to build a resolver when none exists.
-        ClaudeCredentialResolver? claudeCredentialResolver = null)
+        ClaudeCredentialResolver? claudeCredentialResolver = null,
+        Action<string>? seedCodexAuth = null)
     {
         startInfo.Environment.Remove("CODEX_HOME");
         startInfo.Environment.Remove("CLAUDE_CONFIG_DIR");
@@ -615,7 +627,7 @@ public static class DispatchProcessHost
         {
             var codexHome = Path.Combine(sandboxRoot, "codex-home");
             Directory.CreateDirectory(codexHome);
-            SeedCodexAuth(codexHome);
+            (seedCodexAuth ?? SeedCodexAuth)(codexHome);
             startInfo.Environment["CODEX_HOME"] = codexHome;
             return null;
         }
@@ -1400,6 +1412,29 @@ public static void DropToLow() {
         Func<int, Func<int, IReadOnlyList<int>?>, IDisposable?>? startJobQos = null) =>
         RunCore(parameters, hooks, startJobQos: startJobQos);
 
+    internal static OwnedProcessGroup.SuspendedRedirectedProcessStart StartPreparedCodexWorker(
+        ProcessStartInfo startInfo,
+        WorkerSandboxPreparer.CodexScratchScope scratch,
+        Action<Process>? beforeResume = null)
+    {
+        // Retain scratch identities through process creation, but never execute the payload while
+        // those handles deny writes. The owned job also contains a failed, still-suspended launch.
+        var launch = OwnedProcessGroup.StartSuspendedContainedRedirected(startInfo);
+        try
+        {
+            scratch.ValidateAndRepair();
+            scratch.Dispose();
+            beforeResume?.Invoke(launch.Process);
+            launch.Resume();
+            return launch;
+        }
+        catch
+        {
+            launch.Dispose();
+            throw;
+        }
+    }
+
     private static int RunCore(DispatchRunParameters parameters, HeartbeatTestHooks? heartbeatHooks,
         Func<WorkerBuildHostReference, IWorkerBuildRequestService>? buildService = null,
         Func<int, Func<int, IReadOnlyList<int>?>, IDisposable?>? startJobQos = null)
@@ -1417,6 +1452,7 @@ public static void DropToLow() {
         var prepExitWritten = false;
         Process? worker = null;
         OwnedProcessGroup? workerGroup = null;
+        OwnedProcessGroup.SuspendedRedirectedProcessStart? codexLaunch = null;
         IDisposable? jobQos = null;
         void StopJobQos()
         {
@@ -1846,12 +1882,18 @@ public static void DropToLow() {
             }
 
             var sandboxPrepStartedAt = DateTimeOffset.UtcNow;
+            var sandboxPreparer = WorkerSandboxPreparer.CreateDefault();
+            using var codexScratch = OperatingSystem.IsWindows() && parameters.SandboxLowIntegrity &&
+                parameters.Provider == WorkerSandboxProvider.Codex
+                ? sandboxPreparer.OpenCodexScratch(parameters.WorkingDirectory, ResolveSandboxRoot(parameters))
+                : null;
             WriteSandboxPrepEvent(parameters, "start", sandboxPrepStartedAt, null);
             var sandboxPreparation = ApplyWorkerSandbox(
                 startInfo,
                 parameters,
-                WorkerSandboxPreparer.CreateDefault(),
-                (phase, stepStartedAt, elapsed) => WriteSandboxPrepEvent(parameters, phase, stepStartedAt, elapsed));
+                sandboxPreparer,
+                (phase, stepStartedAt, elapsed) => WriteSandboxPrepEvent(parameters, phase, stepStartedAt, elapsed),
+                codexScratch: codexScratch);
             WriteSandboxPrepEvent(
                 parameters,
                 sandboxPreparation.PrepReceiptHit ? "receipt-hit" : "complete",
@@ -1874,11 +1916,22 @@ public static void DropToLow() {
                     (buildService ?? throw new InvalidOperationException("Enrolled dispatch has no worker build service."))(buildReference));
             heartbeatHooks?.BeforeTaskIntentAdmission?.Invoke(startInfo);
             startInfo.Environment[WorkerSandboxOptions.DispatchWorkerVariable] = "1";
+            Process StartPreparedWorker()
+            {
+                if (codexScratch is null)
+                {
+                    worker = ProcessTreeGuiSuppression.Start(startInfo);
+                    return worker;
+                }
+                codexLaunch = StartPreparedCodexWorker(startInfo, codexScratch);
+                workerGroup = codexLaunch.Group;
+                return codexLaunch.Process;
+            }
             worker = parameters.TaskIntentAdmission is { } intentAdmission
                 ? global::Mcg.AgentOrchestrator.Infrastructure.TaskIntentAdmission.Launch(intentAdmission, parameters.StdoutPath, () =>
                 {
-                    worker = ProcessTreeGuiSuppression.Start(startInfo);
-                    try { workerGroup = OwnedProcessGroup.Attach(worker); }
+                    worker = StartPreparedWorker();
+                    try { workerGroup ??= OwnedProcessGroup.Attach(worker); }
                     catch
                     {
                         try { if (!worker.HasExited) worker.Kill(entireProcessTree: true); } catch { }
@@ -1886,7 +1939,7 @@ public static void DropToLow() {
                     }
                     return worker;
                 }, heartbeatHooks?.ReadTaskIntentLaunchIdentity)
-                : ProcessTreeGuiSuppression.Start(startInfo);
+                : StartPreparedWorker();
             workerGroup ??= OwnedProcessGroup.Attach(worker);
             if (parameters.OptOutExecutionThrottling && startJobQos is not null)
             {
@@ -1900,14 +1953,14 @@ public static void DropToLow() {
             try { WriteHeartbeat("launched"); }
             catch (Exception failure) { RecordHeartbeatWriteFailure("launched", failure); }
 
-            WritePromptToWorkerStdin(worker, parameters);
+            WritePromptToWorkerStdin(codexLaunch?.StandardInput ?? worker.StandardInput, parameters);
 
             // Stream raw bytes to the log files so the heartbeat's byte-growth progress detection works.
             using var stdout = new RollingLogWriteStream(parameters.StdoutPath, FileMode.Create);
             using var stderr = OpenWorkerStderrStream(parameters.StderrPath);
             using var drainCts = new CancellationTokenSource();
-            var copyOut = worker.StandardOutput.BaseStream.CopyToAsync(stdout, drainCts.Token);
-            var copyErr = worker.StandardError.BaseStream.CopyToAsync(stderr, drainCts.Token);
+            var copyOut = (codexLaunch?.StandardOutput ?? worker.StandardOutput).BaseStream.CopyToAsync(stdout, drainCts.Token);
+            var copyErr = (codexLaunch?.StandardError ?? worker.StandardError).BaseStream.CopyToAsync(stderr, drainCts.Token);
 
             heartbeatTimer.Change(heartbeatInterval, heartbeatInterval);
 
@@ -2023,6 +2076,7 @@ public static void DropToLow() {
                 selectedChild?.Dispose();
                 selectedChild = null;
             }
+            codexLaunch?.Dispose();
         }
 
         return exitCode;
@@ -2458,13 +2512,16 @@ public static void DropToLow() {
         !string.IsNullOrWhiteSpace(parameters.PromptPath);
 
     internal static void WritePromptToWorkerStdin(Process worker, DispatchRunParameters parameters)
+        => WritePromptToWorkerStdin(worker.StandardInput, parameters);
+
+    internal static void WritePromptToWorkerStdin(StreamWriter input, DispatchRunParameters parameters)
     {
         try
         {
             if (ShouldWritePromptToStdin(parameters))
             {
-                WriteUtf8PromptToStream(parameters.PromptPath!, worker.StandardInput.BaseStream);
-                worker.StandardInput.Flush();
+                WriteUtf8PromptToStream(parameters.PromptPath!, input.BaseStream);
+                input.Flush();
             }
         }
         catch (IOException)
@@ -2475,7 +2532,7 @@ public static void DropToLow() {
         {
             // EOF is the end-of-prompt signal for stdin-driven workers. Close before draining output so
             // neither side waits for the other indefinitely.
-            try { worker.StandardInput.Close(); } catch { /* worker may have already exited */ }
+            try { input.Close(); } catch { /* worker may have already exited */ }
         }
     }
 
