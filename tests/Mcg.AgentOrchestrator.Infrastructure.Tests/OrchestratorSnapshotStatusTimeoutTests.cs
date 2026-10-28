@@ -164,7 +164,7 @@ public sealed class OrchestratorSnapshotStatusTimeoutTests
         public string RelativeRuntime => Path.Combine("..", Path.GetFileName(Runtime));
         public string DefaultRuntime => Path.Combine(Root, "src", "Mcg.AgentOrchestrator.App", "bin", "Debug", "net10.0", "Mcg.AgentOrchestrator.App.dll");
         private string CallerDirectory => Path.Combine(Root, "caller");
-        private string Host => Path.Combine(HostDirectory, "fake dotnet.exe");
+        private string Host => Path.Combine(HostDirectory, "fake dotnet.cmd");
         public string Script(string name) => Path.Combine(Root, "scripts", name);
 
         public PreparedRuntimeFixture()
@@ -184,38 +184,35 @@ public sealed class OrchestratorSnapshotStatusTimeoutTests
                 exit 0
                 """);
             File.WriteAllText(Script("Invoke-OrchestratorSqliteTool.ps1"), "Write-Output 'fixture active goals'\r\nexit 0\r\n");
-            // A native argv recorder avoids cmd.exe reinterpreting metacharacters or hiding token splits.
-            File.WriteAllText(Path.Combine(Root, "prepare-host.ps1"), """
+            // Use the same command-file boundary as the status-timeout fixture, without
+            // compiling another executable at test runtime. -File treats the forwarded
+            // tokens as data; decoded argv assertions below detect splits or reinterpretation.
+            File.WriteAllText(Host, """
+                @echo off
+                "%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%~dp0fake-dotnet.ps1" %*
+                exit /b %errorlevel%
+                """.Replace("\n", "\r\n", StringComparison.Ordinal));
+            File.WriteAllText(Path.Combine(HostDirectory, "fake-dotnet.ps1"), """
                 $ErrorActionPreference = 'Stop'
-                Add-Type -OutputType ConsoleApplication -OutputAssembly (Join-Path $PSScriptRoot 'configured host\fake dotnet.exe') -TypeDefinition @'
-                using System;
-                using System.IO;
-                using System.Text;
-                public static class FakeDotnet {
-                    public static int Main(string[] args) {
-                        string root = AppDomain.CurrentDomain.BaseDirectory;
-                        string[] encoded = Array.ConvertAll(args, a => Convert.ToBase64String(Encoding.UTF8.GetBytes(a)));
-                        File.AppendAllText(Path.Combine(root, "argv.log"), String.Join("\t", encoded) + Environment.NewLine);
-                        if (args.Length < 2) return 91;
-                        if (args[1] == "repo-process-info") {
-                            if (File.Exists(Path.Combine(root, "unsupported"))) {
-                                Console.WriteLine("PROCESS_QUERY_UNAVAILABLE operation=fixture-unsupported command=repo-process-info");
-                                return 23;
-                            }
-                            Console.WriteLine("PROCESS_COUNT=0");
-                            return 0;
-                        }
-                        if (args[1] == "status" && args.Length == 3) {
-                            Console.WriteLine("status ok " + args[2]);
-                            return 0;
-                        }
-                        return 92;
+                $encoded = @($args | ForEach-Object {
+                    [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes([string]$_))
+                })
+                [IO.File]::AppendAllText((Join-Path $PSScriptRoot 'argv.log'), ($encoded -join "`t") + [Environment]::NewLine)
+                if ($args.Count -lt 2) { exit 91 }
+                if ($args[1] -eq 'repo-process-info') {
+                    if (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'unsupported')) {
+                        Write-Output 'PROCESS_QUERY_UNAVAILABLE operation=fixture-unsupported command=repo-process-info'
+                        exit 23
                     }
+                    Write-Output 'PROCESS_COUNT=0'
+                    exit 0
                 }
-                '@
+                if ($args[1] -eq 'status' -and $args.Count -eq 3) {
+                    Write-Output ('status ok ' + $args[2])
+                    exit 0
+                }
+                exit 92
                 """);
-            var prepared = RunPowerShell(Path.Combine(Root, "prepare-host.ps1"));
-            Assert.True(prepared.ExitCode == 0 && File.Exists(Host), $"Host fixture compilation failed:\n{prepared.Stdout}\n{prepared.Stderr}");
         }
 
         public void WriteResolver(string? runtime)
