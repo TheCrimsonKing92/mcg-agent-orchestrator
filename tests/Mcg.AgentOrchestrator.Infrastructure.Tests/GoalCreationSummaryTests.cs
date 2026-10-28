@@ -181,7 +181,7 @@ public sealed class GoalCreationSummaryTests : CliCommandTestBase
     [InlineData("still-committing")]
     [InlineData("failed")]
     [InlineData("created")]
-    public void IncompleteOrInvalidReplayNeverClaimsSuccess(string state)
+    public async Task IncompleteOrInvalidReplayNeverClaimsSuccess(string state)
     {
         using var fixture = new Fixture();
         string[] args = ["goal", "Update receipt formatting.", "--pipeline", "scout", "--summary", "--request-key", "incomplete"];
@@ -189,7 +189,17 @@ public sealed class GoalCreationSummaryTests : CliCommandTestBase
         var store = new GoalIntakeRequestStore(fixture.Workspace.SqliteStatePath);
         store.Reserve(request.RequestKey, request.Fingerprint);
         if (state == "failed") store.MarkFailed(request.RequestKey, request.Fingerprint, "fixture-failure", "fixture detail");
-        if (state == "created") store.MarkCreated(request.RequestKey, request.Fingerprint, GoalId.New().Value);
+        if (state == "created")
+        {
+            // Commit a deliberately dangling receipt through the required state-write session.
+            await fixture.Repository.TransactAsync<bool>((kernel, cancellationToken) =>
+            {
+                store.MarkCreated(request.RequestKey, request.Fingerprint, GoalId.New().Value);
+                return Task.FromResult((ShouldSave: true, Result: true));
+            });
+        }
+        Assert.Equal(state, store.Get(request.RequestKey)!.State);
+        Assert.Empty((await fixture.Repository.LoadAsync()).Goals);
         using var output = new StringWriter();
         var error = Record.Exception(() => AsyncLocalConsoleRouter.Out.CaptureLocal(() => Execute(fixture, args, capture: false), output));
         if (state == "still-committing")
@@ -309,7 +319,8 @@ public sealed class GoalCreationSummaryTests : CliCommandTestBase
         var start = new ProcessStartInfo(ResolveDotnetHostPath())
         {
             WorkingDirectory = root, UseShellExecute = false, CreateNoWindow = true,
-            RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true
+            RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true,
+            StandardOutputEncoding = Encoding.UTF8, StandardErrorEncoding = Encoding.UTF8
         };
         start.Environment.Clear();
         foreach (var name in new[] { "PATH", "SystemRoot", "WINDIR", "TEMP", "TMP", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "ProgramFiles", "ProgramFiles(x86)", "DOTNET_ROOT" })
