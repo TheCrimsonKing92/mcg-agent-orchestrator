@@ -184,7 +184,7 @@ public sealed partial class GoalAcceptanceVerifier
             if (revertedPath is not null)
             {
                 var removed = GitCli.Run(candidatePath, "worktree", "remove", "--force", revertedPath);
-                TryDeleteFocusedEvidenceBaselineDirectory(root, revertedPath);
+                FocusedEvidenceExecution.TryDeleteFocusedEvidenceBaselineDirectory(root, revertedPath);
                 if (SourceRevertedContinuation is { } handoff)
                     handoff.RestorationVerified = removed.Succeeded && !removed.DrainTimedOut && !Directory.Exists(revertedPath);
             }

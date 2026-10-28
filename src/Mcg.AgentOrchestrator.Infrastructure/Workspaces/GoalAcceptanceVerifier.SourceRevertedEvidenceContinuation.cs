@@ -4,7 +4,7 @@ using System.Text.Json;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
-// Invocation-local handoff. Only the host owns durable observations and decides reuse.
+// Invocation-local verifier handoff. Only the host owns durable observations and decides reuse.
 internal sealed class SourceRevertedEvidenceContinuation(
     Func<string, FocusedEvidenceRunResult?> resume,
     Action<string, FocusedEvidenceRunResult> observe,

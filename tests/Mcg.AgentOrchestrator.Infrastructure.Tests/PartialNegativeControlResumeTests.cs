@@ -39,6 +39,12 @@ public sealed class PartialNegativeControlResumeTests
         Assert.True(original.RestorationCompletedAt <= first.CompletedAt);
         Assert.False(string.IsNullOrWhiteSpace(original.OriginalResultFingerprint));
         Assert.False(string.IsNullOrWhiteSpace(original.EvidenceFingerprint));
+        Assert.All(original.OriginalEvidence.Checks, check => Assert.False(string.IsNullOrWhiteSpace(check.ArtifactsPath)));
+        var retained = JsonSerializer.Deserialize<FocusedEvidenceRunResult>(
+            JsonNode.Parse(File.ReadAllText(original.EvidencePath))!["focusedEvidence"]!.ToJsonString(),
+            new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        Assert.NotNull(retained);
+        Assert.All(retained.Checks, check => Assert.Null(check.ArtifactsPath));
         Assert.All(original.OriginalArm.ReceiptArtifacts!, artifact => Assert.True(File.Exists(artifact.Path)));
         Assert.Equal(1, fixture.CandidateCalls);
         Assert.Equal(0, fixture.RevertedCalls);

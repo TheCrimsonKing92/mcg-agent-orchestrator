@@ -101,7 +101,11 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
                     var checks = arm.Checks.Select(check => check with
                     {
                         TestResultPaths = check.TestResultPaths?.Select(Copy).ToArray(),
-                        ArtifactsPath = string.IsNullOrWhiteSpace(check.ArtifactsPath) ? null : Copy(check.ArtifactsPath)
+                        // Dotnet checks name their build output directory here. It is not a
+                        // receipt file; retain the completed TRX files, not the build tree.
+                        // OriginalEvidence above still binds the unmodified host observation.
+                        ArtifactsPath = string.IsNullOrWhiteSpace(check.ArtifactsPath) || Directory.Exists(check.ArtifactsPath)
+                            ? null : Copy(check.ArtifactsPath)
                     }).ToArray();
                     var retainedArm = arm with { Checks = checks };
                     var originalArm = ConductorDriver.CreateFindingEvidenceArmReceipt(retainedArm);

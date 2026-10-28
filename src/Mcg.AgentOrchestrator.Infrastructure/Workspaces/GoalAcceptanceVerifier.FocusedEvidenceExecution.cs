@@ -5,9 +5,6 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 
 internal static class FocusedEvidenceExecution
 {
-    internal static string GetFocusedEvidenceBaselineRoot() =>
-        Path.Combine(Path.GetTempPath(), GoalAcceptanceVerifier.FocusedEvidenceBaselinesRootDirectoryName);
-
     internal delegate Task<FocusedEvidenceArmRunResult> FocusedEvidenceArmRunner(
         FindingEvidenceArm arm,
         string sha,

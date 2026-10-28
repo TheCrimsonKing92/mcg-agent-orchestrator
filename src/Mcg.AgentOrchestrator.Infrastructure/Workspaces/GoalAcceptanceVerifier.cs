@@ -1241,13 +1241,16 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         CancellationToken cancellationToken,
         bool classifyMissingSelectionsAsAbsent = false,
         IAcceptanceRunExecutionContext? executionOwner = null,
-        bool partitionCandidateOnlySelections = false) =>
-        FocusedEvidenceExecution.RunBaselineFocusedEvidenceArmAsync(
-            RunFocusedEvidenceArmAsync, FocusedEvidenceExecution.GetFocusedEvidenceBaselineRoot, TryLabelFocusedEvidenceBaselineWorktree,
+        bool partitionCandidateOnlySelections = false)
+    {
+        var baselineRoot = Path.Combine(Path.GetTempPath(), FocusedEvidenceBaselinesRootDirectoryName);
+        return FocusedEvidenceExecution.RunBaselineFocusedEvidenceArmAsync(
+            RunFocusedEvidenceArmAsync, () => baselineRoot, TryLabelFocusedEvidenceBaselineWorktree,
             SelectBaselineFocusedChecks, CombineFindingBaselineArm, _storageRoot,
             candidateWorktreePath, baselineSha, goalId, focusedChecks, coverage, stableSlotIndex,
             stableSlotLease, cancellationToken, classifyMissingSelectionsAsAbsent, executionOwner,
             partitionCandidateOnlySelections);
+    }
 
     internal static FindingEvidenceOutcomeReason ClassifyFocusedEvidenceExperiment(
         FocusedEvidenceArmRunResult candidate,
@@ -1268,10 +1271,6 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var trimmed = value.Trim();
         return trimmed.Length <= 500 ? trimmed : trimmed[..500];
     }
-
-    private static void TryDeleteFocusedEvidenceBaselineDirectory(string baselineRoot, string baselinePath) =>
-        FocusedEvidenceExecution.TryDeleteFocusedEvidenceBaselineDirectory(
-            baselineRoot, baselinePath);
 
     private async Task<IReadOnlyList<AcceptanceCheckResult>> RunFocusedEvidenceChecksAsync(
         string worktreePath,
