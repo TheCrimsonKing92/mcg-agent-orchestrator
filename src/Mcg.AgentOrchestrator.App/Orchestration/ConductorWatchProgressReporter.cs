@@ -375,7 +375,7 @@ internal sealed partial class ConductorWatchProgressReporter
         count == 1 ? "1 file changed" : $"{count} files changed";
 
     private static string FormatWorker(ConductorWatchProgressSnapshot snapshot, string progressState) =>
-        $"state={progressState} - worker pid={FormatPid(snapshot.WorkerPid)} {snapshot.Liveness}";
+        $"state={progressState} - owned process pid={FormatPid(snapshot.WorkerPid)} {snapshot.Liveness}";
 
     private static string FormatPid(int? processId) => processId?.ToString() ?? "unknown";
 

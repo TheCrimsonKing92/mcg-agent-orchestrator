@@ -1,5 +1,13 @@
 This command and setup reference preserves the earlier README operator material. The canonical guide for driving, observing, and recovering goals is [docs/operator-runbook.md](operator-runbook.md).
 
+## Backlog item detail
+
+`backlog-show <id-prefix> [--summary] [--json]` reads a backlog item without changing state. Default human and `--json` detail remain unchanged; full JSON uses `mcg.backlog-item`.
+
+`--summary` reports the complete id and title, status, created/updated timestamps, source goal, authoritative claim owner/version/coverage and ownership ambiguity. It gives exact counts for linked goals, replacement lineage, prerequisites (`dependencyCount`), dependents and notes. Ambiguous legacy ownership retains `legacy-owner-ambiguous`, no selected owner and the exact ambiguous linked-goal count.
+
+Summaries explicitly list omitted body, note text and history arrays and provide a full-detail command using the complete id. JSON summaries use the distinct `mcg.backlog-item-summary` envelope (`schemaVersion: 1`, `generatedAt`, `payload`), with `omittedSections`, counts and `fullDetailCommand`; omitted payload fields are absent rather than empty placeholders. The expansion command retains `--json` for JSON summaries. Both `--summary --json` and `--json --summary` work after the id. This reduces output volume; storage reads and latency are not promised to decrease.
+
 ## Task graph repair inbox
 
 `add-task [--goal <prefix>] <role> <description> [--before-role <role>]` submits an operator intent. It prints the intent id, pending status and replay key; no task exists until the conductor applies it. `--text-file <path>` supplies the description. Poll `operator-intent-status <id> --wait` for the applied/rejected outcome.

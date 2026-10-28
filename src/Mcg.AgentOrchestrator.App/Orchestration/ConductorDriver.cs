@@ -719,9 +719,9 @@ internal sealed partial class ConductorDriver
             Goal goal,
             string request,
             DotnetBuildEnvironmentLease? stableSlotLease,
-            bool runBaselineArm,
-            CancellationToken cancellationToken,
-            FindingEvidenceNegativeControl? negativeControl = null, IReadOnlyList<string>? revertPaths = null, FindingEvidenceMutation? mutation = null)
+            bool runBaselineArm, CancellationToken cancellationToken,
+            FindingEvidenceNegativeControl? negativeControl = null, IReadOnlyList<string>? revertPaths = null, FindingEvidenceMutation? mutation = null,
+            SourceRevertedEvidenceContinuation? continuation = null)
         {
             var worktreePath = GoalWorktrees.TryResolve(dir, goal.Id);
             if (worktreePath is null)
@@ -739,7 +739,7 @@ internal sealed partial class ConductorDriver
                 acceptanceVerifier, worktreePath, goal.Id, request,
                 stableSlotLease?.Environment.BuildPermitIndex, stableSlotLease,
                 runBaselineArm, cancellationToken, workspace.IntegrationBranch, negativeControl, revertPaths, mutation,
-                NegativeControlRevertSetResolver.Resolve(goal), workspace.ProjectHomeDirectoryOrNull);
+                NegativeControlRevertSetResolver.Resolve(goal), workspace.ProjectHomeDirectoryOrNull, continuation: continuation);
             if (result.Passed)
             {
                 GoalOperationJournal.Completed(dir, goal, "conductor:finding-evidence", result.Summary);
@@ -756,8 +756,8 @@ internal sealed partial class ConductorDriver
             RunFocusedEvidence(goal, request, stableSlotLease, runBaselineArm: false, cancellationToken);
         _runDualArmFocusedEvidence = (goal, request, stableSlotLease, cancellationToken) =>
             RunFocusedEvidence(goal, request, stableSlotLease, runBaselineArm: true, cancellationToken);
-        _runNegativeControlFocusedEvidence = (goal, request, lease, baseline, token, mode, paths, mutation) =>
-            RunFocusedEvidence(goal, request, lease, baseline, token, mode, paths, mutation);
+        _runNegativeControlFocusedEvidence = (goal, request, lease, baseline, token, mode, paths, mutation, continuation) =>
+            RunFocusedEvidence(goal, request, lease, baseline, token, mode, paths, mutation, continuation);
         _focusedEvidenceRunnerConfigured = true;
 
         _retryTask = (goalId, taskId, message, retryRoundKind, cause) =>
@@ -1146,7 +1146,7 @@ internal sealed partial class ConductorDriver
                 Checks: []))
             : ((goal, request, _, _) => runFocusedEvidence(goal, request));
         _runDualArmFocusedEvidence = _runFocusedEvidence;
-        _runNegativeControlFocusedEvidence = (goal, request, lease, baseline, token, _, _, _) =>
+        _runNegativeControlFocusedEvidence = (goal, request, lease, baseline, token, _, _, _, _) =>
             (baseline ? _runDualArmFocusedEvidence : _runFocusedEvidence)(goal, request, lease, token);
         _focusedEvidenceRunnerConfigured = runFocusedEvidence is not null;
         _getPreReviewEvidenceContext = getPreReviewEvidenceContext ??

@@ -51,7 +51,7 @@ internal static class CliCommandHelp
     public const string BacklogPremiseCloseUsage = "Usage: backlog-premise-close <id-prefix> [<id-prefix> ...] --confirm-backlog-premise-close [--min-age-days <n>]";
     public const string BacklogAddUsage = "Usage: backlog-add <title> [body] [--epic <id-or-title>] [--depends-on <id-prefix>] [--no-similar] | backlog-add --title <title> [--text-file <path>|--body-file <path>] [--epic <id-or-title>] [--depends-on <id-prefix>] [--no-similar] | backlog-add <title> --text-file <path> [--epic <id-or-title>] [--depends-on <id-prefix>] [--no-similar] | backlog-add <title> --body-file <path> [--epic <id-or-title>] [--depends-on <id-prefix>] [--no-similar]";
     public const string BacklogUpdateUsage = "Usage: backlog-update <id-prefix> [--title <text>] [--description <text> | --text-file <path> | --body-file <path>] [--priority <value>] [--tags <csv>] [--status <open|done|superseded>]";
-    public const string BacklogShowUsage = "Usage: backlog-show <id-prefix> [--json]";
+    public const string BacklogShowUsage = "Usage: backlog-show <id-prefix> [--summary] [--json]";
     public const string BacklogAnnotateUsage = "Usage: backlog-annotate <id-prefix> <note> | backlog-annotate <id-prefix> --text-file <path>";
     public const string BacklogCloseUsage = "Usage: backlog-close <id-prefix> [reason] | backlog-close <id-prefix> --reason-file <path> | backlog-close <id-prefix> --text-file <path>";
     public const string BacklogSupersedeUsage = "Usage: backlog-supersede <old-id-prefix> <new-id-prefix>";
@@ -447,8 +447,8 @@ internal static class CliCommandHelp
 
     private static readonly CommandHelpEntry BacklogShow = new(
         BacklogShowUsage,
-        "Show a backlog item by id prefix. --json emits the mcg.backlog-item agent envelope.",
-        ["--help", "-h", "--json"]);
+        "Show a backlog item by id prefix. --json emits the mcg.backlog-item agent envelope. --summary omits body and history; with --json it emits mcg.backlog-item-summary version 1.",
+        ["--help", "-h", "--json", "--summary"]);
 
     private static readonly CommandHelpEntry BacklogSimilar = new(
         BacklogSimilarUsage,
