@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
@@ -61,6 +62,41 @@ public sealed class WorkerWorkflowBrokerRoleDeliveryTests : WorkerDispatchTestSu
             Assert.Contains("deterministic-verification.md", RequiredArtifacts(action));
             Assert.DoesNotContain("optional", action, StringComparison.OrdinalIgnoreCase);
             Assert.DoesNotContain("delegated", action, StringComparison.OrdinalIgnoreCase);
+        }
+        Assert.Equal(["deterministic-verification.md", "current-task.md"],
+            RequiredArtifacts(actions["acceptance-evidence"]));
+        Assert.All(actions.Values.SelectMany(RequiredArtifacts), fixture.AssertArtifactAvailable);
+    }
+
+    [Theory]
+    [InlineData(AgentRole.Tester, false)]
+    [InlineData(AgentRole.Tester, true)]
+    [InlineData(AgentRole.Reviewer, false)]
+    [InlineData(AgentRole.Reviewer, true)]
+    public void NodeChecklistRolesRetainRequiredArtifacts(AgentRole role, bool retry)
+    {
+        using var fixture = Prepare(role, retry, includeDotnetProject: false, includePackageJson: true);
+        var actions = ReadActions(fixture.ReadDelivered("workflow-brokers.md"));
+        var checklist = fixture.ReadDelivered("deterministic-verification.md");
+        if (role == AgentRole.Tester)
+        {
+            Assert.Contains("Use `npm test` (or the package.json test script)", checklist, StringComparison.Ordinal);
+            Assert.Contains("Use `npm run build`", checklist, StringComparison.Ordinal);
+        }
+        else
+        {
+            // Reviewer receives policy/evidence requirements, not Developer/Tester execution instructions.
+            Assert.DoesNotContain("## Node.js Verification", checklist, StringComparison.Ordinal);
+            Assert.Contains("## Test Impact Plan", checklist, StringComparison.Ordinal);
+            Assert.Contains("## Required Verification Policy", checklist, StringComparison.Ordinal);
+        }
+        Assert.DoesNotContain("build-only", actions.Keys);
+        foreach (var name in new[] { "build-test-selection", "static-policy-checks", "acceptance-evidence" })
+        {
+            Assert.Contains(name, actions.Keys);
+            Assert.Contains("deterministic-verification.md", RequiredArtifacts(actions[name]));
+            Assert.DoesNotContain("optional", actions[name], StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("delegated", actions[name], StringComparison.OrdinalIgnoreCase);
         }
         Assert.Equal(["deterministic-verification.md", "current-task.md"],
             RequiredArtifacts(actions["acceptance-evidence"]));
@@ -192,6 +228,122 @@ public sealed class WorkerWorkflowBrokerRoleDeliveryTests : WorkerDispatchTestSu
             "deterministic-verification.md", SearchOption.AllDirectories));
     }
 
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public void NodeDeveloperActionsResolveDeliveredArtifacts(bool includeDotnetProject, bool retry)
+    {
+        using var fixture = Prepare(AgentRole.Developer, retry, includeDotnetProject, includePackageJson: true);
+        Assert.Equal(Toolchain.Node, TargetToolchainDetector.Detect(fixture.WorkingDirectory));
+        Assert.True(File.Exists(Path.Combine(fixture.WorkingDirectory, "package.json")));
+        Assert.Equal(includeDotnetProject, File.Exists(Path.Combine(fixture.WorkingDirectory, "Fixture.csproj")));
+        var actions = ReadActions(fixture.ReadDelivered("workflow-brokers.md"));
+        foreach (var name in new[] { "build-test-selection", "static-policy-checks", "acceptance-evidence", "diff-summary" })
+        {
+            Assert.Contains(name, actions.Keys);
+            Assert.NotEmpty(RequiredArtifacts(actions[name]));
+            Assert.Contains("  Use for:", actions[name], StringComparison.Ordinal);
+            Assert.Contains("  Failure handling:", actions[name], StringComparison.Ordinal);
+        }
+        // Keep closure first so the same assertion on baseline fails on missing checklist delivery.
+        Assert.All(actions.Values.SelectMany(RequiredArtifacts), fixture.AssertArtifactAvailable);
+        Assert.True(File.Exists(Path.Combine(fixture.ContextDirectory, "deterministic-verification.md")));
+        Assert.DoesNotContain(fixture.Receipt.Sections,
+            section => section.LogicalIdentity == "context/deterministic-verification.md");
+        Assert.DoesNotContain("context/deterministic-verification.md", fixture.Prompt, StringComparison.Ordinal);
+        Assert.Empty(Directory.EnumerateFiles(Path.Combine(fixture.ContextDirectory, "authoritative"),
+            "deterministic-verification.md", SearchOption.AllDirectories));
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public void NodeDeveloperActionsRetainNativeCommandsAndGateOwnership(bool includeDotnetProject, bool retry)
+    {
+        using var fixture = Prepare(AgentRole.Developer, retry, includeDotnetProject, includePackageJson: true);
+        var broker = fixture.ReadDelivered("workflow-brokers.md");
+        var actions = ReadActions(broker);
+        var build = actions["build-test-selection"];
+        Assert.DoesNotContain("build-only", actions.Keys);
+        Assert.DoesNotContain("Invoke-WorkerBuildCheck", broker, StringComparison.Ordinal);
+        Assert.DoesNotContain("Invoke-IsolatedDotnet", broker, StringComparison.Ordinal);
+        Assert.DoesNotContain("deterministic-verification.md", broker, StringComparison.Ordinal);
+        Assert.Equal("  Suggested command shape: `npm test (or package.json test script)`",
+            Assert.Single(build.Split('\n').Where(line => line.StartsWith("  Suggested command shape:", StringComparison.Ordinal))));
+        var localChecks = Assert.Single(build.Split('\n').Where(line => line.StartsWith("  Local checks:", StringComparison.Ordinal)));
+        Assert.Contains("Use `npm test` (or the package.json test script) to run the test suite.", localChecks, StringComparison.Ordinal);
+        Assert.Contains("Use `npm run build` to verify the project builds.", localChecks, StringComparison.Ordinal);
+        Assert.Contains("Check package.json scripts for the project's test and lint commands.", localChecks, StringComparison.Ordinal);
+        Assert.Contains("Current recommendation:", build, StringComparison.Ordinal);
+        Assert.Contains("generated test-impact plan", build, StringComparison.Ordinal);
+        Assert.Contains("leave unrun checks explicitly pending", build, StringComparison.Ordinal);
+        Assert.Contains("include the command and exit evidence", build, StringComparison.Ordinal);
+        var evidence = actions["acceptance-evidence"];
+        Assert.Contains("Record commands, exit results, failures and missing evidence", evidence, StringComparison.Ordinal);
+        Assert.Contains("never report unrun checks as passed", evidence, StringComparison.Ordinal);
+        Assert.Contains("does not authorize a formal acceptance verdict", evidence, StringComparison.Ordinal);
+        Assert.Contains("The acceptance gate re-runs the project's acceptance manifest checks and decides the verdict", evidence, StringComparison.Ordinal);
+        Assert.Contains("required review remains with its existing owner", evidence, StringComparison.Ordinal);
+        Assert.Contains("missing acceptance evidence should become an explicit blocker", evidence, StringComparison.Ordinal);
+        Assert.Contains("unexpected dirty files are blockers", actions["diff-summary"], StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void NodeDeveloperPolicyReportsRequiredReviewWithoutGrantingAuthority(bool retry)
+    {
+        using var fixture = Prepare(AgentRole.Developer, retry, includeDotnetProject: false,
+            requireRiskReview: true, includePackageJson: true);
+        var actions = ReadActions(fixture.ReadDelivered("workflow-brokers.md"));
+        var policy = actions["static-policy-checks"];
+        Assert.Contains("No deterministic build/test command required by current file scope.", policy, StringComparison.Ordinal);
+        Assert.Contains("human risk review; kind=manual-risk-review; required=True; reason=Task text contains policy, security, migration, rollback, or permission risk signals.", policy, StringComparison.Ordinal);
+        Assert.Contains("generated-path risk", policy, StringComparison.Ordinal);
+        Assert.Contains("worker-result completeness", policy, StringComparison.Ordinal);
+        Assert.Contains("required policy failures block acceptance", policy, StringComparison.Ordinal);
+        Assert.Contains("required human review remain with their existing owners", policy, StringComparison.Ordinal);
+        Assert.Contains("without expanding local execution permissions", policy, StringComparison.Ordinal);
+        Assert.All(actions.Values.SelectMany(RequiredArtifacts), fixture.AssertArtifactAvailable);
+    }
+
+    [Theory]
+    [InlineData("goal")]
+    [InlineData("task")]
+    [InlineData("role")]
+    [InlineData("visibility")]
+    [InlineData("content")]
+    [InlineData("registration")]
+    public void DiffProjectionRejectsInvalidIdentityVisibilityOrContent(string corruption)
+    {
+        using var fixture = Prepare(AgentRole.Developer, retry: false, includeDotnetProject: false, includePackageJson: true);
+        fixture.AssertArtifactAvailable("diff-summary.md");
+        var registryPath = Path.Combine(fixture.ContextDirectory, "artifact-registry.json");
+        var registry = JsonNode.Parse(File.ReadAllText(registryPath))!.AsObject();
+        var artifacts = registry["artifacts"]!.AsArray();
+        var diff = Assert.Single(artifacts, entry => entry!["path"]!.GetValue<string>() == "diff-summary.md")!;
+        switch (corruption)
+        {
+            case "goal": registry["goalId"] = "another-goal"; break;
+            case "task": registry["taskId"] = "another-task"; break;
+            case "role": registry["role"] = "Reviewer"; break;
+            case "visibility": diff["roleVisibility"] = new JsonArray("Reviewer"); break;
+            case "content":
+                var diffPath = Path.Combine(fixture.ContextDirectory, "diff-summary.md");
+                // Equal-length corruption reaches the hash check rather than just the byte count.
+                File.WriteAllText(diffPath, File.ReadAllText(diffPath).Replace("fixture.txt", "foreign.txt", StringComparison.Ordinal));
+                break;
+            case "registration": artifacts.Remove(diff); break;
+            default: throw new ArgumentOutOfRangeException(nameof(corruption));
+        }
+        File.WriteAllText(registryPath, registry.ToJsonString());
+        Assert.ThrowsAny<Xunit.Sdk.XunitException>(() => fixture.AssertArtifactAvailable("diff-summary.md"));
+    }
+
     private static Dictionary<string, string> ReadActions(string broker)
     {
         var start = broker.IndexOf("## Available Broker Actions\n", StringComparison.Ordinal);
@@ -209,7 +361,8 @@ public sealed class WorkerWorkflowBrokerRoleDeliveryTests : WorkerDispatchTestSu
         .ToArray();
 
     private static DeliveryFixture Prepare(AgentRole role, bool retry,
-        bool includeDotnetProject = true, bool includeGoModule = false, bool requireRiskReview = false)
+        bool includeDotnetProject = true, bool includeGoModule = false, bool requireRiskReview = false,
+        bool includePackageJson = false)
     {
         var root = CreateTempDirectory();
         try
@@ -220,15 +373,18 @@ public sealed class WorkerWorkflowBrokerRoleDeliveryTests : WorkerDispatchTestSu
             File.WriteAllText(Path.Combine(workingDirectory, "fixture.txt"), "broker fixture");
             if (includeDotnetProject)
             {
-                // Use the conventional project layout recognized by the existing detector.
-                var projectDirectory = Path.Combine(workingDirectory, "src", "Fixture");
+                // Node precedence is pinned against a root csproj; existing .NET/Go cases keep their layout.
+                var projectDirectory = includePackageJson ? workingDirectory : Path.Combine(workingDirectory, "src", "Fixture");
                 Directory.CreateDirectory(projectDirectory);
                 File.WriteAllText(Path.Combine(projectDirectory, "Fixture.csproj"),
                     "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>");
             }
             if (includeGoModule)
                 File.WriteAllText(Path.Combine(workingDirectory, "go.mod"), "module example.invalid/broker\n\ngo 1.21\n");
-            Assert.Equal(includeGoModule ? Toolchain.Go : includeDotnetProject ? Toolchain.Dotnet : Toolchain.Unknown,
+            if (includePackageJson)
+                File.WriteAllText(Path.Combine(workingDirectory, "package.json"),
+                    """{"name":"broker-fixture","private":true,"scripts":{"test":"node --test","build":"node build.js","lint":"eslint ."}}""");
+            Assert.Equal(includeGoModule ? Toolchain.Go : includePackageJson ? Toolchain.Node : includeDotnetProject ? Toolchain.Dotnet : Toolchain.Unknown,
                 TargetToolchainDetector.Detect(workingDirectory));
             Git("add", ".");
             Git("-c", "user.name=Broker Tests", "-c", "user.email=broker@example.invalid", "commit", "--quiet", "-m", "fixture");
@@ -260,10 +416,13 @@ public sealed class WorkerWorkflowBrokerRoleDeliveryTests : WorkerDispatchTestSu
                 reviewerScopeTotalChangedFileCount: role == AgentRole.Reviewer ? 1 : null,
                 reviewerMergeTreeClean: role == AgentRole.Reviewer ? true : null,
                 reviewerMergeTreeConflictPaths: role == AgentRole.Reviewer ? [] : null,
-                reviewerMergeTreeTotalConflictPathCount: role == AgentRole.Reviewer ? 0 : null);
+                reviewerMergeTreeTotalConflictPathCount: role == AgentRole.Reviewer ? 0 : null,
+                targetHome: includePackageJson ? WorkerTargetHome.NotHome : null);
             var receipt = prepared.Task.LastDispatch!.ContextPackageReceipt!;
             Assert.NotNull(receipt);
             var prompt = File.ReadAllText(prepared.PromptPath);
+            Assert.StartsWith("ctxpkg-v1-sha256:", receipt.SemanticPackageId, StringComparison.Ordinal);
+            Assert.Contains($"Semantic package identity (attestation/cache only; not delivery proof): {receipt.SemanticPackageId}", prompt, StringComparison.Ordinal);
             if (retry)
             {
                 var feedbackReceipt = receipt.RetryFeedbackPromptReceipt;
@@ -324,6 +483,17 @@ public sealed class WorkerWorkflowBrokerRoleDeliveryTests : WorkerDispatchTestSu
             var path = Path.Combine(ContextDirectory, name);
             Assert.True(File.Exists(path), $"Missing domain projection: {name}");
             using var registry = JsonDocument.Parse(File.ReadAllText(Path.Combine(ContextDirectory, "artifact-registry.json")));
+            // Domain projections are deliberately absent from Receipt.Sections. Bind their registry
+            // to this package's delivered metadata before trusting visibility or content hashes.
+            using var metadata = JsonDocument.Parse(ReadInlineDelivered("task/metadata.json"));
+            Assert.Equal(metadata.RootElement.GetProperty("GoalId").GetString(), registry.RootElement.GetProperty("goalId").GetString());
+            Assert.Equal(metadata.RootElement.GetProperty("TaskId").GetString(), registry.RootElement.GetProperty("taskId").GetString());
+            Assert.Equal(Role.ToString(), metadata.RootElement.GetProperty("TaskRole").GetString());
+            Assert.Equal(Role.ToString(), registry.RootElement.GetProperty("role").GetString());
+            Assert.Equal(WorkingDirectory, registry.RootElement.GetProperty("workingDirectory").GetString());
+            using var manifest = JsonDocument.Parse(ReadInlineDelivered("context/manifest.v1.json"));
+            Assert.Contains("artifact-registry.json", manifest.RootElement.GetProperty("CompatibilityAliases")
+                .EnumerateArray().Select(alias => alias.GetString()));
             var entry = Assert.Single(registry.RootElement.GetProperty("artifacts").EnumerateArray(),
                 item => item.GetProperty("path").GetString() == name);
             Assert.True(entry.GetProperty("exists").GetBoolean());
@@ -332,6 +502,22 @@ public sealed class WorkerWorkflowBrokerRoleDeliveryTests : WorkerDispatchTestSu
             Assert.Equal(entry.GetProperty("byteCount").GetInt64(), File.ReadAllBytes(path).LongLength);
             Assert.Equal(entry.GetProperty("sha256").GetString(), WorkerContextArtifact.Hash(File.ReadAllBytes(path)));
             return File.ReadAllText(path);
+        }
+
+        private byte[] ReadInlineDelivered(string identity)
+        {
+            var section = Assert.Single(Receipt.Sections, candidate => candidate.LogicalIdentity == identity);
+            Assert.Contains(Role, section.RoleVisibility);
+            Assert.Equal(ContextDeliveryMode.InlineFull, section.DeliveryMode);
+            AssertPromptReceipt(section);
+            var lines = Prompt.ReplaceLineEndings("\n").Split('\n');
+            var index = Array.FindIndex(lines, line => line.StartsWith($"INLINE FULL: identity={identity};", StringComparison.Ordinal));
+            Assert.True(index >= 0 && index + 1 < lines.Length, $"Missing inline delivery: {identity}");
+            Assert.Contains("encoding=utf8-json", lines[index], StringComparison.Ordinal);
+            var bytes = WorkerContextPackageBuilder.RecoverInlineBytes(lines[index + 1], "utf8-json");
+            Assert.Equal(section.ByteCount, bytes.Length);
+            Assert.Equal(section.ContentHash, WorkerContextArtifact.Hash(bytes));
+            return bytes;
         }
 
         private void AssertPromptReceipt(WorkerContextSectionReceipt section)
@@ -363,12 +549,17 @@ public sealed class WorkerWorkflowBrokerRoleDeliveryTests : WorkerDispatchTestSu
                         Assert.Contains("Report each result in WORKER_RESULT", task, StringComparison.Ordinal);
                         Assert.Contains("The acceptance gate re-runs the Go checks and decides the verdict.", task, StringComparison.Ordinal);
                     }
+                    else if (TargetToolchainDetector.Detect(WorkingDirectory) == Toolchain.Node)
+                        Assert.Contains("Report each command and its result in WORKER_RESULT", ReadProjection(name), StringComparison.Ordinal);
                     else
                         Assert.Contains("Build changed projects with the worker build check.", Prompt, StringComparison.Ordinal);
                 }
             }
             else if (name == "diff-summary.md")
             {
+                // WorkerProfileDispatcher explicitly classifies this as a DomainProjection.
+                // Keep direct delivery mandatory for all other artifacts except current-task.md.
+                Assert.DoesNotContain(Receipt.Sections, section => section.LogicalIdentity == "context/diff-summary.md");
                 Assert.Contains("fixture.txt", ReadProjection(name), StringComparison.Ordinal);
                 Assert.Contains("diff-summary.md", ReadDelivered("workflow-brokers.md"), StringComparison.Ordinal);
             }

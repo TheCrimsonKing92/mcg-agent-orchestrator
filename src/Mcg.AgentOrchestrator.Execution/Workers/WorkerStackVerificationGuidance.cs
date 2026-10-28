@@ -118,6 +118,42 @@ internal static class WorkerStackVerificationGuidance
         "  Failure handling: missing acceptance evidence should become an explicit blocker or a verify command, not a silent pass."
     ];
 
+    internal static IReadOnlyList<string> NodeDeveloperBuildAndPolicyBrokerLines(
+        RepositoryTestImpactPlan testImpactPlan, VerificationPolicy verificationPolicy)
+    {
+        var lines = new List<string>
+        {
+            "- build-test-selection",
+            "  Artifact: current-task.md plus source-survey.md",
+            "  Use for: choosing focused Node tests from the source survey within the assigned scope and reporting requirements in current-task.md.",
+            "  Suggested command shape: `npm test (or package.json test script)`",
+            "  Local checks: Use `npm test` (or the package.json test script) to run the test suite. Use `npm run build` to verify the project builds. Check package.json scripts for the project's test and lint commands.",
+            $"  Current recommendation: {testImpactPlan.Summary}",
+            "  Recommendation source: generated test-impact plan; discover the project's native commands from package.json.",
+            "  Evidence: Record each permitted local command, result and failure in WORKER_RESULT; leave unrun checks explicitly pending.",
+            "  Failure handling: failing required checks are actionable verification failures; include the command and exit evidence.",
+            "- static-policy-checks",
+            "  Artifact: source-survey.md plus diff-summary.md",
+            "  Use for: comparing changed files with the surveyed scope, checking generated-path risk and worker-result completeness, and reporting applicable policy requirements and evidence gaps.",
+            $"  Current policy: {verificationPolicy.Summary}",
+            "  Policy source: generated verification policy. Gate checks and required human review remain with their existing owners; report their status or missing evidence without expanding local execution permissions."
+        };
+        foreach (var check in verificationPolicy.Checks)
+            lines.Add($"  Policy check: {check.Name}; kind={check.Kind}; required={check.Required}; reason={check.Reason}");
+        lines.Add("  Failure handling: required policy failures block acceptance until fixed or explicitly explained.");
+        return lines;
+    }
+
+    internal static IReadOnlyList<string> NodeDeveloperAcceptanceEvidenceBrokerLines() =>
+    [
+        "- acceptance-evidence",
+        "  Artifact: current-task.md plus diff-summary.md",
+        "  Use for: reporting native Node command results against the assigned task and changed files, model-fit evidence, WORKER_RESULT completeness, and pending acceptance manifest or verification evidence.",
+        "  Evidence: Record commands, exit results, failures and missing evidence; never report unrun checks as passed.",
+        "  Verification ownership: Local command-result reporting does not authorize a formal acceptance verdict. The acceptance gate re-runs the project's acceptance manifest checks and decides the verdict; required review remains with its existing owner.",
+        "  Failure handling: missing acceptance evidence should become an explicit blocker or a verify command, not a silent pass."
+    ];
+
     internal static IReadOnlyList<string> DeveloperBuildOnlyBrokerLines()
     {
         var buildInvocation = OrchestratorBuildEvidenceCheck.FormatScriptInvocation(OrchestratorBuildEvidenceCheck.ResolveScriptPath());
