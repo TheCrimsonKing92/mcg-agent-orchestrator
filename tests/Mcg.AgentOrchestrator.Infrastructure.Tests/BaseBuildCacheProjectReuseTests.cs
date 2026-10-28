@@ -134,7 +134,7 @@ public sealed class BaseBuildCacheProjectReuseTests(ITestOutputHelper output) : 
                     var result = Run(tree, owned, args);
                     Assert.True(result.ExitCode == 0, result.Stdout + result.Stderr);
                     return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(result.ExitCode, result.Stdout));
-                }, ProcessEnvironment(tree, owned), candidate.CachePlan.BuildProjects));
+                }, ProcessEnvironment(tree, owned), candidate.CachePlan.BuildProjects, candidate.IdentityDiagnostics));
         var completed = await AcceptanceDotnetBuildPhase.EnsureAsync(phase, slot, hooks);
         Assert.True(completed.Run.Result.Passed);
         Assert.NotEmpty(commands);
@@ -154,6 +154,26 @@ public sealed class BaseBuildCacheProjectReuseTests(ITestOutputHelper output) : 
         Assert.Equal("complete", fields["build_phase_accounting_status"]);
         Assert.True(long.TryParse(fields["build_phase_residual_ms"], NumberStyles.None, CultureInfo.InvariantCulture, out _));
         Assert.Equal("managed_check_exclusive_of_cache", fields["run_build_commands_scope"]);
+        foreach (var role in new[] { "identity_initial_", "identity_revalidation_" })
+        {
+            var invoked = role == "identity_initial_" || fields["identity_revalidation_count"] != "0";
+            Assert.Equal(invoked ? "measured" : "not_run", fields[role + "availability"]);
+            Assert.Equal(invoked ? "complete" : "partial", fields[role + "accounting_status"]);
+            Assert.Equal("command_boundary_internals_unknown", fields[role + "command_scope"]);
+            if (!invoked) continue;
+            foreach (var stage in new[] { "restore_command", "evaluation_command", "preprocessing_command", "directory_hash", "file_hash" })
+            {
+                Assert.True(long.TryParse(fields[role + stage + "_ms"], NumberStyles.None, CultureInfo.InvariantCulture, out _));
+                Assert.True(long.TryParse(fields[role + stage + "_count"], NumberStyles.None, CultureInfo.InvariantCulture, out var count));
+                Assert.Equal(count == 0 ? "not_run" : "measured", fields[role + stage + "_status"]);
+            }
+            foreach (var work in new[] { "total_ms", "residual_ms", "directory_hash_executions", "directory_hash_memo_hits",
+                         "directory_hash_files", "directory_hash_bytes", "file_hash_files", "file_hash_bytes" })
+                Assert.True(long.TryParse(fields[role + work], NumberStyles.None, CultureInfo.InvariantCulture, out _));
+            Assert.Equal(long.Parse(fields[role + "directory_hash_count"], CultureInfo.InvariantCulture),
+                long.Parse(fields[role + "directory_hash_executions"], CultureInfo.InvariantCulture) +
+                long.Parse(fields[role + "directory_hash_memo_hits"], CultureInfo.InvariantCulture));
+        }
         output.WriteLine($"REUSE {slot} Csc={compilerCalls} {summary}");
         return new(environment, summary, compilerCalls, commands);
     }

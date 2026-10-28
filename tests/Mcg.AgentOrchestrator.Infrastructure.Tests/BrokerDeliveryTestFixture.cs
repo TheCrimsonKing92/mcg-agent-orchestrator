@@ -24,6 +24,16 @@ internal static class BrokerDeliveryTestFixture
         .SelectMany(match => match.Groups["paths"].Value.Split(" plus ", StringSplitOptions.TrimEntries))
         .ToArray();
 
+    // Planning closure includes prose dependencies, not just Artifact declarations. Treat mentions
+    // conservatively unless a separate line explicitly identifies an optional/descriptive reference.
+    internal static string[] RequiredPlanningArtifacts(string action) => action.ReplaceLineEndings("\n")
+        .Split('\n')
+        .Where(line => !Regex.IsMatch(line, @"^\s*(?:Optional|Descriptive) artifact: [\w-]+\.md\s*$"))
+        .SelectMany(line => Regex.Matches(line, @"(?<![\w.-])(?<name>[\w-]+\.md)\b")
+            .Select(match => match.Groups["name"].Value))
+        .Distinct(StringComparer.Ordinal)
+        .ToArray();
+
     internal static DeliveryFixture Prepare(AgentRole role, bool retry,
         bool includeDotnetProject = true, bool includeGoModule = false, bool requireRiskReview = false,
         bool includePackageJson = false, string? pythonMarker = null)
@@ -142,6 +152,8 @@ internal static class BrokerDeliveryTestFixture
             Assert.Contains(Role, section.RoleVisibility);
             Assert.Equal(ContextDeliveryMode.MandatoryFile, section.DeliveryMode);
             Assert.NotNull(section.MandatoryRelativePath);
+            Assert.Equal($".orchestrator-context/{GoalId}/authoritative/{TaskId}/typed/{identity}",
+                section.MandatoryRelativePath.Replace('\\', '/'));
             var path = Path.Combine(WorkingDirectory, section.MandatoryRelativePath);
             Assert.True(File.Exists(path), $"Missing delivered artifact: {path}");
             Assert.Equal(section.ByteCount, File.ReadAllBytes(path).Length);
@@ -150,6 +162,14 @@ internal static class BrokerDeliveryTestFixture
             Assert.NotEmpty(ReadProjection(name));
             Assert.Equal(section.ContentHash,
                 WorkerContextArtifact.Hash(File.ReadAllBytes(Path.Combine(ContextDirectory, name))));
+            using var manifest = JsonDocument.Parse(ReadInlineDelivered("context/manifest.v1.json"));
+            var registration = Assert.Single(manifest.RootElement.GetProperty("Artifacts").EnumerateArray(),
+                entry => entry.GetProperty("LogicalIdentity").GetString() == identity);
+            Assert.Equal(section.ContentHash, registration.GetProperty("Sha256").GetString());
+            Assert.Equal(section.ContractVersion, registration.GetProperty("ContractVersion").GetInt32());
+            Assert.Equal(section.DeliveryMode.ToString(), registration.GetProperty("DeliveryMode").GetString());
+            Assert.Contains(Role.ToString(), registration.GetProperty("RoleVisibility").EnumerateArray()
+                .Select(entry => entry.GetString()));
             return File.ReadAllText(path).ReplaceLineEndings("\n");
         }
 
@@ -243,6 +263,24 @@ internal static class BrokerDeliveryTestFixture
             else
             {
                 Assert.NotEmpty(ReadDelivered(name));
+            }
+        }
+
+        public void AssertPlanningArtifactAvailable(string name)
+        {
+            Assert.Contains(Role, new[] { AgentRole.Planner, AgentRole.Researcher });
+            AssertArtifactAvailable(name);
+            if (name == "current-task.md")
+            {
+                // A projection alone cannot prove task content reached the recipient. Recover the
+                // actual inline semantic deliveries and validate their hashes before using them.
+                Assert.Equal("Keep broker artifacts satisfiable.",
+                    Encoding.UTF8.GetString(ReadInlineDelivered("task/description.md")));
+                // The instruction body and task description are separate semantic sources.
+                // Its registered projection still carries the description (checked above), while
+                // the delivered brief supplies instructions with independently verified membership/hash.
+                Assert.Contains("## Instructions",
+                    Encoding.UTF8.GetString(ReadInlineDelivered("brief/current.md")), StringComparison.Ordinal);
             }
         }
 

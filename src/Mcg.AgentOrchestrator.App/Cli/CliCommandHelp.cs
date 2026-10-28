@@ -45,7 +45,7 @@ internal static class CliCommandHelp
     public const string WorkspaceUsage = "Usage: workspace [create|merge|rebase|remove] [goal-id-prefix] [--force-terminal-cleanup]";
     public const string WorkspaceCreateUsage = "Usage: workspace create [goal-id-prefix]";
     public const string ReassignAgentUsage = "Usage: reassign-agent <task-number> <agent-id>|<goal-prefix> <task-number> <agent-id>|--goal <goal-prefix> <task-number> <agent-id>";
-    public const string BacklogListUsage = "Usage: backlog-list [--all] [--limit <n>] [--status <value>] [--text <pattern>|--text=<leading-dash-pattern>] [--json]";
+    public const string BacklogListUsage = "Usage: backlog-list [--all] [--limit <n>] [--status <value>] [--text <pattern>|--text=<leading-dash-pattern>] [--json] [--newest-first]";
     public const string BacklogTriageUsage = "Usage: backlog-triage [--limit <n>] [--stale-days <n>]";
     public const string BacklogPremiseCheckUsage = "Usage: backlog-premise-check [--min-age-days <n>]";
     public const string BacklogPremiseCloseUsage = "Usage: backlog-premise-close <id-prefix> [<id-prefix> ...] --confirm-backlog-premise-close [--min-age-days <n>]";
@@ -417,8 +417,8 @@ internal static class CliCommandHelp
 
     private static readonly CommandHelpEntry BacklogList = new(
         BacklogListUsage,
-        "List every backlog item with its status and linked goal id. --json emits the mcg.backlog-list agent envelope.",
-        ["--all", "--limit", "--status", "--text", "--help", "-h", "--json"]);
+        "List every backlog item with its status and linked goal id. --newest-first orders matches by creation time descending, then id ascending, before --limit. --json emits the mcg.backlog-list agent envelope.",
+        ["--all", "--newest-first", "--limit", "--status", "--text", "--help", "-h", "--json"]);
 
     private static readonly CommandHelpEntry BacklogTriage = new(
         BacklogTriageUsage,

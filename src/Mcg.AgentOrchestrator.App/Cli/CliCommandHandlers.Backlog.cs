@@ -20,15 +20,16 @@ private static bool? TryExecuteBacklogCommand(string command, IReadOnlyList<stri
                 store.ListAsync(includeAll: true).GetAwaiter().GetResult(),
                 filtersByListingStatus ? null : status,
                 text,
-                filtersByListingStatus ? null : limit);
+                limit: null);
             if (filtersByListingStatus)
             {
                 items = items
                     .Where(item => RenderBacklogListingStatus(item, FindAuthoritativeSourceGoalForRead(context, item.Id, out _))
                         .Equals(status, StringComparison.OrdinalIgnoreCase))
-                    .Take(limit ?? int.MaxValue)
                     .ToArray();
             }
+            items = BacklogListAgentReadView.SelectItems(items,
+                HasCliConfirmation(parts, "--newest-first"), limit);
 
             var json = HasCliConfirmation(parts, "--json");
             var rows = json ? new List<BacklogListAgentReadView.Row>() : null;
@@ -50,9 +51,8 @@ private static bool? TryExecuteBacklogCommand(string command, IReadOnlyList<stri
                             return new BacklogPrerequisiteOwner(owner, ownerAmbiguity is not null);
                         },
                         goal => ResolveBacklogShowGoalLandingState(context, goal));
-                    rows.Add(new(item.Id, item.Title, RenderBacklogListingStatus(item, linkedGoal),
-                        ambiguity is null ? linkedGoal?.Id.Value : null, ambiguity is not null, readiness.Eligible,
-                        item.CreatedAt, item.UpdatedAt, item.Priority, item.Tags, item.SupersededBy));
+                    rows.Add(BacklogListAgentReadView.CreateRow(item, RenderBacklogListingStatus(item, linkedGoal),
+                        ambiguity is null ? linkedGoal?.Id.Value : null, ambiguity is not null, readiness.Eligible));
                     continue;
                 }
                 Console.WriteLine($"{BacklogTextView.RenderBacklogListTag(item)}{BacklogTextView.RenderBacklogTimestampSuffix(item)}{BacklogTextView.RenderBacklogListSuffix(item)}{RenderBacklogReadinessSuffix(item, context, store)} {item.Id} | status={RenderBacklogListingStatus(item, linkedGoal)} | goal={goalId} | title={item.Title}");

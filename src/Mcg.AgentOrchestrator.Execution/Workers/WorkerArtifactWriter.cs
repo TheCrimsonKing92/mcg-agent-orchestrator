@@ -560,6 +560,7 @@ internal sealed partial class WorkerArtifactWriter
         var toolchain = ProjectStackResolver.Resolve(workingDirectory, _targetHome.ProjectHomeDirectory);
         var brokerNote = TargetToolchainDetector.GetBrokerBuildTestNote(toolchain);
         var brokerCommandHint = TargetToolchainDetector.GetBrokerCommandHint(toolchain, goalPrefix, attemptName);
+        var planningRole = task.RequiredRole is AgentRole.Planner or AgentRole.Researcher;
         var developerBuildOnly = toolchain == Toolchain.Dotnet && task.RequiredRole == AgentRole.Developer &&
             !BuildRoleVisibility("deterministic-verification.md").Contains(task.RequiredRole.ToString(), StringComparer.Ordinal);
         var lines = new List<string>
@@ -570,7 +571,9 @@ internal sealed partial class WorkerArtifactWriter
             string.Empty,
             "## Available Broker Actions",
         };
-        if (developerBuildOnly)
+        if (planningRole)
+            lines.AddRange(PlanningBrokerGuidance.BuildAndPolicyLines(toolchain, testImpactPlan, verificationPolicy, plannerUsesDurableResearch));
+        else if (developerBuildOnly)
             lines.AddRange(WorkerStackVerificationGuidance.DeveloperBuildOnlyBrokerLines());
         else if (toolchain == Toolchain.Go && task.RequiredRole == AgentRole.Developer)
             lines.AddRange(WorkerStackVerificationGuidance.GoDeveloperBuildAndPolicyBrokerLines(testImpactPlan, verificationPolicy));
@@ -597,13 +600,20 @@ internal sealed partial class WorkerArtifactWriter
                 "  Failure handling: required policy failures block acceptance until fixed or explicitly explained.",
             ]);
         }
-        lines.AddRange([
-            "- diff-summary",
-            "  Artifact: diff-summary.md",
-            "  Use for: existing workspace changes, changed files, diff stat, and generated-output noise checks.",
-            "  Failure handling: unexpected dirty files are blockers unless they are part of the assigned task.",
-        ]);
-        if (toolchain == Toolchain.Go && task.RequiredRole == AgentRole.Developer)
+        if (planningRole)
+            lines.AddRange(PlanningBrokerGuidance.DiffSummaryLines(plannerUsesDurableResearch));
+        else
+        {
+            lines.AddRange([
+                "- diff-summary",
+                "  Artifact: diff-summary.md",
+                "  Use for: existing workspace changes, changed files, diff stat, and generated-output noise checks.",
+                "  Failure handling: unexpected dirty files are blockers unless they are part of the assigned task.",
+            ]);
+        }
+        if (planningRole)
+            lines.AddRange(PlanningBrokerGuidance.AcceptanceEvidenceLines());
+        else if (toolchain == Toolchain.Go && task.RequiredRole == AgentRole.Developer)
             lines.AddRange(WorkerStackVerificationGuidance.GoDeveloperAcceptanceEvidenceBrokerLines());
         else if (toolchain == Toolchain.Node && task.RequiredRole == AgentRole.Developer)
             lines.AddRange(WorkerStackVerificationGuidance.NodeDeveloperAcceptanceEvidenceBrokerLines());
@@ -620,20 +630,27 @@ internal sealed partial class WorkerArtifactWriter
         }
         if (_targetHome.IsOrchestratorHome)
         {
-            lines.AddRange([
-                "- backlog-log-evidence",
-                "  Command: `dogfood-log list --limit <n>` / `dogfood-log add <goal-prefix>`",
-                "  Store: `.orchestrator/dogfood-log.db` is the durable dogfood evidence source; DOGFOOD_LOG.md is only an operator pointer when present.",
-                "  Use for: closing backlog items, filing follow-ups, and recording Model fit at goal boundaries.",
-                "  Failure handling: missing backlog/log evidence should be resolved with the SQLite-backed command surface, not file edits.",
-            ]);
+            if (planningRole)
+                lines.AddRange(PlanningBrokerGuidance.BacklogEvidenceLines());
+            else
+            {
+                lines.AddRange([
+                    "- backlog-log-evidence",
+                    "  Command: `dogfood-log list --limit <n>` / `dogfood-log add <goal-prefix>`",
+                    "  Store: `.orchestrator/dogfood-log.db` is the durable dogfood evidence source; DOGFOOD_LOG.md is only an operator pointer when present.",
+                    "  Use for: closing backlog items, filing follow-ups, and recording Model fit at goal boundaries.",
+                    "  Failure handling: missing backlog/log evidence should be resolved with the SQLite-backed command surface, not file edits.",
+                ]);
+            }
         }
         lines.AddRange([
             string.Empty,
             "## Broker Output Contract",
             "- Prefer broker artifact paths in your evidence over repeating full artifact contents.",
             "- Include broker failures in WORKER_RESULT blockers.",
-            "- Include broker commands and required checks in WORKER_RESULT commands/tests."
+            planningRole
+                ? "- Report supplied receipts and pending evidence requests in WORKER_RESULT; planning recommendations do not establish executed results."
+                : "- Include broker commands and required checks in WORKER_RESULT commands/tests."
         ]);
         if (!plannerUsesDurableResearch)
         {

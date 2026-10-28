@@ -267,7 +267,14 @@ public sealed class ToolchainDetectionTests
             var broker = File.ReadAllText(Path.Combine(context, "workflow-brokers.md"));
 
             Xunit.Assert.Contains("- build-test-selection", broker, StringComparison.Ordinal);
-            Xunit.Assert.Contains($"  Suggested command shape: `{command}`", broker, StringComparison.Ordinal);
+            if (role == AgentRole.Developer)
+            {
+                Xunit.Assert.Contains($"  Suggested command shape: `{command}`", broker, StringComparison.Ordinal);
+            }
+            else
+            {
+                Xunit.Assert.DoesNotContain(" Suggested command shape:", broker, StringComparison.Ordinal);
+            }
             Xunit.Assert.Contains("- static-policy-checks", broker, StringComparison.Ordinal);
             Xunit.Assert.Contains("- acceptance-evidence", broker, StringComparison.Ordinal);
             if (role == AgentRole.Developer)
@@ -280,8 +287,9 @@ public sealed class ToolchainDetectionTests
             }
             else
             {
-                Xunit.Assert.Contains("  Artifact: deterministic-verification.md", broker, StringComparison.Ordinal);
-                Xunit.Assert.Contains("  Artifact: deterministic-verification.md plus current-task.md", broker, StringComparison.Ordinal);
+                Xunit.Assert.DoesNotContain("deterministic-verification.md", broker, StringComparison.Ordinal);
+                Xunit.Assert.Contains("current-task.md", broker, StringComparison.Ordinal);
+                Xunit.Assert.Contains("Acceptance", broker, StringComparison.Ordinal);
                 Xunit.Assert.DoesNotContain("Local command-result reporting", broker, StringComparison.Ordinal);
             }
             Xunit.Assert.DoesNotContain("- build-only", broker, StringComparison.Ordinal);
