@@ -8,11 +8,15 @@ using static ConductorDriverTests;
 [Xunit.Collection("IsolatedProcessSpawning")]
 public sealed class ConductorDriverTestsTesterFindingCategoryRouting
 {
-    [Xunit.Fact]
-    public void RetainedMixedFindingsRouteCheckpointOwnerOnceAcrossReload()
+    [Xunit.Theory]
+    [Xunit.InlineData("valid")]
+    [Xunit.InlineData("historical-dispatch")]
+    [Xunit.InlineData("historical-verification")]
+    public void RetainedMixedFindingsRouteCheckpointOwnerOnceAcrossReload(string control)
     {
-        var (kernel, goal) = RetainedMixedFindings();
-        var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
+        using var repository = new CandidateRepository();
+        var (kernel, goal) = RetainedMixedFindings(repository, control);
+        var developer = goal.Tasks.Single(task => task.Id.Value == "2d0c7585098040d6aa868bd8568a49bb");
         var tester = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Tester);
         var checkpointDispatch = developer.DispatchHistory[0];
         Xunit.Assert.Equal("a104a98deeed4719", DispatchIdentity.BuildId(goal.Id, developer.Id, checkpointDispatch));
@@ -20,17 +24,21 @@ public sealed class ConductorDriverTestsTesterFindingCategoryRouting
             DispatchIdentity.BuildId(goal.Id, developer.Id, checkpointDispatch));
         Xunit.Assert.Null(checkpointDispatch.ResultCommit);
         Xunit.Assert.All(developer.VerificationHistory, record => Xunit.Assert.False(record.HasCommittedChanges));
-        Xunit.Assert.Equal(RetainedCandidate, developer.LastDispatch!.BaseCommit);
-        Xunit.Assert.Equal(RetainedCandidate, developer.LastDispatch.ResultCommit);
-        Xunit.Assert.Equal(RetainedCandidate, tester.LastVerification!.ReviewedCommit);
+        Xunit.Assert.Equal(repository.Candidate, developer.LastDispatch!.BaseCommit);
+        Xunit.Assert.Equal(repository.Candidate, developer.LastDispatch.ResultCommit);
+        Xunit.Assert.Equal(repository.Candidate, tester.LastVerification!.ReviewedCommit);
         Xunit.Assert.True(VerifyingFindingCurrency.IsCurrent(goal, tester, tester.LastVerification));
         Xunit.Assert.Equal(WorkTaskStatus.Completed, developer.Status);
         Xunit.Assert.Equal(WorkTaskStatus.Failed, tester.Status);
+        if (control == "historical-verification")
+            Xunit.Assert.Contains(goal.Tasks.Single(task => task.Id.Value == "historical-developer").VerificationHistory,
+                record => record.HasCommittedChanges);
         var retries = new List<(TaskId Target, string Message, RetryCause Cause)>();
         var focusedRuns = 0;
         ConductorDriver Driver() => MakeDriver(
+            executionDirectory: repository.Root,
             getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
-            getPreReviewEvidenceContext: _ => NoPreReviewContext(RetainedCandidate),
+            getPreReviewEvidenceContext: _ => NoPreReviewContext(repository.Candidate),
             dispatchAndStart: _ => DispatchStartOutcome.EmptyBatch("fixture holds dispatch after routing"),
             runFocusedEvidence: (_, request) =>
             {
@@ -45,7 +53,7 @@ public sealed class ConductorDriverTestsTesterFindingCategoryRouting
 
         Driver().AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
 
-        // Negative control without checkpoint ownership recognition: HasEverCommittedOutput
+        // Negative control without checkpoint ownership recognition: target selection
         // leaves RequiresCommittedTarget true with no explicit target.
         var retry = Xunit.Assert.Single(retries);
         Xunit.Assert.Equal(developer.Id, retry.Target);
@@ -89,17 +97,22 @@ public sealed class ConductorDriverTestsTesterFindingCategoryRouting
     [Xunit.InlineData("wrong-dispatch")]
     [Xunit.InlineData("empty-commit")]
     [Xunit.InlineData("unchanged-commit")]
+    [Xunit.InlineData("unrelated-checkpoint")]
+    [Xunit.InlineData("older-checkpoint")]
+    [Xunit.InlineData("missing-repository")]
     [Xunit.InlineData("stale-candidate")]
     [Xunit.InlineData("stale-attempt")]
     [Xunit.InlineData("ambiguous")]
     public void RetainedMixedFindingsWithoutAuthoritativeCheckpointEscalate(string control)
     {
-        var (kernel, goal) = RetainedMixedFindings(control);
+        using var repository = new CandidateRepository();
+        var (kernel, goal) = RetainedMixedFindings(repository, control);
         var retries = new List<TaskId>();
         string? escalation = null;
         var driver = MakeDriver(
+            executionDirectory: control == "missing-repository" ? null : repository.Root,
             getFacts: _ => GoalLifecycleFacts.None,
-            getPreReviewEvidenceContext: _ => NoPreReviewContext(RetainedCandidate),
+            getPreReviewEvidenceContext: _ => NoPreReviewContext(repository.Candidate),
             retryTaskWithCause: (goalId, taskId, message, kind, cause) =>
             {
                 retries.Add(taskId);
@@ -114,9 +127,6 @@ public sealed class ConductorDriverTestsTesterFindingCategoryRouting
         Xunit.Assert.Contains("could not be routed to an upstream Developer task", escalation);
     }
 
-    private const string RetainedCandidate = "ff8df75a0855771c32b8d562c66a08e3cd444766";
-    private const string RetainedCheckpoint = "d1a712d9430aad7192f9559da6c9909d3a8f6a5f";
-
     private static void AssertRetainedAdvisory(TaskSpec tester)
     {
         var finding = Xunit.Assert.Single(tester.VerificationHistory.Last().MergedReviewFindings!,
@@ -128,11 +138,14 @@ public sealed class ConductorDriverTestsTesterFindingCategoryRouting
         Xunit.Assert.Equal("FullyQualifiedName~WorkerBuildDiagnosticDefaultsTests", selection.TestClass);
     }
 
-    private static (AgentOrchestratorKernel Kernel, Goal Goal) RetainedMixedFindings(string control = "valid")
+    private static (AgentOrchestratorKernel Kernel, Goal Goal) RetainedMixedFindings(
+        CandidateRepository repository, string control)
     {
         // Retained task-history.json and incident-timeline.json under operator-evidence/
         // tester-routing-20261028, cutoff 00:40Z before the manual Developer retry.
-        // ff8 is an integration merge whose first parent is the typed committed checkpoint.
+        // Remap only Git object IDs into an isolated graph: retained ff8df75a is an integration
+        // merge whose first parent is checkpoint d1a712d9. Goal/task/dispatch identities, times,
+        // no-change round and mixed findings retain the incident's structured evidence.
         const string goalId = "45469eead6f54022b9a2f9f3e32d695a";
         const string developerId = "2d0c7585098040d6aa868bd8568a49bb";
         const string testerId = "f944bdc5c3104af09173b1bd55576fa8";
@@ -145,8 +158,10 @@ public sealed class ConductorDriverTestsTesterFindingCategoryRouting
                 control == "wrong-dispatch" ? "another-dispatch" : "a104a98deeed4719",
                 control == "failed" ? FailedRoundCheckpointOutcome.CommitFailed : FailedRoundCheckpointOutcome.Committed,
                 control == "empty-commit" ? "" : control == "unchanged-commit"
-                    ? "7b393558262c05c2e3f8d0cbdcbda6e2c7387659" : RetainedCheckpoint, null));
-        var noChangeCandidate = control == "stale-candidate" ? new string('b', 40) : RetainedCandidate;
+                    ? "7b393558262c05c2e3f8d0cbdcbda6e2c7387659"
+                    : control == "unrelated-checkpoint" ? repository.Main
+                    : control == "older-checkpoint" ? repository.Base : repository.Checkpoint, null));
+        var noChangeCandidate = control == "stale-candidate" ? new string('b', 40) : repository.Candidate;
         var noChangeDispatch = new TaskDispatchSnapshot("codex-cli", command, directory,
             DateTimeOffset.Parse("2026-10-28T00:18:22.3877499Z"), BaseCommit: noChangeCandidate, ResultCommit: noChangeCandidate);
         var failedDeveloper = new TaskVerificationSnapshot(command, directory, 1, "failed build evidence", "",
@@ -155,13 +170,13 @@ public sealed class ConductorDriverTestsTesterFindingCategoryRouting
             DateTimeOffset.Parse("2026-10-28T00:21:22.8188057Z"), WorkerResultPresent: true);
         var findings = RetainedFindings();
         var testerDispatch = new TaskDispatchSnapshot("codex-cli", command, directory,
-            DateTimeOffset.Parse("2026-10-28T00:28:30.4513759Z"), BaseCommit: RetainedCandidate, ResultCommit: RetainedCandidate);
+            DateTimeOffset.Parse("2026-10-28T00:28:30.4513759Z"), BaseCommit: repository.Candidate, ResultCommit: repository.Candidate);
         var testerOutput = string.Join(Environment.NewLine,
             "WORKER_RESULT:", "files: none", "commands: inspect candidate", "tests: deferred - WorkerBuildDiagnosticDefaultsTests",
             "commit: none", "blockers: none", $"findings: {JsonSerializer.Serialize(findings)}",
             "model_fit: fixture/model - adequate - routing fixture", "skills: none", "confidence: high", "END_WORKER_RESULT");
         var testerVerification = new TaskVerificationSnapshot(command, directory, 0, testerOutput, "",
-            DateTimeOffset.Parse("2026-10-28T00:31:52.4372648Z"), ReviewedCommit: RetainedCandidate,
+            DateTimeOffset.Parse("2026-10-28T00:31:52.4372648Z"), ReviewedCommit: repository.Candidate,
             MergedReviewFindings: findings, WorkerResultPresent: true,
             AuthoritativeStandardOutput: testerOutput,
             DispatchStartedAt: DateTimeOffset.Parse("2026-10-28T00:28:32.6392527Z"));
@@ -185,12 +200,30 @@ public sealed class ConductorDriverTestsTesterFindingCategoryRouting
             var owner = tasks.Single(task => task.RequiredRole == AgentRole.Developer);
             // A second authoritative committed owner must not be selected by task order alone.
             tasks.Insert(0, owner with { Id = "other-developer", LastDispatch = noChangeDispatch with
-                { BaseCommit = "other-base", ResultCommit = RetainedCandidate },
-                DispatchHistory = [noChangeDispatch with { BaseCommit = "other-base", ResultCommit = RetainedCandidate }] });
+                { BaseCommit = "other-base", ResultCommit = repository.Candidate },
+                DispatchHistory = [noChangeDispatch with { BaseCommit = "other-base", ResultCommit = repository.Candidate }] });
+        }
+        if (control is "historical-dispatch" or "historical-verification")
+        {
+            var owner = tasks.Single(task => task.RequiredRole == AgentRole.Developer);
+            var historicalDispatch = noChangeDispatch with { BaseCommit = repository.Base, ResultCommit = repository.Main,
+                DispatchedAt = firstDispatch.DispatchedAt };
+            var historicalVerification = failedDeveloper with { ExitCode = 0 };
+            // This Developer committed on the merged main side, not the candidate's output spine.
+            // Either old predicate branch incorrectly counts it and makes the real owner ambiguous.
+            tasks.Insert(0, owner with { Id = "historical-developer", LastDispatch = noChangeDispatch,
+                DispatchHistory = [historicalDispatch, noChangeDispatch], LastVerification = completedDeveloper,
+                VerificationHistory = [historicalVerification, completedDeveloper] });
         }
         var kernel = AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot(
             [snapshot with { Id = goalId, Tasks = tasks, Timeline = [] }], []));
         var goal = kernel.GetGoal(new GoalId(goalId));
+        // HasCommittedChanges is an execution-record flag, not a persisted snapshot member.
+        // Use the kernel API to exercise the legacy verification-only ownership branch.
+        if (control == "historical-verification")
+            kernel.RecordTaskVerification(goal.Id, new TaskId("historical-developer"), new TaskVerificationRecord(
+                command, directory, 0, "historical committed output", "", completedDeveloper.CompletedAt,
+                HasCommittedChanges: true));
         var tester = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Tester);
         // Restored subscription reports require authoritative stdout before finding routing.
         // A preview alone is unreadable and would exercise only terminal escalation.
@@ -198,6 +231,39 @@ public sealed class ConductorDriverTestsTesterFindingCategoryRouting
         Xunit.Assert.Equal(VerificationTerminalContractStatus.Valid,
             WorkerResultBlockers.AssessSubscriptionVerification(tester, tester.LastVerification).Status);
         return (kernel, goal);
+    }
+
+    private sealed class CandidateRepository : IDisposable
+    {
+        public string Root { get; } = SharedTestSupport.CreateTempDirectory();
+        public string Base { get; }
+        public string Checkpoint { get; }
+        public string Main { get; }
+        public string Candidate { get; }
+
+        public CandidateRepository()
+        {
+            Read("init", "--initial-branch=fixture");
+            Read("config", "user.name", "Routing fixture");
+            Read("config", "user.email", "routing@example.test");
+            var tree = GitCli.RunWithStandardInput(Root, GitCli.DefaultTimeoutMilliseconds, "", "mktree");
+            Xunit.Assert.True(tree.Succeeded && !tree.DrainTimedOut, tree.Error);
+            var treeSha = tree.Output.Trim();
+            Base = Read("commit-tree", treeSha, "-m", "base");
+            Checkpoint = Read("commit-tree", treeSha, "-p", Base, "-m", "Developer checkpoint");
+            Main = Read("commit-tree", treeSha, "-p", Base, "-m", "unrelated main output");
+            Candidate = Read("commit-tree", treeSha, "-p", Checkpoint, "-p", Main, "-m", "integration merge");
+            Xunit.Assert.Equal($"{Checkpoint} {Main}", Read("show", "-s", "--format=%P", Candidate));
+        }
+
+        private string Read(params string[] arguments)
+        {
+            var result = GitCli.RunForRepository(Root, arguments);
+            Xunit.Assert.True(result.Succeeded && !result.DrainTimedOut, result.Error);
+            return result.Output.Trim();
+        }
+
+        public void Dispose() => SharedTestSupport.RemoveTempDirectory(Root);
     }
 
     private static ReviewFinding[] RetainedFindings() =>

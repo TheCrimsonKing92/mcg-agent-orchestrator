@@ -37,7 +37,7 @@ internal sealed partial class ConductorDriver
             return null;
         }
 
-        var upstreamDeveloper = TesterFindingDeveloperTargetPolicy.Select(goal, task);
+        var upstreamDeveloper = TesterFindingDeveloperTargetPolicy.Select(goal, task, _executionDirectory);
         var finding = string.Join(
             "; ",
             developerOwnedFindings.Select(item =>
