@@ -22,23 +22,19 @@ public sealed class OwnerConsolePreviewCompletionTests
         Assert.Contains(PreviewMarker(expected), text);
     }
 
-    [Fact]
-    public async Task OverlappingLayout_AfterPreviewLoad_ReproducesLoadingAssertion()
+    [Theory]
+    [InlineData("pending")]
+    [InlineData("passed")]
+    public async Task OverlappingLayout_AfterPreviewLoad_PreservesPreviewAndDetail(string expected)
     {
-        var text = await RenderControlledViewAsync("pending", completeLayoutBeforeLoad: false);
-        Assert.Equal("Loading…", text);
-        // The identical assertion used by the repaired fixture must reject this schedule.
-        var failure = Record.Exception(() => Assert.Contains(PreviewMarker("pending"), text));
-        Assert.NotNull(failure);
-        Assert.Contains(PreviewMarker("pending"), failure.Message);
-        Assert.DoesNotContain(PreviewMarker("passed"), text);
+        var text = await RenderControlledViewAsync(expected, completeLayoutBeforeLoad: false);
+        Assert.Contains(PreviewMarker(expected), text);
+        Assert.DoesNotContain("Loading…", text);
     }
 
-    // Acceptance RED control: in InitialLayout_BeforePublication_PreservesPreviewAndDetail,
-    // change only completeLayoutBeforeLoad: true to false. Its unchanged final Contains must
-    // fail with loading content (both rows); restore true for GREEN. No production mutation.
-    // This controls an 8 -> 100 column resize to make TextChanging observable for Loading…; it establishes
-    // the overlapping uninitialized-fixture contract, not the historical 100-column interleaving.
+    // Force both publication orders during an 8 -> 100 column resize. Completing the entire
+    // layout also runs BOARD/ACTIVITY viewport callbacks, which render the current summary;
+    // an older TextChanging callback does not imply that Loading… is the final preview.
     private static async Task<string> RenderControlledViewAsync(string expected, bool completeLayoutBeforeLoad)
     {
         var kernel = new AgentOrchestratorKernel();
