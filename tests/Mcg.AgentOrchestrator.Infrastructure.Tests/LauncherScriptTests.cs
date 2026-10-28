@@ -2280,8 +2280,12 @@ public sealed class LauncherScriptTests
             Assert.Contains("PROCESS id=115", result.Stdout);
             Assert.DoesNotContain("PROCESS id=102", result.Stdout);
             Assert.DoesNotContain("PROCESS id=103", result.Stdout);
-            Assert.Contains("LOCK id=115 kind=app-host", result.Stdout);
-            Assert.Contains("LOCK id=104 kind=app-host", result.Stdout);
+            Assert.Contains(
+                $"LOCK id=115 kind=app-host parent=1 name=dotnet created={inventoryStartedAt.AddMinutes(15):O} path=C:\\dotnet.exe command=dotnet App.dll status candidate-115",
+                result.Stdout);
+            Assert.Contains(
+                $"LOCK id=104 kind=app-host parent=1 name=dotnet created={inventoryStartedAt.AddMinutes(4):O} path=C:\\dotnet.exe command=dotnet App.dll status candidate-104",
+                result.Stdout);
             Assert.DoesNotContain("LOCK id=103", result.Stdout);
             const string relevantUnavailable = "PROCESS_QUERY_UNAVAILABLE operation=filter id=200 name=dotnet status=AccessDenied";
             Assert.Equal(1, result.Stdout.Split(relevantUnavailable, StringSplitOptions.None).Length - 1);
@@ -2289,6 +2293,8 @@ public sealed class LauncherScriptTests
                 "PROCESS_QUERY_UNAVAILABLE operation=filter id=201 name=Mcg.AgentOrchestrator.Tests status=AccessDenied",
                 result.Stdout);
             Assert.Contains("lock query incomplete: relevant process inspection was unavailable", result.Stdout);
+            Assert.DoesNotContain("FREE", result.Stdout, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("No matching lock-holder processes were observed", result.Stdout);
             Assert.DoesNotContain("operation=filter id=300", result.Stdout);
             Assert.DoesNotContain("operation=filter id=301", result.Stdout);
             Assert.DoesNotContain("id=400", result.Stdout);
