@@ -82,6 +82,15 @@ goal.
 
 ## Declaring and forbidding file scopes
 
+In the first explicit `## Scope` section, declare a repository-relative path on its own line,
+optionally prefixed by `- `. Unquoted paths may use any repository root: `cmd/crosswalk/main.go`,
+`packages/ui/widget.ts`, or `arbitrary-name/component.py`. Use forward slashes and either a
+filename with an extension and a directory component, or a directory ending in `/`, such as
+`internal/adapter/` or `cmd/`. Keep prose, multiple paths, globs and citations off that line.
+Existing backticked paths and home-repository forms remain supported. The section ends at the
+next heading or existing scope terminator, including `Out of scope:`. Recognition declares a
+candidate only; applicability still requires an existing target or an explicit new declaration.
+
 To forbid a repository path, keep it inside a clause that starts with `do not`, `don't`,
 `must not`, or `never`, followed by `touch`, `change`, `modify`, `edit`, `alter`, `rename`, or
 `delete`. The clause ends at a semicolon, at a period followed by whitespace or the end of the

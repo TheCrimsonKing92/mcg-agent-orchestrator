@@ -51,21 +51,47 @@ internal static class BriefScopeSectionSelector
         foreach (Match match in Regex.Matches(line, @"`([^`]*)`"))
         {
             var path = match.Groups[1].Value.TrimEnd('.', ',', ';', ':', ')');
-            if (!path.Contains('/') || path.StartsWith('/') || path.Any(char.IsWhiteSpace) ||
-                path.IndexOfAny([':', '\\', '*', '?', '[', ']', '{', '}', '~', '|', '=', '<', '>']) >= 0 ||
-                path.Split('/').Any(segment => segment is "." or ".." ||
-                    (segment.Length > 0 && segment.All(character => character is >= '0' and <= '9'))))
-            {
-                continue;
-            }
-
-            var name = path[(path.LastIndexOf('/') + 1)..];
-            var dot = name.LastIndexOf('.');
-            if (path.EndsWith('/') || (dot > 0 && dot < name.Length - 1))
+            if (IsSafePathToken(path) && HasFileOrDirectoryShape(path))
             {
                 yield return path;
             }
         }
+    }
+
+    public static string? WholeUnquotedPathToken(string line)
+    {
+        var token = line.Trim();
+        if (token.StartsWith("- ", StringComparison.Ordinal))
+        {
+            token = token[2..].Trim();
+        }
+
+        if (token.Length >= 2 && token[0] is '\'' or '"' && token[^1] == token[0])
+        {
+            return null;
+        }
+
+        return token.IndexOfAny(['/', '\\']) >= 0 && !token.Contains('`') &&
+            !token.Any(char.IsWhiteSpace) ? token : null;
+    }
+
+    public static bool IsSafePathToken(string path) =>
+        path.Contains('/') && !path.StartsWith('/') && !path.Any(char.IsWhiteSpace) &&
+        path.IndexOfAny([':', '\\', '*', '?', '[', ']', '{', '}', '~', '|', '=', '<', '>']) < 0 &&
+        !path.Split('/').Any(segment => segment is "." or ".." ||
+            (segment.Length > 0 && segment.All(character => character is >= '0' and <= '9')));
+
+    public static bool IsRepositoryNeutralPath(string token) =>
+        IsSafePathToken(token) && HasFileOrDirectoryShape(token) &&
+        token.All(character => char.IsLetterOrDigit(character) || character is '/' or '.' or '_' or '-') &&
+        token.TrimEnd('/').Split('/').All(segment => segment.Length > 0 && segment != "...") &&
+        !token.EndsWith("//", StringComparison.Ordinal);
+
+    private static bool HasFileOrDirectoryShape(string path)
+    {
+        var name = path[(path.LastIndexOf('/') + 1)..];
+        var dot = name.LastIndexOf('.');
+        return path.EndsWith('/') || (dot > 0 && dot < name.Length - 1);
     }
 
     public static IReadOnlyList<DeclaredFileScope> KeepResolvable(

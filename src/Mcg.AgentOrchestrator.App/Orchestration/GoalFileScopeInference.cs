@@ -230,8 +230,26 @@ internal static class GoalFileScopeInference
                 continue;
             }
 
+            var inExplicitRegion = provenance == FileScopeProvenance.Explicit &&
+                scopeRegion is { } selected && lineIndex >= selected.Start && lineIndex < selected.End;
+            var unquotedToken = inExplicitRegion
+                ? BriefScopeSectionSelector.WholeUnquotedPathToken(line)
+                : null;
+            if (unquotedToken is not null &&
+                !BriefScopeSectionSelector.IsSafePathToken(unquotedToken.Replace('\\', '/')))
+            {
+                continue;
+            }
+
             foreach (Match match in FileScopeRegex.Matches(line))
             {
+                // A whole unquoted declaration must not recover a home-root suffix.
+                if (unquotedToken is not null &&
+                    match.Index != line.IndexOf(unquotedToken, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
                 if (provenance == FileScopeProvenance.Explicit &&
                     BriefScopeSectionSelector.IsEvidenceOnly(line, match.Index, match.Length))
                 {
@@ -256,10 +274,16 @@ internal static class GoalFileScopeInference
                 }
             }
 
-            if (provenance == FileScopeProvenance.Explicit && scopeRegion is { } selected &&
-                lineIndex >= selected.Start && lineIndex < selected.End)
+            if (inExplicitRegion)
             {
-                foreach (var candidate in BriefScopeSectionSelector.BacktickedPaths(line))
+                var candidates = BriefScopeSectionSelector.BacktickedPaths(line);
+                if (unquotedToken is not null &&
+                    BriefScopeSectionSelector.IsRepositoryNeutralPath(unquotedToken))
+                {
+                    candidates = candidates.Append(unquotedToken);
+                }
+
+                foreach (var candidate in candidates)
                 {
                     var path = NormalizePath(candidate);
                     if (!scopes.TryGetValue(path, out var existing) ||
