@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Xml.Linq;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 // Parallel-safe: each case owns its temporary reports and starts no processes.
@@ -108,6 +109,138 @@ public sealed class NormalizedGateResultStepTests
             Assert.Equal(receipt, updated with { NormalizedTestResultPaths = null, NormalizedTestResultWriteFailure = null });
         });
     }
+
+    [Fact]
+    public void Apply_RetainedDisplayCollision_WritesBothCasesAndRereadsUnchangedData()
+    {
+        WithReceipt((receipt, path) =>
+        {
+            File.WriteAllText(path, RetainedCollisionTrx);
+            var raw = File.ReadAllBytes(path);
+
+            var updated = NormalizedGateResultStep.Apply(receipt, path, "trx");
+
+            // On the pre-fix adapter this assertion reports the retained repeated-ID write failure.
+            Assert.True(updated.NormalizedTestResultWriteFailure is null,
+                updated.NormalizedTestResultWriteFailure?.Detail);
+            var normalized = new NormalizedTestResultSource().Read(Assert.Single(updated.NormalizedTestResultPaths!));
+            Assert.Equal(TestResultReadStatus.Readable, normalized.Status);
+            Assert.Equal(2, normalized.Records.Count);
+            Assert.Equal(2, normalized.Records.Select(row => row.Id).Distinct(StringComparer.Ordinal).Count());
+            Assert.EndsWith("2ea3224a-b8e8-7d59-11b6-e71086f18ad0", normalized.Records[0].Id);
+            Assert.EndsWith("0a4426d9-e30b-69d7-aa84-1d57e3b04713", normalized.Records[1].Id);
+            Assert.All(normalized.Records, row =>
+            {
+                Assert.False(string.IsNullOrEmpty(row.Id));
+                Assert.Equal(RetainedDisplay, row.DisplayName);
+                Assert.Equal(TestResultStatus.Passed, row.Status);
+                Assert.Equal(new[] { "OwnerExperimentReadingQuestionTests" }, row.SuitePath);
+                Assert.Null(row.Message);
+                Assert.Null(row.Trace);
+                Assert.Empty(row.Attempts);
+            });
+            Assert.Equal(new long?[] { 213, 58 }, normalized.Records.Select(row => row.DurationMs));
+            Assert.Equal(raw, File.ReadAllBytes(path));
+            Assert.Equal(receipt, updated with { NormalizedTestResultPaths = null });
+        });
+    }
+
+    [Fact]
+    public void Apply_CollidingMixedStatuses_PreservesEveryOutcomeAndDiagnostic()
+    {
+        var natives = new[] { "a:<&\"🔥", "a:2", "A:2", " " };
+        var outcomes = new[] { "Passed", "Failed", "NotExecuted", "Timeout" };
+        var statuses = new[] { TestResultStatus.Passed, TestResultStatus.Failed,
+            TestResultStatus.Skipped, TestResultStatus.Error };
+        var durations = new long?[] { 1, 2, 3, 4 };
+        var rows = natives.Select((native, i) => new XElement("UnitTestResult",
+            new XAttribute("testId", native), new XAttribute("testName", "Sample.Tests.Run(value: …)"),
+            new XAttribute("outcome", outcomes[i]), new XAttribute("duration", $"00:00:00.00{i + 1}"),
+            new XElement("Output", new XElement("ErrorInfo",
+                new XElement("Message", "message:" + native), new XElement("StackTrace", "trace:" + native)))));
+        var definitions = natives.Where(native => native != " ").Select(native => new XElement("UnitTest",
+            new XAttribute("id", native), new XElement("TestMethod",
+                new XAttribute("className", "Sample.Tests"), new XAttribute("name", "Run"))));
+        WithReceipt((receipt, path) =>
+        {
+            File.WriteAllText(path, new XElement("TestRun", new XElement("Results", rows),
+                new XElement("TestDefinitions", definitions)).ToString());
+            var raw = File.ReadAllBytes(path);
+            var updated = NormalizedGateResultStep.Apply(receipt, path, "trx");
+            Assert.Null(updated.NormalizedTestResultWriteFailure);
+            var read = new NormalizedTestResultSource().Read(Assert.Single(updated.NormalizedTestResultPaths!));
+            Assert.Equal(TestResultReadStatus.Readable, read.Status);
+            Assert.Equal(4, read.Records.Count);
+            Assert.Equal(4, read.Records.Select(row => row.Id).Distinct(StringComparer.Ordinal).Count());
+            for (var i = 0; i < natives.Length; i++)
+            {
+                var row = read.Records[i];
+                Assert.Equal("Sample.Tests.Run(value: …)", row.DisplayName);
+                Assert.Equal(statuses[i], row.Status);
+                Assert.Equal(durations[i], row.DurationMs);
+                Assert.Equal("message:" + natives[i], row.Message);
+                Assert.Equal("trace:" + natives[i], row.Trace);
+                Assert.Equal(i == 3 ? Array.Empty<string>() : new[] { "Sample.Tests" }, row.SuitePath);
+                Assert.Equal("trx", row.ReportedBy);
+                Assert.Null(row.File);
+                Assert.Null(row.Seed);
+                Assert.Null(row.OutputRef);
+                Assert.Empty(row.Attempts);
+            }
+            Assert.Equal(raw, File.ReadAllBytes(path));
+            Assert.Equal(receipt, updated with { NormalizedTestResultPaths = null });
+        });
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("same")]
+    public void Apply_AmbiguousNativeCollision_ReportsWriteFailureWithoutChangingVerdict(string? native)
+    {
+        WithReceipt((receipt, path) =>
+        {
+            var rows = new[] { "same", native, "distinct" }.Select(id => new XElement("UnitTestResult",
+                id is null ? null : new XAttribute("testId", id), new XAttribute("testName", "Cases.Run"),
+                new XAttribute("outcome", "Failed")));
+            File.WriteAllText(path, new XElement("TestRun", new XElement("Results", rows)).ToString());
+            Assert.Equal(3, new TrxTestResultSource().Read(path).Records.Count);
+            var raw = File.ReadAllBytes(path);
+
+            var updated = NormalizedGateResultStep.Apply(receipt, path, "trx");
+
+            Assert.Null(updated.NormalizedTestResultPaths);
+            var failure = Assert.IsType<NormalizedTestResultWriteFailure>(updated.NormalizedTestResultWriteFailure);
+            Assert.Equal(NormalizedTestResultWriteFailure.WriteFailed, failure.Reason);
+            Assert.Contains("Repeated test Id 'Cases.Run'", failure.Detail);
+            Assert.False(File.Exists(NormalizedTestResultWriter.PathFor(path)));
+            Assert.Equal(raw, File.ReadAllBytes(path));
+            Assert.Equal(receipt, updated with { NormalizedTestResultWriteFailure = null });
+        });
+    }
+
+    private const string RetainedDisplay = """
+        OwnerExperimentReadingQuestionTests.ReadAsync_UnrecognisedKey_SkipsItemWithoutHiddenQuestion(key: "experiment-reading-due:1a2b3c4d0000000000000000000"···)
+        """;
+
+    // Derived from .orchestrator/operator-evidence/trx-collision-20261028/minimal-collision.trx.
+    // Candidate aebb2063d01f40a97aec7d46427f56996c657c95; original TRX SHA256
+    // 4BAB4F26B039C4F86363C1DE7C39E9389E7A3AB70E986245B577919E4500E905.
+    // Receipt: .orchestrator/acceptance-gate-attempts/f54d0284d1d74783b6ff9f68a380643e/
+    // f54d0284-0-20261028061302117-072f993b764f4d2789574d26290072ff.result.json.
+    // Only irrelevant execution/machine attributes were omitted; native IDs are receipt-scoped.
+    private const string RetainedCollisionTrx = """
+        <TestRun xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">
+          <Results>
+            <UnitTestResult testId="2ea3224a-b8e8-7d59-11b6-e71086f18ad0" testName="OwnerExperimentReadingQuestionTests.ReadAsync_UnrecognisedKey_SkipsItemWithoutHiddenQuestion(key: &quot;experiment-reading-due:1a2b3c4d0000000000000000000&quot;···)" duration="00:00:00.2133661" outcome="Passed" />
+            <UnitTestResult testId="0a4426d9-e30b-69d7-aa84-1d57e3b04713" testName="OwnerExperimentReadingQuestionTests.ReadAsync_UnrecognisedKey_SkipsItemWithoutHiddenQuestion(key: &quot;experiment-reading-due:1a2b3c4d0000000000000000000&quot;···)" duration="00:00:00.0584351" outcome="Passed" />
+          </Results>
+          <TestDefinitions>
+            <UnitTest id="2ea3224a-b8e8-7d59-11b6-e71086f18ad0" name="OwnerExperimentReadingQuestionTests.ReadAsync_UnrecognisedKey_SkipsItemWithoutHiddenQuestion(key: &quot;experiment-reading-due:1a2b3c4d0000000000000000000&quot;···)"><TestMethod className="OwnerExperimentReadingQuestionTests" name="ReadAsync_UnrecognisedKey_SkipsItemWithoutHiddenQuestion" /></UnitTest>
+            <UnitTest id="0a4426d9-e30b-69d7-aa84-1d57e3b04713" name="OwnerExperimentReadingQuestionTests.ReadAsync_UnrecognisedKey_SkipsItemWithoutHiddenQuestion(key: &quot;experiment-reading-due:1a2b3c4d0000000000000000000&quot;···)"><TestMethod className="OwnerExperimentReadingQuestionTests" name="ReadAsync_UnrecognisedKey_SkipsItemWithoutHiddenQuestion" /></UnitTest>
+          </TestDefinitions>
+        </TestRun>
+        """;
 
     internal const string Trx = """
         <TestRun>
