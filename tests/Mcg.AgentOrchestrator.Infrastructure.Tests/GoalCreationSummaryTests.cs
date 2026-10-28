@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using Mcg.AgentOrchestrator.App.Cli;
@@ -316,11 +317,20 @@ public sealed class GoalCreationSummaryTests : CliCommandTestBase
     private static async Task<CliProcessResult> RunIsolatedApp(Fixture fixture, params string[] args)
     {
         var root = fixture.Root;
+        // A Windows CREATE_NO_WINDOW child has no console code page; .NET writes
+        // using the system ANSI code page. Decode that encoding without changing
+        // the test host's console or registering a process-wide encoding provider.
+        var outputEncoding = Encoding.UTF8;
+        if (OperatingSystem.IsWindows())
+        {
+            var codePage = (int)GetACP();
+            outputEncoding = CodePagesEncodingProvider.Instance.GetEncoding(codePage) ?? Encoding.GetEncoding(codePage);
+        }
         var start = new ProcessStartInfo(ResolveDotnetHostPath())
         {
             WorkingDirectory = root, UseShellExecute = false, CreateNoWindow = true,
             RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true,
-            StandardOutputEncoding = Encoding.UTF8, StandardErrorEncoding = Encoding.UTF8
+            StandardOutputEncoding = outputEncoding, StandardErrorEncoding = outputEncoding
         };
         start.Environment.Clear();
         foreach (var name in new[] { "PATH", "SystemRoot", "WINDIR", "TEMP", "TMP", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "ProgramFiles", "ProgramFiles(x86)", "DOTNET_ROOT" })
@@ -370,6 +380,9 @@ public sealed class GoalCreationSummaryTests : CliCommandTestBase
         }
         return result;
     }
+
+    [DllImport("kernel32.dll", ExactSpelling = true)]
+    private static extern uint GetACP();
 
     private sealed class Fixture : IDisposable
     {
