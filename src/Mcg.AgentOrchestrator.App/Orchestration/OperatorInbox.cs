@@ -346,7 +346,8 @@ internal static class OperatorInbox
             agents,
             workspace.ExecutionDirectory,
             workerProfiles,
-            providerHoldScope: providerHoldScope);
+            providerHoldScope: providerHoldScope,
+            projectHomeDirectory: workspace.ProjectHomeDirectoryOrNull);
         foreach (var finding in readiness.Findings.Where(finding => finding.Severity != GoalReadinessSeverity.Info))
         {
             var severity = finding.Severity == GoalReadinessSeverity.Blocker

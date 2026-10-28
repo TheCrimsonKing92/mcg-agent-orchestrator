@@ -64,6 +64,7 @@ internal sealed partial class GoalDispatchOperations
         var safeBatch = DispatchReadinessRules.SelectFirstParallelSafeAssignedBatch(goal, agents, approveHighRiskOwnership, excludedTaskIds, utcNow());
         EnsureRefinedForSelectedTasks(kernel, workspace, providers, goal, safeBatch.TaskIds);
         goal = kernel.GetGoal(goal.Id);
+        EnsureDeveloperTestLaneReadiness(goal, workspace, safeBatch.TaskIds);
         var home = _resolveHome(workspace);
         Func<Goal, TaskSpec, IEnumerable<Goal>, WorkerSubscriptionPreflightResult> preflight = (viewGoal, viewTask, holdScope) =>
             WorkerProfileDispatcher.PreflightSubscriptionTask(viewGoal, viewTask, agents, profiles,
@@ -283,6 +284,12 @@ internal sealed partial class GoalDispatchOperations
                 continue;
             }
             var task = goal.Tasks.Single(task => task.Id == item.TaskId);
+            var laneBlocker = DeveloperTestLaneBlocker(goal, workspace, [task.Id]);
+            if (laneBlocker is not null)
+            {
+                startRefusals.Add(new DispatchProcessStartRefusal(task.Id, laneBlocker));
+                continue;
+            }
             var intentAdmission = intentStore.GetPreparedAdmission(goal.Id.Value, task.Id.Value, task.LastDispatch!.DispatchedAt);
             var suppression = intentStore.RecordSuppression(intentAdmission,
                 $"prepared:{goal.Id.Value}:{task.Id.Value}:{task.LastDispatch?.DispatchedAt:O}:{intentAdmission.Version}");
