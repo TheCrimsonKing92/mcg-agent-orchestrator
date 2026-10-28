@@ -188,10 +188,14 @@ public sealed class OwnerConsoleGoalChangeSummaryTests
                     await AppendAcceptanceAsync(store, goal.Id, scenario, Candidate, Basis);
             }
             var reads = 0;
+            var layoutComplete = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             var summary = new OwnerGoalChangeSummaryQuery(
                 promotion: (_, _) => Task.FromResult<GoalPromotionFact?>(scenario == "landed" ? Promotion(goal) : null),
                 acceptance: async (id, candidate, landed, token) =>
                 {
+                    // This uninitialized app publishes inline on the loader thread. Finish the
+                    // fixture's initial layout before allowing it to write the same preview label.
+                    await layoutComplete.Task.WaitAsync(token);
                     reads++;
                     Assert.Equal(goal.Id, id);
                     Assert.Equal(Candidate, candidate);
@@ -207,7 +211,8 @@ public sealed class OwnerConsoleGoalChangeSummaryTests
             using IApplication app = Terminal.Gui.App.Application.Create();
             using var view = new OwnerConsoleFullScreenView(app, controller, () => Task.CompletedTask);
             view.Render(Model(goal));
-            view.Window.Layout(new Size(100, 40));
+            try { view.Window.Layout(new Size(100, 40)); }
+            finally { layoutComplete.TrySetResult(); }
             await view.PreviewLoad.WaitAsync(Token);
             Assert.Contains("Verified: " + expected, view.PreviewText);
             await view.HandleKeyAsync(Key.Tab);
