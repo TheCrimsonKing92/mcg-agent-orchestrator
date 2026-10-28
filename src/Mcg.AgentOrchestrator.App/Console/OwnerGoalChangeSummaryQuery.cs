@@ -11,7 +11,8 @@ namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 internal sealed class OwnerGoalChangeSummaryQuery(
     Func<string, CancellationToken, Task<GoalPromotionFact?>>? promotion = null,
     Func<string, string, CancellationToken, Task<CommittedGoalChanges>>? changes = null,
-    Func<TaskVerificationRecord, CancellationToken, Task<string?>>? artifact = null)
+    Func<TaskVerificationRecord, CancellationToken, Task<string?>>? artifact = null,
+    Func<GoalId, string, GoalPromotionFact?, CancellationToken, Task<GoalOperationJournalEntry?>>? acceptance = null)
 {
     internal const int MaxArtifactBytes = 1_056_000;
     private readonly object _cacheGate = new();
@@ -26,7 +27,24 @@ internal sealed class OwnerGoalChangeSummaryQuery(
                 [id], false, token)).SingleOrDefault()?.PromotionFact;
         },
         (basis, candidate, token) => Task.Run(() => GoalChangesReader.ReadCommittedRange(
-            workspace.RootDirectory, basis, candidate), token));
+            workspace.RootDirectory, basis, candidate), token),
+        acceptance: (id, candidate, landed, token) => Task.Run(async () =>
+        {
+            // A retained promotion supplies the historical gate's main even after cleanup.
+            // Otherwise resolve only the selected goal's integration ref, never its dirty worktree.
+            var main = landed?.CandidateRevision == candidate ? landed.PriorMainRevision : null;
+            if (main is null)
+            {
+                var result = GitCli.Run(workspace.ExecutionDirectory, "rev-parse", "--verify",
+                    $"refs/heads/{workspace.IntegrationBranch}");
+                if (!result.Succeeded) throw new IOException("Integration revision unavailable.");
+                main = result.Output.Trim();
+            }
+            token.ThrowIfCancellationRequested();
+            if (!FullRevision(main)) throw new InvalidDataException("Integration revision unavailable.");
+            return await GoalOperationJournal.ReadNewestAcceptanceOutcomeAsync(
+                workspace.RunEventStorePath, id, candidate, main, token);
+        }, token));
 
     internal async Task<OwnerGoalChangeSummary> LoadAsync(Goal goal, CancellationToken token)
     {
@@ -79,8 +97,9 @@ internal sealed class OwnerGoalChangeSummaryQuery(
         var landing = landed is null
             ? promotionFailure is null ? "landing not recorded" : "landing unavailable — " + promotionFailure
             : $"landed candidate {landed.CandidateRevision} at {landed.PromotedAt:yyyy-MM-dd HH:mm} UTC; main {landed.PromotedMainRevision}; {landed.Provenance}";
+        var verified = await VerifiedAsync(goal, candidate, landed, token);
         return new(goal.Id.Value, goal.AuthoritativeBrief.Version, EffectiveAcceptanceCriteriaVersion.ComputeForGoal(goal),
-            candidate, planned, observed, reported, Verified(goal, candidate), landing);
+            candidate, planned, observed, reported, verified, landing);
     }
 
     private async Task<CommittedGoalChanges> ReadChangesAsync(string basis, string candidate, CancellationToken token)
@@ -172,8 +191,21 @@ internal sealed class OwnerGoalChangeSummaryQuery(
         return new("unavailable — structured summary absent or association unknown", [], Source(record, dispatch));
     }
 
-    private static OwnerGoalSummarySection Verified(Goal goal, string? candidate)
+    private async Task<OwnerGoalSummarySection> VerifiedAsync(Goal goal, string? candidate,
+        GoalPromotionFact? landed, CancellationToken token)
     {
+        GoalOperationJournalEntry? outcome = null;
+        string? unavailable = null;
+        try
+        {
+            if (candidate is not null && acceptance is not null)
+                outcome = await acceptance(goal.Id, candidate, landed, token).WaitAsync(token);
+            if (outcome is not null && (outcome.GoalId != goal.Id ||
+                !string.Equals(outcome.BranchHeadSha, candidate, StringComparison.OrdinalIgnoreCase) || !outcome.HasCandidatePair))
+            { outcome = null; unavailable = "mismatched acceptance identity"; }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        { unavailable = ex.GetType().Name; }
         var obligations = goal.CriterionEvidenceObligations.Where(item =>
             item.CriterionVersion == goal.AuthoritativeRefinedSpecVersion?.Version && item.State != CriterionEvidenceState.Repaired).ToArray();
         var applicable = obligations.Where(item => item.CandidateSha == candidate && candidate is not null &&
@@ -184,7 +216,22 @@ internal sealed class OwnerGoalChangeSummaryQuery(
         var all = obligations.Length > 0 && obligations.All(item => item.HasSatisfiedEvidenceFor(candidate));
         var state = candidate is null ? "unavailable — candidate unknown" : failed ? "failed — applicable criterion receipt" :
             all ? "passed — applicable criterion receipts" : "pending — changed candidate lacks complete applicable receipts";
-        if (candidate is not null && goal.RetainedAcceptanceFailure is { } failure && failure.BranchHeadSha == candidate)
+        if (outcome is not null)
+        {
+            var passed = outcome.Status == GoalOperationStatus.Completed &&
+                (string.Equals(outcome.AcceptanceOutcome, "passed", StringComparison.OrdinalIgnoreCase) ||
+                 GoalOperationJournalGatePassedOutcome.Matches(outcome));
+            state = passed
+                ? failed ? state : obligations.Length == 0 || all ? "passed — applicable full acceptance" :
+                    "pending — full acceptance passed; criterion evidence outstanding"
+                : failed ? state : outcome.Status == GoalOperationStatus.Failed || outcome.AcceptanceOutcome == "failed"
+                    ? "failed — applicable full acceptance" : "pending — acceptance " + outcome.AcceptanceOutcome;
+            lines.Add(BoundItem($"Full acceptance: {outcome.AcceptanceOutcome}; event {outcome.IdempotencyKey}; main {outcome.MainHeadSha}; {outcome.At:O}"));
+            lines.AddRange((outcome.FailedCheckNames ?? []).Take(5).Select(BoundItem));
+        }
+        if (unavailable is not null) lines.Add("Acceptance evidence unavailable — " + unavailable);
+        if (candidate is not null && goal.RetainedAcceptanceFailure is { } failure && failure.BranchHeadSha == candidate &&
+            (outcome is null || failure.OccurredAt > outcome.At))
         {
             state = "failed — recorded acceptance (main " + (failure.MainHeadSha ?? "unknown") + ")";
             lines.AddRange(failure.FailedChecks.Take(5).Select(BoundItem));
@@ -197,7 +244,7 @@ internal sealed class OwnerGoalChangeSummaryQuery(
                              .GroupBy(item => item.ReceiptId).Select(group => group.Last())
                              .Where(item => item.Accepted && item.CandidateSha == candidate).Take(5))
                     lines.Add($"Focused execution: {(FindingEvidenceReceiptSelector.SuppliedReceiptsPassAtCandidate(task, candidate, [receipt.ReceiptId]) ? "passed" : "failed")}; receipt {receipt.ReceiptId}; full acceptance tracked separately");
-        return new(state, lines.Take(20).ToArray(), "criterion obligations/acceptance failure; candidate " + (candidate ?? "unknown"),
+        return new(state, lines.Take(20).ToArray(), "criterion obligations/acceptance run events/retained failure; candidate " + (candidate ?? "unknown"),
             Math.Max(0, applicable.Length - 10) + Math.Max(0, lines.Count - 20));
     }
 

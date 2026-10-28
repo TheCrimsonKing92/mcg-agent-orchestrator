@@ -124,6 +124,154 @@ public sealed class OwnerConsoleGoalChangeSummaryTests
     }
 
     [Theory]
+    [InlineData("passed", "passed")]
+    [InlineData("gate-passed", "passed")]
+    [InlineData("failed", "failed")]
+    [InlineData("aborted:state-guard", "pending")]
+    [InlineData("stale-candidate", "pending")]
+    [InlineData("stale-main", "pending")]
+    [InlineData("missing", "pending")]
+    [InlineData("malformed", "pending")]
+    [InlineData("oversized", "pending")]
+    [InlineData("landed", "passed")]
+    public async Task NormalAcceptanceWithoutObligations_ReachesSelectedPreviewAndDetail(string scenario, string expected)
+    {
+        var goal = Fixture(scenario == "landed" ? "landed" : "changed");
+        goal = new TestGoal(goal.ToSnapshot() with { CriterionEvidenceObligations = null });
+        Assert.Empty(((Goal)goal).CriterionEvidenceObligations);
+        var directory = Path.Combine(Path.GetTempPath(), "mcg-summary-acceptance-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var path = Path.Combine(directory, "run-events.db");
+            var store = new SqliteRunEventStore(path);
+            // Unrelated goals and other main/candidate identities must never establish this pass.
+            await AppendAcceptanceAsync(store, goal.Id, "passed", Next, Basis);
+            await AppendAcceptanceAsync(store, goal.Id, "passed", Candidate, Next);
+            await AppendAcceptanceAsync(store, new GoalId("unrelated"), "passed", Candidate, Basis);
+            if (scenario is not ("stale-candidate" or "stale-main" or "missing"))
+            {
+                await AppendAcceptanceAsync(store, goal.Id, "gate-passed", Candidate, Basis);
+                if (scenario is "malformed" or "oversized")
+                    await store.AppendAsync(new(RunEventTypes.GoalOperation, goal.Id.Value, "acceptance", "Failed", null,
+                        scenario == "malformed" ? "{invalid" : AcceptancePayload(goal.Id, "failed", Candidate, Basis,
+                            new string('x', OwnerGoalChangeSummaryQuery.MaxArtifactBytes + 1)), At.AddMinutes(4)), Token);
+                else if (scenario != "landed")
+                    await AppendAcceptanceAsync(store, goal.Id, scenario, Candidate, Basis);
+            }
+            var reads = 0;
+            var summary = new OwnerGoalChangeSummaryQuery(
+                promotion: (_, _) => Task.FromResult<GoalPromotionFact?>(scenario == "landed" ? Promotion(goal) : null),
+                acceptance: (id, candidate, landed, token) =>
+                {
+                    reads++;
+                    Assert.Equal(goal.Id, id);
+                    Assert.Equal(Candidate, candidate);
+                    if (scenario == "landed") Assert.Equal(Basis, landed!.PriorMainRevision);
+                    return GoalOperationJournal.ReadNewestAcceptanceOutcomeAsync(path, id, candidate, Basis, token);
+                });
+            var queries = new Queries(goal);
+            var detailQuery = new OwnerGoalDetailQuery(queries, new EmptyTail(), summary: summary);
+            var harness = new OwnerConsoleHarness();
+            var dialogs = new Dialogs();
+            using var controller = Controller(harness, dialogs, detailQuery);
+            using IApplication app = Terminal.Gui.App.Application.Create();
+            using var view = new OwnerConsoleFullScreenView(app, controller, () => Task.CompletedTask);
+            view.Render(Model(goal));
+            view.Window.Layout(new Size(100, 40));
+            await view.PreviewLoad.WaitAsync(Token);
+            Assert.Contains("Verified: " + expected, view.PreviewText);
+            await view.HandleKeyAsync(Key.Tab);
+            await view.HandleKeyAsync(Key.Enter);
+            var detail = Assert.Single(dialogs.Texts);
+            Assert.Contains("Verified: " + expected, detail);
+            Assert.Equal(2, reads);
+            Assert.Equal(new[] { goal.Id.Value, goal.Id.Value }, queries.ReadIds);
+            Assert.Equal(0, queries.MetadataReads);
+            if (expected == "passed")
+            {
+                Assert.Contains("applicable full acceptance", detail);
+                Assert.Contains("event ", detail);
+                Assert.Contains("main " + Basis, detail);
+            }
+            else Assert.DoesNotContain("Verified: passed", detail);
+            if (scenario is "malformed" or "oversized") Assert.Contains("Acceptance evidence unavailable", detail);
+            Assert.Contains(scenario == "landed" ? "Promotion: landed" : "Promotion: landing not recorded", detail);
+        }
+        finally { Directory.Delete(directory, recursive: true); }
+    }
+
+    [Fact]
+    public async Task NormalAcceptanceReceiptUpdates_InvalidatePassAtSameCandidate()
+    {
+        var goal = Fixture("changed");
+        Assert.Empty(((Goal)goal).CriterionEvidenceObligations);
+        var directory = Path.Combine(Path.GetTempPath(), "mcg-summary-receipt-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var path = Path.Combine(directory, "run-events.db");
+            var store = new SqliteRunEventStore(path);
+            var summary = new OwnerGoalChangeSummaryQuery(acceptance: (id, candidate, _, token) =>
+                GoalOperationJournal.ReadNewestAcceptanceOutcomeAsync(path, id, candidate, Basis, token));
+            var query = new OwnerGoalDetailQuery(new Queries(goal), new EmptyTail(), summary: summary);
+            async Task AssertRenderedAsync(string state)
+            {
+                var detail = await query.LoadAsync(goal.Id.Value, Token);
+                var output = new OwnerConsoleCapturedOutput();
+                OwnerConsoleGoalDetailFormatter.Render(detail!, output, TimeZoneInfo.Utc);
+                Assert.Contains("Verified: " + state, output.Text);
+            }
+            await AppendAcceptanceAsync(store, goal.Id, "gate-passed", Candidate, Basis);
+            await AssertRenderedAsync("passed");
+            // Equal timestamps exercise the journal's append-order tiebreak, without sleeps.
+            await AppendAcceptanceAsync(store, goal.Id, "failed", Candidate, Basis);
+            await AssertRenderedAsync("failed");
+            await AppendAcceptanceAsync(store, goal.Id, "aborted:state-guard", Candidate, Basis);
+            await AssertRenderedAsync("pending");
+            await AppendAcceptanceAsync(store, goal.Id, "passed", Candidate, Basis);
+            await AssertRenderedAsync("passed");
+        }
+        finally { Directory.Delete(directory, recursive: true); }
+    }
+
+    [Theory]
+    [InlineData("passed", true)]
+    [InlineData("aborted:state-guard", true)]
+    [InlineData("passed", false)]
+    public async Task NormalAcceptance_DoesNotEraseOutstandingCriterionEvidence(string outcome, bool failed)
+    {
+        var goal = Fixture("changed");
+        var obligation = Obligation(Candidate, false);
+        if (!failed) obligation = obligation with { State = CriterionEvidenceState.Pending, ReceiptId = null };
+        goal = new TestGoal(goal.ToSnapshot() with { CriterionEvidenceObligations = [obligation] });
+        var entry = new GoalOperationJournalEntry("acceptance-event", goal.Id, "acceptance",
+            outcome == "passed" ? GoalOperationStatus.Completed : GoalOperationStatus.Aborted,
+            At.AddMinutes(3), "full gate", Candidate, Basis, outcome);
+        var summary = new OwnerGoalChangeSummaryQuery(acceptance: (_, _, _, _) => Task.FromResult<GoalOperationJournalEntry?>(entry));
+        var detail = await new OwnerGoalDetailQuery(new Queries(goal), new EmptyTail(), summary: summary).LoadAsync(goal.Id.Value, Token);
+        var output = new OwnerConsoleCapturedOutput();
+        OwnerConsoleGoalDetailFormatter.Render(detail!, output, TimeZoneInfo.Utc);
+        Assert.Contains("Verified: " + (failed ? "failed" : "pending"), output.Text);
+        Assert.DoesNotContain("Verified: passed", output.Text);
+        Assert.Contains("Full acceptance: " + outcome, output.Text);
+    }
+
+    private static Task<RunEventRecord> AppendAcceptanceAsync(SqliteRunEventStore store, GoalId id,
+        string outcome, string candidate, string main) => store.AppendAsync(new(RunEventTypes.GoalOperation,
+        id.Value, "acceptance", outcome == "failed" ? "Failed" : "Completed", "full gate",
+        AcceptancePayload(id, outcome, candidate, main), At.AddMinutes(3)), Token);
+
+    private static string AcceptancePayload(GoalId id, string outcome, string candidate, string main, string? detail = null)
+    {
+        var options = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
+        options.Converters.Add(new System.Text.Json.Serialization.JsonStringEnumConverter());
+        return JsonSerializer.Serialize(new GoalOperationJournalEntry(Guid.NewGuid().ToString("N"), id, "acceptance",
+            outcome == "failed" ? GoalOperationStatus.Failed : GoalOperationStatus.Completed, At.AddMinutes(3),
+            detail ?? "full gate", candidate, main, outcome), options);
+    }
+
+    [Theory]
     [InlineData("amended")]
     [InlineData("criteria")]
     [InlineData("missing")]
