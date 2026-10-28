@@ -26,7 +26,19 @@ internal sealed class ConductorAuthorClaimStore
         command.Parameters.AddWithValue("$now", now.ToString("O"));
         command.Parameters.AddWithValue("$item", JsonSerializer.Serialize(item));
         if (command.ExecuteNonQuery() == 1) return true;
-        command.CommandText = "UPDATE author_claims SET outcome = 'in-flight', claimed_at = $now, item_json = $item, attempt = attempt + 1 WHERE identity = $identity AND outcome = 'retryable'";
+        command.CommandText = "UPDATE author_claims SET outcome = 'in-flight', claimed_at = $now, item_json = $item, attempt = attempt + 1 WHERE identity = $identity AND outcome = 'retryable' AND attempt < $max";
+        command.Parameters.AddWithValue("$max", ConductorAuthorHost.MaxAttempts);
+        return command.ExecuteNonQuery() == 1;
+    }
+
+    internal bool TryConsumeFallbackAttempt(string identity, int expectedAttempt)
+    {
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "UPDATE author_claims SET attempt = attempt + 1 WHERE identity = $identity AND outcome = 'in-flight' AND attempt = $expected AND attempt < $max";
+        command.Parameters.AddWithValue("$identity", identity);
+        command.Parameters.AddWithValue("$expected", expectedAttempt);
+        command.Parameters.AddWithValue("$max", ConductorAuthorHost.MaxAttempts);
         return command.ExecuteNonQuery() == 1;
     }
 
@@ -67,14 +79,27 @@ internal sealed class ConductorAuthorClaimStore
         return result;
     }
 
-    internal void Release(string identity)
+    internal bool Release(string identity)
     {
         using var connection = Open();
+        using var transaction = connection.BeginTransaction();
         using var command = connection.CreateCommand();
-        command.CommandText = "DELETE FROM author_claims WHERE identity = $identity AND outcome = 'in-flight'";
+        command.Transaction = transaction;
+        // An alternate (or a retry) has already spent the last invocation. Shutdown must
+        // not delete that evidence and admit a third invocation in a successor host.
+        command.CommandText = "UPDATE author_claims SET outcome = 'model-failure' WHERE identity = $identity AND outcome = 'in-flight' AND attempt >= $max";
         command.Parameters.AddWithValue("$identity", identity);
+        command.Parameters.AddWithValue("$max", ConductorAuthorHost.MaxAttempts);
+        if (command.ExecuteNonQuery() == 1)
+        {
+            transaction.Commit();
+            return false;
+        }
+        command.CommandText = "DELETE FROM author_claims WHERE identity = $identity AND outcome = 'in-flight' AND attempt = 1";
         if (command.ExecuteNonQuery() != 1)
             throw new InvalidOperationException($"Author claim {identity} is no longer in flight.");
+        transaction.Commit();
+        return true;
     }
 
     internal void Complete(string identity, string outcome, string? intentId = null)

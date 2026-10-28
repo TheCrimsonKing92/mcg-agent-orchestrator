@@ -35,7 +35,7 @@ public sealed class ConductorRoundModelResolverTests
     [InlineData("empty", "empty-model-alias")]
     [InlineData("null", "empty-model-alias")]
     [InlineData("whitespace", "empty-model-alias")]
-    [InlineData("other-profile", "non-claude-profile:codex-cli")]
+    [InlineData("other-profile", "non-claude-profile:api-cli")]
     public void Invalid_shapes_name_the_purpose_and_binding_without_defaulting(string shape, string cause)
     {
         var result = ConductorRoundModelResolver.Resolve(InvalidCatalog(ModelFunctionPurposes.ConductorAuthor, shape),
@@ -56,6 +56,35 @@ public sealed class ConductorRoundModelResolverTests
             Subscription = new("CLAUDE-CLI", "claude-sonnet-5")
         };
         Assert.True(ConductorRoundModelResolver.Resolve(new([binding]), ModelFunctionPurposes.ConductorAuthor).IsValid);
+    }
+
+    [Fact]
+    public void Author_Codex_resolves_effective_model_and_default_effort_without_changing_other_functions()
+    {
+        var binding = Binding(ModelFunctionPurposes.ConductorAuthor) with
+        {
+            Subscription = new("CODEX-CLI", "gpt-6-sol")
+        };
+        var result = ConductorRoundModelResolver.Resolve(new([binding]), binding.Purpose);
+        Assert.True(result.IsValid);
+        Assert.Equal("codex-cli", result.WorkerProfileName);
+        Assert.Equal("gpt-6.1-sol", result.Alias);
+        Assert.Equal(AgentCatalog.DefaultSubscriptionReasoningEffort("OpenAI", "gpt-6.1-sol"), result.ReasoningEffort);
+        var other = binding with { Purpose = ModelFunctionPurposes.ConductorSteward };
+        Assert.False(ConductorRoundModelResolver.Resolve(new([other]), other.Purpose).IsValid);
+    }
+
+    [Fact]
+    public void Fallback_requires_an_explicit_subscription_binding()
+    {
+        var catalog = Catalog(ModelFunctionPurposes.ConductorAuthor);
+        Assert.False(ConductorRoundModelResolver.Resolve(catalog, ModelFunctionPurposes.ConductorAuthor, fallback: true).IsValid);
+        var binding = catalog.Bindings[0] with { SubscriptionFallback = new("codex-cli", "gpt-6-sol", "high") };
+        var result = ConductorRoundModelResolver.Resolve(new([binding]), binding.Purpose, fallback: true);
+        Assert.True(result.IsValid);
+        Assert.Equal("codex-cli", result.WorkerProfileName);
+        Assert.Equal("gpt-6.1-sol", result.Alias);
+        Assert.Equal("high", result.ReasoningEffort);
     }
 
     [Fact]
@@ -86,7 +115,7 @@ public sealed class ConductorRoundModelResolverTests
             "empty" => new([Binding(purpose, "")]),
             "null" => new([Binding(purpose, null)]),
             "whitespace" => new([Binding(purpose, " ")]),
-            "other-profile" => new([binding with { Subscription = new("codex-cli", "claude-sonnet-5") }]),
+            "other-profile" => new([binding with { Subscription = new("api-cli", "claude-sonnet-5") }]),
             _ => throw new ArgumentException("Unknown invalid shape", nameof(shape))
         };
     }
