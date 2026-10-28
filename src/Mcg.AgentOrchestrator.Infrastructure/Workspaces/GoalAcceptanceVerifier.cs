@@ -912,6 +912,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             Checks: checks,
             TestResultPaths: testResultPaths)
         {
+            AttemptId = executionOwner.Identity.AttemptId,
             RequiredCrosswalkChecks = effectiveChecks.Where(check => !check.Advisory &&
                 check.Type.Equals("crosswalk-test", StringComparison.OrdinalIgnoreCase)).Select(check => check.Name).ToArray(),
             RequiredTestCheckNames = effectiveChecks.Where(check => !check.Advisory &&

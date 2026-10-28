@@ -205,7 +205,7 @@ public sealed class GoalAcceptanceVerifierCrosswalkEvidenceTests
         Assert.DoesNotContain(solutionCall, arg => arg.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase));
         Assert.Equal(3, result.Checks!.Count);
         var solution = Assert.Single(result.Checks, check => check.Name == "solution tests");
-        Assert.False(string.IsNullOrWhiteSpace(result.AttemptId));
+        Assert.Equal(Path.GetFileName(fixture.Prefix), result.AttemptId);
         Assert.Equal(result.AttemptId, solution.TestResultAttemptId);
         Assert.Equal(0, solution.TestResultRunOrdinal);
         Assert.False(solution.TestResultIsExplicitCrossAttemptReuse);
