@@ -244,7 +244,11 @@ public sealed class OrchestratorSnapshotStatusTimeoutTests
                 RedirectStandardInput = true,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
-                CreateNoWindow = true
+                // Inventory uses Windows PowerShell's native-command operator, which can
+                // allocate a console lazily; status uses Process.Start directly. Give both
+                // paths an owned hidden console from startup instead.
+                CreateNoWindow = false,
+                WindowStyle = ProcessWindowStyle.Hidden
             };
             startInfo.Environment.Clear();
             foreach (var name in new[] { "SystemRoot", "WINDIR", "TEMP", "TMP", "COMSPEC" })
@@ -252,7 +256,7 @@ public sealed class OrchestratorSnapshotStatusTimeoutTests
                     startInfo.Environment[name] = value;
             startInfo.Environment["PATH"] = Environment.GetFolderPath(Environment.SpecialFolder.System);
             startInfo.Environment["MCG_ORCHESTRATOR_DOTNET_PATH"] = Host;
-            foreach (var argument in new[] { "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", script })
+            foreach (var argument in new[] { "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-ExecutionPolicy", "Bypass", "-File", script })
                 startInfo.ArgumentList.Add(argument);
             return TestChildProcessCapture.Run(startInfo, TimeSpan.FromSeconds(120), start: info =>
             {
