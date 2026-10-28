@@ -1,4 +1,4 @@
-using System.Diagnostics;
+using static Mcg.AgentOrchestrator.Infrastructure.BaseBuildCachePhaseTiming;
 using static Mcg.AgentOrchestrator.Infrastructure.AcceptanceCheckCommandBuilder;
 using static Mcg.AgentOrchestrator.Infrastructure.AcceptancePolicyShardPlanner;
 
@@ -38,7 +38,8 @@ internal sealed record AcceptanceDotnetBuildPhaseHooks(
     Func<string, DotnetBuildEnvironment> ResolveExecutionEnvironment,
     Func<string, string> AttemptSlug,
     Func<DotnetBaseBuildCache> ResolveBaseBuildCache,
-    Func<DotnetTestBuildPhase, DotnetBuildEnvironment, Task<DotnetBaseBuildCacheIdentity?>> ResolveCacheIdentityAsync);
+    Func<DotnetTestBuildPhase, DotnetBuildEnvironment, Task<DotnetBaseBuildCacheIdentity?>> ResolveCacheIdentityAsync,
+    TimeProvider? TimingClock = null);
 
 internal sealed class AcceptanceDotnetBuildPhase
 {
@@ -211,12 +212,15 @@ internal sealed class AcceptanceDotnetBuildPhase
             return null;
         }
 
-        var wall = Stopwatch.StartNew();
+        var wall = new BaseBuildCachePhaseTiming(hooks.TimingClock);
         var environment = phase.BuildEnvironment ?? throw new InvalidOperationException("Cache restoration requires an owned build environment.");
-        var identity = await hooks.ResolveCacheIdentityAsync(phase, environment).ConfigureAwait(false);
+        DotnetBaseBuildCacheIdentity? identity;
+        using (wall.Measure(Phase.IdentityResolution))
+            identity = await hooks.ResolveCacheIdentityAsync(phase, environment).ConfigureAwait(false);
         if (identity is null)
         {
-            EmitBaseBuildCacheReceipt($"base-build-cache main_sha={plan.MainSha} status=miss reason=unresolved-build-inputs");
+            wall.Stop();
+            EmitBaseBuildCacheReceipt($"base-build-cache main_sha={plan.MainSha} status=miss reason=unresolved-build-inputs {wall.Format()}");
             return null;
         }
         var cache = hooks.ResolveBaseBuildCache();
@@ -257,7 +261,9 @@ internal sealed class AcceptanceDotnetBuildPhase
                 {
                     var arguments = BuildDotnetProjectBuildArguments(project, phase.BuildArguments);
                     if (projectMode) arguments = [.. arguments, "-p:BuildProjectReferences=false"];
-                    var projectRun = await hooks.RunManagedCheckAsync(
+                    (AcceptanceCheckResult Result, bool Retried) projectRun;
+                    using (wall.Measure(Phase.RunBuildCommands))
+                        projectRun = await hooks.RunManagedCheckAsync(
                         arguments,
                         $"{attemptName}-build-{hooks.AttemptSlug(ProjectLabel(project))}",
                         preparedEnvironment =>
@@ -267,6 +273,7 @@ internal sealed class AcceptanceDotnetBuildPhase
                                 return;
                             }
 
+                            using var restoreTiming = wall.Measure(Phase.CacheRestoreCopy);
                             var restored = cache.Restore(plan.MainSha, preparedEnvironment.ArtifactsPath,
                                 projectMode ? hitProjects : restoreProjects, identity);
                             restore = projectMode
@@ -299,7 +306,8 @@ internal sealed class AcceptanceDotnetBuildPhase
         if (!focused)
         {
             builtProjects = projectMode ? orderedProjects : plan.CacheableProjects;
-            lastRun = await hooks.RunManagedCheckAsync(
+            using (wall.Measure(Phase.RunBuildCommands))
+                lastRun = await hooks.RunManagedCheckAsync(
                 phase.BuildArguments,
                 $"{attemptName}-build",
                 null,
@@ -316,9 +324,14 @@ internal sealed class AcceptanceDotnetBuildPhase
             {
                 // Build targets may change inputs. Re-resolve before publication rather than
                 // labeling new outputs with a pre-build identity that is no longer current.
-                var afterBuildIdentity = await hooks.ResolveCacheIdentityAsync(phase, environment).ConfigureAwait(false);
+                DotnetBaseBuildCacheIdentity? afterBuildIdentity;
+                using (wall.Measure(Phase.IdentityRevalidation))
+                    afterBuildIdentity = await hooks.ResolveCacheIdentityAsync(phase, environment).ConfigureAwait(false);
                 if (afterBuildIdentity == identity)
+                {
+                    using var publishTiming = wall.Measure(Phase.CacheCapturePublish);
                     publish = cache.Publish(plan.MainSha, environment.ArtifactsPath, missedProjects, identity, hitProjects);
+                }
             }
         }
 
@@ -334,11 +347,12 @@ internal sealed class AcceptanceDotnetBuildPhase
             publish,
             builtProjects,
             identity,
-            (long)wall.Elapsed.TotalMilliseconds);
+            wall.ElapsedMilliseconds,
+            wall.Format());
         EmitBaseBuildCacheReceipt(receiptSummary);
         return (lastRun.Value.Result with
         {
-            DurationMilliseconds = (long)wall.Elapsed.TotalMilliseconds,
+            DurationMilliseconds = wall.ElapsedMilliseconds,
             LockRemediationApplied = lockRemediationApplied,
             ResultSummary = PrefixResultSummary(receiptSummary, lastRun.Value.Result.ResultSummary)
         }, retried);
@@ -352,7 +366,8 @@ internal sealed class AcceptanceDotnetBuildPhase
         DotnetBaseBuildCachePublishResult? publish,
         IReadOnlyList<string> builtProjects,
         DotnetBaseBuildCacheIdentity identity,
-        long buildPhaseMilliseconds)
+        long buildPhaseMilliseconds,
+        string phaseTiming)
     {
         var projectReceipts = plan.CacheableProjects
             .Select(project =>
@@ -380,6 +395,7 @@ internal sealed class AcceptanceDotnetBuildPhase
         var evictions = restore.Evictions.Concat(publish?.Evictions ?? []).ToArray();
         return
             $"base-build-cache main_sha={plan.MainSha} input_identity={identity.Fingerprint} build_phase_ms={buildPhaseMilliseconds.ToString(System.Globalization.CultureInfo.InvariantCulture)} " +
+            $"{phaseTiming} " +
             $"projects={string.Join(",", projectReceipts)} " +
             $"built_projects={string.Join(",", builtProjects.Select(ProjectLabel))} " +
             $"miss_reasons={missReasons} " +
