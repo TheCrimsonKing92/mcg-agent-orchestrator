@@ -705,6 +705,74 @@ public sealed class BacklogSelectiveGoalReadTests(ITestOutputHelper output) : Cl
         AssertSimilarityDomainFailure(fixture, args, typeof(ArgumentException), "metadata");
     }
 
+    [Fact]
+    public async Task Similarity_ActiveHotStub_UsesValidCompletedArchive()
+    {
+        using var fixture = await Fixture.Create(4, 256);
+        await fixture.MakeTerminalAndArchive(CompletedId);
+        // Keep both the indexed Completed row and the completed archive unchanged.
+        fixture.ReplaceSnapshotMember(CompletedId, "Status", "\"Active\"");
+        string[] args = ["backlog-similar", "quartz", "--excerpt", "--limit", "100"];
+        var baseline = Run(args, fixture.Workspace, true);
+        Assert.Contains(CompletedId, baseline.Archived);
+        Assert.Contains($"kind=goal id={CompletedId[..8]}", baseline.Text);
+
+        var candidate = Run(args, fixture.Workspace, false);
+        Assert.Equal(baseline.Text, candidate.Text);
+        Assert.Equal(1, candidate.Count("similarity-projected"));
+        Assert.Empty(candidate.Requested);
+        Assert.Empty(candidate.Deserialized);
+        Assert.Empty(candidate.Archived);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Similarity_MissingArchive_ValidatesHotStub(bool missingTable)
+    {
+        using var fixture = await Fixture.Create(4, 256);
+        await fixture.MakeTerminalAndArchive(CompletedId);
+        fixture.ExecuteState(missingTable
+            ? "DROP TABLE goal_snapshot_archive"
+            : $"DELETE FROM goal_snapshot_archive WHERE goal_id = '{CompletedId}'");
+        string[] args = ["backlog-similar", "quartz"];
+        var baseline = Run(args, fixture.Workspace, true);
+        Assert.Empty(baseline.Archived);
+        Assert.Contains($"kind=goal id={CompletedId[..8]}", baseline.Text);
+        var candidate = Run(args, fixture.Workspace, false);
+        Assert.Equal(baseline.Text, candidate.Text);
+        Assert.Equal(1, candidate.Count("similarity-projected"));
+
+        fixture.ReplaceSnapshotMember(CompletedId, "Status", "\"Active\"");
+        AssertSimilarityDomainFailure(fixture, args, typeof(ArgumentException), "metadata");
+    }
+
+    [Fact]
+    public async Task Similarity_MalformedHotStub_QuarantinesBeforeArchive()
+    {
+        using var fixture = await Fixture.Create(4, 256);
+        const string validId = "55555555555555555555555555555555";
+        await fixture.AddSimilarityTwin(validId);
+        await fixture.MakeTerminalAndArchive(CompletedId);
+        // The valid archive cannot hide a serializer failure in the hot stub.
+        fixture.ReplaceSnapshotMember(CompletedId, "Objective", "42");
+        string[] args = ["backlog-similar", "quartz"];
+        Receipt baseline = null!, candidate = null!;
+        var expectedError = AsyncLocalConsoleRouter.CaptureError(() => baseline = Run(args, fixture.Workspace, true));
+        var actualError = AsyncLocalConsoleRouter.CaptureError(() => candidate = Run(args, fixture.Workspace, false));
+        Assert.Contains($"QUARANTINED goal {CompletedId[..8]}: JsonException:", expectedError);
+        Assert.Contains("$.Objective", expectedError);
+        Assert.Equal(expectedError, actualError);
+        Assert.Equal(baseline.Text, candidate.Text);
+        Assert.DoesNotContain($"kind=goal id={CompletedId[..8]}", candidate.Text);
+        Assert.Contains($"kind=goal id={validId[..8]}", candidate.Text);
+        Assert.Equal(1, candidate.Count("similarity-projected"));
+        Assert.DoesNotContain(CompletedId, baseline.Archived);
+        Assert.Empty(candidate.Requested);
+        Assert.Empty(candidate.Deserialized);
+        Assert.Empty(candidate.Archived);
+    }
+
     [Theory]
     [InlineData(false, GoalStatus.Completed)]
     [InlineData(true, GoalStatus.Completed)]

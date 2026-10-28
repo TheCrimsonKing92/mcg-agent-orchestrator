@@ -61,7 +61,7 @@ public sealed partial class SqliteOrchestratorStateRepository
                 Console.Error.WriteLine($"QUARANTINED goal {ShortGoalId(id)}: JsonException: deserialized goal snapshot was null");
                 continue;
             }
-            var status = ValidateSimilarityDomain(fields, () => reader.GetStream(1));
+            Func<Stream> reopenStream = () => reader.GetStream(1);
             if (fields is { IsMetadataOnly: true })
             {
                 using var archive = connection.CreateCommand();
@@ -73,9 +73,14 @@ public sealed partial class SqliteOrchestratorStateRepository
                     ex.Message.Contains("no such table: goal_snapshot_archive", StringComparison.OrdinalIgnoreCase)) { }
                 using var stream = GoalSnapshotArchiveCodec.OpenDecodedStream(value);
                 if (stream is not null)
-                    fields = ReadGoalSimilarityFields(stream, () => GoalSnapshotArchiveCodec.OpenDecodedStream(value)!);
-                status = ValidateSimilarityDomain(fields, () => GoalSnapshotArchiveCodec.OpenDecodedStream(value)!);
+                {
+                    reopenStream = () => GoalSnapshotArchiveCodec.OpenDecodedStream(value)!;
+                    fields = ReadGoalSimilarityFields(stream, reopenStream);
+                }
             }
+            // Match selected loading: validate hot serialization first, then hydrate before
+            // Core domain validation. A missing archive leaves the hot stub authoritative.
+            var status = ValidateSimilarityDomain(fields, reopenStream);
             if (fields is null || status != GoalStatus.Completed) continue;
             var objective = fields.Objective.Trim();
             // Goal.FromSnapshot uses a bounded first-line title and metadata timestamps only
