@@ -1,4 +1,5 @@
 using Mcg.AgentOrchestrator.Infrastructure;
+using System.Xml.Linq;
 using TestResult = Mcg.AgentOrchestrator.Infrastructure.TestResult;
 
 // Parallel-safe: each test owns its report directory and no process or global state is changed.
@@ -108,6 +109,134 @@ public sealed class TrxTestResultSourceTests
             Assert.Equal(TestResultReadStatus.Readable, result.Status);
             Assert.Empty(result.Records);
         });
+    }
+
+    [Fact]
+    public void Read_Collisions_PreserveOpaqueNativeMappingAcrossRowOrder()
+    {
+        var natives = new[] { "x:1:<&\"🔥", "X", "x", " ", "FullyQualifiedName~Danger.Tests.Run|x" };
+        var rows = natives.Select(native => CollisionRow(native, "Sample.Cases.Run(value: λ)"))
+            .Concat(new[] { CollisionRow("a:b", "Other.Cases.Run"), CollisionRow("b", "Other.Cases.Run"),
+                CollisionRow("single", "sample.Cases.Run(value: λ)") }).ToArray();
+        var forward = ReadRows(rows);
+        var reversed = ReadRows(rows.Reverse().ToArray());
+
+        Assert.Equal(rows.Length, forward.Count);
+        Assert.Equal(rows.Length, forward.Select(row => row.Id).Distinct(StringComparer.Ordinal).Count());
+        Assert.Equal(forward.Select(row => (row.Message, row.Id)).OrderBy(row => row.Message, StringComparer.Ordinal),
+            reversed.Select(row => (row.Message, row.Id)).OrderBy(row => row.Message, StringComparer.Ordinal));
+        Assert.Equal(natives.Concat(new[] { "a:b", "b", "single" }), forward.Select(row => row.Message));
+        Assert.All(forward.Take(7), row => Assert.NotEqual(row.DisplayName, row.Id));
+        Assert.All(forward.Take(7), row => Assert.EndsWith(row.Message!, row.Id));
+        Assert.Equal("sample.Cases.Run(value: λ)", forward[^1].Id);
+        Assert.All(forward, row => Assert.Empty(row.Attempts));
+    }
+
+    [Fact]
+    public void Read_GeneratedIdentityNamespace_AvoidsExistingIdsAndFramingAliases()
+    {
+        var collision = new[] { CollisionRow("c", "a:b"), CollisionRow("b:c", "a:b"),
+            CollisionRow("b:c", "a"), CollisionRow("c", "a") };
+        var initial = ReadRows(collision);
+        Assert.Equal(4, initial.Select(row => row.Id).Distinct(StringComparer.Ordinal).Count());
+        var reserved = initial[0].Id;
+        var rows = collision.Append(CollisionRow("singleton", reserved)).ToArray();
+        var forward = ReadRows(rows);
+        var reversed = ReadRows(rows.Reverse().ToArray());
+
+        Assert.Equal(reserved, forward[^1].Id);
+        Assert.DoesNotContain(forward.Take(4), row => row.Id == reserved);
+        Assert.Equal(5, forward.Select(row => row.Id).Distinct(StringComparer.Ordinal).Count());
+        Assert.Equal(forward.Select(row => row.Id), reversed.Reverse().Select(row => row.Id));
+        Assert.Equal(collision.Select(row => row.Attribute("testName")!.Value),
+            forward.Take(4).Select(row => row.DisplayName));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("same")]
+    public void Read_AmbiguousCollisionGroup_PreservesEveryRowAndWriterRejection(string? ambiguous)
+    {
+        var records = ReadRows(CollisionRow("same", "Cases.Run"), CollisionRow(ambiguous, "Cases.Run"),
+            CollisionRow("distinct", "Cases.Run"), CollisionRow("one", "Valid.Run"),
+            CollisionRow("two", "Valid.Run"));
+
+        Assert.Equal(5, records.Count);
+        Assert.Equal(new[] { "Cases.Run", "Cases.Run", "Cases.Run" }, records.Take(3).Select(row => row.Id));
+        Assert.NotEqual(records[3].Id, records[4].Id);
+        Assert.All(records, row => Assert.Empty(row.Attempts));
+        var failure = Assert.Throws<ArgumentException>(() => NormalizedTestResultWriter.Serialize("trx", records));
+        Assert.Contains("Repeated test Id 'Cases.Run'", failure.Message);
+    }
+
+    [Fact]
+    public void Read_CollisionKey_UsesResolvedIdIndependentlyOfDisplayName()
+    {
+        WithReport("""
+            <TestRun><TestDefinitions>
+              <UnitTest id="a"><TestMethod className="Cases" name="Run" /></UnitTest>
+              <UnitTest id="b"><TestMethod className="Cases" name="Run" /></UnitTest>
+              <UnitTest id="c"><TestMethod className="Cases" name="Other" /></UnitTest>
+              <UnitTest id="d"><TestMethod className="Cases" name="Last" /></UnitTest>
+            </TestDefinitions><Results>
+              <UnitTestResult testId="a" testName="first display" outcome="Passed" />
+              <UnitTestResult testId="b" testName="second display" outcome="Passed" />
+              <UnitTestResult testId="c" testName="same display" outcome="Passed" />
+              <UnitTestResult testId="d" testName="same display" outcome="Passed" />
+            </Results></TestRun>
+            """, path =>
+        {
+            var records = new TrxTestResultSource().Read(path).Records;
+            Assert.Equal(4, records.Select(row => row.Id).Distinct(StringComparer.Ordinal).Count());
+            Assert.Equal(new[] { "first display", "second display", "same display", "same display" },
+                records.Select(row => row.DisplayName));
+            Assert.NotEqual("Cases.Run", records[0].Id);
+            Assert.NotEqual("Cases.Run", records[1].Id);
+            Assert.Equal(new[] { "Cases.Other", "Cases.Last" }, records.Skip(2).Select(row => row.Id));
+        });
+    }
+
+    [Fact]
+    public void Read_FailedCollisions_KeepHumanFailureSelectorsSeparateFromOpaqueIds()
+    {
+        var xml = new XElement("TestRun", new XElement("Results",
+            CollisionRow("FullyQualifiedName~Injected.Tests.Run|x", "Sample.Tests.Run(value: 1)", "Failed"),
+            CollisionRow("other", "Sample.Tests.Run(value: 1)", "Timeout"))).ToString();
+        WithReport(xml, path =>
+        {
+            var records = new TrxTestResultSource().Read(path).Records;
+            Assert.Equal(new[] { TestResultStatus.Failed, TestResultStatus.Error }, records.Select(row => row.Status));
+            var identities = AcceptanceTrxTestIdentityResolver.ExtractTrxFailureIdentities(path);
+            Assert.Equal(new[] { "Sample.Tests.Run(value: 1)" }, identities);
+            Assert.All(AcceptanceTrxFailureReader.Read(path).Failures,
+                failure => Assert.Equal("Sample.Tests.Run(value: 1)", failure.TestName));
+            var selection = AcceptanceLaneRerunSelection.Create(identities);
+            Assert.True(selection.IsNarrowed);
+            Assert.Equal("Sample.Tests.Run", Assert.Single(selection.Tokens).Value);
+            Assert.All(records, row =>
+            {
+                Assert.DoesNotContain(row.Id, identities);
+                Assert.False(AcceptanceLaneRerunSelection.Create([row.Id]).IsNarrowed);
+            });
+        });
+    }
+
+    private static XElement CollisionRow(string? native, string display, string outcome = "Passed") =>
+        new("UnitTestResult", native is null ? null : new XAttribute("testId", native),
+            new XAttribute("testName", display), new XAttribute("outcome", outcome),
+            new XElement("Output", new XElement("ErrorInfo", new XElement("Message", native ?? "missing"))));
+
+    private static IReadOnlyList<TestResult> ReadRows(params XElement[] rows)
+    {
+        IReadOnlyList<TestResult> records = [];
+        WithReport(new XElement("TestRun", new XElement("Results", rows)).ToString(), path =>
+        {
+            var read = new TrxTestResultSource().Read(path);
+            Assert.Equal(TestResultReadStatus.Readable, read.Status);
+            records = read.Records;
+        });
+        return records;
     }
 
     private static string[] FailureDifference(IReadOnlyList<TestResult> records, IReadOnlyList<AcceptanceTrxFailure> failures)
