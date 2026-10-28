@@ -17,7 +17,8 @@ param(
     [switch]$ConductLoop,
     [switch]$DispatchHost,
     [switch]$IncludeChildren,
-    [switch]$Locks
+    [switch]$Locks,
+    [string]$AppDll
 )
 
 Set-StrictMode -Version Latest
@@ -45,6 +46,23 @@ if ($IncludeChildren) { $arguments += '--include-children' }
 if ($Locks) { $arguments += '--locks' }
 
 try {
+    if ($PSBoundParameters.ContainsKey('AppDll')) {
+        if ([string]::IsNullOrWhiteSpace($AppDll)) {
+            throw '-AppDll must name an existing filesystem file.'
+        }
+        $selectedApp = Get-Item -LiteralPath $AppDll -ErrorAction Stop
+        if ($selectedApp -isnot [System.IO.FileInfo]) {
+            throw '-AppDll must name an existing filesystem file.'
+        }
+        $dotnetHost = if ([string]::IsNullOrWhiteSpace($env:MCG_ORCHESTRATOR_DOTNET_PATH)) {
+            'dotnet'
+        } else {
+            $env:MCG_ORCHESTRATOR_DOTNET_PATH
+        }
+        & $dotnetHost $selectedApp.FullName @arguments
+        exit $LASTEXITCODE
+    }
+
     $resolver = Join-Path $repoRoot 'scripts\Resolve-RepoProcessAppDll.ps1'
     $resolvedAppDll = @()
     try {
