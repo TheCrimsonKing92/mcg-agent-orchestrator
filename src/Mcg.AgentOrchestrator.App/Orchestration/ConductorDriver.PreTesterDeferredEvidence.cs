@@ -14,69 +14,6 @@ internal sealed partial class ConductorDriver
         TryReconcileFocusedEvidenceAttempt, _recordFindingEvidenceRequest, _recordFindingEvidenceRun,
         CreateFindingEvidenceBatchId, CreateFindingEvidenceReceiptId);
 
-    private bool TryRouteCoveredPreTesterRequest(
-        Goal goal,
-        TaskSpec requestingTask,
-        string candidateSha,
-        IReadOnlyList<ReviewFinding> requestingFindings,
-        out FailedGoalFindingObservation decision)
-    {
-        decision = FailedGoalFindingObservation.None;
-        if (requestingFindings.Any(finding => finding.EvidenceRequest?.NegativeControl is not null)) return false;
-        var tester = goal.Tasks.FirstOrDefault(task => task.RequiredRole == AgentRole.Tester);
-        var receipt = PreTesterEvidenceIndexLines.Latest(
-            goal, tester?.Id ?? requestingTask.Id, candidateSha);
-        if (receipt is not { Outcome: "green" }) return false;
-
-        var covered = FindingEvidenceExecutedCoverage.ExecutedSelections(receipt.Selections, receipt.NotRun).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var settings = _getFindingEvidenceEngineSettings(goal);
-        var normalizedRequests = new List<FindingEvidenceRequest>();
-        foreach (var finding in requestingFindings)
-        {
-            if (finding.EvidenceRequest is null ||
-                !TryNormalizeFindingEvidenceRequest(
-                    finding.EvidenceRequest, settings,
-                    (project, name) => _resolveFindingEvidenceSiblingClasses(goal, project, name),
-                    out var normalized, out _, out _, out _) ||
-                normalized.Selections.Any(selection =>
-                    !covered.Contains(FormatFindingEvidenceSelection(selection))))
-                return false;
-            normalizedRequests.Add(normalized);
-        }
-
-        var request = new FindingEvidenceRequest(normalizedRequests
-            .SelectMany(normalized => normalized.Selections)
-            .DistinctBy(FormatFindingEvidenceSelection)
-            .ToArray());
-        var attachedReceipt = new FindingEvidenceReceipt(
-            receipt.ReceiptId, candidateSha, request, Accepted: true, Passed: true,
-            Summary: $"Pre-Tester focused evidence {receipt.Outcome}; result_path={receipt.ResultPath ?? "none"}",
-            RequestDispositions: requestingFindings.Select(finding =>
-                new FindingEvidenceRequestDisposition(
-                    finding.StableId,
-                    FindingEvidenceExecutionClassifier.BuildRequestIdentity(finding.EvidenceRequest!),
-                    "executed-pre-tester")).ToArray());
-        foreach (var finding in requestingFindings)
-        {
-            var requestIdentity = FindingEvidenceExecutionClassifier.BuildRequestIdentity(finding.EvidenceRequest!);
-            _recordFindingEvidenceOutcome(
-                goal.Id, requestingTask.Id, finding.StableId,
-                new FindingEvidenceOutcome(
-                    Honoured: true, ReceiptId: receipt.ReceiptId,
-                    ResultReason: FindingEvidenceOutcomeReason.ValidEvidence,
-                    RequestedSelectionIdentity: requestIdentity,
-                    DecisionReason: "pre-tester-covered"),
-                attachedReceipt);
-        }
-
-        decision = BuildCappedFindingEvidenceDeliveryRetry(
-            goal, requestingTask, candidateSha, requestingFindings,
-            [receipt.ReceiptId],
-            "The candidate-bound pre-Tester receipt covers every requested selection; " +
-            "its result and any not-run classes are in the evidence index.");
-        return true;
-    }
-
     private bool TryRunPreTesterDeferredEvidence(
         Goal goal,
         TaskSpec developer,
@@ -212,7 +149,7 @@ internal sealed partial class ConductorDriver
         var requestContext = new ConductorFocusedEvidenceRequestContext(
             "pre-tester-deferred",
             CreateFindingEvidenceBatchId(candidateSha!, salt, policy.Name, identity),
-            []);
+            [], ExecutionBasisIdentity: BuildFindingEvidenceExecutionBasisIdentity(settings), ReceiptId: receiptId);
         var completed = TryReconcileFocusedEvidenceAttempt(
             goal, policy, request, candidateSha, "pre-tester-deferred", requestContext,
             out var evidence, out var attempt, out var decision, out var kind);
@@ -248,7 +185,7 @@ internal sealed partial class ConductorDriver
             identity, request, new FindingEvidenceRequest(distinct), [], []);
         var (outcome, candidate, failingTests, unusable) = PreTesterApparatusReceiptClassifier.ClassifyOutcome(evidence, completed, candidateSha, distinct,
             failures => EveryFailingTestIsInsideCandidateChanges(goal, attributionBatch, failures));
-        if (outcome == "unusable" && attempt is not null)
+        if (attempt is not null)
             _focusedEvidenceAttemptCoordinator.RecordFocusedEvidenceRequestDispositions(attempt, requestContext.FindingRoundFingerprint, receiptId, []);
         _recordFindingEvidenceRun(goal.Id, tester.Id, PreTesterUnusableReason.AppendTo(unusable, PreTesterFailureSignatureReader.AppendTo(
             PreTesterEvidenceIndexLines.FormatMarker(new PreTesterEvidenceEntry(
