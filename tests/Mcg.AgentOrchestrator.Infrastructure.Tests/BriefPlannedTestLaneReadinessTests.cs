@@ -125,6 +125,8 @@ public sealed class BriefPlannedTestLaneReadinessTests
     [InlineData("production-refactor-path-prefix")]
     [InlineData("production-reenable-prefix")]
     [InlineData("production-reenable-path-prefix")]
+    [InlineData("short-reenable-prefix")]
+    [InlineData("short-reenable-path-prefix")]
     [InlineData("negated-membership-work")]
     [InlineData("never-membership-work")]
     [InlineData("must-not-membership-work")]
@@ -153,6 +155,8 @@ public sealed class BriefPlannedTestLaneReadinessTests
             "production-refactor-path-prefix" => "Refactor production widget handling; add new tests/Widget.Tests/BuildWidgetTests.cs.",
             "production-reenable-prefix" => "Re-enable production widget handling; add new test class BuildWidgetTests.",
             "production-reenable-path-prefix" => "Re-enable production widget handling; add new tests/Widget.Tests/BuildWidgetTests.cs.",
+            "short-reenable-prefix" => "Re-enable widgets; add new test class BuildWidgetTests.",
+            "short-reenable-path-prefix" => "Re-enable widgets; add new tests/Widget.Tests/BuildWidgetTests.cs.",
             "negated-membership-work" => "Add new test class BuildWidgetTests; " + Plan.Replace("update the pinned", "do not update the pinned"),
             "never-membership-work" => "Add new test class BuildWidgetTests; " + Plan.Replace("update the pinned", "never update the pinned"),
             "must-not-membership-work" => "Add new test class BuildWidgetTests; " + Plan.Replace("update the pinned", "must not update the pinned"),
@@ -309,6 +313,10 @@ public sealed class BriefPlannedTestLaneReadinessTests
     [InlineData("raw-cmd-comma-class")]
     [InlineData("raw-cmd-comma-path")]
     [InlineData("raw-cmd-exe-comma-class")]
+    [InlineData("raw-cmd-options-comma-class")]
+    [InlineData("raw-cmd-options-comma-path")]
+    [InlineData("raw-cmd-exe-options-comma-class")]
+    [InlineData("raw-cmd-multiple-options-comma-path")]
     [InlineData("raw-custom-switches")]
     public void CommandContents_DoNotBlockDeveloperPreparation(string kind)
     {
@@ -335,6 +343,10 @@ public sealed class BriefPlannedTestLaneReadinessTests
             "raw-cmd-comma-class" => "cmd /c echo ignored, add new test class BuildWidgetTests.",
             "raw-cmd-comma-path" => "cmd /c echo ignored, add new tests/Widget.Tests/BuildWidgetTests.cs.",
             "raw-cmd-exe-comma-class" => "cmd.exe /c echo ignored, add new test class BuildWidgetTests.",
+            "raw-cmd-options-comma-class" => "cmd /d /c echo ignored, add new test class BuildWidgetTests.",
+            "raw-cmd-options-comma-path" => "cmd /d /c echo ignored, add new tests/Widget.Tests/BuildWidgetTests.cs.",
+            "raw-cmd-exe-options-comma-class" => "cmd.exe /d /c echo ignored, add new test class BuildWidgetTests.",
+            "raw-cmd-multiple-options-comma-path" => "cmd /d /s /k echo ignored, add new tests/Widget.Tests/BuildWidgetTests.cs.",
             "raw-custom-switches" => "custom-command --message ignored text, add new test class BuildWidgetTests.",
             _ => throw new ArgumentException(kind)
         };

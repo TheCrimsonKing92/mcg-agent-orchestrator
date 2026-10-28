@@ -120,12 +120,13 @@ internal static class BriefPlannedTestLaneReadiness
         // existing behavior, while arbitrary prose or executable arguments do not declare anything.
         var clauses = Regex.Split(prefix, @"[,;.!?]\s+", Options);
         // Command syntax retains its argument context across punctuation, including shell wrappers.
-        // A hyphenated prose word alone is not command evidence: require an argument-shaped
-        // clause (one bare argument, or explicit switches/quoting) for an otherwise unknown command.
+        // Bare arguments do not distinguish hyphenated prose from commands. Require an explicit
+        // command name, PowerShell Verb-Noun casing, or switches/quoting for an unknown command.
         if (Regex.IsMatch(clauses[0],
-                @"^\s*(?:echo\b|cmd(?:\.exe)?\s+/(?:c|k)(?=\s|$)|[\w./\\-]*[./\\][\w./\\-]*(?=\s|$))", Options) ||
+                @"^\s*(?:echo\b|cmd(?:\.exe)?\s+(?:/[^\s]+\s+)*?/(?:c|k)(?=\s|$)|[\w./\\-]*[./\\][\w./\\-]*(?=\s|$)|[\w-]+-command\s+)", Options) ||
+            Regex.IsMatch(clauses[0], @"^\s*[A-Z][a-z]+-[A-Z][A-Za-z]+\s+", RegexOptions.CultureInvariant) ||
             Regex.IsMatch(clauses[0],
-                @"^\s*[\w-]+-[\w-]+\s+(?:\S+\s*$|(?:.*\s)?(?:--?\w|/[A-Za-z]|[""']))", Options))
+                @"^\s*[\w-]+-[\w-]+\s+(?:.*\s)?(?:--?\w|/[A-Za-z]|[""'])", Options))
             return false;
         var context = clauses[^1];
         context = Regex.Replace(context, @"\bnew\s+(?:(?:test|source|class|file)\s+)*[`'""]?$", "", Options).Trim();
