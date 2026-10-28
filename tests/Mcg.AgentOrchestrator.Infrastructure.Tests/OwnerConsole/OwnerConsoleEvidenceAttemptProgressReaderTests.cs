@@ -5,7 +5,8 @@ using Mcg.AgentOrchestrator.App.OwnerConsole;
 public sealed class OwnerConsoleEvidenceAttemptProgressReaderTests
 {
     private const string Goal = "11111111-evidence";
-    private const string Attempt = "running-attempt";
+    private const string Attempt = "11111111-1-20261028115648000-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    private const string ResultsPrefix = "11111111-pre-review-20261028115649000-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
     private static readonly DateTimeOffset Now = new(2026, 10, 28, 12, 0, 0, TimeSpan.Zero);
 
     [Fact]
@@ -142,6 +143,55 @@ public sealed class OwnerConsoleEvidenceAttemptProgressReaderTests
     }
 
     [Theory]
+    [InlineData("")]
+    [InlineData("PHASE_PROGRESS target=\"heartbeat=unrelated\"\n")]
+    public void Read_NoRecordedLink_DoesNotGuessFromSameGoalFiles(string stdout)
+    {
+        using var fixture = new Fixture();
+        fixture.Write("out.log", stdout);
+
+        var progress = fixture.Read();
+
+        Assert.Null(progress.Lane);
+        Assert.Null(progress.Passed);
+        Assert.Null(progress.Failed);
+        Assert.Equal(2, progress.Ordinal);
+        Assert.Equal("verification-check", progress.Phase);
+        Assert.Equal(Now.AddSeconds(-4), progress.LastProgressAt);
+    }
+
+    [Fact]
+    public void Read_UnreferencedSameGoalAndBaselineFiles_AreExcluded()
+    {
+        using var fixture = new Fixture();
+        var other = ResultsPrefix.Replace("bbbbbbbb", "cccccccc", StringComparison.Ordinal) + "-candidate.other";
+        File.WriteAllText(Path.Combine(fixture.Directory, other + ".trx"),
+            "<TestRun><Results><UnitTestResult outcome=\"Failed\"/></Results></TestRun>");
+        File.WriteAllText(Path.Combine(fixture.Directory, other + ".gate-heartbeat.json"),
+            JsonSerializer.Serialize(new { goalId = Goal, currentTarget = "AAA.Tests" }));
+
+        var progress = fixture.Read();
+
+        Assert.Equal("Infrastructure.Tests: AlphaTests +1 classes", progress.Lane);
+        Assert.Equal(2, progress.Passed);
+        Assert.Equal(1, progress.Failed);
+    }
+
+    [Fact]
+    public void Read_TornProgressLine_DoesNotAttributeFilesUntilLineIsComplete()
+    {
+        using var fixture = new Fixture();
+        fixture.Write("out.log", Fixture.ProgressLine(fixture.PathFor("lane.gate-heartbeat.json")));
+
+        Assert.Null(fixture.Read().Passed);
+        Assert.Null(fixture.Read().Lane);
+
+        File.AppendAllText(fixture.PathFor("out.log"), "\n");
+        Assert.Equal(2, fixture.Read().Passed);
+        Assert.Equal("Infrastructure.Tests: AlphaTests +1 classes", fixture.Read().Lane);
+    }
+
+    [Theory]
     [InlineData("FullyQualifiedName~Example.AlphaTests", "CustomLane: AlphaTests")]
     [InlineData("Name~SomeMethod", "CustomLane")]
     [InlineData("FullyQualifiedName~AlphaTests&Name~Method", "CustomLane")]
@@ -208,7 +258,7 @@ public sealed class OwnerConsoleEvidenceAttemptProgressReaderTests
 
     private sealed class Fixture : IDisposable
     {
-        internal string Root { get; } = InfrastructureTestSupport.CreateTempDirectory();
+        internal string Root { get; } = Path.Combine(InfrastructureTestSupport.CreateTempDirectory(), "with spaces");
         internal string Directory { get; }
         internal OwnerConsoleHostActivity Running { get; }
 
@@ -230,6 +280,16 @@ public sealed class OwnerConsoleEvidenceAttemptProgressReaderTests
                 "phase=torn utc=2026-10-28T11:59:00.0000000Z pid=7");
             WriteLane("lane.gate-heartbeat.json", Goal, "Infrastructure.Tests",
                 "AlphaTests", "BetaTests", "AlphaTests");
+            // Runtime uses a separate owner prefix for candidate and baseline arms, beside the
+            // attempt-id heartbeat/phase/stdout. Focused heartbeats currently have no runId.
+            var baseline = Path.Combine(Directory, ResultsPrefix + "-baseline.reviewer-focused-evidence");
+            File.WriteAllText(baseline + ".trx",
+                "<TestRun><Results><UnitTestResult outcome=\"Failed\"/></Results></TestRun>");
+            File.WriteAllText(baseline + ".gate-heartbeat.json", JsonSerializer.Serialize(new
+            {
+                goalId = Goal, currentTarget = "AAA.Tests", startedAt = Now.AddMinutes(-2), runId = (string?)null
+            }));
+            File.AppendAllText(PathFor("out.log"), ProgressLine(baseline + ".gate-heartbeat.json") + "\n");
             Write("trx", "<TestRun xmlns=\"http://microsoft.com/schemas/VisualStudio/TeamTest/2010\"><Results>" +
                 "<UnitTestResult executionId=\"p1\" outcome=\"Passed\"/>" +
                 "<UnitTestResult executionId=\"p2\" outcome=\"Passed\"/>" +
@@ -237,14 +297,25 @@ public sealed class OwnerConsoleEvidenceAttemptProgressReaderTests
                 "<UnitTestResult executionId=\"torn\" outcome=\"Passed\"><Output>");
         }
 
-        internal string PathFor(string suffix) => Path.Combine(Directory, Attempt + "." + suffix);
+        internal string PathFor(string suffix) => Path.Combine(Directory,
+            suffix is "heartbeat.json" or "phase.log" or "out.log" ? Attempt + "." + suffix :
+            ResultsPrefix + "-candidate.reviewer-focused-evidence-" + (suffix == "trx" ? "infrastructure-tests.trx" : suffix));
         internal void Write(string suffix, string text) => File.WriteAllText(PathFor(suffix), text);
-        internal void WriteLane(string suffix, string goal, string lane, params string[] classes) =>
+        internal void WriteLane(string suffix, string goal, string lane, params string[] classes)
+        {
             Write(suffix, JsonSerializer.Serialize(new
             {
                 goalId = goal, phase = "verification-check", currentTarget = "reviewer focused evidence: " +
-                    lane + " " + string.Join('|', classes.Select(name => "FullyQualifiedName~Example." + name))
+                    lane + " " + string.Join('|', classes.Select(name => "FullyQualifiedName~Example." + name)),
+                startedAt = Now.AddMinutes(-2), runId = (string?)null
             }));
+            File.AppendAllText(PathFor("out.log"), ProgressLine(PathFor(suffix)) + "\n");
+        }
+
+        internal static string ProgressLine(string heartbeat) =>
+            $"PHASE_PROGRESS goal={Goal[..8]} phase=verification-check elapsed_ms=0 " +
+            $"target=\"reviewer focused evidence: Infrastructure.Tests FullyQualifiedName~Example.AlphaTests\" " +
+            $"child_pid=7 output_bytes=0 heartbeat=\"{heartbeat}\" ts={Now:O}";
 
         internal OwnerConsoleEvidenceAttemptProgress Read(bool checkUnchanged = true)
         {
@@ -258,6 +329,6 @@ public sealed class OwnerConsoleEvidenceAttemptProgressReaderTests
             System.IO.Directory.GetFiles(Directory).Order(StringComparer.Ordinal).Select(path =>
                 (path, Convert.ToBase64String(File.ReadAllBytes(path)), File.GetLastWriteTimeUtc(path))).ToArray();
 
-        public void Dispose() => System.IO.Directory.Delete(Root, recursive: true);
+        public void Dispose() => System.IO.Directory.Delete(Path.GetDirectoryName(Root)!, recursive: true);
     }
 }

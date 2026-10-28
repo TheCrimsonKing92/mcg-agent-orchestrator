@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using System.Xml;
 using Mcg.AgentOrchestrator.App.Orchestration;
 
@@ -35,27 +36,58 @@ internal sealed class OwnerConsoleEvidenceAttemptProgressReader(string storeRoot
         var heartbeat = ReadJson(prefix + ".heartbeat.json", root => Text(root, "lastProgressAt"));
         DateTimeOffset? lastProgress = DateTimeOffset.TryParse(heartbeat, CultureInfo.InvariantCulture,
             DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var at) ? at : null;
-        var files = AttemptFiles(goalDirectory, attempt);
-        var lane = files.Where(path => path.EndsWith(".gate-heartbeat.json", StringComparison.Ordinal))
+        var files = AttemptFiles(goalDirectory, goalId, prefix + ".out.log");
+        var lane = files.Heartbeats
             .Select(path => ReadJson(path, root => Text(root, "goalId") == goalId ? Text(root, "currentTarget") : null))
             .Select(DescribeLane).Where(item => item.Name is not null)
             .OrderBy(item => item.Name, StringComparer.Ordinal).FirstOrDefault().Description;
-        var counts = ReadCounts(files.Where(path => path.EndsWith(".trx", StringComparison.Ordinal)).ToArray());
+        var counts = ReadCounts(files.Results);
         return new(now, running.Ordinal, running.StartedAt,
             AcceptanceAttemptOwnedPhaseTrail.ReadLastPhase(prefix + ".attempt.json"), lane, lastProgress,
             counts.Passed, counts.Failed);
     }
 
-    private static string[] AttemptFiles(string directory, string attempt)
+    private static (string[] Heartbeats, string[] Results) AttemptFiles(string directory, string goalId, string stdout)
     {
         try
         {
-            return Directory.EnumerateFiles(directory).Where(path =>
-                Path.GetFileName(path).StartsWith(attempt + ".", StringComparison.Ordinal))
+            // Focused verification owns a fresh results prefix, separate from the attempt id.
+            // Its PHASE_PROGRESS lines are redirected to this attempt's stdout. Use those explicit
+            // references rather than attributing same-goal files by timestamps or directory proximity.
+            using var stream = OpenRead(stdout);
+            using var reader = new StreamReader(stream);
+            var lines = reader.ReadToEnd().Split('\n');
+            var heartbeats = new HashSet<string>(StringComparer.Ordinal);
+            var prefixes = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var line in lines.Take(lines.Length - 1)) // Ignore a partial trailing observation.
+            {
+                if (!line.StartsWith("PHASE_PROGRESS ", StringComparison.Ordinal)) continue;
+                // Consume every token so a quoted target containing "heartbeat=" is not a reference.
+                var tokens = Regex.Matches(line.TrimEnd('\r'),
+                    "(?:^| )(?<key>[a-z_]+)=(?:\"(?<quoted>(?:\\\\\"|[^\"])*)\"|(?<plain>[^ \"]+))(?= |$)");
+                var reference = tokens.Cast<Match>().FirstOrDefault(token => token.Groups["key"].Value == "heartbeat");
+                if (reference is null) continue;
+                var path = reference.Groups["quoted"].Success ? reference.Groups["quoted"].Value : reference.Groups["plain"].Value;
+                if (!Path.IsPathFullyQualified(path) ||
+                    !string.Equals(Path.GetDirectoryName(path), Path.TrimEndingDirectorySeparator(directory),
+                        StringComparison.OrdinalIgnoreCase)) continue;
+                var name = Path.GetFileName(path);
+                var separator = name.IndexOf('.');
+                if (separator < 0 || !name.EndsWith(".gate-heartbeat.json", StringComparison.Ordinal)) continue;
+                var resultPrefix = name[..separator];
+                if (!resultPrefix.StartsWith(goalId[..Math.Min(8, goalId.Length)] + "-pre-review-", StringComparison.Ordinal) ||
+                    !resultPrefix.EndsWith("-candidate", StringComparison.Ordinal)) continue;
+                heartbeats.Add(path);
+                prefixes.Add(resultPrefix + ".");
+            }
+            var results = Directory.EnumerateFiles(directory, "*.trx").Where(path =>
+                prefixes.Any(prefix => Path.GetFileName(path).StartsWith(prefix, StringComparison.Ordinal)))
                 .Order(StringComparer.Ordinal).ToArray();
+            return (heartbeats.Order(StringComparer.Ordinal).ToArray(), results);
         }
-        catch (IOException) { return []; }
-        catch (UnauthorizedAccessException) { return []; }
+        catch (IOException) { return ([], []); }
+        catch (UnauthorizedAccessException) { return ([], []); }
+        catch (ArgumentException) { return ([], []); }
     }
 
     private static FileStream OpenRead(string path) => new(path, FileMode.Open, FileAccess.Read,
