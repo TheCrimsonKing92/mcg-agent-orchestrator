@@ -17,43 +17,9 @@ internal sealed partial class ConductorDriver
         if (task.RequiredRole == AgentRole.Tester &&
             (_cohortKernel ?? _conductorTickKernel) is { } kernel)
         {
-            var currentTask = kernel.GetTask(goal.Id, task.Id);
-            diagnosis = FindingReceiptClosureDiagnosis.Evaluate(goal, currentTask, candidateSha,
-                kernel.HumanInputRequests.Any(request =>
-                    request.GoalId == goal.Id && request.TaskId == task.Id &&
-                    !request.IsCompleted && HumanWaitPolicyDefaults.BlocksActiveWork(request.Kind)));
-            if (diagnosis.IsClosable)
-            {
-                var closable = diagnosis.ClosableFindings;
-                var prior = currentTask.LastVerification!;
-                var reviewedSha = prior.ReviewedCommit!.Trim();
-                var resolved = closable.ToDictionary(pair => pair.Finding.StableId, pair =>
-                    pair.Finding with
-                    {
-                        State = ReviewFindingState.Resolved,
-                        Description = $"Closed by conductor receipt closure: receipt {pair.Receipt.ReceiptId}; " +
-                            $"request {pair.Finding.EvidenceOutcome!.RequestedSelectionIdentity ?? BuildFindingEvidenceIdentity(pair.Receipt.Request)}; " +
-                            $"candidate {reviewedSha}."
-                    }, StringComparer.Ordinal);
-                var note = $"FINDING_RECEIPT_CLOSURE task={task.Id.Value[..8]} " +
-                    $"findings={string.Join(',', resolved.Keys.Order(StringComparer.Ordinal))} " +
-                    $"receipts={string.Join(',', closable.Select(pair => pair.Receipt.ReceiptId).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal))} " +
-                    $"candidate={reviewedSha}{OutsideDiffFindingRerun.FormatClosureDecision(closable)}; no worker dispatched";
-                kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord(
-                    "conductor finding-receipt-closure", prior.WorkingDirectory, 0, OutsideDiffFindingRerun.ClosureOutput(note, resolved.Values), "", _utcNow(),
-                    ReviewedCommit: reviewedSha,
-                    CandidateIdentity: prior.CandidateIdentity,
-                    DispatchStartedAt: prior.DispatchStartedAt,
-                    MergedReviewFindings: prior.MergedReviewFindings!
-                        .Select(finding => resolved.GetValueOrDefault(finding.StableId, finding)).ToArray(),
-                    FindingEvidenceReceipts: prior.FindingEvidenceReceipts,
-                    FindingEvidenceRequestDispositions: prior.FindingEvidenceRequestDispositions));
-                if (currentTask.Status != WorkTaskStatus.Completed)
-                    throw new InvalidOperationException($"Receipt closure did not complete Tester task {task.Id}.");
-                kernel.RecordTaskNote(goal.Id, task.Id, note);
-                return FailedGoalFindingObservation.Observed(
-                    FailedGoalFindingObservationKind.FindingEvidencePending, note);
-            }
+            if (FindingReceiptClosureCoordinator.TryClose(kernel, goal, task.Id, candidateSha, _utcNow,
+                    out diagnosis, out var observation))
+                return observation;
         }
 
         var receiptTask = (_cohortKernel ?? _conductorTickKernel)?.GetTask(goal.Id, task.Id) ?? task;
