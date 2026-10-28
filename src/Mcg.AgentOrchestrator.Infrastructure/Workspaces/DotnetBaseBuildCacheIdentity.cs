@@ -19,17 +19,25 @@ internal static class DotnetBaseBuildCacheIdentityResolver
         Action<IDictionary<string, string?>, string, string?> configureEnvironment,
         Func<IDisposable?> acquirePermit,
         Func<string[], Task<GoalAcceptanceVerifier.CommandResult>> run,
-        Func<DotnetBaseBuildCacheIdentity?>? resolveForTests)
+        Func<DotnetBaseBuildCacheIdentity?>? resolveForTests,
+        CacheIdentityDiagnosticContext? diagnostics = null)
     {
         if (resolveForTests is not null) return resolveForTests();
-        using var permit = acquirePermit();
-        var processEnvironment = Environment.GetEnvironmentVariables().Cast<DictionaryEntry>()
-            .ToDictionary(entry => (string)entry.Key, entry => (string?)entry.Value);
-        configureEnvironment(processEnvironment, worktreePath, environment.RootPath);
-        return await ResolveAsync(
-            worktreePath, phase.CachePlan!.RestoreProjects, phase.BuildArguments, environment, run,
-            processEnvironment.ToDictionary(entry => entry.Key, entry => entry.Value ?? ""),
-            phase.CachePlan.BuildProjects).ConfigureAwait(false);
+        diagnostics ??= phase.IdentityDiagnostics;
+        using var timing = diagnostics is null ? null : new CacheIdentityStageTiming(diagnostics);
+        DotnetBaseBuildCacheIdentity? identity;
+        using (var permit = acquirePermit())
+        {
+            var processEnvironment = Environment.GetEnvironmentVariables().Cast<DictionaryEntry>()
+                .ToDictionary(entry => (string)entry.Key, entry => (string?)entry.Value);
+            configureEnvironment(processEnvironment, worktreePath, environment.RootPath);
+            identity = await ResolveCoreAsync(
+                worktreePath, phase.CachePlan!.RestoreProjects, phase.BuildArguments, environment, run,
+                processEnvironment.ToDictionary(entry => entry.Key, entry => entry.Value ?? ""),
+                phase.CachePlan.BuildProjects, timing).ConfigureAwait(false);
+        }
+        timing?.Complete(identity is not null);
+        return identity;
     }
 
     // MSBuildAllProjects heads with the newest-write-time import; preprocessed text already binds the import set.
@@ -41,7 +49,22 @@ internal static class DotnetBaseBuildCacheIdentityResolver
         DotnetBuildEnvironment environment,
         Func<string[], Task<GoalAcceptanceVerifier.CommandResult>> run,
         IReadOnlyDictionary<string, string>? processEnvironment = null,
-        IReadOnlyList<string>? buildProjects = null)
+        IReadOnlyList<string>? buildProjects = null,
+        CacheIdentityDiagnosticContext? diagnostics = null)
+    {
+        using var timing = diagnostics is null ? null : new CacheIdentityStageTiming(diagnostics);
+        var identity = await ResolveCoreAsync(worktreePath, projects, buildArguments, environment, run,
+            processEnvironment, buildProjects, timing).ConfigureAwait(false);
+        timing?.Complete(identity is not null);
+        return identity;
+    }
+
+    private static async Task<DotnetBaseBuildCacheIdentity?> ResolveCoreAsync(
+        string worktreePath, IReadOnlyList<string> projects, string[] buildArguments,
+        DotnetBuildEnvironment environment,
+        Func<string[], Task<GoalAcceptanceVerifier.CommandResult>> run,
+        IReadOnlyDictionary<string, string>? processEnvironment,
+        IReadOnlyList<string>? buildProjects, CacheIdentityStageTiming? timing)
     {
         try
         {
@@ -73,10 +96,14 @@ internal static class DotnetBaseBuildCacheIdentityResolver
                     if (aggregate) buckets.TryAdd($"{name}:{component}", []);
                 var projectPath = Path.GetFullPath(project, root);
                 if (!File.Exists(projectPath)) return null;
-                var restore = await run(["dotnet", "msbuild", projectPath, .. properties, "-t:Restore", "-nologo", "-v:q"]).ConfigureAwait(false);
+                GoalAcceptanceVerifier.CommandResult restore;
+                using (timing?.Measure(CacheIdentityStageTiming.Stage.RestoreCommand))
+                    restore = await run(["dotnet", "msbuild", projectPath, .. properties, "-t:Restore", "-nologo", "-v:q"]).ConfigureAwait(false);
                 if (!Completed(restore)) return null;
-                var evaluation = await run(["dotnet", "msbuild", projectPath, .. properties,
-                    $"-getProperty:{Properties}", $"-getItem:{Items}", "-nologo"]).ConfigureAwait(false);
+                GoalAcceptanceVerifier.CommandResult evaluation;
+                using (timing?.Measure(CacheIdentityStageTiming.Stage.EvaluationCommand))
+                    evaluation = await run(["dotnet", "msbuild", projectPath, .. properties,
+                        $"-getProperty:{Properties}", $"-getItem:{Items}", "-nologo"]).ConfigureAwait(false);
                 if (!Completed(evaluation)) return null;
                 using var document = JsonDocument.Parse(evaluation.Output);
                 var snapshot = document.RootElement;
@@ -116,8 +143,10 @@ internal static class DotnetBaseBuildCacheIdentityResolver
                 var preprocessedPath = Path.Combine(environment.RootPath, $"base-cache-input-{Guid.NewGuid():N}.xml");
                 try
                 {
-                    var preprocess = await run(["dotnet", "msbuild", projectPath, .. properties,
-                        $"-preprocess:{preprocessedPath}", "-nologo"]).ConfigureAwait(false);
+                    GoalAcceptanceVerifier.CommandResult preprocess;
+                    using (timing?.Measure(CacheIdentityStageTiming.Stage.PreprocessingCommand))
+                        preprocess = await run(["dotnet", "msbuild", projectPath, .. properties,
+                            $"-preprocess:{preprocessedPath}", "-nologo"]).ConfigureAwait(false);
                     if (!Completed(preprocess) || !File.Exists(preprocessedPath)) return null;
                     Add($"{name}:imports", Normalize(File.ReadAllText(preprocessedPath)));
                 }
@@ -146,7 +175,7 @@ internal static class DotnetBaseBuildCacheIdentityResolver
                         Add($"{name}:items", "absent-global-analyzer-config");
                         continue;
                     }
-                    Add($"{name}:items", HashFile(input));
+                    Add($"{name}:items", HashFile(input, timing));
                 }
                 // Include project-local generator/custom-target inputs, not just Compile items.
                 Add($"{name}:project-tree", HashTree(Path.GetDirectoryName(projectPath)!, projectInputs: true));
@@ -155,7 +184,7 @@ internal static class DotnetBaseBuildCacheIdentityResolver
                     foreach (var file in Directory.EnumerateFiles(ancestor).Where(IsSharedInput).Order(StringComparer.Ordinal))
                     {
                         Add($"{name}:shared-inputs", file);
-                        Add($"{name}:shared-inputs", HashFile(file));
+                        Add($"{name}:shared-inputs", HashFile(file, timing));
                     }
                     if (ancestor.Equals(root, StringComparison.OrdinalIgnoreCase)) break;
                 }
@@ -199,9 +228,15 @@ internal static class DotnetBaseBuildCacheIdentityResolver
 
             string HashTree(string directory, bool projectInputs = false)
             {
-                if (directoryHashes.TryGetValue(directory, out var existing)) return existing;
+                using var stage = timing?.Measure(CacheIdentityStageTiming.Stage.DirectoryHash);
+                if (directoryHashes.TryGetValue(directory, out var existing))
+                {
+                    timing?.MemoHit();
+                    return existing;
+                }
+                timing?.TreeExecution();
                 var files = EnumerateInputs(directory, projectInputs).OrderBy(file => Path.GetRelativePath(directory, file), StringComparer.Ordinal).ToArray();
-                var inputs = files.Select(file => new[] { Path.GetRelativePath(directory, file), HashFile(file) });
+                var inputs = files.Select(file => new[] { Path.GetRelativePath(directory, file), HashFile(file, timing, tree: true) });
                 return directoryHashes[directory] = HashText(JsonSerializer.Serialize(inputs));
             }
         }
@@ -259,9 +294,10 @@ internal static class DotnetBaseBuildCacheIdentityResolver
         }
     }
 
-    private static string HashFile(string file)
+    private static string HashFile(string file, CacheIdentityStageTiming? timing, bool tree = false)
     {
-        using var stream = File.OpenRead(file);
+        using var stage = tree ? null : timing?.Measure(CacheIdentityStageTiming.Stage.FileHash);
+        using var stream = timing is null ? File.OpenRead(file) : timing.ObserveHashing(File.OpenRead(file), tree);
         return Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
     }
 

@@ -15,6 +15,8 @@ internal sealed class DotnetTestBuildPhase(string[] buildArguments, DotnetBaseBu
     public string[] BuildArguments { get; } = buildArguments;
     public DotnetBaseBuildCachePlan? CachePlan { get; } = cachePlan;
     public DotnetBuildEnvironment? BuildEnvironment { get; set; }
+    // Set only around one existing resolver call, then restored even on failure.
+    internal CacheIdentityDiagnosticContext? IdentityDiagnostics { get; set; }
     private (AcceptanceCheckResult Result, bool Retried)? _run;
     public TaskCompletionSource BuildCompleted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
     public (AcceptanceCheckResult Result, bool Retried)? Run
@@ -214,13 +216,15 @@ internal sealed class AcceptanceDotnetBuildPhase
 
         var wall = new BaseBuildCachePhaseTiming(hooks.TimingClock);
         var environment = phase.BuildEnvironment ?? throw new InvalidOperationException("Cache restoration requires an owned build environment.");
+        var initialStages = CacheIdentityStageReceipt.Missing("unavailable");
+        var revalidationStages = CacheIdentityStageReceipt.Missing("not_run");
         DotnetBaseBuildCacheIdentity? identity;
         using (wall.Measure(Phase.IdentityResolution))
-            identity = await hooks.ResolveCacheIdentityAsync(phase, environment).ConfigureAwait(false);
+            identity = await ResolveIdentityAsync(receipt => initialStages = receipt).ConfigureAwait(false);
         if (identity is null)
         {
             wall.Stop();
-            EmitBaseBuildCacheReceipt($"base-build-cache main_sha={plan.MainSha} status=miss reason=unresolved-build-inputs {wall.Format()}");
+            EmitBaseBuildCacheReceipt($"base-build-cache main_sha={plan.MainSha} status=miss reason=unresolved-build-inputs {wall.Format()} {StageReceipts()}");
             return null;
         }
         var cache = hooks.ResolveBaseBuildCache();
@@ -325,8 +329,9 @@ internal sealed class AcceptanceDotnetBuildPhase
                 // Build targets may change inputs. Re-resolve before publication rather than
                 // labeling new outputs with a pre-build identity that is no longer current.
                 DotnetBaseBuildCacheIdentity? afterBuildIdentity;
+                revalidationStages = CacheIdentityStageReceipt.Missing("unavailable");
                 using (wall.Measure(Phase.IdentityRevalidation))
-                    afterBuildIdentity = await hooks.ResolveCacheIdentityAsync(phase, environment).ConfigureAwait(false);
+                    afterBuildIdentity = await ResolveIdentityAsync(receipt => revalidationStages = receipt).ConfigureAwait(false);
                 if (afterBuildIdentity == identity)
                 {
                     using var publishTiming = wall.Measure(Phase.CacheCapturePublish);
@@ -348,7 +353,7 @@ internal sealed class AcceptanceDotnetBuildPhase
             builtProjects,
             identity,
             wall.ElapsedMilliseconds,
-            wall.Format());
+            $"{wall.Format()} {StageReceipts()}");
         EmitBaseBuildCacheReceipt(receiptSummary);
         return (lastRun.Value.Result with
         {
@@ -356,6 +361,16 @@ internal sealed class AcceptanceDotnetBuildPhase
             LockRemediationApplied = lockRemediationApplied,
             ResultSummary = PrefixResultSummary(receiptSummary, lastRun.Value.Result.ResultSummary)
         }, retried);
+
+        string StageReceipts() => $"{initialStages.Format("identity_initial_")} {revalidationStages.Format("identity_revalidation_")}";
+
+        async Task<DotnetBaseBuildCacheIdentity?> ResolveIdentityAsync(Action<CacheIdentityStageReceipt> sink)
+        {
+            var previous = phase.IdentityDiagnostics;
+            phase.IdentityDiagnostics = new(sink);
+            try { return await hooks.ResolveCacheIdentityAsync(phase, environment).ConfigureAwait(false); }
+            finally { phase.IdentityDiagnostics = previous; }
+        }
     }
 
     private sealed class BaseBuildCacheRestoreMissException : Exception;
