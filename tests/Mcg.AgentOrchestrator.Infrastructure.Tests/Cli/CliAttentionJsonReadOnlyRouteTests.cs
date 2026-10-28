@@ -268,6 +268,9 @@ public sealed class CliAttentionJsonReadOnlyRouteTests : CliTaskQueryTestSupport
             Assert.Equal(beforeItems, JsonSerializer.Serialize(await store.ListAsync()));
             stateTransaction.Rollback();
             itemsTransaction.Rollback();
+            // Release the native database handles before the file-hash snapshot on Windows.
+            await stateWriter.CloseAsync();
+            await itemsWriter.CloseAsync();
             var after = Snapshot(root, [workspace.SqliteStatePath + "-wal", workspace.SqliteStatePath + "-shm", itemsDb + "-wal", itemsDb + "-shm"]);
             Assert.Equal(before.Keys.Order(), after.Keys.Order());
             foreach (var (path, hash) in before) Assert.Equal(hash, after[path]);

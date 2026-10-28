@@ -33,7 +33,8 @@ public sealed class CliAttentionJsonSelectiveReadTests : CliTaskQueryTestSupport
             Kind: HumanWaitKind.ProspectiveAcceptanceEvidence, PlannerIdentity: Identity(current, 2)));
         await fixture.WriteWaitAsync(new("stale-wait", current.Id, null, "Stale", Now,
             PlannerIdentity: Identity(current, 1)));
-        await fixture.WriteWaitAsync(new("completed-wait", current.Id, null, "Answered", Now, IsCompleted: true));
+        await fixture.WriteWaitAsync(new("completed-wait", current.Id, null, "Answered", Now,
+            IsCompleted: true, Answer: "Proceed", AnsweredAt: Now));
         await fixture.WriteGoalAsync(goals[1] with { Status = GoalStatus.Active });
         await fixture.WriteGoalAsync(goals[2] with { Status = GoalStatus.Parked, CurrentHold =
             Hold("author-owner-question", "author-owner-question item=HumanInput:wait-x reason=choose question=Choose? recommendation=Yes") });
