@@ -255,6 +255,10 @@ public sealed class OrchestratorSnapshotStatusTimeoutTests
                 if (Environment.GetEnvironmentVariable(name) is { } value)
                     startInfo.Environment[name] = value;
             startInfo.Environment["PATH"] = Environment.GetFolderPath(Environment.SpecialFolder.System);
+            // Windows PowerShell needs PATHEXT to invoke the configured .cmd host.
+            // Pin it after clearing the environment so native invocation cannot depend
+            // on the test host's launch context; Calls() still verifies actual argv.
+            startInfo.Environment["PATHEXT"] = ".COM;.EXE;.BAT;.CMD";
             startInfo.Environment["MCG_ORCHESTRATOR_DOTNET_PATH"] = Host;
             foreach (var argument in new[] { "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-ExecutionPolicy", "Bypass", "-File", script })
                 startInfo.ArgumentList.Add(argument);
