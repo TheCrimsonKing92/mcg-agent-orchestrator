@@ -438,10 +438,7 @@ internal sealed partial class ConductorDriver
             gateTestResultPaths = GroupedReceiptTestResultPaths.Apply(Console.Out, "cohort",
                 $"cohort-receipt-v2-{identity.Value[(AcceptanceCohortIdentity.Version.Length + 1)..]}",
                 verification, classifiedVerification.NormalizedTestResultPaths);
-            failedChecks = verification.Checks?
-                .Where(check => !check.Passed && !check.Advisory)
-                .Select(check => check.Name)
-                .ToArray() ?? [];
+            failedChecks = AcceptanceCohortVerificationClassifier.FailedCheckNames(verification);
             cohortFailingTests = CohortFailingTestIdentities(verification);
             cohortFailedChecks = verification.Checks?.Where(check => !check.Passed && !check.Advisory).ToArray() ?? [];
             gateExecutionComplete = true;
@@ -457,7 +454,8 @@ internal sealed partial class ConductorDriver
                 GateTestResultPaths: gateTestResultPaths,
                 ValidForLanding: classification.Outcome == AcceptanceCohortGateOutcome.Passed,
                 InfrastructureReasonCode: classification.InfrastructureReasonCode,
-                InfrastructureDetail: classification.InfrastructureDetail));
+                InfrastructureDetail: classification.InfrastructureDetail)
+                { GateChecks = classifiedVerification.Checks.Select(check => check.BindToCohort(identity)).ToArray() });
         }
         catch (Exception ex) when (!gateExecutionComplete && ex is (
             AcceptanceInfrastructureDeferredException or DotnetBuildSlotsBusyException or
@@ -546,9 +544,7 @@ internal sealed partial class ConductorDriver
                 verifier, partition.Path, member, identity, gateProgressEventWriter, cancellationToken, scope);
             testResultPaths = NormalizeCohortTestResultPaths(result.TestResultPaths);
             failingTestIdentities = CohortFailingTestIdentities(result);
-            failedChecks = result.Checks?
-                .Where(check => !check.Advisory && !check.Passed)
-                .Select(check => check.Name).ToArray() ?? [];
+            failedChecks = AcceptanceCohortVerificationClassifier.FailedCheckNames(result);
             partition.AssertGoalBranchesUnchanged();
             outcome = ClassifyCohortVerification(result);
         }

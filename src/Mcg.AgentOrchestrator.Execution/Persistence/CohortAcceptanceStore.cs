@@ -62,7 +62,10 @@ public sealed partial class CohortAcceptanceStore
 
         if ((receipt.Outcome == AcceptanceCohortGateOutcome.Passed || receipt.ValidForLanding) &&
             (receipt.GateExitCode != 0 ||
-             !AcceptanceCohortGateEvidence.HasCoherentTrxEvidence(receipt.GateTestResultPaths)))
+             !(receipt.GateChecks.Count > 0
+                 ? CohortTestResultEvidence.Assess(receipt.GateChecks) is { Coherent: true, Passed: true } &&
+                     DeclaredPathsMatch(receipt)
+                 : AcceptanceCohortGateEvidence.HasCoherentTrxEvidence(receipt.GateTestResultPaths))))
         {
             throw new ArgumentException(
                 "A passing cohort receipt requires exit code zero and normalized bound TRX evidence.",
@@ -849,6 +852,7 @@ public sealed partial class CohortAcceptanceStore
 
         var artifacts = new List<AcceptanceCohortEvidenceArtifact>();
         var custodyTrxPaths = new List<string>();
+        var relocated = new Dictionary<string, AcceptanceCohortEvidenceArtifact>(StringComparer.OrdinalIgnoreCase);
         for (var index = 0; index < receipt.GateTestResultPaths.Count; index++)
         {
             var source = Path.GetFullPath(receipt.GateTestResultPaths[index]);
@@ -861,10 +865,30 @@ public sealed partial class CohortAcceptanceStore
                 continue;
             }
 
-            var target = Path.Combine(custodyDirectory, $"trx-{index:D3}.trx");
-            artifacts.Add(CopyContentBoundArtifact(source, target, "trx"));
+            var declared = receipt.GateChecks.SelectMany(check => check.AllArtifacts).SingleOrDefault(a => a.Path == source);
+            var kind = declared?.Kind ?? "trx";
+            if (declared is not null && !CohortTestResultEvidence.IsOwnedPath(
+                    receipt.GateChecks.Single(check => check.AllArtifacts.Contains(declared)).ArtifactRoot, source))
+                throw new InvalidDataException("Declared cohort artifact escaped its allocation before custody.");
+            var target = Path.Combine(custodyDirectory, kind == AcceptanceCohortCheckEvidence.NormalizedFormat
+                ? $"normalized-{index:D3}.ctrf.json" : $"trx-{index:D3}.trx");
+            var retained = CopyContentBoundArtifact(source, target, kind);
+            if (declared is not null && (declared.Sha256 != retained.Sha256 || declared.Length != retained.Length))
+                throw new InvalidDataException("Declared cohort artifact changed before custody.");
+            artifacts.Add(retained);
+            relocated.Add(source, retained);
             custodyTrxPaths.Add(Path.GetFullPath(target));
         }
+
+        var gateChecks = receipt.GateChecks.Select(check => check with
+        {
+            ArtifactRoot = Path.GetFullPath(custodyDirectory),
+            Artifacts = check.Artifacts.Where(a => relocated.ContainsKey(a.Path)).Select(a => relocated[a.Path]).ToArray(),
+            SupplementalArtifacts = check.SupplementalArtifacts.Where(a => relocated.ContainsKey(a.Path)).Select(a => relocated[a.Path]).ToArray()
+        }).ToArray();
+        if (receipt.GateChecks.Count > 0 && receipt.Outcome == AcceptanceCohortGateOutcome.Passed &&
+            CohortTestResultEvidence.Assess(gateChecks) is not { Coherent: true, Passed: true })
+            throw new InvalidDataException("Retained declared cohort evidence is not green.");
 
         var verdictBytes = JsonSerializer.SerializeToUtf8Bytes(new
         {
@@ -875,8 +899,8 @@ public sealed partial class CohortAcceptanceStore
             receipt.GateElapsedMilliseconds,
             FailedChecks = receipt.FailedChecks.ToArray(),
             receipt.GateExitCode,
+            GateChecks = gateChecks,
             GateTestResultSha256 = artifacts
-                .Where(artifact => artifact.Kind.Equals("trx", StringComparison.Ordinal))
                 .Select(artifact => artifact.Sha256)
                 .ToArray()
         });
@@ -887,8 +911,10 @@ public sealed partial class CohortAcceptanceStore
 
         return receipt with
         {
-            GateTestResultPaths = custodyTrxPaths,
-            GateEvidenceArtifacts = artifacts
+            GateTestResultPaths = custodyTrxPaths.Order(StringComparer.OrdinalIgnoreCase).ToArray(),
+            GateEvidenceArtifacts = artifacts,
+            GateChecks = gateChecks,
+            DeclaredEvidenceValidated = CohortTestResultEvidence.Assess(gateChecks) is { Coherent: true, Passed: true }
         };
     }
 
@@ -1156,12 +1182,15 @@ public sealed partial class CohortAcceptanceStore
             }
         }
 
+        var declaredChecks = ReadDeclaredChecks(gateEvidenceArtifacts);
         return new AcceptanceCohortReceipt(
             receiptId, identity, outcome, completed, elapsed, failed, gateExitCode,
             gateTestResultPaths, attribution, valid,
             infrastructureReasonCode, infrastructureDetail)
         {
             GateEvidenceArtifacts = gateEvidenceArtifacts,
+            GateChecks = declaredChecks,
+            DeclaredEvidenceValidated = CohortTestResultEvidence.Assess(declaredChecks) is { Coherent: true, Passed: true },
             Invalidation = invalidation,
             AttributedMembers = attributedMembers,
             UnrelatedFailures = unrelatedFailures,
