@@ -27,7 +27,7 @@ public sealed class PreTesterPartialCoverageTests
         Assert.Equal(["AlphaTests", "BetaTests"], Classes(scenario.Requests[0]));
         Assert.Equal(["GammaTests"], Classes(scenario.Requests[1]));
         Assert.Equal(2, scenario.Requests.Count);
-        var verification = scenario.Tester.LastVerification!;
+        var verification = scenario.Verification;
         var source = verification.FindingEvidenceReceipts!.Single(receipt =>
             receipt.ReceiptId == original.FocusedEvidenceReceiptId);
         Assert.Equal(JsonSerializer.Serialize(original.OriginalFocusedReceipt), JsonSerializer.Serialize(source));
@@ -69,7 +69,7 @@ public sealed class PreTesterPartialCoverageTests
 
         Assert.Equal(2, scenario.Requests.Count);
         Assert.Equal(ReviewFindingState.Resolved, scenario.Finding.State);
-        Assert.Equal(2, scenario.Tester.LastVerification!.FindingEvidenceReceipts!.Count);
+        Assert.Equal(2, scenario.Verification.FindingEvidenceReceipts!.Count);
         scenario.Tick(driver);
         Assert.Equal(2, scenario.Requests.Count);
     }
@@ -122,7 +122,7 @@ public sealed class PreTesterPartialCoverageTests
 
         Assert.Equal(["BetaTests", "GammaTests"], Classes(scenario.Requests[1]));
         Assert.Equal(ReviewFindingState.Open, scenario.Finding.State);
-        Assert.DoesNotContain(scenario.Tester.LastVerification!.FindingEvidenceReceipts ?? [], receipt =>
+        Assert.DoesNotContain(scenario.Verification.FindingEvidenceReceipts ?? [], receipt =>
             receipt.ReceiptId == original.FocusedEvidenceReceiptId);
     }
 
@@ -154,7 +154,7 @@ public sealed class PreTesterPartialCoverageTests
         Assert.Equal(["GammaTests"], Classes(scenario.Requests[1]));
         Assert.Equal(ReviewFindingState.Open, scenario.Finding.State);
         Assert.False(FindingReceiptClosureDiagnosis.Evaluate(scenario.Goal, scenario.Tester, CandidateSha).IsClosable);
-        Assert.Contains(scenario.Tester.LastVerification!.FindingEvidenceReceipts!, receipt =>
+        Assert.Contains(scenario.Verification.FindingEvidenceReceipts!, receipt =>
             receipt.Request.Selections.SingleOrDefault()?.TestClass == "GammaTests" && receipt.Passed);
         Assert.Equal("reused-pre-tester-invalidated:pending-execution", scenario.Finding.EvidenceOutcome!.DecisionReason);
 
@@ -198,7 +198,8 @@ public sealed class PreTesterPartialCoverageTests
         public Func<string, FocusedEvidenceRunResult>? NextResult { get; set; }
         public string Candidate { get; set; } = CandidateSha;
         public AcceptanceGateEngineSettings Settings { get; set; } = new();
-        public ReviewFinding Finding => Tester.LastVerification!.MergedReviewFindings!.Single(finding => finding.StableId == "mixed");
+        public TaskVerificationRecord Verification => Tester.VerificationHistory.Last();
+        public ReviewFinding Finding => Verification.MergedReviewFindings!.Single(finding => finding.StableId == "mixed");
         private string Attempts => Path.Combine(Root, "attempts");
         private int _tick;
 
@@ -210,7 +211,7 @@ public sealed class PreTesterPartialCoverageTests
             Kernel.ActivateGoal(Goal.Id, DefaultAgents());
             PassVerification(Kernel, Goal, Goal.Tasks.Single(task => task.RequiredRole == AgentRole.Planner));
             var developer = Goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
-            DispatchTask(Kernel, Goal, developer, baseCommit: "aaa1111");
+            DispatchTask(Kernel, Goal, developer, workingDirectory: Root, baseCommit: "aaa1111");
             Kernel.RecordTaskVerification(Goal.Id, developer.Id, new TaskVerificationRecord("test.exe", Root, 0,
                 string.Join(Environment.NewLine, "WORKER_RESULT:", "files: tests/AlphaTests.cs", "commands: none",
                     "tests: deferred - AlphaTests, BetaTests", "commit: none", "blockers: none", "assigned_scope_complete: true",
@@ -263,7 +264,8 @@ public sealed class PreTesterPartialCoverageTests
                 classes: [first, second]);
             if (negativeControl) finding = finding with { EvidenceRequest = finding.EvidenceRequest! with
                 { NegativeControl = FindingEvidenceNegativeControl.RevertSrc } };
-            DispatchTask(Kernel, Goal, Tester, "test", baseCommit: Candidate);
+            DispatchTask(Kernel, Goal, Tester, "test", workingDirectory: Root, baseCommit: Candidate);
+            Assert.Equal(Root, Tester.LastDispatch!.WorkingDirectory);
             var output = string.Join(Environment.NewLine, "WORKER_RESULT:", "files: none", "commands: inspect evidence",
                 "tests: deferred - acceptance owns execution", "commit: none", "blockers: none",
                 $"findings: {JsonSerializer.Serialize(new[] { finding })}", "touched_anchors: []", "verdict: needs-work",
@@ -276,7 +278,7 @@ public sealed class PreTesterPartialCoverageTests
         {
             var request = new FindingEvidenceRequest([new(Project, "BetaTests")]);
             var evidence = Unsuccessful(Project + ":BetaTests", outcome);
-            Assert.True(WorkerResultBlockers.TryFindReviewFindingRound(Tester.LastVerification, out var round, out _));
+            Assert.True(WorkerResultBlockers.TryFindReviewFindingRound(Verification, out var round, out _));
             var fingerprint = ConductorDriver.BuildFindingRoundFingerprint(Tester, round);
             var receipt = new FindingEvidenceReceipt("newer-beta-" + outcome, Candidate, request, evidence.Accepted, evidence.IsValidEvidence,
                 evidence.Summary, evidence.Arms?.Select(ConductorDriver.CreateFindingEvidenceArmReceipt).ToArray(),

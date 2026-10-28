@@ -71,7 +71,10 @@ public sealed class ConductorDriverTestsPreTesterBudgetCoverage : IDisposable
         driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
 
         Assert.Equal(shouldRun ? 1 : 0, requests.Count);
-        var finding = Assert.Single(reviewer.LastVerification!.MergedReviewFindings!);
+        // Evidence delivery retries clear LastVerification; the recorded round retains
+        // its findings, dispositions and original receipt provenance in kernel history.
+        var verification = reviewer.VerificationHistory.Last();
+        var finding = Assert.Single(verification.MergedReviewFindings!);
         var evidenceOutcome = Assert.IsType<FindingEvidenceOutcome>(finding.EvidenceOutcome);
         Assert.True(evidenceOutcome.Honoured);
         Assert.Equal(FindingEvidenceOutcomeReason.ValidEvidence, evidenceOutcome.ResultReason);
@@ -84,7 +87,7 @@ public sealed class ConductorDriverTestsPreTesterBudgetCoverage : IDisposable
         {
             Assert.Empty(preTesterAttachments);
             Assert.Equal($"{Project}:{requestedClass}", Assert.Single(requests));
-            var executed = Assert.Single(reviewer.LastVerification.FindingEvidenceReceipts!);
+            var executed = Assert.Single(verification.FindingEvidenceReceipts!);
             Assert.NotEqual("pre-tester-receipt", executed.ReceiptId);
             Assert.Equal(CandidateSha, executed.CandidateSha);
             Assert.Equal(new FindingEvidenceSelection(Project, requestedClass), Assert.Single(executed.Request.Selections));
@@ -97,7 +100,7 @@ public sealed class ConductorDriverTestsPreTesterBudgetCoverage : IDisposable
             Assert.Equal(JsonSerializer.Serialize(original!.OriginalFocusedReceipt), JsonSerializer.Serialize(attached));
             Assert.Equal(original.FocusedEvidenceReceiptId, evidenceOutcome.ReceiptId);
             Assert.Equal([attached.ReceiptId], evidenceOutcome.SourceReceiptIds);
-            var disposition = Assert.Single(reviewer.LastVerification.FindingEvidenceRequestDispositions!
+            var disposition = Assert.Single(verification.FindingEvidenceRequestDispositions!
                 .Where(item => item.FindingStableId == finding.StableId));
             Assert.Equal(FindingEvidenceRequestDecision.CoveredByReceipt, disposition.Decision);
             Assert.Equal(ConductorDriver.BuildFindingEvidenceIdentity(new FindingEvidenceRequest(
@@ -149,7 +152,7 @@ public sealed class ConductorDriverTestsPreTesterBudgetCoverage : IDisposable
 
         Assert.Equal(developer.Id, retriedTaskId);
         Assert.Equal(0, attachments);
-        Assert.Empty(reviewer.LastVerification!.FindingEvidenceReceipts ?? []);
+        Assert.Empty(reviewer.VerificationHistory.Last().FindingEvidenceReceipts ?? []);
         Assert.Contains(goal.Timeline, evt => evt.Kind == ProgressKind.FindingEvidenceSuppressed);
     }
 
