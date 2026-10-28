@@ -151,6 +151,7 @@ public sealed class CachePhaseTimingTests : IDisposable
         Assert.Same(environment, phase.BuildEnvironment);
         var summary = result.Run.Result.ResultSummary!;
         Assert.EndsWith("original", summary);
+        Assert.Contains("evictions=none; original", summary);
         var fields = Fields(summary);
         Assert.Equal(long.Parse(fields["build_phase_ms"], CultureInfo.InvariantCulture), result.Run.Result.DurationMilliseconds);
         AssertPhase(fields, "identity_resolution", "11", "1", "measured");

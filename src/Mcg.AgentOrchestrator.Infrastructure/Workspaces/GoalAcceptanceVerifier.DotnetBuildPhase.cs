@@ -347,7 +347,8 @@ internal sealed class AcceptanceDotnetBuildPhase
             publish,
             builtProjects,
             identity,
-            wall.ElapsedMilliseconds) + " " + wall.Format();
+            wall.ElapsedMilliseconds,
+            wall.Format());
         EmitBaseBuildCacheReceipt(receiptSummary);
         return (lastRun.Value.Result with
         {
@@ -365,7 +366,8 @@ internal sealed class AcceptanceDotnetBuildPhase
         DotnetBaseBuildCachePublishResult? publish,
         IReadOnlyList<string> builtProjects,
         DotnetBaseBuildCacheIdentity identity,
-        long buildPhaseMilliseconds)
+        long buildPhaseMilliseconds,
+        string phaseTiming)
     {
         var projectReceipts = plan.CacheableProjects
             .Select(project =>
@@ -393,6 +395,7 @@ internal sealed class AcceptanceDotnetBuildPhase
         var evictions = restore.Evictions.Concat(publish?.Evictions ?? []).ToArray();
         return
             $"base-build-cache main_sha={plan.MainSha} input_identity={identity.Fingerprint} build_phase_ms={buildPhaseMilliseconds.ToString(System.Globalization.CultureInfo.InvariantCulture)} " +
+            $"{phaseTiming} " +
             $"projects={string.Join(",", projectReceipts)} " +
             $"built_projects={string.Join(",", builtProjects.Select(ProjectLabel))} " +
             $"miss_reasons={missReasons} " +
