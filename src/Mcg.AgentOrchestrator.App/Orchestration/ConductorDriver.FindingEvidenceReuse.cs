@@ -37,11 +37,14 @@ internal sealed partial class ConductorDriver
             return null;
         }
 
-        var upstreamDeveloper = goal.Tasks
+        var upstreamDevelopers = goal.Tasks
             .TakeWhile(candidate => candidate.Id != task.Id)
-            .LastOrDefault(candidate =>
+            .Where(candidate =>
                 candidate.RequiredRole == AgentRole.Developer &&
-                HasEverCommittedOutput(candidate));
+                HasEverCommittedOutput(goal, candidate, task))
+            .Take(2)
+            .ToArray();
+        var upstreamDeveloper = upstreamDevelopers.Length == 1 ? upstreamDevelopers[0] : null;
         var finding = string.Join(
             "; ",
             developerOwnedFindings.Select(item =>
@@ -713,12 +716,31 @@ internal sealed partial class ConductorDriver
         return selections;
     }
 
-    private static bool HasEverCommittedOutput(TaskSpec task) =>
+    private static bool HasEverCommittedOutput(Goal goal, TaskSpec task, TaskSpec verifyingTask) =>
         task.VerificationHistory.Any(verification => verification.HasCommittedChanges) ||
         task.DispatchHistory.Any(dispatch =>
             !string.IsNullOrWhiteSpace(dispatch.ResultCommit) &&
             (string.IsNullOrWhiteSpace(dispatch.BaseCommit) ||
-             !string.Equals(dispatch.BaseCommit, dispatch.ResultCommit, StringComparison.OrdinalIgnoreCase)));
+             !string.Equals(dispatch.BaseCommit, dispatch.ResultCommit, StringComparison.OrdinalIgnoreCase))) ||
+        // A failed round can be committed at the pre-dispatch checkpoint boundary. Its original
+        // verification and ResultCommit stay unchanged; the typed decision owns that output.
+        // Bind it to its dispatch, and to a successful Developer round on the reviewed candidate,
+        // rather than treating a Completed label or an arbitrary historical commit as ownership.
+        (task.LastVerification?.Succeeded == true &&
+         task.LastDispatch is { } currentDispatch &&
+         verifyingTask.LastVerification is { ReviewedCommit: { } reviewedCommit } findingRecord &&
+         !string.IsNullOrWhiteSpace(reviewedCommit) &&
+         currentDispatch.DispatchedAt >= task.LatestRetryAt.GetValueOrDefault() &&
+         task.LastVerification.CompletedAt >= currentDispatch.DispatchedAt &&
+         task.LastVerification.CompletedAt <= findingRecord.CompletedAt &&
+         string.Equals(currentDispatch.ResultCommit, reviewedCommit, StringComparison.OrdinalIgnoreCase) &&
+         task.DispatchHistory.Any(dispatch =>
+             dispatch.FailedRoundCheckpointDecision is
+                 { Outcome: FailedRoundCheckpointOutcome.Committed, CommitSha: { } commitSha } decision &&
+             !string.IsNullOrWhiteSpace(commitSha) &&
+             !string.Equals(dispatch.BaseCommit, commitSha, StringComparison.OrdinalIgnoreCase) &&
+             dispatch.DispatchedAt <= currentDispatch.DispatchedAt &&
+             decision.DispatchId == DispatchIdentity.BuildId(goal.Id, task.Id, dispatch)));
 
     // One refusal truth: routing and the worker-visible execution state read the same rule.
     private static bool IsPermanentFindingEvidenceRefusal(FindingEvidenceOutcome outcome) =>
