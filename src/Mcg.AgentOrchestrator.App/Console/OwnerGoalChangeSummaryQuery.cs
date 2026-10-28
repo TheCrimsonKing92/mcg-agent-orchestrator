@@ -94,7 +94,7 @@ internal sealed class OwnerGoalChangeSummaryQuery(
     {
         var task = goal.Tasks.Where(task => task.RequiredRole == AgentRole.Planner)
             .OrderByDescending(task => task.LastDispatch?.DispatchedAt).FirstOrDefault();
-        var reason = task is null || task.Status is WorkTaskStatus.Pending or WorkTaskStatus.Running
+        var reason = task is null || task.Status is WorkTaskStatus.Pending or WorkTaskStatus.Assigned or WorkTaskStatus.Running
             ? "planning pending" : "planning unavailable";
         var verification = task?.LastVerification;
         var dispatch = task?.LastDispatch;

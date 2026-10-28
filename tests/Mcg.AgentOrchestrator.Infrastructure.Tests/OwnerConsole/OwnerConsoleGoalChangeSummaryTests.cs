@@ -48,9 +48,11 @@ public sealed class OwnerConsoleGoalChangeSummaryTests
                 CurrentHold = index == 3 ? new("hold", "waiting", "hold", At) : null,
                 Timeline = [new(goal.Id, null, ProgressKind.GoalPolicyDecision, "entered Verified", At.AddMinutes(index))]
             }).ToArray() });
-            var repository = new SqliteOrchestratorStateRepository(Path.Combine(root, "state.db"));
+            var statePath = Path.Combine(root, "state.db");
+            _ = StateDbMigrations.EnsureUpToDate(statePath);
+            var repository = new SqliteOrchestratorStateRepository(statePath);
             await repository.SaveAsync(kernel, Token);
-            var facts = await SqliteOrchestratorStateRepository.OpenReadOnly(Path.Combine(root, "state.db")).ListAcceptanceQueueFactsAsync(Token);
+            var facts = await SqliteOrchestratorStateRepository.OpenReadOnly(statePath).ListAcceptanceQueueFactsAsync(Token);
             var expected = GoalSchedulingOrder.ForAcceptance(kernel.Goals.Where(goal => goal.CurrentHold is null)).Select(goal => goal.Id.Value);
             var actual = facts.OrderByDescending(item => item.Priority).ThenBy(item => item.VerifiedAt).ThenBy(item => item.CreatedAt)
                 .ThenBy(item => item.GoalId, StringComparer.Ordinal).Select(item => item.GoalId);
@@ -420,9 +422,15 @@ public sealed class OwnerConsoleGoalChangeSummaryTests
                 Assert.True(button.Frame.Bottom <= button.SuperView.Viewport.Height);
             });
             Assert.Contains("Epic (e)", production.Buttons['e'].Text);
-            Assert.True(dialog.HandleKey(Key.End));
+            // Exercise the production page's supported keys through the entire expanded text.
+            for (var step = 0; step < goalDialog.Page.Lines.Count && goalDialog.Page.Selected < goalDialog.Page.Lines.Count - 1; step++)
+                Assert.True(dialog.HandleKey(new Key(Key.PageDown)));
+            Assert.Equal(goalDialog.Page.Lines.Count - 1, goalDialog.Page.Selected);
             Assert.True(goalDialog.Page.Offset > 0);
-            Assert.True(dialog.HandleKey(Key.Home));
+            Assert.Equal(goalDialog.Page.Lines.Last(), goalDialog.Page.Visible.Last());
+            for (var step = 0; step < goalDialog.Page.Lines.Count && goalDialog.Page.Selected > 0; step++)
+                Assert.True(dialog.HandleKey(new Key(Key.PageUp)));
+            Assert.Equal(0, goalDialog.Page.Selected);
             Assert.Equal(0, goalDialog.Page.Offset);
         }
         production.Buttons['e'].InvokeCommand(Command.Accept);
@@ -456,7 +464,9 @@ public sealed class OwnerConsoleGoalChangeSummaryTests
                     ResultCommit: task.RequiredRole == AgentRole.Developer ? Candidate : null) : null,
             LastVerification = task.RequiredRole == AgentRole.Planner && phase != "pending" || task.RequiredRole == AgentRole.Developer && changed
                 ? new TaskVerificationSnapshot("worker", "retained-artifact", 0, task.RequiredRole == AgentRole.Planner ? Plan : worker,
-                    "", At.AddMinutes(1), DispatchStartedAt: At, AcceptanceCriteriaVersionHash: hash) : null
+                    "", At.AddMinutes(1), DispatchStartedAt: At, AcceptanceCriteriaVersionHash: hash,
+                    // Match persisted evidence: the complete authoritative stream equals StandardOutput.
+                    AuthoritativeStandardOutputUnavailableReason: VerificationSnapshotText.StoredAsBoundedText) : null
         }).ToArray();
         return new TestGoal(snapshot with
         {
