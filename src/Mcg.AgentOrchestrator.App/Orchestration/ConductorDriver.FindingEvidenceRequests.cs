@@ -217,7 +217,8 @@ internal sealed partial class ConductorDriver
             return true;
         }
 
-        var plan = FindingRoundBatchSchedule.Plan(FindingEvidenceRoundPlanner.BuildFindingEvidenceBatches(groups),
+        var plan = FindingRoundBatchSchedule.Plan(PreTesterCoverageComposition.BindExecutionIdentities(
+                FindingEvidenceRoundPlanner.BuildFindingEvidenceBatches(groups)),
             requestingTask.Id, requestingTask.VerificationHistory.SelectMany(item => item.FindingEvidenceReceipts ?? []).ToArray(),
             telemetryCandidateSha, findingRoundFingerprint, executionBasisIdentity, goal.Timeline);
         foreach (var (batch, covering) in plan.RedCovered)

@@ -114,6 +114,8 @@ public sealed class PreTesterPartialCoverageTests
                 ? arm with { NotRunSelections = [new(Project, "BetaTests")] } : arm).ToArray()
         };
         var original = scenario.RunPreTester();
+        if (control == "not-run") Assert.Contains(original.OriginalFocusedReceipt!.Arms!, arm =>
+            arm.Arm == FindingEvidenceArm.Candidate && arm.NotRunSelections.Contains(new(Project, "BetaTests")));
         scenario.Invalidate(original, control);
         scenario.Report("BetaTests", "GammaTests", negativeControl: control == "negative-control");
         scenario.NextResult = request => scenario.Unsuccessful(request, "rejected");
@@ -157,15 +159,34 @@ public sealed class PreTesterPartialCoverageTests
         Assert.Contains(scenario.Verification.FindingEvidenceReceipts!, receipt =>
             receipt.Request.Selections.SingleOrDefault()?.TestClass == "GammaTests" && receipt.Passed);
         Assert.Equal("reused-pre-tester-invalidated:pending-execution", scenario.Finding.EvidenceOutcome!.DecisionReason);
+        var retainedC = scenario.Verification.FindingEvidenceReceipts!.Single(receipt =>
+            receipt.Request.Selections.SingleOrDefault()?.TestClass == "GammaTests");
+        var retainedCBytes = JsonSerializer.Serialize(retainedC);
 
         scenario.Tick(driver);
         var retry = gate.RequiredHandleForTests(scenario.Goal.Id.Value);
         Assert.Equal(["BetaTests"], Classes(retry.Attempt.FocusedEvidenceRequest!));
+        scenario.Tick(driver);
+        Assert.Equal(1, gate.HeldCount);
+        Assert.Equal(2, scenario.Requests.Count);
+        Assert.Equal(ReviewFindingState.Open, scenario.Finding.State);
         retry.CompleteForTests();
         scenario.Tick(driver);
         Assert.Equal(3, scenario.Requests.Count);
         Assert.Equal(["BetaTests"], Classes(scenario.Requests[2]));
         Assert.Equal(ReviewFindingState.Resolved, scenario.Finding.State);
+        var repairedB = scenario.Verification.FindingEvidenceReceipts!.Single(receipt =>
+            receipt.Request.Selections.SingleOrDefault()?.TestClass == "BetaTests" && receipt.Passed);
+        Assert.NotEqual(retainedC.ReceiptId, repairedB.ReceiptId);
+        Assert.Equal(retainedCBytes, JsonSerializer.Serialize(scenario.Verification.FindingEvidenceReceipts!
+            .Single(receipt => receipt.ReceiptId == retainedC.ReceiptId)));
+        Assert.Equal(new[] { retainedC.ReceiptId, repairedB.ReceiptId }.Order(),
+            scenario.Finding.EvidenceOutcome!.SourceReceiptIds!.Order());
+        Assert.Contains(repairedB.RequestDispositions!, disposition =>
+            disposition.RequestIdentity == ConductorDriver.BuildFindingEvidenceIdentity(
+                new([new(Project, "BetaTests"), new(Project, "GammaTests")])));
+        scenario.Tick(driver);
+        Assert.Equal(3, scenario.Requests.Count);
     }
 
     [Theory(Timeout = TestHangGuard.WholeTestMilliseconds)]

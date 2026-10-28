@@ -383,11 +383,18 @@ internal sealed partial class ConductorDriver
         var latestTimeBySelection = new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal);
         var preTesterIds = (preTesterCoverage ?? []).Select(source => source.ReceiptId).ToHashSet(StringComparer.Ordinal);
         foreach (var source in preTesterCoverage ?? [])
-        foreach (var selection in source.Selections.Select(FormatFindingEvidenceSelection).Where(requestedCoverage.Contains))
         {
-            latestTimeBySelection[selection] = source.CompletedAt;
-            latestReceiptBySelection.Remove(selection);
-            if (source.Receipt is { } receipt) latestReceiptBySelection[selection] = receipt;
+            var executedCoverage = source.Receipt is { } receipt
+                ? FindingEvidenceExecutedCoverage.ExecutedSelections(receipt, FormatFindingEvidenceSelection)
+                    .Select(FormatFindingEvidenceSelection).ToHashSet(StringComparer.Ordinal)
+                : [];
+            foreach (var selection in source.Selections.Select(FormatFindingEvidenceSelection).Where(requestedCoverage.Contains))
+            {
+                latestTimeBySelection[selection] = source.CompletedAt;
+                latestReceiptBySelection.Remove(selection);
+                // Preserve the latest attempt's veto without treating an omitted class as executed.
+                if (executedCoverage.Contains(selection)) latestReceiptBySelection[selection] = source.Receipt!;
+            }
         }
         foreach (var verification in requestingTask.VerificationHistory)
         {

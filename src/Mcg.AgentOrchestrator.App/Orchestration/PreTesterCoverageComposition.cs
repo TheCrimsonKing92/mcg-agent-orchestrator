@@ -10,6 +10,16 @@ internal static class PreTesterCoverageComposition
     internal sealed record PreTesterCoverageSource(string? ReceiptId, FindingEvidenceReceipt? Receipt,
         IReadOnlyList<FindingEvidenceSelection> Selections, DateTimeOffset CompletedAt);
 
+    internal static IReadOnlyList<FindingEvidenceBatch> BindExecutionIdentities(IReadOnlyList<FindingEvidenceBatch> batches) =>
+        batches.Select(batch => batch.Members.Any(member =>
+                member.CoverageDecisionReason == "pre-tester-authority-missing" ||
+                (member.ReusedSourceReceipts ?? []).Any(source => source.FindingRoundFingerprint == "pre-tester-deferred" ||
+                    (source.RequestDispositions ?? []).Any(disposition => disposition.Reason == "retained-uncovered-execution")))
+            // A retained C receipt must not deduplicate a later B repair. Member identities
+            // still name the original B+C finding request; batch identities name actual work.
+            ? batch with { Identity = BuildFindingEvidenceIdentity(batch.TypedRequest) }
+            : batch).ToArray();
+
     internal static IReadOnlyList<PreTesterCoverageSource> ReadCoverage(
         ConductorDriver driver, Goal goal, string candidateSha, string basis)
     {
@@ -49,7 +59,10 @@ internal static class PreTesterCoverageComposition
         var ids = attempt.FocusedEvidenceRequestDispositions!.Where(disposition => disposition.RequestIdentity == identity)
             .SelectMany(disposition => disposition.SourceReceiptIds ?? []).ToHashSet(StringComparer.Ordinal);
         sources = attempts.Where(source => ids.Contains(source.FocusedEvidenceReceiptId ?? ""))
-            .Select(source => source.OriginalFocusedReceipt).OfType<FindingEvidenceReceipt>().ToArray();
+            .Select(source => source.OriginalFocusedReceipt).OfType<FindingEvidenceReceipt>()
+            .Concat(task.VerificationHistory.SelectMany(verification => verification.FindingEvidenceReceipts ?? [])
+                .Where(receipt => ids.Contains(receipt.ReceiptId)))
+            .DistinctBy(receipt => receipt.ReceiptId, StringComparer.Ordinal).ToArray();
         remainder = request with { Selections = (attempt.FocusedEvidenceMemberRequests ?? []).SelectMany(ParseDispositionSelections).ToArray() };
         return remainder.Selections.Count > 0;
     }
