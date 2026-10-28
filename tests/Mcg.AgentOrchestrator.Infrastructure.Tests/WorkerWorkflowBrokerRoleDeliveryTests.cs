@@ -39,13 +39,17 @@ public sealed class WorkerWorkflowBrokerRoleDeliveryTests : WorkerDispatchTestSu
     }
 
     [Theory]
-    [InlineData(AgentRole.Tester, false)]
-    [InlineData(AgentRole.Tester, true)]
-    [InlineData(AgentRole.Reviewer, false)]
-    [InlineData(AgentRole.Reviewer, true)]
-    public void ChecklistRolesRetainRequiredArtifacts(AgentRole role, bool retry)
+    [InlineData(AgentRole.Tester, false, false)]
+    [InlineData(AgentRole.Tester, true, false)]
+    [InlineData(AgentRole.Reviewer, false, false)]
+    [InlineData(AgentRole.Reviewer, true, false)]
+    [InlineData(AgentRole.Tester, false, true)]
+    [InlineData(AgentRole.Tester, true, true)]
+    [InlineData(AgentRole.Reviewer, false, true)]
+    [InlineData(AgentRole.Reviewer, true, true)]
+    public void ChecklistRolesRetainRequiredArtifacts(AgentRole role, bool retry, bool includeGoModule)
     {
-        using var fixture = Prepare(role, retry);
+        using var fixture = Prepare(role, retry, includeDotnetProject: !includeGoModule, includeGoModule: includeGoModule);
         var actions = ReadActions(fixture.ReadDelivered("workflow-brokers.md"));
         Assert.NotEmpty(fixture.ReadDelivered("deterministic-verification.md"));
         Assert.DoesNotContain("build-only", actions.Keys);
@@ -123,6 +127,69 @@ public sealed class WorkerWorkflowBrokerRoleDeliveryTests : WorkerDispatchTestSu
         Assert.Contains("diff-summary", actions.Keys);
         Assert.DoesNotContain("Invoke-WorkerBuildCheck", broker, StringComparison.Ordinal);
         Assert.DoesNotContain("Invoke-IsolatedDotnet", broker, StringComparison.Ordinal);
+        Assert.DoesNotContain("deterministic-verification.md", broker, StringComparison.Ordinal);
+        Assert.Contains("Run `go build ./...`, `go vet ./...` and `go test ./...`",
+            actions["build-test-selection"], StringComparison.Ordinal);
+        Assert.Contains("current-task.md", RequiredArtifacts(actions["build-test-selection"]));
+        Assert.Contains("Current recommendation:", actions["build-test-selection"], StringComparison.Ordinal);
+        Assert.Contains("generated test-impact plan", actions["build-test-selection"], StringComparison.Ordinal);
+        Assert.Contains("include the command and exit evidence", actions["build-test-selection"], StringComparison.Ordinal);
+        Assert.Contains("generated-path risk", actions["static-policy-checks"], StringComparison.Ordinal);
+        Assert.Contains("Current policy:", actions["static-policy-checks"], StringComparison.Ordinal);
+        Assert.Contains("required policy failures block acceptance", actions["static-policy-checks"], StringComparison.Ordinal);
+        Assert.Contains("never report unrun checks as passed", actions["acceptance-evidence"], StringComparison.Ordinal);
+        Assert.Contains("does not authorize a formal acceptance verdict", actions["acceptance-evidence"], StringComparison.Ordinal);
+        Assert.Contains("The acceptance gate re-runs the Go checks and decides the verdict",
+            actions["acceptance-evidence"], StringComparison.Ordinal);
+        Assert.Contains("missing acceptance evidence should become an explicit blocker", actions["acceptance-evidence"], StringComparison.Ordinal);
+        Assert.Contains("unexpected dirty files are blockers", actions["diff-summary"], StringComparison.Ordinal);
+        Assert.Contains("If a broker artifact is missing, stale, or reports a failure, report that as a blocker in WORKER_RESULT",
+            broker, StringComparison.Ordinal);
+        fixture.AssertArtifactAvailable("current-task.md");
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void GoDeveloperPolicyReportsRequiredReviewWithoutGrantingAuthority(bool retry)
+    {
+        using var fixture = Prepare(AgentRole.Developer, retry, includeDotnetProject: false,
+            includeGoModule: true, requireRiskReview: true);
+        var actions = ReadActions(fixture.ReadDelivered("workflow-brokers.md"));
+        var policy = actions["static-policy-checks"];
+        // The summary alone omits required human review when no deterministic command is selected.
+        Assert.Contains("No deterministic build/test command required by current file scope.", policy, StringComparison.Ordinal);
+        Assert.Contains("human risk review; kind=manual-risk-review; required=True", policy, StringComparison.Ordinal);
+        Assert.Contains("Task text contains policy, security, migration, rollback, or permission risk signals.", policy, StringComparison.Ordinal);
+        Assert.Contains("required human review remain with their existing owners", policy, StringComparison.Ordinal);
+        Assert.All(actions.Values.SelectMany(RequiredArtifacts), fixture.AssertArtifactAvailable);
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public void GoDeveloperActionsResolveDeliveredArtifacts(bool includeDotnetProject, bool retry)
+    {
+        using var fixture = Prepare(AgentRole.Developer, retry, includeDotnetProject, includeGoModule: true);
+        var actions = ReadActions(fixture.ReadDelivered("workflow-brokers.md"));
+        foreach (var name in new[] { "build-test-selection", "static-policy-checks", "acceptance-evidence", "diff-summary" })
+        {
+            Assert.Contains(name, actions.Keys);
+            Assert.NotEmpty(RequiredArtifacts(actions[name]));
+            Assert.Contains("  Use for:", actions[name], StringComparison.Ordinal);
+            Assert.Contains("  Failure handling:", actions[name], StringComparison.Ordinal);
+        }
+        Assert.All(actions.Values.SelectMany(RequiredArtifacts), fixture.AssertArtifactAvailable);
+
+        // Unfiltered existence must not mask a missing role-authorized delivery.
+        Assert.True(File.Exists(Path.Combine(fixture.ContextDirectory, "deterministic-verification.md")));
+        Assert.DoesNotContain(fixture.Receipt.Sections,
+            section => section.LogicalIdentity == "context/deterministic-verification.md");
+        Assert.DoesNotContain("context/deterministic-verification.md", fixture.Prompt, StringComparison.Ordinal);
+        Assert.Empty(Directory.EnumerateFiles(Path.Combine(fixture.ContextDirectory, "authoritative"),
+            "deterministic-verification.md", SearchOption.AllDirectories));
     }
 
     private static Dictionary<string, string> ReadActions(string broker)
@@ -142,7 +209,7 @@ public sealed class WorkerWorkflowBrokerRoleDeliveryTests : WorkerDispatchTestSu
         .ToArray();
 
     private static DeliveryFixture Prepare(AgentRole role, bool retry,
-        bool includeDotnetProject = true, bool includeGoModule = false)
+        bool includeDotnetProject = true, bool includeGoModule = false, bool requireRiskReview = false)
     {
         var root = CreateTempDirectory();
         try
@@ -170,7 +237,8 @@ public sealed class WorkerWorkflowBrokerRoleDeliveryTests : WorkerDispatchTestSu
             File.AppendAllText(Path.Combine(workingDirectory, "fixture.txt"), "\nchanged broker fixture");
             var kernel = new AgentOrchestratorKernel();
             var task = new TaskSpec(TaskId.New(), "Keep broker artifacts satisfiable.", role);
-            var goal = kernel.CreateGoal("Repair broker instructions.", [task]);
+            var goal = kernel.CreateGoal(requireRiskReview
+                ? "Repair broker instructions with security review." : "Repair broker instructions.", [task]);
             kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
             if (retry)
             {
@@ -234,14 +302,20 @@ public sealed class WorkerWorkflowBrokerRoleDeliveryTests : WorkerDispatchTestSu
         public string ReadDelivered(string name)
         {
             var identity = $"context/{name}";
+            Assert.True(Receipt.Sections.Any(candidate => candidate.LogicalIdentity == identity),
+                $"Required broker artifact '{name}' is not delivered to {Role}; unfiltered file existence is insufficient.");
             var section = Assert.Single(Receipt.Sections, candidate => candidate.LogicalIdentity == identity);
             Assert.Contains(Role, section.RoleVisibility);
             Assert.Equal(ContextDeliveryMode.MandatoryFile, section.DeliveryMode);
             Assert.NotNull(section.MandatoryRelativePath);
             var path = Path.Combine(WorkingDirectory, section.MandatoryRelativePath);
             Assert.True(File.Exists(path), $"Missing delivered artifact: {path}");
+            Assert.Equal(section.ByteCount, File.ReadAllBytes(path).Length);
             Assert.Equal(section.ContentHash, WorkerContextArtifact.Hash(File.ReadAllBytes(path)));
-            Assert.Contains($"identity={identity};", Prompt, StringComparison.Ordinal);
+            AssertPromptReceipt(section);
+            Assert.NotEmpty(ReadProjection(name));
+            Assert.Equal(section.ContentHash,
+                WorkerContextArtifact.Hash(File.ReadAllBytes(Path.Combine(ContextDirectory, name))));
             return File.ReadAllText(path).ReplaceLineEndings("\n");
         }
 
@@ -255,8 +329,16 @@ public sealed class WorkerWorkflowBrokerRoleDeliveryTests : WorkerDispatchTestSu
             Assert.True(entry.GetProperty("exists").GetBoolean());
             Assert.True(entry.GetProperty("hashVerified").GetBoolean());
             Assert.Contains(Role.ToString(), entry.GetProperty("roleVisibility").EnumerateArray().Select(item => item.GetString()));
+            Assert.Equal(entry.GetProperty("byteCount").GetInt64(), File.ReadAllBytes(path).LongLength);
             Assert.Equal(entry.GetProperty("sha256").GetString(), WorkerContextArtifact.Hash(File.ReadAllBytes(path)));
             return File.ReadAllText(path);
+        }
+
+        private void AssertPromptReceipt(WorkerContextSectionReceipt section)
+        {
+            var declaration = Assert.Single(Prompt.Split('\n'),
+                line => line.Contains($"identity={section.LogicalIdentity};", StringComparison.Ordinal));
+            Assert.Contains($"sha256={section.ContentHash};", declaration, StringComparison.Ordinal);
         }
 
         public void AssertArtifactAvailable(string name)
@@ -266,10 +348,24 @@ public sealed class WorkerWorkflowBrokerRoleDeliveryTests : WorkerDispatchTestSu
                 Assert.Contains("Keep broker artifacts satisfiable.", ReadProjection(name), StringComparison.Ordinal);
                 var description = Assert.Single(Receipt.Sections, section => section.LogicalIdentity == "task/description.md");
                 Assert.Equal(WorkerContextArtifact.Hash(Encoding.UTF8.GetBytes("Keep broker artifacts satisfiable.")), description.ContentHash);
+                Assert.Contains(Role, description.RoleVisibility);
+                AssertPromptReceipt(description);
                 Assert.Contains("Keep broker artifacts satisfiable.", Prompt, StringComparison.Ordinal);
-                Assert.Single(Receipt.Sections, section => section.LogicalIdentity == "brief/current.md");
+                var brief = Assert.Single(Receipt.Sections, section => section.LogicalIdentity == "brief/current.md");
+                Assert.Contains(Role, brief.RoleVisibility);
+                AssertPromptReceipt(brief);
                 if (Role == AgentRole.Developer)
-                    Assert.Contains("Build changed projects with the worker build check.", Prompt, StringComparison.Ordinal);
+                {
+                    if (TargetToolchainDetector.Detect(WorkingDirectory) == Toolchain.Go)
+                    {
+                        var task = ReadProjection(name);
+                        Assert.Contains("Run `go build ./...`, `go vet ./...` and `go test ./...`", task, StringComparison.Ordinal);
+                        Assert.Contains("Report each result in WORKER_RESULT", task, StringComparison.Ordinal);
+                        Assert.Contains("The acceptance gate re-runs the Go checks and decides the verdict.", task, StringComparison.Ordinal);
+                    }
+                    else
+                        Assert.Contains("Build changed projects with the worker build check.", Prompt, StringComparison.Ordinal);
+                }
             }
             else if (name == "diff-summary.md")
             {
