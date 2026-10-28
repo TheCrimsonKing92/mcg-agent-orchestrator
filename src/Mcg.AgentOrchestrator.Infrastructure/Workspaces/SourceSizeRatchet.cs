@@ -327,7 +327,7 @@ internal static class SourceSizeRatchet
             // Goal 6e82a00d extracts build-scope preparation to WorkerBuildScopeDispatchPreparation and
             // integration-ref lookup to WorkerGitContext. Measured 2596 after extraction; no extra headroom.
             // Goal 60609951: stable provider-capability code and ready-blocked reason routing (+9 lines).
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Execution/Workers/WorkerProfileDispatcher.cs", 2590),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Execution/Workers/WorkerProfileDispatcher.cs", 2572),
             // Raised for goal fd252fe4: the single typed retry-cause argument belongs at the durable CLI
             // command-application boundary; classification and admission behavior remain elsewhere.
             // Goal 17d96426 classifies the stateless Hermes trial beside the existing stateless commands.
