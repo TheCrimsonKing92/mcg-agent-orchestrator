@@ -94,15 +94,15 @@ internal static class FindingEvidenceContinuationCoordinator
                 Decision = new PolicyDecisionRecord("finding-evidence-continuation", "Hold", 0, failure, reason,
                     Array.AsReadOnly<PolicyDecisionFact>(
                     [
-                        new("goalId", goal.Id.Value),
-                        new("taskId", task.Id.Value),
-                        new("candidateSha", claimed.CandidateSha),
-                        new("candidateIdentity", claimed.CandidateIdentity.Canonical),
-                        new("decisionKey", claimed.DecisionKey),
-                        new("continuationKey", claimed.Key),
-                        new("priorVerificationAt", claimed.PriorVerificationAt.ToString("O")),
-                        new("priorDispatchAt", claimed.PriorDispatchAt.ToString("O")),
-                        new("selections", JsonSerializer.Serialize(claimed.Selections))
+                        new PolicyDecisionFact("goalId", goal.Id.Value),
+                        new PolicyDecisionFact("taskId", task.Id.Value),
+                        new PolicyDecisionFact("candidateSha", claimed.CandidateSha),
+                        new PolicyDecisionFact("candidateIdentity", claimed.CandidateIdentity.Canonical),
+                        new PolicyDecisionFact("decisionKey", claimed.DecisionKey),
+                        new PolicyDecisionFact("continuationKey", claimed.Key),
+                        new PolicyDecisionFact("priorVerificationAt", claimed.PriorVerificationAt.ToString("O")),
+                        new PolicyDecisionFact("priorDispatchAt", claimed.PriorDispatchAt.ToString("O")),
+                        new PolicyDecisionFact("selections", JsonSerializer.Serialize(claimed.Selections))
                     ]))
             };
         }
