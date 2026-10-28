@@ -116,6 +116,14 @@ The repeatable `--depends-on <goal-prefix>` flag records each dependency in the 
 
 `goal-depends <goal> --on <dependency>` records a hard dependency used by the conductor's dispatch-start gate. It does not interrupt workers already in flight. Use `goal-depends <goal> --remove <dependency>` to remove one link, or `goal-depends <goal> --clear` to remove all links. Supply exactly one of these flags; self-dependencies and cycles are rejected, as are removal of an absent link and clearing an empty dependency set.
 
+## `backlog-list`
+
+`backlog-list [--all] [--newest-first] [--limit <n>] [--status <value>] [--text <pattern>|--text=<leading-dash-pattern>] [--json]`
+
+Lists backlog items oldest first by default. Use `backlog-list --status Open --newest-first --limit 20` to select recent matching items. `--newest-first` orders by creation time descending, then ID ascending for equal instants, after status/text filtering and before the optional limit. Omitting the limit returns every match; zero returns none. `--all` retains its existing status behavior; ordering does not change membership.
+
+Human and JSON output use the same selected IDs and order. `--json` retains the existing full rows and versioned `mcg.backlog-list` envelope. Listing is read-only and does not change priority, claims, or automatic intake. This option does not change storage reads or promise lower latency.
+
 ## `author-draft`
 
 ```text
