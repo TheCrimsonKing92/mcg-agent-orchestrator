@@ -60,6 +60,14 @@ public sealed class CliAttentionJsonSelectiveReadTests : CliTaskQueryTestSupport
         await fixture.Store.RaiseAsync(CollaborationItemType.Decision, goals[1].Id, "Live item", "Body");
         await fixture.Store.RaiseAsync(CollaborationItemType.Decision, null, "Global", "Body");
         await fixture.Store.RaiseAsync(CollaborationItemType.Decision, Id(9999), "Orphan", "Body");
+        await fixture.WriteGoalAsync(goals[9] with { Status = GoalStatus.Completed, Tasks =
+            [goals[9].Tasks[0] with
+            {
+                LastDispatch = new("claude-cli", "claude", "fixture", Now.AddHours(-2),
+                    ProviderName: "Claude", ClaudeCredentialSourceDirectory: "account-a"),
+                LastVerification = new("claude", "fixture", 1, "", "You've hit your usage limit", Now.AddHours(-1),
+                    StandardErrorPath: "receipt", ProviderFailureKind: ProviderFailureKind.BudgetExhausted)
+            }] }, archive: true, compress: compress);
         for (var index = 10; index < goals.Length; index++)
             await fixture.WriteGoalAsync(goals[index] with { Status = GoalStatus.Completed }, archive: true, compress: compress);
 
@@ -79,12 +87,55 @@ public sealed class CliAttentionJsonSelectiveReadTests : CliTaskQueryTestSupport
         Assert.Equal(3, payload.GetProperty("ownerQuestionHolds").GetArrayLength());
         Assert.Equal(2, payload.GetProperty("ownerQuestionHolds")[1].GetProperty("taskNumber").GetInt32());
         Assert.Equal(4, payload.GetProperty("gateEvidence").GetArrayLength());
-        Assert.Equal(history + 2, probe.LastProjection!.Reads.ArchivePayloadsRead);
+        Assert.Single(payload.GetProperty("providerHolds").EnumerateArray());
+        Assert.Equal(history + 3, probe.LastProjection!.Reads.ArchivePayloadsRead);
         Assert.Equal(probe.LastProjection.Reads.ArchivePayloadsRead, probe.LastProjection.Reads.ArchivePayloadsDecoded);
         Assert.Equal(0, probe.BoardLoads);
         var fallback = new QueryProbe(fixture.Queries) { Unsupported = true };
         AssertJsonEqual(expected, Render(await AttentionJsonReadContext.ReadAsync(fallback, fixture.Workspace, Now)));
         Assert.Equal(goals.Length, Assert.Single(fallback.Loads).Length);
+        foreach (var args in SummaryForms())
+        {
+            probe.Loads.Clear();
+            var summary = CaptureConsole(() => CliAttentionJsonQueryCommand.Execute(args, probe, fixture.Workspace, new FixedTime()));
+            AssertSummaryMatches(expected, summary);
+            Assert.Empty(probe.LastProjection!.GateEvidence);
+            Assert.Equal(new[] { current.Id, goals[1].Id }, Assert.Single(probe.Loads));
+            var legacy = new QueryProbe(fixture.Queries) { Unsupported = true };
+            AssertJsonEqual(summary, CaptureConsole(() => CliAttentionJsonQueryCommand.Execute(args, legacy, fixture.Workspace, new FixedTime())));
+            Assert.Equal(goals.Length, Assert.Single(legacy.Loads).Length);
+        }
+    }
+
+    [Fact]
+    public async Task HistoricalGateGrowth_LeavesSummaryBytesAndActionableRowsUnchanged()
+    {
+        using var fixture = await Fixture.CreateAsync(4);
+        for (var index = 1; index < 4; index++)
+            await fixture.WriteGoalAsync(fixture.Goals[index] with { Status = GoalStatus.Completed });
+        await fixture.WriteWaitAsync(new("fixed-wait", fixture.Goals[0].Id, null, "Choose?", Now));
+        await fixture.Store.RaiseAsync(CollaborationItemType.Decision, fixture.Goals[0].Id, "Fixed item", "Body");
+        string Read(string[] args) => CaptureConsole(() =>
+            CliAttentionJsonQueryCommand.Execute(args, fixture.Queries, fixture.Workspace, new FixedTime()));
+        var before = Read(SummaryForms()[0]);
+        AssertSummaryMatches(Read(["attention", "list", "--json"]), before);
+        for (var index = 1; index < 4; index++)
+            await fixture.WriteGoalAsync(fixture.Goals[index] with
+            {
+                Status = GoalStatus.Completed,
+                GateTestObligations = Enumerable.Range(0, 150)
+                    .Select(number => new GateTestObligation("historical-" + number, 1, ["Selector"], null, "Pending", Now)).ToArray()
+            }, archive: index > 1, compress: index == 3);
+        var full = Read(["attention", "list", "--json"]);
+        using var document = JsonDocument.Parse(full);
+        Assert.Equal(450, document.RootElement.GetProperty("payload").GetProperty("gateEvidence").GetArrayLength());
+        foreach (var args in SummaryForms())
+        {
+            var after = Read(args);
+            Assert.Equal(before, after);
+            Assert.Equal(System.Text.Encoding.UTF8.GetByteCount(before), System.Text.Encoding.UTF8.GetByteCount(after));
+            AssertSummaryMatches(full, after);
+        }
     }
 
     [Theory]
@@ -174,6 +225,11 @@ public sealed class CliAttentionJsonSelectiveReadTests : CliTaskQueryTestSupport
         Assert.IsType(failure.GetType(), actual);
         Assert.Empty(probe.Loads);
         Assert.Equal(0, probe.MetadataLoads);
+        var summaryFailure = await Assert.ThrowsAnyAsync<Exception>(() =>
+            AttentionJsonReadContext.ReadAsync(probe, fixture.Workspace, Now, new(false), cancellation.Token));
+        Assert.IsType(failure.GetType(), summaryFailure);
+        Assert.Empty(probe.Loads);
+        Assert.Equal(0, probe.MetadataLoads);
     }
 
     [Theory]
@@ -188,6 +244,13 @@ public sealed class CliAttentionJsonSelectiveReadTests : CliTaskQueryTestSupport
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
             AttentionJsonReadContext.ReadAsync(probe, fixture.Workspace, Now, cancellation.Token));
         Assert.Single(probe.Loads);
+        probe.Loads.Clear();
+        using var summaryCancellation = new CancellationTokenSource();
+        var summaryProbe = new QueryProbe(fixture.Queries)
+            { Unsupported = unsupported, BeforeLoad = summaryCancellation.Cancel };
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => AttentionJsonReadContext.ReadAsync(
+            summaryProbe, fixture.Workspace, Now, new(false), summaryCancellation.Token));
+        Assert.Single(summaryProbe.Loads);
     }
 
     [Fact]
@@ -196,6 +259,10 @@ public sealed class CliAttentionJsonSelectiveReadTests : CliTaskQueryTestSupport
         using var fixture = await Fixture.CreateAsync(1);
         var probe = new QueryProbe(fixture.Queries) { Failure = new NotSupportedException("implemented query failed") };
         await Assert.ThrowsAsync<NotSupportedException>(() => AttentionJsonReadContext.ReadAsync(probe, fixture.Workspace, Now));
+        Assert.Empty(probe.Loads);
+        Assert.Equal(0, probe.MetadataLoads);
+        await Assert.ThrowsAsync<NotSupportedException>(() =>
+            AttentionJsonReadContext.ReadAsync(probe, fixture.Workspace, Now, new AttentionProjectionReadOptions(false), default));
         Assert.Empty(probe.Loads);
         Assert.Equal(0, probe.MetadataLoads);
     }
@@ -209,6 +276,27 @@ public sealed class CliAttentionJsonSelectiveReadTests : CliTaskQueryTestSupport
         AssertJsonEqual(await fixture.BaselineAsync(), Render(actual));
         Assert.Empty(probe.Loads);
         Assert.Equal(new AttentionProjectionReadCounts(0, 0, 0, 0, 0), probe.LastProjection!.Reads);
+    }
+
+    private static string[][] SummaryForms() =>
+        [["attention", "list", "--summary", "--json"], ["attention", "list", "--json", "--summary"]];
+
+    private static void AssertSummaryMatches(string full, string summary)
+    {
+        using var ordinary = JsonDocument.Parse(full);
+        using var compact = JsonDocument.Parse(summary);
+        var envelope = compact.RootElement;
+        Assert.Equal(new[] { "schema", "schemaVersion", "generatedAt", "omittedSections", "payload" },
+            envelope.EnumerateObject().Select(property => property.Name));
+        Assert.Equal("mcg.attention-summary", envelope.GetProperty("schema").GetString());
+        Assert.Equal(1, envelope.GetProperty("schemaVersion").GetInt32());
+        Assert.Equal(ordinary.RootElement.GetProperty("generatedAt").GetString(), envelope.GetProperty("generatedAt").GetString());
+        Assert.Equal("gateEvidence", Assert.Single(envelope.GetProperty("omittedSections").EnumerateArray()).GetString());
+        var payload = envelope.GetProperty("payload");
+        Assert.Equal(new[] { "waits", "items", "providerHolds", "ownerQuestionHolds" },
+            payload.EnumerateObject().Select(property => property.Name));
+        foreach (var section in payload.EnumerateObject())
+            Assert.Equal(ordinary.RootElement.GetProperty("payload").GetProperty(section.Name).GetRawText(), section.Value.GetRawText());
     }
 
     private static void AssertJsonEqual(string expected, string actual) =>
@@ -231,9 +319,12 @@ public sealed class CliAttentionJsonSelectiveReadTests : CliTaskQueryTestSupport
         public Action? BeforeLoad { get; init; }
         public AttentionReadProjection? LastProjection { get; private set; }
         public async Task<AttentionReadProjection?> ReadAttentionProjectionAsync(CancellationToken cancellationToken = default)
+            => await ReadAttentionProjectionAsync(new AttentionProjectionReadOptions(), cancellationToken);
+        public async Task<AttentionReadProjection?> ReadAttentionProjectionAsync(AttentionProjectionReadOptions options,
+            CancellationToken cancellationToken)
         {
             if (Failure is not null) throw Failure;
-            return LastProjection = Unsupported ? null : await inner.ReadAttentionProjectionAsync(cancellationToken);
+            return LastProjection = Unsupported ? null : await inner.ReadAttentionProjectionAsync(options, cancellationToken);
         }
         public Task<IReadOnlyList<GoalSummary>> ListGoalMetadataAsync(CancellationToken cancellationToken = default)
         { MetadataLoads++; return inner.ListGoalMetadataAsync(cancellationToken); }

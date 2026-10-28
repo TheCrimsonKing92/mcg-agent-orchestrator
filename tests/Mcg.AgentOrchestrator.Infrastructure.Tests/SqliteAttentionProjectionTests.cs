@@ -143,6 +143,8 @@ public sealed class SqliteAttentionProjectionTests
         using var cancellation = new CancellationTokenSource();
         cancellation.Cancel();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => fixture.Queries.ReadAttentionProjectionAsync(cancellation.Token));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            fixture.Queries.ReadAttentionProjectionAsync(new AttentionProjectionReadOptions(false), cancellation.Token));
         await fixture.WriteAsync(fixture.Goals[0] with { Status = GoalStatus.Completed }, archive: true);
         await using var connection = fixture.Connection();
         await connection.OpenAsync();
@@ -150,6 +152,93 @@ public sealed class SqliteAttentionProjectionTests
         update.CommandText = "UPDATE goal_snapshot_archive SET snapshot_json = X'010203'";
         Assert.Equal(1, await update.ExecuteNonQueryAsync());
         await Assert.ThrowsAsync<InvalidDataException>(() => fixture.Queries.ReadAttentionProjectionAsync());
+        await Assert.ThrowsAsync<InvalidDataException>(() =>
+            fixture.Queries.ReadAttentionProjectionAsync(new AttentionProjectionReadOptions(false), default));
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task SummarySkipsGateDeserialization_FullModeStillValidates(bool archive, bool compress)
+    {
+        using var fixture = await Fixture.CreateAsync(1);
+        var goal = fixture.Goals[0] with
+        {
+            CurrentHold = new("question", "steward-owner-question", "Owner must choose", At),
+            GateTestObligations = [new("gate", 1, ["Selector"], null, "Pending", At)],
+            Tasks = [fixture.Goals[0].Tasks[0] with
+            {
+                LastDispatch = Dispatch(At, "account-a"),
+                LastVerification = Verification(At.AddMinutes(1), ProviderFailureKind.BudgetExhausted)
+            }]
+        };
+        await fixture.WriteAsync(goal, archive, compress);
+        var full = Assert.IsType<AttentionReadProjection>(await fixture.Queries.ReadAttentionProjectionAsync());
+        Assert.Single(full.GateEvidence);
+        Assert.Single(full.OwnerQuestions);
+        Assert.Single(ProviderUsageHoldView.ReadEvidence(full.ProviderEvidence, At.AddHours(1)));
+
+        await using var connection = fixture.Connection();
+        await connection.OpenAsync();
+        var table = archive ? "goal_snapshot_archive" : "goals";
+        await using var read = connection.CreateCommand();
+        read.CommandText = $"SELECT snapshot_json FROM {table}";
+        var root = JsonNode.Parse(GoalSnapshotArchiveCodec.Decode(await read.ExecuteScalarAsync())!)!;
+        // The document remains valid JSON; only typed gate decoding is impossible. Restoring
+        // gate deserialization in summary mode must therefore fail this control.
+        root["GateTestObligations"] = JsonNode.Parse("[\"not-a-gate-obligation\"]");
+        var json = root.ToJsonString();
+        await using var update = connection.CreateCommand();
+        update.CommandText = $"UPDATE {table} SET snapshot_json = $json";
+        update.Parameters.AddWithValue("$json", compress ? (object)GoalSnapshotArchiveCodec.Encode(json) : json);
+        Assert.Equal(1, await update.ExecuteNonQueryAsync());
+        await Assert.ThrowsAsync<JsonException>(() => fixture.Queries.ReadAttentionProjectionAsync());
+        var summary = Assert.IsType<AttentionReadProjection>(await fixture.Queries.ReadAttentionProjectionAsync(new AttentionProjectionReadOptions(false), default));
+        Assert.Empty(summary.GateEvidence);
+        Assert.Equal(JsonSerializer.Serialize(full.Goals), JsonSerializer.Serialize(summary.Goals));
+        Assert.Equal(JsonSerializer.Serialize(full.OwnerQuestions), JsonSerializer.Serialize(summary.OwnerQuestions));
+        Assert.Equal(JsonSerializer.Serialize(full.ProviderEvidence), JsonSerializer.Serialize(summary.ProviderEvidence));
+        Assert.Equal(full.Reads, summary.Reads);
+
+        // Corruption in a retained field must still fail the selected read path.
+        root["CurrentHold"] = "not-a-hold";
+        json = root.ToJsonString();
+        update.Parameters["$json"].Value = compress ? (object)GoalSnapshotArchiveCodec.Encode(json) : json;
+        Assert.Equal(1, await update.ExecuteNonQueryAsync());
+        await Assert.ThrowsAsync<JsonException>(() => fixture.Queries.ReadAttentionProjectionAsync(new AttentionProjectionReadOptions(false), default));
+    }
+
+    [Fact]
+    public async Task LegacyProjectionImplementation_ReceivesAdditiveCallsAndOriginalDefaultLiteral()
+    {
+        using var fixture = await Fixture.CreateAsync(1);
+        var projection = Assert.IsType<AttentionReadProjection>(await fixture.Queries.ReadAttentionProjectionAsync());
+        var legacy = new LegacyAttentionQueries(projection);
+        IOrchestratorStateQueries queries = legacy;
+        // Keep this default literal: it proves source compatibility of existing callers.
+        Assert.Same(projection, await queries.ReadAttentionProjectionAsync(default));
+        Assert.Equal(1, legacy.Calls);
+        using var cancellation = new CancellationTokenSource();
+        Assert.Same(projection, await queries.ReadAttentionProjectionAsync(new AttentionProjectionReadOptions(false), cancellation.Token));
+        Assert.Equal(2, legacy.Calls);
+        Assert.Equal(cancellation.Token, legacy.LastToken);
+    }
+
+    private sealed class LegacyAttentionQueries(AttentionReadProjection projection) : IOrchestratorStateQueries
+    {
+        public int Calls { get; private set; }
+        public CancellationToken LastToken { get; private set; }
+        public Task<AttentionReadProjection?> ReadAttentionProjectionAsync(CancellationToken cancellationToken = default)
+        {
+            Calls++;
+            LastToken = cancellationToken;
+            return Task.FromResult<AttentionReadProjection?>(projection);
+        }
+        public Task<AgentOrchestratorKernel> LoadGoalsAsync(IReadOnlyCollection<GoalId> goalIds,
+            CancellationToken cancellationToken = default) => throw new InvalidOperationException("Unexpected kernel load");
+        public Task<IReadOnlyList<GoalSummary>> ListGoalMetadataAsync(CancellationToken cancellationToken = default) =>
+            throw new InvalidOperationException("Unexpected metadata load");
     }
 
     private static TaskDispatchSnapshot Dispatch(DateTimeOffset at, string credential) =>

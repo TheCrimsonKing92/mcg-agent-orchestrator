@@ -16,6 +16,8 @@ public sealed class CliAttentionJsonReadOnlyRouteTests : CliTaskQueryTestSupport
     [InlineData("attention", "list", "--json")]
     [InlineData("ATTENTION", "--json")]
     [InlineData("Attention", "LIST", "--json")]
+    [InlineData("attention", "list", "--summary", "--json")]
+    [InlineData("attention", "list", "--json", "--summary")]
     public async Task JsonFormsAreQueryOnlyAndSkipHydration(params string[] args)
     {
         Assert.True(CliAttentionJsonQueryCommand.IsAttentionJsonCommand(args));
@@ -42,6 +44,23 @@ public sealed class CliAttentionJsonReadOnlyRouteTests : CliTaskQueryTestSupport
     {
         Assert.False(CliAttentionJsonQueryCommand.IsAttentionJsonCommand(args));
         Assert.Equal(CliCommandCapability.Execution, CliCommandCapabilities.Classify(args));
+    }
+
+    [Theory]
+    [InlineData("attention", "list", "--summary")]
+    [InlineData("attention", "--summary", "--json")]
+    [InlineData("attention", "list", "--summary", "--summary", "--json")]
+    [InlineData("attention", "list", "--summary", "--json", "--json")]
+    [InlineData("attention", "list", "prefix", "--summary", "--json")]
+    [InlineData("attention", "list", "--summary", "--json", "extra")]
+    [InlineData("attention", "show", "--summary", "--json")]
+    [InlineData("attention", "list", "--all", "--summary", "--json")]
+    [InlineData("attention", "list", "--SUMMARY", "--json")]
+    public void InvalidSummaryFormsFailThroughNormalFlagValidation(params string[] args)
+    {
+        Assert.False(CliAttentionJsonQueryCommand.IsAttentionJsonCommand(args));
+        var error = Assert.Throws<ArgumentException>(() => CliCommandHelp.ThrowIfInvalidFlags(args));
+        Assert.Contains(CliCommandHelp.AttentionUsage, error.Message);
     }
 
     [Fact]
@@ -90,6 +109,10 @@ public sealed class CliAttentionJsonReadOnlyRouteTests : CliTaskQueryTestSupport
     [InlineData(false, "attention", "list", "--json")]
     [InlineData(true, "attention", "--json")]
     [InlineData(true, "attention", "list", "--json")]
+    [InlineData(false, "attention", "list", "--summary", "--json")]
+    [InlineData(false, "attention", "list", "--json", "--summary")]
+    [InlineData(true, "attention", "list", "--summary", "--json")]
+    [InlineData(true, "attention", "list", "--json", "--summary")]
     public async Task ParkedOrMissingStoreNeverDeclinesOrWrites(bool parked, params string[] args)
     {
         var root = CreateTempDirectory();
@@ -136,7 +159,14 @@ public sealed class CliAttentionJsonReadOnlyRouteTests : CliTaskQueryTestSupport
             Assert.Equal(0, declines);
             Assert.Null(currentGoal);
             using var json = JsonDocument.Parse(output);
-            Assert.Equal("mcg.attention", json.RootElement.GetProperty("schema").GetString());
+            var summary = args.Contains("--summary");
+            Assert.Equal(summary ? "mcg.attention-summary" : "mcg.attention", json.RootElement.GetProperty("schema").GetString());
+            if (summary)
+            {
+                Assert.Equal(1, json.RootElement.GetProperty("schemaVersion").GetInt32());
+                Assert.Equal("gateEvidence", Assert.Single(json.RootElement.GetProperty("omittedSections").EnumerateArray()).GetString());
+                Assert.False(json.RootElement.GetProperty("payload").TryGetProperty("gateEvidence", out _));
+            }
             var payload = json.RootElement.GetProperty("payload");
             Assert.Equal(wait.Id.Value, Assert.Single(payload.GetProperty("waits").EnumerateArray())
                 .GetProperty("id").GetString());
@@ -233,6 +263,8 @@ public sealed class CliAttentionJsonReadOnlyRouteTests : CliTaskQueryTestSupport
     [Theory]
     [InlineData("attention", "--json")]
     [InlineData("attention", "list", "--json")]
+    [InlineData("attention", "list", "--summary", "--json")]
+    [InlineData("attention", "list", "--json", "--summary")]
     public async Task SqliteJsonAliases_ReadWhileBothStoreWritersAreHeld(params string[] args)
     {
         var root = CreateTempDirectory();

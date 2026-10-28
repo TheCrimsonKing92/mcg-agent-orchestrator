@@ -5,7 +5,11 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed partial class SqliteOrchestratorStateRepository
 {
-    public async Task<AttentionReadProjection?> ReadAttentionProjectionAsync(CancellationToken cancellationToken = default)
+    public Task<AttentionReadProjection?> ReadAttentionProjectionAsync(CancellationToken cancellationToken = default) =>
+        ReadAttentionProjectionAsync(new AttentionProjectionReadOptions(), cancellationToken);
+
+    public async Task<AttentionReadProjection?> ReadAttentionProjectionAsync(AttentionProjectionReadOptions options,
+        CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         await using var connection = OpenConnection();
@@ -59,21 +63,24 @@ public sealed partial class SqliteOrchestratorStateRepository
                     .Any(task => ReadAttentionField<WorkTaskStatus>(task, "Status") == WorkTaskStatus.WaitingForHuman)));
                 if (metadataOnly) continue; // A missing archive retains the baseline metadata-only behavior.
 
-                var obligations = new List<GateTestObligation>();
-                foreach (var obligation in ReadAttentionArray<GateTestObligation>(root, "GateTestObligations"))
+                if (options.IncludeGateEvidence)
                 {
-                    var previous = obligations.FirstOrDefault(item => item.HasSameIdentity(obligation));
-                    if (previous is not null)
+                    var obligations = new List<GateTestObligation>();
+                    foreach (var obligation in ReadAttentionArray<GateTestObligation>(root, "GateTestObligations"))
                     {
-                        if (obligation.PlannerIdentity is not null &&
-                            !obligation.PlannerEvidence!.SemanticallyEquals(previous.PlannerEvidence))
-                            throw new InvalidOperationException("Conflicting stored Planner evidence payload.");
-                        continue;
+                        var previous = obligations.FirstOrDefault(item => item.HasSameIdentity(obligation));
+                        if (previous is not null)
+                        {
+                            if (obligation.PlannerIdentity is not null &&
+                                !obligation.PlannerEvidence!.SemanticallyEquals(previous.PlannerEvidence))
+                                throw new InvalidOperationException("Conflicting stored Planner evidence payload.");
+                            continue;
+                        }
+                        obligations.Add(obligation with { Selectors = obligation.Selectors?.ToArray() ?? [] });
                     }
-                    obligations.Add(obligation with { Selectors = obligation.Selectors?.ToArray() ?? [] });
+                    gates.AddRange(obligations.Where(item => item.BriefVersion == briefVersion)
+                        .Select(item => new AttentionGateEvidence(id, item)));
                 }
-                gates.AddRange(obligations.Where(item => item.BriefVersion == briefVersion)
-                    .Select(item => new AttentionGateEvidence(id, item)));
 
                 var hold = ReadAttentionField<GoalHoldSnapshot>(root, "CurrentHold");
                 var needsQuestion = status is not (GoalStatus.Completed or GoalStatus.Cancelled or GoalStatus.Superseded) &&
