@@ -53,6 +53,7 @@ internal static partial class CliPersistentStateRunner
         ConductorLoopLeaseController? startupLoopLease = null,
         Func<AgentOrchestratorKernel, Action<AgentOrchestratorKernel>, CliExecutionContext>? createLifecycleContext = null)
     {
+        CliCommandHelp.ValidateGoalCreationOptions(args);
         if (CliArgumentParser.IsAskGoal(args))
             return CliAskGoalCommand.Execute(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel);
         if (!skipReadOnlyRoute && CliReadOnlyCommandRunner.TryExecute(args, stateRepository, workspace, providers, channel, ref agents, ref workerProfiles, ref currentGoal, out var readOnlyResult))
@@ -2039,7 +2040,8 @@ internal static partial class CliPersistentStateRunner
             intakeRecord = reservation.Record;
             if (reservation.Kind == GoalIntakeReservationKind.Replay)
             {
-                GoalIntakeReceiptTextView.PrintGoalIntakeReceipt(reservation.Record);
+                var summary = GoalCreationSummaryView.IsRequested(args);
+                if (!summary) GoalIntakeReceiptTextView.PrintGoalIntakeReceipt(reservation.Record);
                 if (reservation.Record.State == GoalIntakeRequestStates.Created)
                 {
                     var replayKernel = stateRepository.LoadAsync().GetAwaiter().GetResult();
@@ -2050,9 +2052,13 @@ internal static partial class CliPersistentStateRunner
                         throw new InvalidOperationException(
                             $"GOAL_INTAKE_RECEIPT_INVALID requestKey={request.RequestKey} reason=created-goal-missing");
                     }
-                    GoalTextView.PrintGoal(currentGoal);
+                    if (summary)
+                        GoalCreationSummaryView.Print(currentGoal, "replayed", workspace.PortfolioStorePath);
+                    else
+                        GoalTextView.PrintGoal(currentGoal);
                     return false;
                 }
+                if (summary) GoalCreationSummaryView.PrintProgress(reservation.Record);
                 if (reservation.Record.State == GoalIntakeRequestStates.Failed)
                 {
                     throw new InvalidOperationException(
@@ -2104,7 +2110,7 @@ internal static partial class CliPersistentStateRunner
                 .GetAwaiter()
                 .GetResult();
             committedSnapshot = preparedSnapshot;
-            if (intakeRecord is not null)
+            if (intakeRecord is not null && !GoalCreationSummaryView.IsRequested(args))
                 GoalIntakeReceiptTextView.PrintGoalIntakeReceipt(intakeRecord);
             try
             {
@@ -2138,7 +2144,7 @@ internal static partial class CliPersistentStateRunner
                 refinementCollaborationItemRaise: deferredCollaborationWriter.RaiseAsync,
                 reportGoalCreationProgress: () =>
                 {
-                    if (intakeRecord is not null)
+                    if (intakeRecord is not null && !GoalCreationSummaryView.IsRequested(args))
                         GoalIntakeReceiptTextView.PrintGoalIntakeReceipt(intakeRecord);
                 });
             if (committedSnapshot is null)

@@ -147,7 +147,7 @@ internal static class CliCommandHelp
 
     private static readonly string[] GoalOwnFlags =
     [
-        "--pipeline", "--simple", "--from-backlog", "--run", "--confirm-batch-start",
+        "--pipeline", "--simple", "--from-backlog", "--run", "--confirm-batch-start", "--summary",
         "--backlog-item", "--backlog-coverage", "--request-key", "--text-file", "--brief-file", "--epic", "--depends-on",
         ..GoalRoleOverrideFlags,
         ..HelpFlags
@@ -203,7 +203,7 @@ internal static class CliCommandHelp
 
     private static readonly CommandHelpEntry Goal = new(
         GoalUsage,
-        "Create a goal. Before authoring criteria, assign evidence owners using docs/role-capability-matrix.md.",
+        "Create a goal. --summary prints a compact receipt for standalone creation; it cannot accompany --simple, --run or --from-backlog. Before authoring criteria, assign evidence owners using docs/role-capability-matrix.md.",
         UnionFlags(GoalOwnFlags, SimpleGoal.Flags, BacklogIntake.Flags, RunGoal.Flags));
 
     private static readonly CommandHelpEntry GoalIntakeStatus = new(
@@ -942,6 +942,13 @@ internal static class CliCommandHelp
 
     internal static void ThrowIfInvalidFlags(IReadOnlyList<string> args)
     {
+        if (args.Count > 0 && args[0].Equals("goal", StringComparison.OrdinalIgnoreCase) &&
+            GoalCreationSummaryView.IsRequested(args) &&
+            args.Skip(1).Any(arg => arg.Equals("--simple", StringComparison.OrdinalIgnoreCase) ||
+                arg.Equals("--run", StringComparison.OrdinalIgnoreCase) ||
+                arg.Equals("--from-backlog", StringComparison.OrdinalIgnoreCase)))
+            throw new ArgumentException("--summary is supported only for standalone goal creation; it cannot be combined with --simple, --run or --from-backlog.");
+
         if (CliGateStatusJsonQueryCommand.IsGateStatusJsonCommand(args) ||
             CliStatusJsonQueryCommand.IsStatusJsonCommand(args) ||
             CliConductorStatusJsonQueryCommand.IsConductorStatusJsonCommand(args) ||
@@ -987,6 +994,13 @@ internal static class CliCommandHelp
                 throw new ArgumentException($"Unknown option '{arg}'.{escapeHint}{suggestionText}{Environment.NewLine}{entry.Usage}");
             }
         }
+    }
+
+    internal static void ValidateGoalCreationOptions(IReadOnlyList<string> args)
+    {
+        if (args.Count > 0 && (args[0].Equals("goal", StringComparison.OrdinalIgnoreCase) ||
+            GoalCreationSummaryView.IsRequested(args)))
+            ThrowIfInvalidFlags(args);
     }
 
     private static string GetOptionName(string arg)

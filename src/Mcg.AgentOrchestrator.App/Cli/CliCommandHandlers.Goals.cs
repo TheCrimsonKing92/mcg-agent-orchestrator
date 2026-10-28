@@ -14,7 +14,7 @@ internal static partial class CliCommandHandlers
 {
 internal const int GoalMarkLandedPromptTimeoutMilliseconds = 10_000;
 
-private static PortfolioMembership? ReadGoalPortfolioMembership(string path, string goalId)
+internal static PortfolioMembership? ReadGoalPortfolioMembership(string path, string goalId)
 {
     // Served status must not create or upgrade a portfolio store.
     if (!File.Exists(path)) return null;
@@ -362,10 +362,17 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             }
             var goalObjective = ResolveBriefObjective(parts, "goal <objective> [--simple] [--from-backlog] [--run] | goal --brief-file <path> | goal --text-file <path>");
             var goalObjectivePlan = BuildGoalObjectivePlan(context, goalObjective, simple: false, goalPipelineRequest);
+            var summary = GoalCreationSummaryView.IsRequested(parts);
+            if (summary && !goalObjectivePlan.CanCreateGoal)
+            {
+                GoalCreationSummaryView.PrintBlocked(goalObjectivePlan);
+                PrintScopeCollisionAdvisory(context, goalObjective);
+                PrintBriefLintAdvisory(goalObjective);
+            }
             GoalObjectivePlanner.ThrowIfBlocked(goalObjectivePlan);
             var goalAgents = ApplyRoleAgentOverrides(parts, context.Agents);
             GoalLifecycleCommands.EnsureRequestedPipelineCanBeSatisfied(goalObjectivePlan, goalAgents);
-            ConsoleViews.PrintGoalObjectivePlan(goalObjectivePlan);
+            if (!summary) ConsoleViews.PrintGoalObjectivePlan(goalObjectivePlan);
             PrintScopeCollisionAdvisory(context, goalObjective);
             PrintBriefLintAdvisory(goalObjective);
             var goalSourceBacklogLink = ResolveSourceBacklogItemLink(context, parts, goalObjective);
@@ -384,7 +391,10 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             CliGoalDependencyCommands.ApplyAtCreation(context.Kernel, context.CurrentGoal, goalDependsOn);
             context.FinalizeGoalCreation(context.CurrentGoal);
             EpicAtCreation.AssignAfterCommit(context.Workspace, PortfolioMemberKind.Goal, context.CurrentGoal.Id.Value, goalEpicId);
-            GoalTextView.PrintGoal(context.CurrentGoal);
+            if (summary)
+                GoalCreationSummaryView.Print(context.CurrentGoal, "created", context.Workspace.PortfolioStorePath);
+            else
+                GoalTextView.PrintGoal(context.CurrentGoal);
             return true;
 
         case "simple-goal":

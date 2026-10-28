@@ -49,6 +49,7 @@ public static bool ExecuteCommand(
     Action<Action>? registerPostCommitAction = null,
     Func<IReadOnlyCollection<GoalId>, AgentOrchestratorKernel>? loadOperatorIntentTargets = null)
 {
+    CliCommandHelp.ValidateGoalCreationOptions(parts);
     if (CliArgumentParser.IsAskGoal(parts))
     {
         if (CliCommandHelp.TryPrintStartupHelp(parts)) return false;
