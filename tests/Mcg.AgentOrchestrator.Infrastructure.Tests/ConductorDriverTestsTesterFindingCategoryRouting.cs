@@ -65,8 +65,21 @@ public sealed class ConductorDriverTestsTesterFindingCategoryRouting
 
         Xunit.Assert.Single(retries);
         Xunit.Assert.Equal(0, focusedRuns);
-        Xunit.Assert.Single(goal.Timeline.Where(item => item.Kind == ProgressKind.TaskRetried && item.TaskId == developer.Id));
-        Xunit.Assert.DoesNotContain(goal.Timeline, item => item.Kind == ProgressKind.TaskRetried && item.TaskId == tester.Id);
+        // Retrying Developer invalidates the failed downstream Tester in the kernel.
+        // That TaskRetried event must follow the source retry, not be a Tester-first recovery.
+        Xunit.Assert.Collection(goal.Timeline.Where(item => item.Kind == ProgressKind.TaskRetried),
+            item =>
+            {
+                Xunit.Assert.Equal(developer.Id, item.TaskId);
+                Xunit.Assert.Equal(retry.Message, item.Message);
+            },
+            item =>
+            {
+                Xunit.Assert.Equal(tester.Id, item.TaskId);
+                Xunit.Assert.Equal(
+                    $"Invalidated Tester task because upstream Developer task {developer.Id.Value[..8]} was retried.",
+                    item.Message);
+            });
         AssertRetainedAdvisory(goal.Tasks.Single(task => task.Id == tester.Id));
     }
 
