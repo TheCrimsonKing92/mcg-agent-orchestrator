@@ -1243,17 +1243,11 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         IAcceptanceRunExecutionContext? executionOwner = null,
         bool partitionCandidateOnlySelections = false) =>
         FocusedEvidenceExecution.RunBaselineFocusedEvidenceArmAsync(
-            RunFocusedEvidenceArmAsync, GetFocusedEvidenceBaselineRoot, TryLabelFocusedEvidenceBaselineWorktree,
+            RunFocusedEvidenceArmAsync, FocusedEvidenceExecution.GetFocusedEvidenceBaselineRoot, TryLabelFocusedEvidenceBaselineWorktree,
             SelectBaselineFocusedChecks, CombineFindingBaselineArm, _storageRoot,
             candidateWorktreePath, baselineSha, goalId, focusedChecks, coverage, stableSlotIndex,
             stableSlotLease, cancellationToken, classifyMissingSelectionsAsAbsent, executionOwner,
             partitionCandidateOnlySelections);
-
-    private static string GetFocusedEvidenceBaselineRoot()
-    {
-        var baselineRoot = Path.Combine(Path.GetTempPath(), FocusedEvidenceBaselinesRootDirectoryName);
-        return baselineRoot;
-    }
 
     internal static FindingEvidenceOutcomeReason ClassifyFocusedEvidenceExperiment(
         FocusedEvidenceArmRunResult candidate,

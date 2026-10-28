@@ -13,6 +13,44 @@ internal sealed record SourceRevertedCandidateObservation(
 
 internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
 {
+    // Preserve the existing delegate API while carrying a typed invocation capability to its owner.
+    internal sealed class SourceRevertFocusedRunner(
+        Func<Goal, string, DotnetBuildEnvironmentLease?, CancellationToken, SourceRevertedEvidenceContinuation?, FocusedEvidenceRunResult> runner)
+    {
+        internal static Func<Goal, string, DotnetBuildEnvironmentLease?, CancellationToken, FocusedEvidenceRunResult>?
+            TryCreate(FindingEvidenceNegativeControl? mode, bool runBaselineArm,
+                IReadOnlyList<string>? revertPaths, FindingEvidenceMutation? mutation,
+                Func<Goal, string, DotnetBuildEnvironmentLease?, bool, CancellationToken, FindingEvidenceNegativeControl,
+                    IReadOnlyList<string>?, FindingEvidenceMutation?, SourceRevertedEvidenceContinuation?, FocusedEvidenceRunResult> run)
+        {
+            if (runBaselineArm || mode != FindingEvidenceNegativeControl.RevertSrc ||
+                revertPaths is not { Count: > 0 } || mutation is not null) return null;
+            return new SourceRevertFocusedRunner((goal, request, lease, token, continuation) =>
+                run(goal, request, lease, false, token, FindingEvidenceNegativeControl.RevertSrc,
+                    revertPaths, null, continuation)).Run;
+        }
+
+        internal FocusedEvidenceRunResult Run(Goal goal, string request, DotnetBuildEnvironmentLease? lease, CancellationToken token) =>
+            runner(goal, request, lease, token, null);
+        internal FocusedEvidenceRunResult RunWithContinuation(Goal goal, string request, DotnetBuildEnvironmentLease? lease,
+            CancellationToken token, SourceRevertedEvidenceContinuation? continuation) => runner(goal, request, lease, token, continuation);
+    }
+
+    internal static FocusedEvidenceRunResult RetainNegativeControlEvidence(
+        FocusedEvidenceRunResult next, FocusedEvidenceRunResult prior)
+    {
+        if (prior.NegativeControlOutcome is null) return next;
+        return next with
+        {
+            NegativeControlOutcome = prior.NegativeControlOutcome,
+            RevertPathsRejection = prior.RevertPathsRejection,
+            Arms = [.. next.Arms ?? [], .. (prior.Arms ?? []).Where(arm => arm.Arm == FindingEvidenceArm.SourceReverted)],
+            Summary = $"{next.Summary}; " + (prior.RevertPathsRejection is not null ||
+                prior.NegativeControlOutcome == FindingEvidenceNegativeControlOutcome.CompileRed ? prior.Summary :
+                FindingEvidenceNegativeControlOutcomeJsonConverter.ToWireValue(prior.NegativeControlOutcome.Value))
+        };
+    }
+
     internal SourceRevertedEvidenceContinuation? CreateSourceRevertContinuation(
         ConductorParallelAcceptanceAttempt attempt, ConductorParallelAcceptanceCandidate candidate, bool baseline)
     {

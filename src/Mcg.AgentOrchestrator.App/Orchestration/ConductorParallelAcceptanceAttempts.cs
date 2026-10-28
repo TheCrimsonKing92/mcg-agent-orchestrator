@@ -676,7 +676,7 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
             policy,
             (attemptCandidate, _, lease, cancellationToken, _) => ConductorParallelAcceptanceRunResult.Focused(
                 attemptCandidate,
-                runFocusedEvidence.Target is ConductorDriver.SourceRevertFocusedRunner scoped
+                runFocusedEvidence.Target is SourceRevertFocusedRunner scoped
                     ? scoped.RunWithContinuation(attemptCandidate.Goal, request, lease, cancellationToken,
                         CreateSourceRevertContinuation(ReadCanonicalAttempt(TryReadLatest(candidate.Goal.Id.Value)!.MetadataPath,
                             candidate.Goal.Id.Value), candidate, requestContext?.RunBaselineArm ?? false))

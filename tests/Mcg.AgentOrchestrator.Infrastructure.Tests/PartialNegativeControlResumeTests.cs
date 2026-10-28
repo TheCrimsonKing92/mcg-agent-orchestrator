@@ -218,7 +218,7 @@ public sealed class PartialNegativeControlResumeTests
                 WriteTrx(args, red);
                 return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(red ? 1 : 0, red ? "Failed: 1" : "Passed: 1"));
             });
-            var runner = new ConductorDriver.SourceRevertFocusedRunner((goal, request, lease, token, continuation) =>
+            var runner = new ConductorParallelAcceptanceAttemptCoordinator.SourceRevertFocusedRunner((goal, request, lease, token, continuation) =>
             {
                 LastEvidence = AcceptanceExecutionRunner.RunFocusedVerification(verifier, _repo.Root, goal.Id, request,
                     null, lease, false, token, "main", FindingEvidenceNegativeControl.RevertSrc, _paths,
