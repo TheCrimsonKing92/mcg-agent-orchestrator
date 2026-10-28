@@ -7,19 +7,26 @@ internal static class ConductorRoundModelResolver
 {
     internal const string DefaultModelAlias = "sonnet";
 
-    internal static ConductorRoundModel Resolve(ModelFunctionCatalog? catalog, string purpose)
+    internal static ConductorRoundModel Resolve(ModelFunctionCatalog? catalog, string purpose, bool fallback = false)
     {
         var bindings = (catalog ?? ModelFunctionCatalog.Empty).ForPurpose(purpose);
-        if (bindings.Count == 0) return new(purpose, DefaultModelAlias, null, null);
+        var author = string.Equals(purpose, ModelFunctionPurposes.ConductorAuthor, StringComparison.OrdinalIgnoreCase);
+        if (bindings.Count == 0) return fallback ? Invalid("missing-subscription-fallback") : new(purpose, DefaultModelAlias, null, null);
         if (bindings.Count > 1) return Invalid("multiple-bindings");
-        var subscription = bindings[0].Subscription;
+        var subscription = fallback ? bindings[0].SubscriptionFallback : bindings[0].Subscription;
+        if (fallback && !author) return Invalid("fallback-unsupported-purpose");
+        if (fallback && subscription is null) return Invalid("missing-subscription-fallback");
         if (subscription is null) return Invalid("missing-subscription");
-        if (!string.Equals(subscription.WorkerProfileName,
+        var codex = author && string.Equals(subscription.WorkerProfileName, "codex-cli", StringComparison.OrdinalIgnoreCase);
+        if (!codex && !string.Equals(subscription.WorkerProfileName,
                 WorkerProfileDispatcher.AnthropicSubscriptionProfileName, StringComparison.OrdinalIgnoreCase))
             return Invalid($"non-claude-profile:{subscription.WorkerProfileName}");
         if (string.IsNullOrWhiteSpace(subscription.ModelAlias)) return Invalid("empty-model-alias");
-        return new(purpose, subscription.ModelAlias.Trim(),
-            string.IsNullOrWhiteSpace(subscription.ReasoningEffort) ? null : subscription.ReasoningEffort, null);
+        var alias = EffectiveModelAssignment.Normalize(codex ? "OpenAI" : "Anthropic", subscription.ModelAlias.Trim());
+        var effort = string.IsNullOrWhiteSpace(subscription.ReasoningEffort)
+            ? codex ? AgentCatalog.DefaultSubscriptionReasoningEffort("OpenAI", alias) : null
+            : subscription.ReasoningEffort;
+        return new(purpose, alias, effort, null, codex ? "codex-cli" : "claude-cli");
 
         ConductorRoundModel Invalid(string cause)
         {
@@ -42,14 +49,16 @@ internal static class ConductorRoundModelResolver
         modelAlias is null ? existing : $"{existing} model={modelAlias}";
 }
 
-internal sealed record ConductorRoundModel(string Purpose, string? Alias, string? ReasoningEffort, string? InvalidReason)
+internal sealed record ConductorRoundModel(string Purpose, string? Alias, string? ReasoningEffort, string? InvalidReason,
+    string WorkerProfileName = "claude-cli")
 {
     internal bool IsValid => InvalidReason is null;
     internal string ModelArguments => $"--model {Alias}" +
         (ReasoningEffort is null ? "" : $" {ClaudeCliEffortPolicy.EffortFlag} {ReasoningEffort}");
 }
 
-internal sealed class ConductorModelRoundException(string message, string? modelAlias) : InvalidOperationException(message)
+internal sealed class ConductorModelRoundException(string message, string? modelAlias, string? terminalReason = null) : InvalidOperationException(message)
 {
     internal string? ModelAlias { get; } = modelAlias;
+    internal string? TerminalReason { get; } = terminalReason;
 }

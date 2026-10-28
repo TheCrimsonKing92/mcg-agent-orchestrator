@@ -7,7 +7,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 public sealed class CliBacklogReadOnlyRouteTests : CliTaskQueryTestSupport
 {
     [Xunit.Fact]
-    public async Task ReadForms_ClassifyAndLoadAllGoalsWithoutWriterOrOutboxAccess()
+    public async Task ReadForms_SelectRequiredGoalsWithoutWriterOrOutboxAccess()
     {
         var root = CreateTempDirectory();
         try
@@ -31,10 +31,17 @@ public sealed class CliBacklogReadOnlyRouteTests : CliTaskQueryTestSupport
 
                 Xunit.Assert.NotEmpty(output);
                 Xunit.Assert.Same(originalGoal, currentGoal);
-                Xunit.Assert.Equal(1, repository.ListGoalMetadataCount);
-                Xunit.Assert.Equal(1, repository.LoadGoalsCount);
-                Xunit.Assert.Equal(seed.Kernel.Goals.Select(goal => goal.Id.Value).Order(StringComparer.Ordinal),
-                    repository.LoadedGoalIds.Order(StringComparer.Ordinal));
+                Xunit.Assert.Equal(0, repository.ListGoalMetadataCount);
+                if (args[0] == "backlog-similar")
+                {
+                    Xunit.Assert.Equal(1, repository.SimilarityProjectionCount);
+                    Xunit.Assert.Empty(repository.RequestedGoalIds);
+                }
+                else
+                {
+                    Xunit.Assert.Equal([LinkedGoalId], repository.RequestedGoalIds);
+                    Xunit.Assert.Equal([LinkedGoalId], repository.LoadedGoalIds);
+                }
                 AssertNoWriterAccess(repository);
                 if (args[0] == "backlog-show")
                 {
