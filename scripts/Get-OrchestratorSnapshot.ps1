@@ -17,6 +17,7 @@ param(
     [int]$ActiveLimit = 8,
     [int]$NewestProcesses = 12,
     [int]$StatusTimeoutSeconds = 20,
+    [string]$AppDll,
 
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]]$AdditionalGoalPrefix = @()
@@ -38,7 +39,24 @@ if ($StatusTimeoutSeconds -lt 1) {
 }
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
-$appDll = Join-Path $repoRoot "src\Mcg.AgentOrchestrator.App\bin\Debug\net10.0\Mcg.AgentOrchestrator.App.dll"
+$statusAppDll = Join-Path $repoRoot "src\Mcg.AgentOrchestrator.App\bin\Debug\net10.0\Mcg.AgentOrchestrator.App.dll"
+$explicitAppDll = $PSBoundParameters.ContainsKey('AppDll')
+$appDllSelectionError = $null
+if ($explicitAppDll) {
+    try {
+        if ([string]::IsNullOrWhiteSpace($AppDll)) {
+            throw '-AppDll must name an existing filesystem file.'
+        }
+        $selectedApp = Get-Item -LiteralPath $AppDll -ErrorAction Stop
+        if ($selectedApp -isnot [System.IO.FileInfo]) {
+            throw '-AppDll must name an existing filesystem file.'
+        }
+        $statusAppDll = $selectedApp.FullName
+    }
+    catch {
+        $appDllSelectionError = "explicit App DLL unavailable: $($_.Exception.Message)"
+    }
+}
 $GoalPrefix = @($GoalPrefix) + @($AdditionalGoalPrefix)
 
 function Write-Section {
@@ -122,11 +140,18 @@ function Get-LockKind {
 }
 
 function Read-OperationProcessInventory {
+    if ($null -ne $appDllSelectionError) {
+        throw $appDllSelectionError
+    }
+    $runtimeArguments = @{}
+    if ($explicitAppDll) {
+        $runtimeArguments.AppDll = $statusAppDll
+    }
     $helper = Join-Path $repoRoot "scripts\Get-RepoProcessInfo.ps1"
     # Seed names are available from the native enumeration, so filter on them before opening
     # processes for identity and command-line reads. The single-space predicate retains the
     # existing available-command contract; PowerShell drops an empty-string script argument.
-    $lines = @(& $helper `
+    $lines = @(& $helper @runtimeArguments `
         -Name @("dotnet", "DispatchProcessHost", "Mcg.AgentOrchestrator*") `
         -CommandContains " " `
         -Newest ([int]::MaxValue))
@@ -483,8 +508,11 @@ catch {
 
 if ($GoalPrefix.Count -gt 0) {
     Write-Section "Goal Status"
-    if (-not (Test-Path -LiteralPath $appDll -PathType Leaf)) {
-        Write-Output "App DLL not found: $appDll"
+    if ($null -ne $appDllSelectionError) {
+        Write-Output "status unavailable: $appDllSelectionError"
+    }
+    elseif (-not (Test-Path -LiteralPath $statusAppDll -PathType Leaf)) {
+        Write-Output "App DLL not found: $statusAppDll"
     }
     else {
         foreach ($goal in $GoalPrefix) {
@@ -495,7 +523,7 @@ if ($GoalPrefix.Count -gt 0) {
             Write-Output ""
             Write-Output "### $goal"
             $dotnetPath = if ([string]::IsNullOrWhiteSpace($env:MCG_ORCHESTRATOR_DOTNET_PATH)) { "dotnet" } else { $env:MCG_ORCHESTRATOR_DOTNET_PATH }
-            Invoke-BoundedGoalStatus -DotnetPath $dotnetPath -AppDllPath $appDll -Goal $goal -TimeoutSeconds $StatusTimeoutSeconds
+            Invoke-BoundedGoalStatus -DotnetPath $dotnetPath -AppDllPath $statusAppDll -Goal $goal -TimeoutSeconds $StatusTimeoutSeconds
         }
     }
 }
