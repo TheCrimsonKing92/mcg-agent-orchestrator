@@ -31,6 +31,20 @@ public sealed class OwnerConsoleGoalLandingTests
         Assert.Equal(expected, OwnerConsoleGoalLanding.Line(goal, position, zone));
     }
 
+    [Theory]
+    [InlineData(GoalStatus.Verifying, true, null, "held: waiting for your approval")]
+    [InlineData(GoalStatus.Verifying, false, null, "gate running since 15:34")]
+    [InlineData(GoalStatus.Verified, false, 2, "waiting for the gate (2nd)")]
+    [InlineData(GoalStatus.AcceptanceFailed, false, null, null)]
+    public void CandidateSummary_OmitsHistoryAndPreservesCurrentLanding(
+        GoalStatus status, bool held, int? position, string? expected)
+    {
+        var goal = Goal(status, held, true);
+        Assert.NotNull(goal.RetainedAcceptanceFailure);
+        var zone = TimeZoneInfo.CreateCustomTimeZone("Test", TimeSpan.FromHours(3), "Test", "Test");
+        Assert.Equal(expected, OwnerConsoleGoalLanding.Line(goal, position, zone, includeFailureHistory: false));
+    }
+
     [Fact]
     public void NoLandingFactsOmitsLine() => Assert.Null(OwnerConsoleGoalLanding.Line(Goal(GoalStatus.Active, false, false), null, TimeZoneInfo.Utc));
 

@@ -5,7 +5,7 @@ namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 internal sealed record OwnerGoalDetailSnapshot(
     Goal Goal, int? LandingQueuePosition, IReadOnlyList<OwnerConductEvent> RecentEvents,
     OwnerConsoleGateProgress? Gate = null, bool GateObserved = false, OwnerConsoleGateEnd? LastGateEnd = null,
-    string? PriorityWarning = null)
+    string? PriorityWarning = null, OwnerGoalChangeSummary? Changes = null)
 {
     internal OwnerGoalDetailSnapshot WithGate(OwnerConsoleGateProgress? observed) => this with
     {

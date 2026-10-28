@@ -37,8 +37,8 @@ public sealed class OwnerGoalDetailQueryTests
         Assert.NotNull(detail);
         Assert.Same(goal, detail.Goal);
         Assert.Equal(ordered.ToList().FindIndex(item => item.Id == goal.Id) + 1, detail.LandingQueuePosition);
-        Assert.Contains("metadata", harness.State.Calls);
-        Assert.Equal(new[] { "goals", "metadata", "goals" }, harness.State.Calls);
+        Assert.Equal(1, harness.State.AcceptanceQueueReadCount);
+        Assert.Equal(new[] { "goals" }, harness.State.Calls);
         Assert.Equal((Id, 100), Assert.Single(tail.Calls));
         Assert.Collection(detail.RecentEvents,
             item => { Assert.Equal(At, item.Timestamp); Assert.Contains("TaskDispatched role=Developer", item.Detail); },
@@ -67,6 +67,7 @@ public sealed class OwnerGoalDetailQueryTests
 
         Assert.NotNull(detail);
         Assert.Null(detail.LandingQueuePosition);
+        Assert.Equal(0, harness.State.AcceptanceQueueReadCount);
         Assert.DoesNotContain("metadata", harness.State.Calls);
         Assert.Equal(new[] { "goals" }, harness.State.Calls);
         Assert.Equal((Id, 100), Assert.Single(tail.Calls));
@@ -83,6 +84,7 @@ public sealed class OwnerGoalDetailQueryTests
             .LoadAsync("44444444444444444444444444444444", CancellationToken.None);
 
         Assert.Null(detail);
+        Assert.Equal(0, harness.State.AcceptanceQueueReadCount);
         Assert.Empty(tail.Calls);
         Assert.Equal(new[] { "goals" }, harness.State.Calls);
         Assert.DoesNotContain("metadata", harness.State.Calls);
