@@ -2040,32 +2040,8 @@ internal static partial class CliPersistentStateRunner
             intakeRecord = reservation.Record;
             if (reservation.Kind == GoalIntakeReservationKind.Replay)
             {
-                var summary = GoalCreationSummaryView.IsRequested(args);
-                if (!summary) GoalIntakeReceiptTextView.PrintGoalIntakeReceipt(reservation.Record);
-                if (reservation.Record.State == GoalIntakeRequestStates.Created)
-                {
-                    var replayKernel = stateRepository.LoadAsync().GetAwaiter().GetResult();
-                    currentGoal = replayKernel.Goals.FirstOrDefault(goal =>
-                        goal.Id.Value.Equals(reservation.Record.GoalId, StringComparison.Ordinal));
-                    if (currentGoal is null)
-                    {
-                        throw new InvalidOperationException(
-                            $"GOAL_INTAKE_RECEIPT_INVALID requestKey={request.RequestKey} reason=created-goal-missing");
-                    }
-                    if (summary)
-                        GoalCreationSummaryView.Print(currentGoal, "replayed", workspace.PortfolioStorePath);
-                    else
-                        GoalTextView.PrintGoal(currentGoal);
-                    return false;
-                }
-                if (summary) GoalCreationSummaryView.PrintProgress(reservation.Record);
-                if (reservation.Record.State == GoalIntakeRequestStates.Failed)
-                {
-                    throw new InvalidOperationException(
-                        $"GOAL_INTAKE_REPLAY_FAILED requestKey={request.RequestKey} " +
-                        $"failureCode={reservation.Record.FailureCode} detail={reservation.Record.FailureDetail}");
-                }
-
+                GoalIntakeReplayReceipt.Print(reservation.Record, request.RequestKey, stateRepository,
+                    workspace.PortfolioStorePath, GoalCreationSummaryView.IsRequested(args), ref currentGoal);
                 return false;
             }
         }

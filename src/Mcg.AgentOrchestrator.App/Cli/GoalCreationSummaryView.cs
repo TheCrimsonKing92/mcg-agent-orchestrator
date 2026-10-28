@@ -24,7 +24,7 @@ internal static class GoalCreationSummaryView
             Console.WriteLine($"Source backlog: {goal.SourceBacklogItemId}");
             Console.WriteLine($"Source backlog coverage: {goal.SourceBacklogCoverage?.ToString().ToLowerInvariant() ?? "legacy-full"}");
         }
-        var membership = CliCommandHandlers.ReadGoalPortfolioMembership(portfolioPath, goal.Id.Value);
+        var membership = GoalPortfolioMembershipReader.Read(portfolioPath, goal.Id.Value);
         if (membership is not null)
         {
             Console.WriteLine($"Epic: {membership.EpicId}");

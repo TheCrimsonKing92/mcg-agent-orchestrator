@@ -6,24 +6,12 @@ using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.App.Rendering;
 using Mcg.AgentOrchestrator.App.SubscriptionPlanning;
 using Mcg.AgentOrchestrator.Infrastructure;
-using Microsoft.Data.Sqlite;
 
 namespace Mcg.AgentOrchestrator.App.Cli;
 
 internal static partial class CliCommandHandlers
 {
 internal const int GoalMarkLandedPromptTimeoutMilliseconds = 10_000;
-
-internal static PortfolioMembership? ReadGoalPortfolioMembership(string path, string goalId)
-{
-    // Served status must not create or upgrade a portfolio store.
-    if (!File.Exists(path)) return null;
-    PortfolioStore store;
-    try { store = PortfolioStore.OpenReadOnly(path); }
-    catch (InvalidOperationException) { return null; } // Open documents missing/non-current schema.
-    catch (SqliteException ex) when (ex.SqliteErrorCode == 14 && !File.Exists(path)) { return null; }
-    return store.GetGoalMembershipAsync(goalId).GetAwaiter().GetResult();
-}
 
 private static readonly Dictionary<string, AgentRole> GoalRoleAgentFlags =
     new Dictionary<string, AgentRole>(StringComparer.OrdinalIgnoreCase)
@@ -931,7 +919,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 ResolveGoalStatusText(context.Workspace, context.CurrentGoal),
                 tasksOnly
                     ? null
-                    : ReadGoalPortfolioMembership(context.Workspace.PortfolioStorePath, context.CurrentGoal.Id.Value),
+                    : GoalPortfolioMembershipReader.Read(context.Workspace.PortfolioStorePath, context.CurrentGoal.Id.Value),
                 tasksOnly);
             if (!tasksOnly)
             {
