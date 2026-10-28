@@ -45,8 +45,8 @@ public sealed class ConductorDriverTestsTesterFindingCategoryRouting
 
         Driver().AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
 
-        // Negative control on unchanged production source: HasEverCommittedOutput ignores the
-        // committed checkpoint, leaving RequiresCommittedTarget true with no explicit target.
+        // Negative control without checkpoint ownership recognition: HasEverCommittedOutput
+        // leaves RequiresCommittedTarget true with no explicit target.
         var retry = Xunit.Assert.Single(retries);
         Xunit.Assert.Equal(developer.Id, retry.Target);
         var repair = retry.Message.Split("## RESIDUAL_OPEN_ACTION_ITEMS")[1].Split("## PRESERVE_ACCEPTED")[0];
@@ -150,6 +150,7 @@ public sealed class ConductorDriverTestsTesterFindingCategoryRouting
         var testerVerification = new TaskVerificationSnapshot(command, directory, 0, testerOutput, "",
             DateTimeOffset.Parse("2026-10-28T00:31:52.4372648Z"), ReviewedCommit: RetainedCandidate,
             MergedReviewFindings: findings, WorkerResultPresent: true,
+            AuthoritativeStandardOutput: testerOutput,
             DispatchStartedAt: DateTimeOffset.Parse("2026-10-28T00:28:32.6392527Z"));
         var (seed, _) = SoftwareGoal();
         var snapshot = seed.ExportSnapshot().Goals.Single();
@@ -176,7 +177,14 @@ public sealed class ConductorDriverTestsTesterFindingCategoryRouting
         }
         var kernel = AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot(
             [snapshot with { Id = goalId, Tasks = tasks, Timeline = [] }], []));
-        return (kernel, kernel.GetGoal(new GoalId(goalId)));
+        var goal = kernel.GetGoal(new GoalId(goalId));
+        var tester = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Tester);
+        // Restored subscription reports require authoritative stdout before finding routing.
+        // A preview alone is unreadable and would exercise only terminal escalation.
+        Xunit.Assert.Equal(testerOutput, tester.LastVerification!.AuthoritativeStandardOutput);
+        Xunit.Assert.Equal(VerificationTerminalContractStatus.Valid,
+            WorkerResultBlockers.AssessSubscriptionVerification(tester, tester.LastVerification).Status);
+        return (kernel, goal);
     }
 
     private static ReviewFinding[] RetainedFindings() =>
