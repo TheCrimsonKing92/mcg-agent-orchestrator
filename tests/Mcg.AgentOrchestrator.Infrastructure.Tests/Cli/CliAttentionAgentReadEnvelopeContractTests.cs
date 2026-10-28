@@ -107,6 +107,15 @@ public sealed class CliAttentionAgentReadEnvelopeContractTests : CliTaskQueryTes
         Assert.Equal("2026-10-06T00:00:00.0000000Z", row.GetProperty("requestedAt").GetString());
     }
 
+    [Fact]
+    public void EmptyViewsPinOrdinaryBytesAndExplicitSummaryOmission()
+    {
+        Assert.Equal("{\"schema\":\"mcg.attention\",\"schemaVersion\":1,\"generatedAt\":\"2026-10-06T00:00:00.0000000Z\",\"payload\":{\"waits\":[],\"gateEvidence\":[],\"items\":[],\"providerHolds\":[],\"ownerQuestionHolds\":[]}}",
+            AttentionAgentReadView.Render([], [], new FixedTimeProvider()));
+        Assert.Equal("{\"schema\":\"mcg.attention-summary\",\"schemaVersion\":1,\"generatedAt\":\"2026-10-06T00:00:00.0000000Z\",\"omittedSections\":[\"gateEvidence\"],\"payload\":{\"waits\":[],\"items\":[],\"providerHolds\":[],\"ownerQuestionHolds\":[]}}",
+            AttentionAgentReadView.RenderSummary([], [], new FixedTimeProvider()));
+    }
+
     private static JsonElement AssertEnvelope(JsonElement envelope)
     {
         Assert.Equal(new[] { "schema", "schemaVersion", "generatedAt", "payload" },

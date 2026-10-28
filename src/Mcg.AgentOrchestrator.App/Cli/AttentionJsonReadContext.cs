@@ -11,9 +11,14 @@ internal sealed record AttentionJsonReadContext(
 {
     internal static async Task<AttentionJsonReadContext> ReadAsync(IOrchestratorStateQueries queries,
         OrchestratorWorkspace workspace, DateTimeOffset now, CancellationToken cancellationToken = default)
+        => await ReadAsync(queries, workspace, now, new AttentionProjectionReadOptions(), cancellationToken);
+
+    internal static async Task<AttentionJsonReadContext> ReadAsync(IOrchestratorStateQueries queries,
+        OrchestratorWorkspace workspace, DateTimeOffset now, AttentionProjectionReadOptions options,
+        CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        var projection = await queries.ReadAttentionProjectionAsync(cancellationToken);
+        var projection = await queries.ReadAttentionProjectionAsync(options, cancellationToken);
         var itemsDb = Path.Combine(workspace.OrchestratorDirectory, "collaboration-items.db");
         IReadOnlyList<CollaborationItem> items = File.Exists(itemsDb)
             ? await CollaborationItemStore.OpenExisting(workspace.OrchestratorDirectory)
@@ -27,7 +32,7 @@ internal sealed record AttentionJsonReadContext(
             var fallbackIds = metadata.Select(goal => new GoalId(goal.Id)).ToArray();
             var baseline = fallbackIds.Length == 0 ? new AgentOrchestratorKernel()
                 : await queries.LoadGoalsAsync(fallbackIds, cancellationToken);
-            return FromKernel(baseline, items, now);
+            return FromKernel(baseline, items, now, options);
         }
 
         var facts = projection.Goals.ToDictionary(goal => goal.GoalId, StringComparer.OrdinalIgnoreCase);
@@ -50,20 +55,21 @@ internal sealed record AttentionJsonReadContext(
         cancellationToken.ThrowIfCancellationRequested();
         var result = new AttentionJsonReadContext(CliCommandHandlers.HumanWaitsForAttention(kernel, null, includeHistory: false),
             CliCommandHandlers.CollaborationItemsForAttention(items, kernel, null, includeHistory: false),
-            ProviderUsageHoldView.ReadEvidence(projection.ProviderEvidence, now, kernel.Goals), projection.GateEvidence,
+            ProviderUsageHoldView.ReadEvidence(projection.ProviderEvidence, now, kernel.Goals),
+            options.IncludeGateEvidence ? projection.GateEvidence : [],
             projection.OwnerQuestions.Select(ReadOwnerQuestion).ToArray());
         cancellationToken.ThrowIfCancellationRequested();
         return result;
     }
 
     private static AttentionJsonReadContext FromKernel(AgentOrchestratorKernel kernel,
-        IReadOnlyList<CollaborationItem> items, DateTimeOffset now) => new(
+        IReadOnlyList<CollaborationItem> items, DateTimeOffset now, AttentionProjectionReadOptions options) => new(
         CliCommandHandlers.HumanWaitsForAttention(kernel, null, includeHistory: false),
         CliCommandHandlers.CollaborationItemsForAttention(items, kernel, null, includeHistory: false),
         ProviderUsageHoldView.Read(kernel.Goals, now),
-        kernel.Goals.SelectMany(goal => goal.GateTestObligations
+        options.IncludeGateEvidence ? kernel.Goals.SelectMany(goal => goal.GateTestObligations
             .Where(item => item.BriefVersion == goal.AuthoritativeBrief.Version)
-            .Select(item => new AttentionGateEvidence(goal.Id.Value, item))).ToArray(),
+            .Select(item => new AttentionGateEvidence(goal.Id.Value, item))).ToArray() : [],
         kernel.Goals.Where(goal => goal.Status is not (GoalStatus.Completed or GoalStatus.Cancelled or GoalStatus.Superseded))
             .Select(OwnerQuestionHoldBlocker.TryRead).OfType<OwnerQuestionHoldBlocker>().ToArray());
 
