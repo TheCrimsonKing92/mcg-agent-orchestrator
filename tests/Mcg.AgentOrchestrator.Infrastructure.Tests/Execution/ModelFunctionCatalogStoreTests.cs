@@ -6,6 +6,26 @@ public sealed class ModelFunctionCatalogStoreTests
     [Xunit.Theory]
     [Xunit.InlineData(false)]
     [Xunit.InlineData(true)]
+    public void Author_fallback_roundtrips_and_normalizes_its_own_provider(bool backup)
+    {
+        var path = Path.Combine(CreateTempDirectory(), "model-functions.json");
+        var binding = new ModelFunctionBinding(ModelFunctionPurposes.ConductorAuthor, ModelLane.Capable,
+            new ModelProfile("Anthropic", "sonnet", ModelCapability.Text, SubscriptionMode.ApiKey),
+            Subscription: new("claude-cli", "sonnet"), SubscriptionFallback: new("codex-cli", "gpt-6-sol", "high"));
+        ModelFunctionCatalogStore.Save(path, new([binding]));
+        if (backup)
+        {
+            ModelFunctionCatalogStore.Save(path, ModelFunctionCatalog.Empty);
+            File.WriteAllText(path, "{corrupt}");
+        }
+        var restored = Assert.Single(ModelFunctionCatalogStore.Load(path).Bindings);
+        Assert.Equal(binding with { SubscriptionFallback = new("codex-cli", "gpt-6.1-sol", "high") }, restored);
+        Assert.Equal(binding.Subscription, restored.Subscription);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
     public void RetirementNormalizesPrimaryAndBackupBindingsWithoutChangingIdentity(bool backup)
     {
         var path = Path.Combine(CreateTempDirectory(), "model-functions.json");
