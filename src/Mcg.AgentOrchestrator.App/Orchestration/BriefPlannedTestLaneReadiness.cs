@@ -119,10 +119,13 @@ internal static class BriefPlannedTestLaneReadiness
         // Only the introducing clause declares new work. A preceding purpose clause may describe
         // existing behavior, while arbitrary prose or executable arguments do not declare anything.
         var clauses = Regex.Split(prefix, @"[,;.!?]\s+", Options);
-        // Command syntax retains its argument context across punctuation. Ordinary preceding
-        // prose does not restrict which affirmative local clause can introduce new work.
+        // Command syntax retains its argument context across punctuation, including shell wrappers.
+        // A hyphenated prose word alone is not command evidence: require an argument-shaped
+        // clause (one bare argument, or explicit switches/quoting) for an otherwise unknown command.
         if (Regex.IsMatch(clauses[0],
-                @"^\s*(?:echo\b|[\w./\\-]*[-./\\][\w./\\-]*(?=\s|$))", Options))
+                @"^\s*(?:echo\b|cmd(?:\.exe)?\s+/(?:c|k)(?=\s|$)|[\w./\\-]*[./\\][\w./\\-]*(?=\s|$))", Options) ||
+            Regex.IsMatch(clauses[0],
+                @"^\s*[\w-]+-[\w-]+\s+(?:\S+\s*$|(?:.*\s)?(?:--?\w|/[A-Za-z]|[""']))", Options))
             return false;
         var context = clauses[^1];
         context = Regex.Replace(context, @"\bnew\s+(?:(?:test|source|class|file)\s+)*[`'""]?$", "", Options).Trim();

@@ -123,6 +123,8 @@ public sealed class BriefPlannedTestLaneReadinessTests
     [InlineData("production-update-path-prefix")]
     [InlineData("production-fix-prefix")]
     [InlineData("production-refactor-path-prefix")]
+    [InlineData("production-reenable-prefix")]
+    [InlineData("production-reenable-path-prefix")]
     [InlineData("negated-membership-work")]
     [InlineData("never-membership-work")]
     [InlineData("must-not-membership-work")]
@@ -149,6 +151,8 @@ public sealed class BriefPlannedTestLaneReadinessTests
             "production-update-path-prefix" => "Update production widget handling; add new tests/Widget.Tests/BuildWidgetTests.cs.",
             "production-fix-prefix" => "Fix production widget handling; add new test class BuildWidgetTests.",
             "production-refactor-path-prefix" => "Refactor production widget handling; add new tests/Widget.Tests/BuildWidgetTests.cs.",
+            "production-reenable-prefix" => "Re-enable production widget handling; add new test class BuildWidgetTests.",
+            "production-reenable-path-prefix" => "Re-enable production widget handling; add new tests/Widget.Tests/BuildWidgetTests.cs.",
             "negated-membership-work" => "Add new test class BuildWidgetTests; " + Plan.Replace("update the pinned", "do not update the pinned"),
             "never-membership-work" => "Add new test class BuildWidgetTests; " + Plan.Replace("update the pinned", "never update the pinned"),
             "must-not-membership-work" => "Add new test class BuildWidgetTests; " + Plan.Replace("update the pinned", "must not update the pinned"),
@@ -302,6 +306,10 @@ public sealed class BriefPlannedTestLaneReadinessTests
     [InlineData("raw-action-command")]
     [InlineData("raw-semicolon-action")]
     [InlineData("raw-custom-semicolon-path")]
+    [InlineData("raw-cmd-comma-class")]
+    [InlineData("raw-cmd-comma-path")]
+    [InlineData("raw-cmd-exe-comma-class")]
+    [InlineData("raw-custom-switches")]
     public void CommandContents_DoNotBlockDeveloperPreparation(string kind)
     {
         var scope = kind switch
@@ -324,6 +332,10 @@ public sealed class BriefPlannedTestLaneReadinessTests
             "raw-action-command" => "Add-Content ignored, new test class BuildWidgetTests.",
             "raw-semicolon-action" => "echo ignored; add new test class BuildWidgetTests.",
             "raw-custom-semicolon-path" => "custom-command ignored; add new tests/Widget.Tests/BuildWidgetTests.cs.",
+            "raw-cmd-comma-class" => "cmd /c echo ignored, add new test class BuildWidgetTests.",
+            "raw-cmd-comma-path" => "cmd /c echo ignored, add new tests/Widget.Tests/BuildWidgetTests.cs.",
+            "raw-cmd-exe-comma-class" => "cmd.exe /c echo ignored, add new test class BuildWidgetTests.",
+            "raw-custom-switches" => "custom-command --message ignored text, add new test class BuildWidgetTests.",
             _ => throw new ArgumentException(kind)
         };
         using var fixture = new Fixture(scope);
