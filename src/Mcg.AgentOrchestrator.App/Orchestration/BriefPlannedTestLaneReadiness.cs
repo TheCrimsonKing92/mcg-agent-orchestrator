@@ -27,8 +27,9 @@ internal static class BriefPlannedTestLaneReadiness
         try
         {
             var declarations = Declare(lines, repositoryRoot);
-            // Ordinary manifest-optional readiness stays optional. An explicit test proposal needs real lane inputs.
-            if (declarations.Count == 0 && projectHomeDirectory is null && !File.Exists(manifestPath)) return [];
+            // Project ownership selects the manifest location; it does not make a docs-only goal require one.
+            // Existing manifests are still validated, and explicit test proposals require real lane inputs.
+            if (declarations.Count == 0 && !File.Exists(manifestPath)) return [];
             if (!File.Exists(manifestPath))
                 throw new MissingAcceptanceManifestException(
                     AcceptanceManifestLocator.SearchedLocations(repositoryRoot, projectHomeDirectory));

@@ -17,6 +17,46 @@ public sealed class BriefPlannedTestLaneReadinessTests
         "to FullyQualifiedName~BuildWidgetTests and update the pinned membership test.";
 
     [Theory]
+    [InlineData(false, "profile")]
+    [InlineData(true, "profile")]
+    [InlineData(false, "subscription")]
+    [InlineData(true, "subscription")]
+    public void NoTestDeclarations_MissingManifestDoesNotPreventDeveloperPreparation(bool projectScoped, string route)
+    {
+        using var fixture = new Fixture("Inspect docs/project.md and summarize.");
+        File.Delete(fixture.ManifestPath);
+        var projectHome = projectScoped ? Path.Combine(fixture.Root, "project-home") : null;
+        if (projectHome is not null) Directory.CreateDirectory(projectHome);
+        var workspace = projectHome is null ? fixture.Workspace
+            : fixture.Workspace with { IsProjectScoped = true, OrchestratorDirectory = projectHome };
+        Assert.False(File.Exists(AcceptanceManifestLocator.Resolve(fixture.Root, projectHome)));
+        var report = fixture.Readiness(projectHome);
+        Assert.True(report.AllowsStart(false));
+        Assert.DoesNotContain(report.Findings,
+            item => item.Kind is BriefPlannedTestLaneReadiness.ConfigurationKind or LaneSubstringCollisionCheck.Rule);
+
+        var preparationCalls = 0;
+        var operations = new GoalDispatchOperations(resolveHome: _ =>
+        {
+            preparationCalls++;
+            throw new InvalidOperationException("Admitted to preparation.");
+        });
+        var failure = Assert.Throws<InvalidOperationException>(() =>
+        {
+            if (route == "subscription")
+                operations.SubscriptionDispatchTask(fixture.Kernel, workspace, fixture.Goal,
+                    fixture.Developer, fixture.Agents, new WorkerProfileCatalog([fixture.Profile]));
+            else
+                operations.ProfileDispatchTask(fixture.Kernel, workspace, fixture.Goal,
+                    fixture.Developer, fixture.Profile);
+        });
+        Assert.Equal(1, preparationCalls);
+        Assert.Equal("Admitted to preparation.", failure.Message);
+        Assert.Null(fixture.Developer.LastDispatch);
+        Assert.Null(fixture.Developer.LastProcess);
+    }
+
+    [Theory]
     [InlineData("new test class BuildWidgetTests")]
     [InlineData("new test class Example.BuildWidgetTests")]
     [InlineData("new test class Widget.Historical.BuildWidgetTests")]
@@ -506,14 +546,14 @@ public sealed class BriefPlannedTestLaneReadinessTests
     }
 
     [Theory]
-    [InlineData("missing")]
-    [InlineData("invalid-json")]
-    [InlineData("invalid-filter")]
-    [InlineData("duplicate-lane")]
-    [InlineData("unreadable")]
-    public void InvalidTargetConfiguration_BlocksWithoutHomeSubstitution(string kind)
+    [InlineData("missing", true)]
+    [InlineData("invalid-json", false)]
+    [InlineData("invalid-filter", false)]
+    [InlineData("duplicate-lane", false)]
+    [InlineData("unreadable", false)]
+    public void InvalidTargetConfiguration_BlocksWithoutHomeSubstitution(string kind, bool proposesTest)
     {
-        using var fixture = new Fixture("No proposed test declarations.");
+        using var fixture = new Fixture(proposesTest ? "new test class " + Name : "No proposed test declarations.");
         using var home = new Fixture("new test class " + Name);
         var projectHome = Path.Combine(fixture.Root, "project-home");
         Directory.CreateDirectory(projectHome);
