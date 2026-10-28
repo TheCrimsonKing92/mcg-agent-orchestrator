@@ -162,13 +162,14 @@ public sealed class OwnerConsoleGoalChangeSummaryTests
             var reads = 0;
             var summary = new OwnerGoalChangeSummaryQuery(
                 promotion: (_, _) => Task.FromResult<GoalPromotionFact?>(scenario == "landed" ? Promotion(goal) : null),
-                acceptance: (id, candidate, landed, token) =>
+                acceptance: async (id, candidate, landed, token) =>
                 {
                     reads++;
                     Assert.Equal(goal.Id, id);
                     Assert.Equal(Candidate, candidate);
                     if (scenario == "landed") Assert.Equal(Basis, landed!.PriorMainRevision);
-                    return GoalOperationJournal.ReadNewestAcceptanceOutcomeAsync(path, id, candidate, Basis, token);
+                    return new OwnerGoalAcceptanceEvidence(Basis,
+                        await GoalOperationJournal.ReadNewestAcceptanceOutcomeAsync(path, id, candidate, Basis, token));
                 });
             var queries = new Queries(goal);
             var detailQuery = new OwnerGoalDetailQuery(queries, new EmptyTail(), summary: summary);
@@ -212,8 +213,9 @@ public sealed class OwnerConsoleGoalChangeSummaryTests
         {
             var path = Path.Combine(directory, "run-events.db");
             var store = new SqliteRunEventStore(path);
-            var summary = new OwnerGoalChangeSummaryQuery(acceptance: (id, candidate, _, token) =>
-                GoalOperationJournal.ReadNewestAcceptanceOutcomeAsync(path, id, candidate, Basis, token));
+            var summary = new OwnerGoalChangeSummaryQuery(acceptance: async (id, candidate, _, token) =>
+                new OwnerGoalAcceptanceEvidence(Basis,
+                    await GoalOperationJournal.ReadNewestAcceptanceOutcomeAsync(path, id, candidate, Basis, token)));
             var query = new OwnerGoalDetailQuery(new Queries(goal), new EmptyTail(), summary: summary);
             async Task AssertRenderedAsync(string state)
             {
@@ -248,13 +250,135 @@ public sealed class OwnerConsoleGoalChangeSummaryTests
         var entry = new GoalOperationJournalEntry("acceptance-event", goal.Id, "acceptance",
             outcome == "passed" ? GoalOperationStatus.Completed : GoalOperationStatus.Aborted,
             At.AddMinutes(3), "full gate", Candidate, Basis, outcome);
-        var summary = new OwnerGoalChangeSummaryQuery(acceptance: (_, _, _, _) => Task.FromResult<GoalOperationJournalEntry?>(entry));
+        var summary = new OwnerGoalChangeSummaryQuery(acceptance: (_, _, _, _) =>
+            Task.FromResult(new OwnerGoalAcceptanceEvidence(Basis, entry)));
         var detail = await new OwnerGoalDetailQuery(new Queries(goal), new EmptyTail(), summary: summary).LoadAsync(goal.Id.Value, Token);
         var output = new OwnerConsoleCapturedOutput();
         OwnerConsoleGoalDetailFormatter.Render(detail!, output, TimeZoneInfo.Utc);
         Assert.Contains("Verified: " + (failed ? "failed" : "pending"), output.Text);
         Assert.DoesNotContain("Verified: passed", output.Text);
         Assert.Contains("Full acceptance: " + outcome, output.Text);
+    }
+
+    [Theory]
+    [InlineData(AgentRole.Tester, false)]
+    [InlineData(AgentRole.Reviewer, false)]
+    [InlineData(AgentRole.Tester, true)]
+    [InlineData(AgentRole.Reviewer, true)]
+    public async Task ReadOnlyDispatch_PreservesOnlyMatchingContributingRange(AgentRole role, bool advanced)
+    {
+        var original = Fixture("changed").ToSnapshot();
+        var candidate = advanced ? Next : Candidate;
+        var readOnly = original.Tasks.Single(task => task.RequiredRole == AgentRole.Developer) with
+        {
+            Id = TaskId.New().Value, RequiredRole = role, Status = WorkTaskStatus.Completed,
+            LastVerification = null, VerificationHistory = null, DispatchHistory = null,
+            LastDispatch = new("reader", "reader", "read-only-artifact", At.AddMinutes(2),
+                BaseCommit: candidate, ResultCommit: candidate)
+        };
+        var goal = new TestGoal(original with { Tasks = [.. original.Tasks, readOnly] });
+        var reads = new List<(string Base, string Candidate)>();
+        var query = new OwnerGoalChangeSummaryQuery(changes: (basis, head, _) =>
+        {
+            reads.Add((basis, head));
+            // Model the real empty result for HEAD..HEAD; the pre-fix selection loses the file.
+            return Task.FromResult(basis == head ? new CommittedGoalChanges(true, [], 0) :
+                new CommittedGoalChanges(true, ["M src/Feature.cs"], 1));
+        });
+        var (preview, detail) = await RenderSelectedGoalAsync(goal, query);
+        Assert.Equal(new[] { (advanced ? Next : Basis, candidate) }, reads);
+        Assert.Contains("Candidate: " + candidate, detail);
+        Assert.Contains("Git " + (advanced ? Next : Basis) + ".." + candidate, detail);
+        var expected = advanced ? "Changed: observed empty committed range" : "Changed: observed 1 files";
+        Assert.Contains(expected, preview);
+        Assert.Contains(expected, detail);
+        if (advanced) Assert.DoesNotContain("M src/Feature.cs", detail);
+        else
+        {
+            Assert.Contains("M src/Feature.cs", preview);
+            Assert.Contains("M src/Feature.cs", detail);
+            Assert.Contains("latest contributing dispatch range, not whole-goal coverage", detail);
+        }
+    }
+
+    [Theory]
+    [InlineData("current", "failed")]
+    [InlineData("stale-main", "pending")]
+    [InlineData("stale-candidate", "pending")]
+    [InlineData("unknown-main", "pending")]
+    [InlineData("main-unavailable", "pending")]
+    [InlineData("current-pass", "passed")]
+    [InlineData("landed", "failed")]
+    public async Task RetainedFailure_RequiresExpectedMainInPreviewAndDetail(string scenario, string expected)
+    {
+        var original = Fixture("changed").ToSnapshot();
+        var retainedCandidate = scenario == "stale-candidate" ? Next : Candidate;
+        var retainedMain = scenario == "unknown-main" ? null : scenario is "stale-main" or "current-pass" ? Next : Basis;
+        var goal = new TestGoal(original with
+        {
+            LatestAcceptanceFailure = new(At.AddMinutes(4), ["retained-check"], retainedCandidate, retainedMain)
+        });
+        Assert.NotNull(((Goal)goal).RetainedAcceptanceFailure);
+        var root = SharedTestSupport.CreateTempDirectory();
+        try
+        {
+            var path = Path.Combine(root, "run-events.db");
+            var store = new SqliteRunEventStore(path);
+            await AppendAcceptanceAsync(store, goal.Id, "failed", retainedCandidate, retainedMain ?? Next);
+            if (scenario == "current-pass") await AppendAcceptanceAsync(store, goal.Id, "passed", Candidate, Basis);
+            var reads = 0;
+            var query = new OwnerGoalChangeSummaryQuery(
+                promotion: (_, _) => Task.FromResult<GoalPromotionFact?>(scenario == "landed" ? Promotion(goal) : null),
+                acceptance: async (id, candidate, landed, token) =>
+                {
+                    reads++;
+                    Assert.Equal(goal.Id, id); Assert.Equal(Candidate, candidate);
+                    if (scenario == "main-unavailable") throw new IOException("Integration revision unavailable.");
+                    var main = landed?.PriorMainRevision ?? Basis;
+                    return new OwnerGoalAcceptanceEvidence(main,
+                        await GoalOperationJournal.ReadNewestAcceptanceOutcomeAsync(path, id, candidate, main, token));
+                });
+            var (preview, detail) = await RenderSelectedGoalAsync(goal, query);
+            Assert.Equal(2, reads);
+            Assert.Contains("Verified: " + expected, preview);
+            Assert.Contains("Verified: " + expected, detail);
+            if (expected == "failed") Assert.Contains("retained-check", detail);
+            else
+            {
+                Assert.DoesNotContain("Verified: failed", detail);
+                Assert.DoesNotContain("retained-check", detail);
+            }
+            if (scenario is "stale-main" or "current-pass")
+            {
+                Assert.Contains("Retained acceptance failure superseded", detail);
+                Assert.Contains("recorded main " + Next + "; expected main " + Basis, detail);
+            }
+            if (scenario == "main-unavailable") Assert.Contains("Retained acceptance failure applicability unavailable", detail);
+            if (scenario == "landed") Assert.Contains("Promotion: landed", detail);
+        }
+        finally { SharedTestSupport.RemoveTempDirectory(root); }
+    }
+
+    private static async Task<(string Preview, string Detail)> RenderSelectedGoalAsync(
+        TestGoal goal, OwnerGoalChangeSummaryQuery summary)
+    {
+        var queries = new Queries(goal);
+        var detailQuery = new OwnerGoalDetailQuery(queries, new EmptyTail(), summary: summary);
+        var harness = new OwnerConsoleHarness();
+        var dialogs = new Dialogs();
+        using var controller = Controller(harness, dialogs, detailQuery);
+        using IApplication app = Terminal.Gui.App.Application.Create();
+        using var view = new OwnerConsoleFullScreenView(app, controller, () => Task.CompletedTask);
+        view.Render(Model(goal));
+        view.Window.Layout(new Size(100, 40));
+        await view.PreviewLoad.WaitAsync(Token);
+        var preview = view.PreviewText;
+        await view.HandleKeyAsync(Key.Tab);
+        await view.HandleKeyAsync(Key.Enter);
+        Assert.Equal(new[] { goal.Id.Value, goal.Id.Value }, queries.ReadIds);
+        Assert.Equal(0, queries.MetadataReads);
+        Assert.Empty(harness.Answers.Calls); Assert.Empty(harness.Conductor.Calls);
+        return (preview, Assert.Single(dialogs.Texts));
     }
 
     private static Task<RunEventRecord> AppendAcceptanceAsync(SqliteRunEventStore store, GoalId id,

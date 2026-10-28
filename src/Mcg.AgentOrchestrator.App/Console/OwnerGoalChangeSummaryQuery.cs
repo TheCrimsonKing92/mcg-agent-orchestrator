@@ -7,12 +7,15 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 
+// Preserve the applicability basis even when no acceptance event matches it.
+internal sealed record OwnerGoalAcceptanceEvidence(string MainRevision, GoalOperationJournalEntry? Outcome);
+
 // Selected-goal composition only. No worker polling, provider calls, writes, or peer snapshots.
 internal sealed class OwnerGoalChangeSummaryQuery(
     Func<string, CancellationToken, Task<GoalPromotionFact?>>? promotion = null,
     Func<string, string, CancellationToken, Task<CommittedGoalChanges>>? changes = null,
     Func<TaskVerificationRecord, CancellationToken, Task<string?>>? artifact = null,
-    Func<GoalId, string, GoalPromotionFact?, CancellationToken, Task<GoalOperationJournalEntry?>>? acceptance = null)
+    Func<GoalId, string, GoalPromotionFact?, CancellationToken, Task<OwnerGoalAcceptanceEvidence>>? acceptance = null)
 {
     internal const int MaxArtifactBytes = 1_056_000;
     private readonly object _cacheGate = new();
@@ -42,8 +45,8 @@ internal sealed class OwnerGoalChangeSummaryQuery(
             }
             token.ThrowIfCancellationRequested();
             if (!FullRevision(main)) throw new InvalidDataException("Integration revision unavailable.");
-            return await GoalOperationJournal.ReadNewestAcceptanceOutcomeAsync(
-                workspace.RunEventStorePath, id, candidate, main, token);
+            return new OwnerGoalAcceptanceEvidence(main, await GoalOperationJournal.ReadNewestAcceptanceOutcomeAsync(
+                workspace.RunEventStorePath, id, candidate, main, token));
         }, token));
 
     internal async Task<OwnerGoalChangeSummary> LoadAsync(Goal goal, CancellationToken token)
@@ -57,12 +60,19 @@ internal sealed class OwnerGoalChangeSummaryQuery(
         if (landed is not null && landed.GoalId != goal.Id.Value)
         { landed = null; promotionFailure = "mismatched goal identity"; }
 
-        var dispatch = goal.Tasks.SelectMany(task => task.DispatchHistory)
-            .Where(item => FullRevision(item.ResultCommit)).OrderByDescending(item => item.DispatchedAt).FirstOrDefault();
+        var dispatches = goal.Tasks.SelectMany(task => task.DispatchHistory)
+            .Where(item => FullRevision(item.ResultCommit)).OrderByDescending(item => item.DispatchedAt).ToArray();
+        var dispatch = dispatches.FirstOrDefault();
         var candidate = landed is not null && (dispatch is null || dispatch.DispatchedAt <= landed.PromotedAt)
             ? landed.CandidateRevision : dispatch?.ResultCommit;
         candidate ??= FullRevision(goal.MetadataResultCommit) ? goal.MetadataResultCommit : null;
-        var basis = landed is not null && landed.CandidateRevision == candidate ? landed.PriorMainRevision : dispatch?.BaseCommit;
+        // Read-only completions also record HEAD. Keep their current candidate identity, but
+        // prefer a contributing range ending at that candidate over a later HEAD..HEAD range.
+        var contributing = dispatches.FirstOrDefault(item =>
+            string.Equals(item.ResultCommit, candidate, StringComparison.OrdinalIgnoreCase) && FullRevision(item.BaseCommit) &&
+            !string.Equals(item.BaseCommit, candidate, StringComparison.OrdinalIgnoreCase));
+        var promotionRange = landed is not null && landed.CandidateRevision == candidate;
+        var basis = promotionRange ? landed!.PriorMainRevision : contributing?.BaseCommit ?? dispatch?.BaseCommit;
         var planned = await PlannedAsync(goal, token);
         var observed = new OwnerGoalSummarySection("unavailable — no committed comparison", [], "recorded dispatch/promotion identities");
         if (candidate is not null && FullRevision(basis) && changes is not null)
@@ -81,7 +91,7 @@ internal sealed class OwnerGoalChangeSummaryQuery(
                 observed = facts.Available
                     ? new(facts.TotalFiles == 0 ? "observed empty committed range" : $"observed {facts.TotalFiles} files (file scope: {FileAreas(facts.Files)})",
                         facts.Files.Take(20).Select(BoundItem).ToArray(),
-                        $"Git {basis}..{candidate}; " + (landed is null ? "latest dispatch range, not whole-goal coverage" : "promotion range"),
+                        $"Git {basis}..{candidate}; " + (promotionRange ? "promotion range" : "latest contributing dispatch range, not whole-goal coverage"),
                         Math.Max(0, facts.TotalFiles - 20), facts.Files.Take(20).Where(item => item.Length > 360).ToArray())
                     : new("unavailable — " + facts.Reason, [], $"Git {basis}..{candidate}");
                 // Retry an unavailable observation on the next refresh; never cache it as an empty diff.
@@ -195,13 +205,19 @@ internal sealed class OwnerGoalChangeSummaryQuery(
         GoalPromotionFact? landed, CancellationToken token)
     {
         GoalOperationJournalEntry? outcome = null;
+        string? expectedMain = null;
         string? unavailable = null;
         try
         {
             if (candidate is not null && acceptance is not null)
-                outcome = await acceptance(goal.Id, candidate, landed, token).WaitAsync(token);
+            {
+                var evidence = await acceptance(goal.Id, candidate, landed, token).WaitAsync(token);
+                if (!FullRevision(evidence.MainRevision)) throw new InvalidDataException("Integration revision unavailable.");
+                expectedMain = evidence.MainRevision;
+                outcome = evidence.Outcome;
+            }
             if (outcome is not null && (outcome.GoalId != goal.Id ||
-                !string.Equals(outcome.BranchHeadSha, candidate, StringComparison.OrdinalIgnoreCase) || !outcome.HasCandidatePair))
+                !outcome.HasCandidate(candidate!, expectedMain!)))
             { outcome = null; unavailable = "mismatched acceptance identity"; }
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
@@ -230,11 +246,18 @@ internal sealed class OwnerGoalChangeSummaryQuery(
             lines.AddRange((outcome.FailedCheckNames ?? []).Take(5).Select(BoundItem));
         }
         if (unavailable is not null) lines.Add("Acceptance evidence unavailable — " + unavailable);
-        if (candidate is not null && goal.RetainedAcceptanceFailure is { } failure && failure.BranchHeadSha == candidate &&
+        if (candidate is not null && goal.RetainedAcceptanceFailure is { } failure &&
+            string.Equals(failure.BranchHeadSha, candidate, StringComparison.OrdinalIgnoreCase) &&
             (outcome is null || failure.OccurredAt > outcome.At))
         {
-            state = "failed — recorded acceptance (main " + (failure.MainHeadSha ?? "unknown") + ")";
-            lines.AddRange(failure.FailedChecks.Take(5).Select(BoundItem));
+            if (expectedMain is not null && string.Equals(failure.MainHeadSha, expectedMain, StringComparison.OrdinalIgnoreCase))
+            {
+                state = "failed — recorded acceptance (main " + failure.MainHeadSha + ")";
+                lines.AddRange(failure.FailedChecks.Take(5).Select(BoundItem));
+            }
+            else
+                lines.Add("Retained acceptance failure " + (expectedMain is null ? "applicability unavailable" : "superseded") +
+                    "; recorded main " + (failure.MainHeadSha ?? "unknown") + "; expected main " + (expectedMain ?? "unavailable"));
         }
         if (obligations.Any(item => item.Owner == CriterionEvidenceOwner.Operator && !item.HasSatisfiedEvidenceFor(candidate)))
             lines.Add("Operator obligation outstanding");
