@@ -5,9 +5,9 @@ using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Microsoft.Data.Sqlite;
 
-// The qualified name carries the existing SQLite acceptance-lane selector. All roots and
-// connections are fixture-owned; use the SQLite suite's existing collection, without manifests.
-namespace Mcg.AgentOrchestrator.Tests.SqliteOrchestratorStateRepositoryTests;
+// All roots and connections are fixture-owned. Retain the SQLite suite's isolation collection;
+// the distinct qualified name lets the default Remainder lane select this class.
+namespace Mcg.AgentOrchestrator.Tests;
 
 [Collection(TestCollections.EnvMutation)]
 public sealed class SqliteAttentionProjectionTests
