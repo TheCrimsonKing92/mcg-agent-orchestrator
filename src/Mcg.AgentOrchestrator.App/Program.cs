@@ -289,7 +289,8 @@ if (CliExecutorScreenCommand.IsCommand(startupArgs))
 }
 
 if (Mcg.AgentOrchestrator.App.OwnerConsole.OwnerConsoleVerb.IsCommand(startupArgs))
-    return ExitCompletedStartupCommand(await Mcg.AgentOrchestrator.App.OwnerConsole.OwnerConsoleVerb.RunAsync(startupArgs, workspace));
+    return ExitCompletedStartupCommand(await Mcg.AgentOrchestrator.App.OwnerConsole.OwnerConsoleVerb.RunAsync(startupArgs, workspace,
+        owners: Mcg.AgentOrchestrator.App.OwnerConsole.OwnerConsoleHostRowOwner.FromRegistry(repoRoot, projectRegistry)));
 if (CliOperatorIntentRoute.IsServed(startupArgs))
     return ExitCompletedStartupCommand(CliOperatorIntentRoute.Run(startupArgs, workspace));
 

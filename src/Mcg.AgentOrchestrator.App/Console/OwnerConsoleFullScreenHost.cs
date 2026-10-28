@@ -18,14 +18,14 @@ internal static class OwnerConsoleFullScreenHost
     }
 
     internal static async Task<int> RunAsync(OrchestratorWorkspace workspace, CancellationToken cancellationToken,
-        string? inputTracePath = null)
+        string? inputTracePath = null, OwnerConsoleHostRowOwner? owners = null)
     {
-        if (inputTracePath is null) return await RunCoreAsync(workspace, cancellationToken, null);
+        if (inputTracePath is null) return await RunCoreAsync(workspace, cancellationToken, null, owners);
         try
         {
             using var destination = OwnerConsoleInputTraceOptions.OpenDestination(inputTracePath);
             var diagnostics = new OwnerConsoleInputDiagnostics();
-            var result = await RunCoreAsync(workspace, cancellationToken, diagnostics);
+            var result = await RunCoreAsync(workspace, cancellationToken, diagnostics, owners);
             // RunCoreAsync has disposed the application and restored the terminal before export.
             diagnostics.Export(destination);
             return result;
@@ -38,7 +38,7 @@ internal static class OwnerConsoleFullScreenHost
     }
 
     private static async Task<int> RunCoreAsync(OrchestratorWorkspace workspace, CancellationToken cancellationToken,
-        OwnerConsoleInputDiagnostics? diagnostics)
+        OwnerConsoleInputDiagnostics? diagnostics, OwnerConsoleHostRowOwner? owners)
     {
         var clock = TimeProvider.System;
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -76,7 +76,7 @@ internal static class OwnerConsoleFullScreenHost
                 Path.Combine(workspace.RootDirectory, "config", "acceptance-manifest.json"),
                 durationPath, clock,
                 executorConfigPath: RemoteLaneExecutorConfiguration.ResolveStorePath(workspace.RootDirectory),
-                conductTail: conductTail, durationTail: durationTail);
+                conductTail: conductTail, durationTail: durationTail, owners: owners);
             var changes = new ChangeStreamFileReader(Path.Combine(workspace.LogDirectory, Orchestration.ChangeStreamWriter.FileName));
             var builder = new OwnerConsoleViewModelBuilder(state, questions,
                 new ConductorLeaseLiveness(workspace.OrchestratorDirectory), new PortfolioGoalEpicLookup(workspace.PortfolioStorePath), clock,
@@ -169,9 +169,10 @@ internal static class OwnerConsoleFullScreenHost
                         workspace.OrchestratorDirectory, workspace.LogDirectory, clock),
                     notifier: new SystemOwnerConsoleNotifier(new WindowsOwnerConsoleSoundOutput(), notifications, File.Exists),
                     notifications: notifications,
-                    fleet: () => OwnerFleetViewModelBuilder.Load(workspace, new ConductorLeaseLiveness(workspace.OrchestratorDirectory)),
+                    fleet: () => OwnerFleetViewModelBuilder.Load(workspace, new ConductorLeaseLiveness(workspace.OrchestratorDirectory), owners: owners),
                     landings: argument => OwnerLandingsPage.Load(state, workspace.OrchestratorDirectory, clock, argument));
-                view = new(app, controller, () => RefreshAsync(), token, clock, OwnerConsoleLoopOptions.Default, diagnostics);
+                view = new(app, controller, () => RefreshAsync(), token, clock, OwnerConsoleLoopOptions.Default, diagnostics,
+                    projectLabel: OwnerConsoleProjectLabel.ForWorkspace(workspace));
                 boardIds = board.Board.Select(row => row.GoalId).ToArray();
                 view.Render(board);
                 var startup = new OwnerConsoleStartupLoader(builder, activityLoader, action => Post("startup-render", action), clock);

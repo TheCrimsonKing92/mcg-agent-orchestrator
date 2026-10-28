@@ -16,18 +16,26 @@ internal static class OwnerConsoleGateWhereLine
                     " " + Bar((double)group.Count(row => row.State == OwnerConsoleGateLaneState.Done) / group.Count())))];
         }
 
-        var running = ordinary.Where(row => row.State == OwnerConsoleGateLaneState.Running && !row.IsAttribution &&
+        var runningLanes = ordinary.Where(row => row.State == OwnerConsoleGateLaneState.Running && !row.IsAttribution &&
                 !row.Name.EndsWith(" [trusted main baseline]", StringComparison.Ordinal))
+            .ToArray();
+        var running = runningLanes
             .GroupBy(row => row.Location, StringComparer.Ordinal)
             .ToDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal);
         var configured = new HashSet<string>(StringComparer.Ordinal);
         var groups = new List<string>();
+        if (capacity.Owners is not null) groups.Add($"capacity owner: {OwnerConsoleHostRowOwner.Host}");
+        string Owner(IEnumerable<OwnerConsoleGateLane> lanes) => capacity.Owners is null ? "" :
+            $" owner: {capacity.Owners.ForRunningLanes(lanes)}";
         foreach (var executor in capacity.Executors)
             if (configured.Add(executor.Id))
-                groups.Add(Occupancy(executor.Id, running.GetValueOrDefault(executor.Id), executor.Slots));
+                groups.Add(Occupancy(executor.Id, running.GetValueOrDefault(executor.Id), executor.Slots) +
+                    Owner(runningLanes.Where(row => row.Location == executor.Id)));
         groups.AddRange(running.Where(pair => !IsLocal(pair.Key) && !configured.Contains(pair.Key))
-            .OrderBy(pair => pair.Key, StringComparer.Ordinal).Select(pair => $"{pair.Key} {pair.Value} running"));
-        groups.Add(Occupancy("local", running.Where(pair => IsLocal(pair.Key)).Sum(pair => pair.Value), capacity.LocalBudget));
+            .OrderBy(pair => pair.Key, StringComparer.Ordinal).Select(pair => $"{pair.Key} {pair.Value} running" +
+                Owner(runningLanes.Where(row => row.Location == pair.Key))));
+        groups.Add(Occupancy("local", running.Where(pair => IsLocal(pair.Key)).Sum(pair => pair.Value), capacity.LocalBudget) +
+            Owner(runningLanes.Where(row => IsLocal(row.Location))));
 
         var lines = new List<string>();
         var current = "WHERE   " + groups[0];

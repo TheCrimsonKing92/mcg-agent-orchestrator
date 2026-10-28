@@ -6,7 +6,8 @@ namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 
 internal sealed class OwnerConsoleGateProgressLoader(string logPath, string manifestPath, string durationPath, TimeProvider clock,
     string? executorConfigPath = null, int? coreBudget = null,
-    OwnerConsoleJsonlTail? conductTail = null, OwnerConsoleJsonlTail? durationTail = null)
+    OwnerConsoleJsonlTail? conductTail = null, OwnerConsoleJsonlTail? durationTail = null,
+    OwnerConsoleHostRowOwner? owners = null)
 {
     private static readonly OwnerConsoleGateFailureNames FailureNames = new();
     private readonly OwnerConsoleJsonlTail _conductTail = conductTail ?? new(logPath);
@@ -32,7 +33,7 @@ internal sealed class OwnerConsoleGateProgressLoader(string logPath, string mani
                 ? _durationTail.Select("lane-duration", ParseDuration, long.MaxValue).OfType<OwnerConsoleGateDuration>().ToArray()
                 : [];
             var capacity = new OwnerConsoleGateCapacity(executors,
-                Math.Min(maxConcurrentShards, coreBudget ?? Math.Max(1, Environment.ProcessorCount / 2)));
+                Math.Min(maxConcurrentShards, coreBudget ?? Math.Max(1, Environment.ProcessorCount / 2)), owners);
             var gate = OwnerConsoleGateProgress.Build(now, events, lanes, history,
                 id => titles.FirstOrDefault(pair => pair.Key.StartsWith(id, StringComparison.Ordinal)).Value,
                 capacity: capacity.LocalBudget);
