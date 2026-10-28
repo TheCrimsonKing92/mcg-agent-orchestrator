@@ -768,7 +768,7 @@ internal sealed partial class AcceptancePartitionVerdictCache
         }
         if (credit?.Confirmation is { } confirmation)
         {
-            var confirmationId = GoalAcceptanceVerifier.BuildInvocationIdentity(check, confirmation.TestResultRunOrdinal, AttemptId);
+            var confirmationId = AcceptanceInvocationEvidenceProvenance.BuildInvocationIdentity(check, confirmation.TestResultRunOrdinal, AttemptId);
             var creditEvidence = new AcceptanceLaneRerunEvidence(completedReceipt.OriginalInvocationId,
                 firstRun.TestResultPaths ?? [], credit.Identities, decision.FailedPredicate,
                 confirmationId, confirmation.TestResultPaths ?? [], confirmation.FailingTestIdentities ?? [],

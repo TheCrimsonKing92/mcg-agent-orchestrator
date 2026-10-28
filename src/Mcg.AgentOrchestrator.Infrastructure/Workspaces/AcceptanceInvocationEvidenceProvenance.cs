@@ -1,7 +1,15 @@
+using AcceptanceManifestCheck = Mcg.AgentOrchestrator.Infrastructure.GoalAcceptanceVerifier.AcceptanceManifestCheck;
+
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
 internal static class AcceptanceInvocationEvidenceProvenance
 {
+    internal static string BuildInvocationIdentity(
+        AcceptanceManifestCheck check,
+        int ordinal,
+        string? attemptId) =>
+        $"{attemptId ?? "manual"}:{AcceptanceArtifactFileNames.Slug(check.Name)}:{ordinal.ToString(System.Globalization.CultureInfo.InvariantCulture)}";
+
     internal static (AcceptanceCheckResult Result, bool Retried) Bind(
         (AcceptanceCheckResult Result, bool Retried) result,
         string? attemptId,

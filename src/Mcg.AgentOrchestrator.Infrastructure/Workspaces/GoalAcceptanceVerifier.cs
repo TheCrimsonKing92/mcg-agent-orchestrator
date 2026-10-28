@@ -1520,7 +1520,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         if (cacheContext?.ShouldRerunWithinAttempt(check, fresh.Result.CompletionDecision) == true)
         {
             var original = fresh.Result;
-            var originalInvocationId = BuildInvocationIdentity(check, original.TestResultRunOrdinal, currentAttemptId);
+            var originalInvocationId = AcceptanceInvocationEvidenceProvenance.BuildInvocationIdentity(check, original.TestResultRunOrdinal, currentAttemptId);
             AcceptanceRetainedDiagnostic? retainedDiagnostic = null;
             try
             {
@@ -1547,7 +1547,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             }
 
             var retryInvocation = AllocateTestTelemetryInvocation(check);
-            var retryInvocationId = BuildInvocationIdentity(check, retryInvocation.Ordinal, currentAttemptId);
+            var retryInvocationId = AcceptanceInvocationEvidenceProvenance.BuildInvocationIdentity(check, retryInvocation.Ordinal, currentAttemptId);
             cacheContext.RecordWithinAttemptRetry(
                 check,
                 original,
@@ -1579,7 +1579,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             fresh.Result.CompletionDecision?.FailedPredicate == AcceptanceShardCompletionPredicates.FailingTrx)
         {
             var finalResult = await AcceptanceLaneTestFailureRerun.ForAttempt(cacheContext, worktreePath).RunAsync(
-                check, fresh.Result, RunNarrowedCheckAsync, result => BuildInvocationIdentity(check, result.TestResultRunOrdinal, currentAttemptId),
+                check, fresh.Result, RunNarrowedCheckAsync, result => AcceptanceInvocationEvidenceProvenance.BuildInvocationIdentity(check, result.TestResultRunOrdinal, currentAttemptId),
                 cacheContext.SharedApparatusInvalidation is not null, cancellationToken).ConfigureAwait(false);
             fresh = (finalResult, fresh.Retried || finalResult.LaneRerun is not null);
         }
@@ -1649,12 +1649,6 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         new GoalAcceptanceVerifier(this, owner).RunCheckWithCancellationProbeAsync(
             check, worktreePath, null, null, null, null, cancellationToken,
             invocationOverride: invocation);
-
-    internal static string BuildInvocationIdentity(
-        AcceptanceManifestCheck check,
-        int ordinal,
-        string? attemptId) =>
-        $"{attemptId ?? "manual"}:{AcceptanceArtifactFileNames.Slug(check.Name)}:{ordinal.ToString(System.Globalization.CultureInfo.InvariantCulture)}";
 
     private static AcceptanceShardCompletionDecision InferPartitionCompletionDecision(AcceptanceCheckResult result) =>
         AcceptanceShardCompletionAdjudicator.InferPartition(result, IsCaptureLimitFailureName(result.Name));
