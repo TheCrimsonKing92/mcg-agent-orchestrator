@@ -37,11 +37,7 @@ internal sealed partial class ConductorDriver
             return null;
         }
 
-        var upstreamDeveloper = goal.Tasks
-            .TakeWhile(candidate => candidate.Id != task.Id)
-            .LastOrDefault(candidate =>
-                candidate.RequiredRole == AgentRole.Developer &&
-                HasEverCommittedOutput(candidate));
+        var upstreamDeveloper = TesterFindingDeveloperTargetPolicy.Select(goal, task, _executionDirectory);
         var finding = string.Join(
             "; ",
             developerOwnedFindings.Select(item =>
@@ -712,13 +708,6 @@ internal sealed partial class ConductorDriver
         }
         return selections;
     }
-
-    private static bool HasEverCommittedOutput(TaskSpec task) =>
-        task.VerificationHistory.Any(verification => verification.HasCommittedChanges) ||
-        task.DispatchHistory.Any(dispatch =>
-            !string.IsNullOrWhiteSpace(dispatch.ResultCommit) &&
-            (string.IsNullOrWhiteSpace(dispatch.BaseCommit) ||
-             !string.Equals(dispatch.BaseCommit, dispatch.ResultCommit, StringComparison.OrdinalIgnoreCase)));
 
     // One refusal truth: routing and the worker-visible execution state read the same rule.
     private static bool IsPermanentFindingEvidenceRefusal(FindingEvidenceOutcome outcome) =>
