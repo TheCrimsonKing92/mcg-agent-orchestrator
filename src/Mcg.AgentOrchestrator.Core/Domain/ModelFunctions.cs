@@ -21,7 +21,8 @@ public sealed record ModelFunctionBinding(
     ModelLane Lane,
     ModelProfile Model,
     string? Name = null,
-    SubscriptionLaunchProfile? Subscription = null);
+    SubscriptionLaunchProfile? Subscription = null,
+    SubscriptionLaunchProfile? SubscriptionFallback = null);
 
 public sealed record ModelFunctionCatalog(IReadOnlyList<ModelFunctionBinding> Bindings)
 {

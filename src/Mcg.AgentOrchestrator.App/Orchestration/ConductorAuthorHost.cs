@@ -7,7 +7,7 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 internal sealed partial class ConductorAuthorHost
 {
     internal const string EnabledEnvironmentVariable = "MCG_ORCHESTRATOR_AUTHOR_ENABLED";
-    private const int MaxAttempts = 2;
+    internal const int MaxAttempts = 2;
     private readonly ConductorAuthorClaimStore _claims;
     private readonly ICollaborationItemStore _collaboration;
     private readonly IConductorAuthorModelRound _model;
@@ -84,9 +84,11 @@ internal sealed partial class ConductorAuthorHost
                 {
                     var precedent = string.IsNullOrWhiteSpace(item.ForkKind) ? null :
                         _precedents.TryGetPrecedentAsync(item.ForkKind).GetAwaiter().GetResult();
+                    var attempt = _claims.Attempt(item.Identity);
                     var input = new ConductorAuthorRoundInput(item, goal.Objective,
                         JsonSerializer.Serialize(goal.RefinedSpec, Json), precedent,
-                        _lessons?.Select(ConductorLessonSelector.AuthorTags(item.ForkKind)));
+                        _lessons?.Select(ConductorLessonSelector.AuthorTags(item.ForkKind)), attempt,
+                        () => _claims.TryConsumeFallbackAttempt(item.Identity, attempt));
                     var directory = _workingDirectory(goal);
                     var round = Task.Run(() => _model.DispatchAsync(input, directory, _shutdown.Token), _shutdown.Token);
                     _rounds.Add(item.Identity, (item, round));
@@ -122,8 +124,8 @@ internal sealed partial class ConductorAuthorHost
                      (!running.Round.IsCompleted || running.Round.IsCanceled ||
                       running.Round.Exception?.GetBaseException() is OperationCanceledException))
             {
-                _claims.Release(identity);
-                Record(running.Item, "released", "conductor-stop");
+                var released = _claims.Release(identity);
+                Record(running.Item, released ? "released" : "model-failure", "conductor-stop");
             }
             else
             {
@@ -147,12 +149,14 @@ internal sealed partial class ConductorAuthorHost
             if (!running.Round.IsCompletedSuccessfully)
             {
                 var attempt = _claims.Attempt(identity);
-                var retry = attempt < MaxAttempts;
                 var failure = running.Round.Exception?.GetBaseException();
+                var terminal = (failure as ConductorModelRoundException)?.TerminalReason;
+                var retry = attempt < MaxAttempts && terminal is null;
                 var reason = running.Round.IsCanceled ? "timeout" : ConductorRoundModelResolver.ConductReason(failure,
                     failure is ConductorModelRoundException ? nameof(InvalidOperationException) : failure?.GetType().Name ?? "model-failure");
                 _claims.Complete(identity, retry ? "retryable" : "model-failure");
-                Record(item, retry ? "retry-scheduled" : "model-failure", $"{reason} attempt={attempt}/{MaxAttempts}");
+                Record(item, retry ? "retry-scheduled" : "model-failure", $"{reason} attempt={attempt}/{MaxAttempts}" +
+                    (terminal is null ? "" : $" terminal={terminal}"));
                 continue;
             }
             _claims.Preserve(item, running.Round.Result);

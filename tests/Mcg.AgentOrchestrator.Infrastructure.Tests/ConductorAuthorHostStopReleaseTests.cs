@@ -10,6 +10,36 @@ public sealed class ConductorAuthorHostStopReleaseTests
         """;
 
     [Xunit.Fact]
+    public async Task Stop_during_reserved_fallback_does_not_restore_the_spent_allowance()
+    {
+        using var harness = new Harness();
+        var goal = harness.Kernel.CreateGoal("Choose runtime");
+        await harness.Raise(goal);
+        var started = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var calls = 0;
+        var round = new ClaudeConductorAuthorModelRound(Path.Combine(harness.Root, "receipts"), async (_, token) =>
+        {
+            if (Interlocked.Increment(ref calls) == 1)
+                return new WorkerProcessRunResult(1, ConductorAuthorModelRoundCatalogTests.Exhausted, "");
+            started.TrySetResult(true);
+            await Task.Delay(Timeout.InfiniteTimeSpan, token);
+            throw new InvalidOperationException("Canceled alternate must not return output.");
+        }, ConductorAuthorModelRoundCatalogTests.FallbackCatalog(), _ => true);
+        var first = harness.NewHost(round);
+        first.ServiceTick(harness.Kernel);
+        await Await(started.Task, "reserved Codex fallback started");
+        first.Stop();
+        var fresh = new AnswerModel();
+        var successor = harness.NewHost(fresh);
+        for (var tick = 0; tick < 3; tick++) successor.ServiceTick(harness.Kernel);
+        Xunit.Assert.Equal(2, calls);
+        Xunit.Assert.Equal(0, fresh.Calls);
+        Xunit.Assert.Empty(successor.CurrentRounds);
+        Xunit.Assert.Empty(await harness.Intents.ListForGoalAsync(goal.Id.Value));
+        Xunit.Assert.Contains("kind=model-failure reason=conductor-stop", File.ReadAllText(harness.ConductPath));
+    }
+
+    [Xunit.Fact]
     public async Task Stop_interrupted_round_is_released_and_successor_answers_it()
     {
         using var harness = new Harness();
@@ -178,6 +208,7 @@ public sealed class ConductorAuthorHostStopReleaseTests
         internal CollaborationItemStore Collaboration { get; }
         internal SqliteOperatorIntentStore Intents { get; }
         internal string ConductPath => _workspace.ConductEventsLogPath;
+        internal string Root => _root;
 
         internal Harness()
         {
