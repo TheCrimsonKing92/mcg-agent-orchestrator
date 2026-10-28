@@ -5,11 +5,10 @@ using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Microsoft.Data.Sqlite;
 
-// All roots and connections are fixture-owned. Retain the SQLite suite's isolation collection;
-// the distinct qualified name lets the default Remainder lane select this class.
+// Parallel-safe: each fixture owns a unique temporary root and database, disposes its
+// connections, and does not mutate environment variables or other process-global state.
 namespace Mcg.AgentOrchestrator.Tests;
 
-[Collection(TestCollections.EnvMutation)]
 public sealed class SqliteAttentionProjectionTests
 {
     private static readonly DateTimeOffset At = new(2026, 10, 5, 0, 0, 0, TimeSpan.Zero);
