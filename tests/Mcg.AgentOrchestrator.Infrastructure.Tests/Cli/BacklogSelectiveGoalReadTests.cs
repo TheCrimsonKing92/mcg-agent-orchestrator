@@ -527,6 +527,125 @@ public sealed class BacklogSelectiveGoalReadTests(ITestOutputHelper output) : Cl
         Assert.Empty(actualError); // Reconstruction failures must escape hot quarantine too.
     }
 
+    public static IEnumerable<object[]> NestedSimilarityDomainMembers()
+    {
+        var cases = new List<(string Member, string Valid, string Invalid, Type Exception)>();
+        const string correction = """
+            [{"SupersededCriterion":"old","Correction":"new","Actor":"operator",
+              "Dispositions":[{"Criterion":"quartz","Disposition":"retained"}]}]
+            """;
+        foreach (var disposition in new[]
+        {
+            "null", """{"Criterion":null,"Disposition":"retained"}""",
+            """{"Criterion":"","Disposition":"retained"}""",
+            """{"Criterion":"   ","Disposition":"retained"}""",
+            """{"Criterion":"quartz","Disposition":null}""",
+            """{"Criterion":"quartz","Disposition":""}""",
+            """{"Criterion":"quartz","Disposition":"   "}"""
+        })
+        {
+            var invalid = JsonNode.Parse(correction)!;
+            invalid[0]!["Dispositions"] = JsonNode.Parse("[" + disposition + "]");
+            cases.Add(("EffectiveAcceptanceCriteriaCorrections", correction, invalid.ToJsonString(),
+                disposition == "null" ? typeof(NullReferenceException) : typeof(ArgumentException)));
+        }
+
+        const string failure = """
+            {"FailedChecks":["quartz"],"AttributionPending":{"CandidateSha":"candidate","MainSha":"main",
+             "AttemptId":"attempt","Tests":[],"OtherEvidenceKind":"none"}}
+            """;
+        foreach (var checks in new[] { "[]", "[\"   \"]" })
+        {
+            var invalid = JsonNode.Parse(failure)!;
+            invalid["FailedChecks"] = JsonNode.Parse(checks);
+            cases.Add(("LatestAcceptanceFailure", failure, invalid.ToJsonString(), typeof(NullReferenceException)));
+        }
+
+        var obligation = new GateTestObligation("quartz", 1, ["BacklogSelectiveGoalReadTests"], "planner", "evidence", Stamp,
+            new PlannerEvidenceIdentity(CompletedId, "planner", 1, 0, "quartz"),
+            new PlannerEvidencePayload(0, "quartz", "post-implementation", "acceptance-gate", "needed", "reason",
+                null, null, ["BacklogSelectiveGoalReadTests"]));
+        // Separate selector arrays prove semantic equality, rather than record/reference equality.
+        var matching = obligation with { PlannerEvidence = obligation.PlannerEvidence! with
+            { Selectors = ["BacklogSelectiveGoalReadTests"] } };
+        cases.Add(("GateTestObligations", JsonSerializer.Serialize(new[] { obligation, matching }),
+            JsonSerializer.Serialize(new[] { obligation, matching with
+                { PlannerEvidence = matching.PlannerEvidence! with { Needed = "conflicting" } } }),
+            typeof(InvalidOperationException)));
+
+        const string spec = """
+            {"BehavioralContract":"quartz","AcceptanceCriteria":["quartz"],"Decisions":[],"OpenQuestions":[],
+             "OperatorOwnedAcceptanceCriteria":[],"AcceptanceGateOwnedAcceptanceCriteria":[]}
+            """;
+        foreach (var versioned in new[] { false, true })
+        foreach (var entry in new[]
+        {
+            (Member: "AcceptanceCriteria", Value: "null", Exception: typeof(NullReferenceException)),
+            (Member: "AcceptanceCriteria", Value: "[null]", Exception: typeof(ArgumentException)),
+            (Member: "AcceptanceCriteria", Value: "[\"\"]", Exception: typeof(ArgumentException)),
+            (Member: "AcceptanceCriteria", Value: "[\"   \"]", Exception: typeof(ArgumentException)),
+            (Member: "OperatorOwnedAcceptanceCriteria", Value: "[null]", Exception: typeof(NullReferenceException)),
+            (Member: "AcceptanceGateOwnedAcceptanceCriteria", Value: "[null]", Exception: typeof(NullReferenceException))
+        })
+        {
+            var invalid = JsonNode.Parse(spec)!;
+            invalid[entry.Member] = JsonNode.Parse(entry.Value);
+            string Wrap(string contents) => versioned
+                ? "[{\"Version\":1,\"Spec\":" + contents + ",\"BriefVersion\":1}]" : contents;
+            cases.Add((versioned ? "RefinedSpecVersions" : "RefinedSpec", Wrap(spec), Wrap(invalid.ToJsonString()), entry.Exception));
+        }
+
+        const string task = """[{"Id":"66666666666666666666666666666666","Description":"valid","CriterionRetryFeedback":["retry quartz"]}]""";
+        cases.Add(("Tasks", task, task.Replace("\"retry quartz\"", "null", StringComparison.Ordinal), typeof(NullReferenceException)));
+
+        var verification = JsonSerializer.SerializeToNode(new TaskVerificationSnapshot("verify", "workspace", 0, "passed", "", Stamp,
+            MergedReviewFindings: [new ReviewFinding("quartz", ReviewFindingState.Open, new ReviewFindingLocation("file", "region"), "finding")],
+            FindingEvidenceReceipts: [new FindingEvidenceReceipt("receipt", "candidate",
+                new FindingEvidenceRequest([new FindingEvidenceSelection("Infrastructure.Tests", "BacklogSelectiveGoalReadTests")]),
+                true, true, "passed")],
+            FindingEvidenceRequestDispositions: [new FindingEvidenceRequestDisposition("quartz", "request", "executed")]))!;
+        string WithHistory(JsonNode record)
+        {
+            var node = JsonNode.Parse(task)!;
+            node[0]!["VerificationHistory"] = new JsonArray(record.DeepClone(), record.DeepClone());
+            return node.ToJsonString();
+        }
+        foreach (var member in new[] { "MergedReviewFindings", "FindingEvidenceReceipts", "FindingEvidenceRequestDispositions" })
+        {
+            var invalid = verification.DeepClone();
+            invalid[member] = new JsonArray((JsonNode?)null);
+            cases.Add(("Tasks", WithHistory(verification), WithHistory(invalid), typeof(NullReferenceException)));
+        }
+
+        foreach (var archive in new[] { false, true })
+        foreach (var entry in cases)
+            yield return [archive, entry.Member, entry.Valid, entry.Invalid, entry.Exception];
+    }
+
+    [Theory]
+    [MemberData(nameof(NestedSimilarityDomainMembers))]
+    public async Task Similarity_NestedDomainState_PreservesProjectionAndHydrationFailure(
+        bool archive, string member, string valid, string invalid, Type exceptionType)
+    {
+        using var fixture = await Fixture.Create(4, 256);
+        if (archive) await fixture.MakeTerminalAndArchive(CompletedId);
+        // Spec restoration must create the criterion obligation, rather than skip an existing one.
+        if (member is "RefinedSpec" or "RefinedSpecVersions")
+            fixture.ReplaceSnapshotMember(CompletedId, "CriterionEvidenceObligations", "[]", archive);
+        fixture.ReplaceSnapshotMember(CompletedId, member, valid, archive);
+        string[] args = ["backlog-similar", "quartz"];
+        var before = Run(args, fixture.Workspace, false);
+        Assert.Contains($"kind=goal id={CompletedId[..8]}", before.Text);
+        Assert.Equal(Run(args, fixture.Workspace, true).Text, before.Text);
+        Assert.Equal(1, before.Count("similarity-projected"));
+        Assert.Empty(before.Requested);
+        Assert.Empty(before.Deserialized);
+        Assert.Empty(before.Archived);
+
+        fixture.ReplaceSnapshotMember(CompletedId, member, invalid, archive);
+        AssertSimilarityDomainFailure(fixture, args, exceptionType);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

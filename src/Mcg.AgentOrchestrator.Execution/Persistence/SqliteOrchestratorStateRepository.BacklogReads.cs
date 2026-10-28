@@ -175,11 +175,11 @@ public sealed partial class SqliteOrchestratorStateRepository
                 nameof(GoalSnapshot.BriefVersions) => ReadSimilarityVersionChain(ref projection, options, brief: true),
                 nameof(GoalSnapshot.RefinedSpecVersions) => ReadSimilarityVersionChain(ref projection, options, brief: false),
                 nameof(GoalSnapshot.RefinedSpec) => projection.TokenType != JsonTokenType.Null &&
-                    HasInvalidSimilarityMembers(ref projection, [], ["Decisions", "OpenQuestions"]),
+                    HasInvalidSimilaritySpec(ref projection),
                 nameof(GoalSnapshot.EffectiveAcceptanceCriteriaCorrections) => HasInvalidSimilarityCorrections(ref projection),
                 nameof(GoalSnapshot.LatestAcceptanceFailure) => projection.TokenType != JsonTokenType.Null &&
-                    HasInvalidSimilarityMembers(ref projection, [], ["FailedChecks"]),
-                nameof(GoalSnapshot.GateTestObligations) => HasNullSimilarityEntry(ref projection),
+                    HasInvalidSimilarityFailure(ref projection),
+                nameof(GoalSnapshot.GateTestObligations) => HasInvalidSimilarityObligations(ref projection, options),
                 _ => null
             };
         }
@@ -270,7 +270,7 @@ public sealed partial class SqliteOrchestratorStateRepository
                     if (spec)
                     {
                         hasSpec = true;
-                        invalid |= HasInvalidSimilarityMembers(ref contents, [], ["Decisions", "OpenQuestions"]);
+                        invalid |= HasInvalidSimilaritySpec(ref contents);
                     }
                     contents.Skip();
                 }
@@ -337,7 +337,98 @@ public sealed partial class SqliteOrchestratorStateRepository
         if (reader.TokenType == JsonTokenType.Null) return false;
         var invalid = false;
         while (reader.Read() && reader.TokenType != JsonTokenType.EndArray)
-            invalid |= HasInvalidSimilarityMembers(ref reader, ["SupersededCriterion", "Correction", "Actor"], []);
+        {
+            var required = reader;
+            invalid |= HasInvalidSimilarityMembers(ref required, ["SupersededCriterion", "Correction", "Actor"], []);
+            if (reader.TokenType == JsonTokenType.Null) continue;
+            while (reader.Read() && reader.TokenType != JsonTokenType.EndObject)
+            {
+                var dispositions = reader.ValueTextEquals("Dispositions"u8);
+                reader.Read();
+                if (dispositions && reader.TokenType == JsonTokenType.StartArray)
+                    while (reader.Read() && reader.TokenType != JsonTokenType.EndArray)
+                        invalid |= HasInvalidSimilarityMembers(ref reader, ["Criterion", "Disposition"], []);
+                reader.Skip();
+            }
+        }
+        return invalid;
+    }
+
+    private static bool HasInvalidSimilaritySpec(ref Utf8JsonReader reader)
+    {
+        var required = reader;
+        var invalid = HasInvalidSimilarityMembers(ref required, [], ["AcceptanceCriteria", "Decisions", "OpenQuestions"]);
+        if (reader.TokenType == JsonTokenType.Null) return invalid;
+        while (reader.Read() && reader.TokenType != JsonTokenType.EndObject)
+        {
+            var criteria = reader.ValueTextEquals("AcceptanceCriteria"u8);
+            var ownership = reader.ValueTextEquals("OperatorOwnedAcceptanceCriteria"u8) ||
+                reader.ValueTextEquals("AcceptanceGateOwnedAcceptanceCriteria"u8);
+            reader.Read();
+            if (criteria && reader.TokenType == JsonTokenType.StartArray)
+                while (reader.Read() && reader.TokenType != JsonTokenType.EndArray)
+                    invalid |= IsBlankSimilarityText(ref reader);
+            else if (ownership) invalid |= HasNullSimilarityEntry(ref reader);
+            reader.Skip();
+        }
+        return invalid;
+    }
+
+    private static bool HasInvalidSimilarityFailure(ref Utf8JsonReader reader)
+    {
+        var required = reader;
+        var invalid = HasInvalidSimilarityMembers(ref required, [], ["FailedChecks"]);
+        var hasCheck = false;
+        var pending = false;
+        while (reader.Read() && reader.TokenType != JsonTokenType.EndObject)
+        {
+            var checks = reader.ValueTextEquals("FailedChecks"u8);
+            var attribution = reader.ValueTextEquals("AttributionPending"u8);
+            reader.Read();
+            if (checks && reader.TokenType == JsonTokenType.StartArray)
+                while (reader.Read() && reader.TokenType != JsonTokenType.EndArray)
+                    hasCheck |= !IsBlankSimilarityText(ref reader);
+            else if (attribution) pending = reader.TokenType != JsonTokenType.Null;
+            reader.Skip();
+        }
+        return invalid || pending && !hasCheck;
+    }
+
+    private sealed record SimilarityPlannerObligation(PlannerEvidenceIdentity? PlannerIdentity,
+        PlannerEvidencePayload? PlannerEvidence);
+
+    private static bool HasInvalidSimilarityObligations(ref Utf8JsonReader reader, JsonSerializerOptions options)
+    {
+        if (reader.TokenType == JsonTokenType.Null) return false;
+        var evidence = new Dictionary<PlannerEvidenceIdentity, PlannerEvidencePayload?>();
+        var invalid = false;
+        while (reader.Read() && reader.TokenType != JsonTokenType.EndArray)
+        {
+            var obligation = JsonSerializer.Deserialize<SimilarityPlannerObligation>(ref reader, options);
+            if (obligation is null) { invalid = true; continue; }
+            if (obligation.PlannerIdentity is not { } identity) continue;
+            if (evidence.TryGetValue(identity, out var previous))
+                invalid |= obligation.PlannerEvidence?.SemanticallyEquals(previous) != true;
+            else evidence.Add(identity, obligation.PlannerEvidence);
+        }
+        return invalid;
+    }
+
+    private static bool HasInvalidSimilarityVerification(ref Utf8JsonReader reader)
+    {
+        if (reader.TokenType == JsonTokenType.Null) return true;
+        if (reader.TokenType != JsonTokenType.StartObject) { reader.Skip(); return false; }
+        var invalid = false;
+        while (reader.Read() && reader.TokenType != JsonTokenType.EndObject)
+        {
+            var enrichment = reader.ValueTextEquals("MergedReviewFindings"u8) ||
+                reader.ValueTextEquals("FindingEvidenceReceipts"u8) ||
+                reader.ValueTextEquals("FindingEvidenceRequestDispositions"u8);
+            reader.Read();
+            if (enrichment && reader.TokenType == JsonTokenType.StartArray)
+                invalid |= HasNullSimilarityEntry(ref reader);
+            reader.Skip();
+        }
         return invalid;
     }
 
@@ -381,12 +472,19 @@ public sealed partial class SqliteOrchestratorStateRepository
                         {
                             var description = task.ValueTextEquals("Description"u8);
                             var history = task.ValueTextEquals("DispatchHistory"u8) ||
-                                task.ValueTextEquals("RetryAdmissionHistory"u8) || task.ValueTextEquals("VerificationHistory"u8);
+                                task.ValueTextEquals("RetryAdmissionHistory"u8) || task.ValueTextEquals("CriterionRetryFeedback"u8);
+                            var verification = task.ValueTextEquals("VerificationHistory"u8);
+                            var lastVerification = task.ValueTextEquals("LastVerification"u8);
                             task.Read();
                             if (description && task.TokenType is JsonTokenType.String or JsonTokenType.Null)
                                 blankDescription = IsBlankSimilarityText(ref task);
                             if (history && task.TokenType == JsonTokenType.StartArray)
                                 requiresReconstruction |= HasNullSimilarityEntry(ref task);
+                            if (verification && task.TokenType == JsonTokenType.StartArray)
+                                while (task.Read() && task.TokenType != JsonTokenType.EndArray)
+                                    requiresReconstruction |= HasInvalidSimilarityVerification(ref task);
+                            if (lastVerification && task.TokenType != JsonTokenType.Null)
+                                requiresReconstruction |= HasInvalidSimilarityVerification(ref task);
                             task.Skip();
                         }
                     requiresReconstruction |= blankDescription;
