@@ -23,7 +23,13 @@ public static class ProjectStackResolver
                     // Read only an explicit declaration: ProjectModel's default is not evidence.
                     var stack = declaration.Deserialize<ProjectStack>();
                     if (Enum.IsDefined(stack))
-                        return stack == ProjectStack.Go ? Toolchain.Go : Toolchain.Dotnet;
+                        return stack switch
+                        {
+                            ProjectStack.Go => Toolchain.Go,
+                            ProjectStack.Node => Toolchain.Node,
+                            ProjectStack.Dotnet => Toolchain.Dotnet,
+                            _ => throw new InvalidOperationException($"No toolchain mapping for declared stack {stack}.")
+                        };
                 }
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or

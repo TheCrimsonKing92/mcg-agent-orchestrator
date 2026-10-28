@@ -8,5 +8,7 @@ public enum ProjectStack
     [JsonStringEnumMemberName("dotnet")]
     Dotnet,
     [JsonStringEnumMemberName("go")]
-    Go
+    Go,
+    [JsonStringEnumMemberName("node")]
+    Node
 }
