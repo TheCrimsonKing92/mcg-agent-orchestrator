@@ -253,7 +253,8 @@ internal sealed partial class ConductorDriver
             ReceiptId: primaryReceipt.ReceiptId,
             ResultReason: FindingEvidenceOutcomeReason.ValidEvidence,
             RequestedSelectionIdentity: requestedIdentity,
-            DecisionReason: $"reused-covered-green:{coverageReason}",
+            DecisionReason: receipts.All(source => source.FindingRoundFingerprint == "pre-tester-deferred")
+                ? "pre-tester-covered" : $"reused-covered-green:{coverageReason}",
             SourceReceiptIds: sourceReceiptIds);
         foreach (var receipt in receipts)
         {
@@ -353,11 +354,28 @@ internal sealed partial class ConductorDriver
         string executionBasisIdentity,
         out IReadOnlyList<FindingEvidenceReceipt> reusableReceipts,
         out IReadOnlyList<FindingEvidenceSelection> uncoveredSelections,
-        out string coverageReason)
+        out string coverageReason,
+        IReadOnlyList<PreTesterCoverageComposition.PreTesterCoverageSource>? preTesterCoverage = null)
+        => TryResolveFindingEvidenceCoverage(requestingTask, normalizedRequest, candidateSha, executionBasisIdentity,
+            out reusableReceipts, out uncoveredSelections, out coverageReason, out _, preTesterCoverage);
+
+    internal static bool TryResolveFindingEvidenceCoverage(
+        TaskSpec requestingTask,
+        FindingEvidenceRequest normalizedRequest,
+        string candidateSha,
+        string executionBasisIdentity,
+        out IReadOnlyList<FindingEvidenceReceipt> reusableReceipts,
+        out IReadOnlyList<FindingEvidenceSelection> uncoveredSelections,
+        out string coverageReason,
+        out IReadOnlyDictionary<string, FindingEvidenceReceipt> reusableSelectionReceipts,
+        IReadOnlyList<PreTesterCoverageComposition.PreTesterCoverageSource>? preTesterCoverage = null)
     {
         reusableReceipts = [];
         uncoveredSelections = normalizedRequest.Selections;
         coverageReason = string.Empty;
+        reusableSelectionReceipts = new Dictionary<string, FindingEvidenceReceipt>(StringComparer.Ordinal);
+        if (normalizedRequest.NegativeControl is not null || normalizedRequest.RevertPaths is not null ||
+            normalizedRequest.Mutation is not null) preTesterCoverage = [];
         if (candidateSha == "unavailable" ||
             string.IsNullOrWhiteSpace(executionBasisIdentity) ||
             !TryGetFindingEvidenceCoverage(normalizedRequest, out var requestedCoverage))
@@ -370,10 +388,28 @@ internal sealed partial class ConductorDriver
             .Select(finding => finding.EvidenceOutcome)
             .OfType<FindingEvidenceOutcome>()
             .Where(outcome =>
-                outcome is { Honoured: true, ReceiptId.Length: > 0, ResultReason: FindingEvidenceOutcomeReason.ValidEvidence })
+                outcome is { Honoured: true, ReceiptId.Length: > 0, ResultReason: FindingEvidenceOutcomeReason.ValidEvidence } ||
+                outcome is { Honoured: true, ReceiptId.Length: > 0, ResultReason: FindingEvidenceOutcomeReason.Unknown,
+                    DecisionReason: "reused-pre-tester-invalidated:pending-execution" })
             .GroupBy(outcome => outcome.ReceiptId!, StringComparer.Ordinal)
             .ToDictionary(group => group.Key, group => group.Last(), StringComparer.Ordinal);
         var latestReceiptBySelection = new Dictionary<string, FindingEvidenceReceipt>(StringComparer.Ordinal);
+        var latestTimeBySelection = new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal);
+        var preTesterIds = (preTesterCoverage ?? []).Select(source => source.ReceiptId).ToHashSet(StringComparer.Ordinal);
+        foreach (var source in preTesterCoverage ?? [])
+        {
+            var executedCoverage = source.Receipt is { } receipt
+                ? FindingEvidenceExecutedCoverage.ExecutedSelections(receipt, FormatFindingEvidenceSelection)
+                    .Select(FormatFindingEvidenceSelection).ToHashSet(StringComparer.Ordinal)
+                : [];
+            foreach (var selection in source.Selections.Select(FormatFindingEvidenceSelection).Where(requestedCoverage.Contains))
+            {
+                latestTimeBySelection[selection] = source.CompletedAt;
+                latestReceiptBySelection.Remove(selection);
+                // Preserve the latest attempt's veto without treating an omitted class as executed.
+                if (executedCoverage.Contains(selection)) latestReceiptBySelection[selection] = source.Receipt!;
+            }
+        }
         foreach (var verification in requestingTask.VerificationHistory)
         {
             if (!WorkerResultBlockers.TryFindReviewFindingRound(verification, out var receiptRound, out _))
@@ -387,6 +423,9 @@ internal sealed partial class ConductorDriver
                 receiptRound);
             foreach (var receipt in verification.FindingEvidenceReceipts ?? [])
             {
+                // Copies attached for delivery are references, not new executions. Their original
+                // authority and chronology are supplied by the pre-Tester reader above.
+                if (preTesterIds.Contains(receipt.ReceiptId)) continue;
                 if (!string.Equals(receipt.FindingRoundFingerprint, executedRoundFingerprint, StringComparison.Ordinal) ||
                     !string.Equals(receipt.CandidateSha, candidateSha, StringComparison.OrdinalIgnoreCase) ||
                     !string.Equals(receipt.ExecutionBasisIdentity, executionBasisIdentity, StringComparison.Ordinal) ||
@@ -403,7 +442,9 @@ internal sealed partial class ConductorDriver
                 // wins even when it is RED, incomplete, rejected, or otherwise non-reusable.
                 foreach (var selection in receiptCoverage.Where(requestedCoverage.Contains))
                 {
+                    if (latestTimeBySelection.TryGetValue(selection, out var time) && time > verification.CompletedAt) continue;
                     latestReceiptBySelection[selection] = receipt;
+                    latestTimeBySelection[selection] = verification.CompletedAt;
                 }
             }
         }
@@ -412,7 +453,8 @@ internal sealed partial class ConductorDriver
         foreach (var selection in requestedCoverage)
         {
             if (latestReceiptBySelection.TryGetValue(selection, out var receipt) &&
-                validOutcomesByReceiptId.ContainsKey(receipt.ReceiptId) &&
+                (validOutcomesByReceiptId.ContainsKey(receipt.ReceiptId) ||
+                 (preTesterCoverage ?? []).Any(source => source.Receipt == receipt)) &&
                 IsReusableGreenFindingEvidenceReceipt(receipt, candidateSha, executionBasisIdentity))
             {
                 reusableBySelection[selection] = receipt;
@@ -420,6 +462,7 @@ internal sealed partial class ConductorDriver
         }
 
         var expandedSelections = FindingEvidenceRoundPlanner.ExpandSelections(normalizedRequest.Selections);
+        reusableSelectionReceipts = reusableBySelection;
         uncoveredSelections = expandedSelections
             .Where(selection => !reusableBySelection.ContainsKey(FormatFindingEvidenceSelection(selection)))
             .ToArray();
@@ -451,7 +494,7 @@ internal sealed partial class ConductorDriver
         return true;
     }
 
-    private static bool IsReusableGreenFindingEvidenceReceipt(
+    internal static bool IsReusableGreenFindingEvidenceReceipt(
         FindingEvidenceReceipt receipt,
         string candidateSha,
         string executionBasisIdentity)
@@ -671,7 +714,7 @@ internal sealed partial class ConductorDriver
         return coverage.Count > 0;
     }
 
-    private static IReadOnlyList<FindingEvidenceSelection> ParseDispositionSelections(string identity)
+    internal static IReadOnlyList<FindingEvidenceSelection> ParseDispositionSelections(string identity)
     {
         // Request identities use project:selection alternatives. A bare alternative inherits
         // its preceding project, which also supports older positive-disjunction receipts.
