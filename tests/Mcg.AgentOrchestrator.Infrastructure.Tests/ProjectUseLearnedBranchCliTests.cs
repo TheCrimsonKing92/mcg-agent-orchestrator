@@ -1,12 +1,15 @@
+using System.Diagnostics;
+using System.Security.Cryptography;
 using System.Text.Json;
 using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Infrastructure;
 using Xunit;
 using static InfrastructureTestSupport;
 
-// Parallel-safe: unique registry/data roots, private writers and AsyncLocal console capture.
-public sealed class ProjectUseLearnedBranchCliTests : IDisposable
+// Parallel-safe: unique registry/data roots, child-only environments and AsyncLocal console capture.
+public sealed class ProjectUseLearnedBranchCliTests : CliCommandTestBase
 {
     private readonly string directory = CreateTempDirectory();
     private string ProjectRoot => Path.Combine(directory, "repository");
@@ -78,6 +81,82 @@ public sealed class ProjectUseLearnedBranchCliTests : IDisposable
         Assert.Contains(name == "unknown" ? "Unknown project" : "The default project is implicit", error.Message);
         Assert.Equal(before, File.ReadAllBytes(registry.RegistryPath));
         Assert.Empty(output.ToString());
+    }
+
+    [Theory]
+    [InlineData("show", false, false)]
+    [InlineData("use-learned-branch", false, false)]
+    [InlineData("use-learned-branch", true, false)]
+    [InlineData("show", false, true)]
+    [InlineData("use-learned-branch", false, true)]
+    [InlineData("use-learned-branch", true, true)]
+    public async Task Execute_NameInOtherRegistry_ReportsQueriedPathWithoutWriting(
+        string command, bool off, bool child)
+    {
+        var registry = CreateProject();
+        registry.SelectProject("sample");
+        var other = new OrchestratorProjectRegistry(Path.Combine(directory, "other registry"), registry.DataRootDirectory);
+        other.CreateProject("Shared", ProjectRoot);
+        Assert.Equal("Shared", other.GetRequiredProject("Shared").Name);
+        var queried = new OrchestratorProjectRegistry(Path.Combine(directory, "queried registry with spaces"), registry.DataRootDirectory);
+        Directory.CreateDirectory(queried.RegistryDirectory);
+        File.Copy(registry.RegistryPath, queried.RegistryPath);
+        File.Copy(registry.CurrentProjectPath, queried.CurrentProjectPath);
+        Assert.DoesNotContain(queried.ListProjects(), project => project.Name == "Shared");
+        string[] args = off ? ["project", command, " Shared ", "--off"] : ["project", command, " Shared "];
+        var before = Snapshot();
+        string diagnostic;
+
+        if (child)
+        {
+            var result = await RunCliAsync(queried, args);
+            Assert.Equal(1, result.ExitCode);
+            Assert.Empty(result.StandardOutput);
+            Assert.StartsWith("ArgumentException: Unknown project", result.StandardError);
+            diagnostic = result.StandardError;
+        }
+        else
+        {
+            string? message = null;
+            var output = CaptureConsole(() => message = Assert.Throws<ArgumentException>(() =>
+                ProjectCliCommand.Execute(args, queried, ProjectRoot, null)).Message);
+            Assert.Empty(output);
+            diagnostic = Assert.IsType<string>(message);
+        }
+
+        Assert.Contains("Unknown project 'Shared'", diagnostic);
+        Assert.DoesNotContain(" Shared ", diagnostic);
+        Assert.Contains($"Registry: '{queried.RegistryPath}'", diagnostic);
+        Assert.Contains("Check registry/project selection before creating an entry", diagnostic);
+        Assert.Contains("project create Shared --root <path>", diagnostic);
+        Assert.DoesNotContain(other.RegistryPath, diagnostic);
+        Assert.DoesNotContain("sample", diagnostic);
+        Assert.DoesNotContain(ProjectRoot, diagnostic);
+        Assert.DoesNotContain(queried.DataRootDirectory, diagnostic);
+        Assert.Equal(before, Snapshot());
+        Assert.Equal("sample", queried.ReadSelectedProjectName());
+    }
+
+    [Theory]
+    [InlineData("show", false)]
+    [InlineData("show", true)]
+    [InlineData("use-learned-branch", false)]
+    [InlineData("use-learned-branch", true)]
+    public async Task Execute_AbsentRegistry_ReportsContextWithoutCreatingState(
+        string command, bool existingDirectory)
+    {
+        Directory.CreateDirectory(ProjectRoot);
+        var registry = Registry;
+        if (existingDirectory) Directory.CreateDirectory(registry.RegistryDirectory);
+        var before = Snapshot();
+
+        var result = await RunCliAsync(registry, ["project", command, "Shared"]);
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.StartsWith("ArgumentException: Unknown project 'Shared'", result.StandardError);
+        Assert.Contains($"Registry: '{registry.RegistryPath}'", result.StandardError);
+        Assert.Empty(result.StandardOutput);
+        Assert.Equal(before, Snapshot());
     }
 
     [Theory]
@@ -181,5 +260,40 @@ public sealed class ProjectUseLearnedBranchCliTests : IDisposable
         File.WriteAllText(Path.Combine(modelDirectory, "project-model.json"), ProjectModelJson.Serialize(model));
     }
 
-    public void Dispose() => Directory.Delete(directory, recursive: true);
+    private async Task<CliChildProcessResult> RunCliAsync(OrchestratorProjectRegistry registry, string[] args)
+    {
+        var start = new ProcessStartInfo("dotnet")
+        {
+            UseShellExecute = false, CreateNoWindow = true, WorkingDirectory = ProjectRoot,
+            RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true
+        };
+        start.ArgumentList.Add(typeof(ProjectCliCommand).Assembly.Location);
+        foreach (var arg in args) start.ArgumentList.Add(arg);
+        start.Environment.Clear();
+        foreach (var name in new[]
+        {
+            "PATH", "SystemRoot", "WINDIR", "TEMP", "TMP", "USERPROFILE", "LOCALAPPDATA", "APPDATA",
+            "ProgramFiles", "ProgramFiles(x86)", "DOTNET_ROOT", "DOTNET_ROOT(x86)"
+        })
+        {
+            if (Environment.GetEnvironmentVariable(name) is { } value) start.Environment[name] = value;
+        }
+        start.Environment[OrchestratorWorkspace.RepoRootEnvironmentVariable] = ProjectRoot;
+        start.Environment[OrchestratorProjectRegistry.RegistryHomeEnvironmentVariable] = registry.RegistryDirectory;
+        start.Environment[OrchestratorDataRoot.EnvironmentVariable] = registry.DataRootDirectory;
+        start.Environment[DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable] = Path.Combine(directory, "test-dotnet");
+        return await CliChildProcessRunner.RunAsync(start);
+    }
+
+    private string[] Snapshot() => Directory.EnumerateFileSystemEntries(directory, "*", SearchOption.AllDirectories)
+        .Order(StringComparer.Ordinal)
+        .Select(path => Directory.Exists(path) ? path + "/" :
+            path + ":" + Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path))))
+        .ToArray();
+
+    public override async ValueTask DisposeAsync()
+    {
+        try { Directory.Delete(directory, recursive: true); }
+        finally { await base.DisposeAsync(); }
+    }
 }
