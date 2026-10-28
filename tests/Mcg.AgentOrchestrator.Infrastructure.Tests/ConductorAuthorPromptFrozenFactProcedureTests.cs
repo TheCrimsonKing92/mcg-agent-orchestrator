@@ -6,22 +6,25 @@ using Mcg.AgentOrchestrator.Core;
 public sealed class ConductorAuthorPromptFrozenFactProcedureTests
 {
     [Xunit.Fact]
-    public void Prompt_keeps_four_steps_and_adds_literal_edit_and_fixture_rules()
+    public void Prompt_embeds_complete_normative_procedure_without_document_dependency()
     {
         var input = new ConductorAuthorRoundInput(
             new ConductorAuthorItem(OperatorAnswerTargetKind.HumanInput, "item", "goal", "question", null),
             "brief", "spec", null);
-        var prompt = Regex.Replace(ConductorAuthorPrompt.Render(input), @"\s+", " ");
-        const string fourSteps = "For a fact frozen by a criterion, use frozen-fact-ruling only when the goal brief and current source show all four steps: the fact builds exactly the behavior deliberately removed or moved; only assertions or path pieces pinning that behavior change; name every other assertion in the fact and every other fact in every frozen class as unmodified; give a runnable candidate diff check.";
-        const string prohibition = "Removing an assertion is never an allowed change.";
+        AssertSelfContainedProcedure(ConductorAuthorPrompt.Render(input));
+    }
 
-        Xunit.Assert.Contains(fourSteps, prompt);
-        Xunit.Assert.Contains(ConductorAuthorPrompt.StepZero, prompt);
-        Xunit.Assert.Contains(ConductorAuthorPrompt.FixtureInputs, prompt);
-        Xunit.Assert.Contains(prohibition, prompt);
-        Xunit.Assert.Contains($"{fourSteps} {ConductorAuthorPrompt.StepZero} {ConductorAuthorPrompt.FixtureInputs}", prompt);
-        Xunit.Assert.True(prompt.IndexOf(ConductorAuthorPrompt.FixtureInputs, StringComparison.Ordinal) <
-            prompt.IndexOf(prohibition, StringComparison.Ordinal));
+    internal static void AssertSelfContainedProcedure(string prompt)
+    {
+        // The expected authority comes from the home document, independently of prompt constants.
+        var document = File.ReadAllText(Path.Combine(VerifiedRepositoryRoot.Find(), "docs", "frozen-fact-rulings.md"));
+        var procedure = document.Split("## Four-step procedure", StringSplitOptions.None)[1]
+            .Split("## Shared text format", StringSplitOptions.None)[0];
+        var normalized = Regex.Replace(prompt, @"\s+", " ");
+        Xunit.Assert.Contains(Regex.Replace(procedure, @"\s+", " ").Trim(), normalized);
+        Xunit.Assert.Contains("runnable against the candidate output", normalized);
+        Xunit.Assert.DoesNotContain("docs/frozen-fact-rulings.md", prompt);
+        Xunit.Assert.DoesNotContain("## Operator exemplars", prompt);
     }
 
     [Xunit.Fact]
