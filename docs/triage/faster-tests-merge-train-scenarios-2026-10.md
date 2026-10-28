@@ -72,7 +72,7 @@ landing and cleanup still execute per test.
 | MergeTrainDeferralFixtureEquivalenceTests / Deferral_SharedAndFreshFixtures_ProduceEquivalentResults | Fresh-arm repository/candidate setup plus production train execution: :14-16 invoke both arms; MergeTrainDeferralSharedFixture.cs:116-130 rebuilds fresh. Reset_FiveOrderedScenarios_RestoreStateWithoutRebuilding at :40 executes five scenarios. Slot delays are completed tasks, not paced waits. | Unchanged by design; both busyRounds 2 and 3 retain an independently built fresh arm and all five scenarios remain. |
 | AcceptanceCohortWorkflowTestsLandingAndReceipts / RetryableLandingHold_PreservesPassingReceipt_AndLaterRelandsIdenticalState | Candidate and real cohort/landing git work: theory at :727 repeats two candidates, then materializes a cohort and seeds an exact receipt. FakeAcceptanceVerifier fails if a forbidden rerun occurs. Store-only tests at :18 have no candidate setup. | Copy only the four-row retry recipe; retain real receipt creation/replay, stores, and other scenarios. |
 | AcceptanceCohortWorkflowTestsGroupedGateAttempts / AdmissionWritesOwnedAttemptBeforeReturningWithoutRunningVerifier | Candidate setup and git launches: CreateReadyMembers at :399 builds two/three candidates. Process launch is injected and the verifier is scripted; no actual gate child is removed. | One template per member count; registry, launch ownership and receipt replay remain per-test. |
-| BackgroundMergeTrainGateTests / PlannerConflict_EscalatesWhileAnotherTrainOccupiesAcceptanceWidth | Candidate setup and git launches: CreateReadyTrain at :458 repeats three worktrees; BackgroundGateStartHarness captures launches, and batch ticks use maxIterations 1. | Copy repeated ready-train recipe; keep the distinct blocked-gate scenario fresh and add real-path equivalence coverage. |
+| BackgroundMergeTrainGateTests / PlannerConflict_EscalatesWhileAnotherTrainOccupiesAcceptanceWidth | Candidate setup and git launches: CreateReadyTrain at :512 repeats three worktrees; BackgroundGateStartHarness captures launches, and batch ticks use maxIterations 1. | Copy repeated ready-train recipe; keep the distinct blocked-gate scenario fresh and add real-path equivalence coverage. |
 | AcceptanceCohortWorkflowTestsTrainImplicatedExclusion / PassingRemainder_ExcludesEjectedRevisionFromBothSelectors | Candidate setup and production train git work: WithTrain at :200 builds two/three candidates and uses SequenceAcceptanceVerifier. | One template per member count; ejections, implication stores and selector assertions unchanged. |
 | AcceptanceCohortWorkflowTestsFollowerGateStart / StartBindsFollowerPlanAndHoldsOnlyFollower | Candidate setup and real follower-workspace git work: CreateScenario at :222 builds two worktrees; Scenario.Enable injects child launch. | Copy non-conflict recipe only in this class. Keep the singleton conflict case fresh. Optional fixture argument defaults to fresh for external callers in FollowerGateCarry/Stop. |
 | MergeTrainBisectSlotLossTests / FailedFirstGate_BusyBisectKeepsReceiptAndImplicatesBeforeLease | Candidate setup and git launches: WithTrain at :184 builds three worktrees. BisectSlotVerifier scripts results; cohortStableSlotRoundDelay returns Task.CompletedTask. | Copy the repeated three-member recipe; real slot acquisition/loss, receipt retention, and bisect remain. |
@@ -92,6 +92,30 @@ remains a failed recipe, and failed copies are deleted before rethrowing.
 The copy repairs both absolute worktree pointers inside its own tree; relative
 commondir entries keep their topology. No Git write is directed at the source
 template. No gate/time seam or shipping source change is introduced.
+
+Candidate `8507934da21e5f0a145e92bbd2884b33ed6915d2` failed
+`MergeTrainRedAttributionReplayScenarioTests.ReadOnlyChild_LandedRemainderStillFailsCulprit`
+at `LandingExecutor.MergeTrains.cs:240-244` (receipt
+`finding-evidence-7849b7da9d55232efdda0f19`): `read-tree -m -u` rejected
+`Other.Source.cs` as not uptodate after main's ref advanced. The source-supported
+hypothesis is stale copied index stat data: copying files/indexes does not rebind
+the cached metadata to the destination, and both Git runners set
+`GIT_OPTIONAL_LOCKS=0`, so status checks cannot persist a refresh
+(`InfrastructureTestSupport.cs:185`, `src/Mcg.AgentOrchestrator.Execution/Processes/GitCli.cs:122`).
+The copy now explicitly runs `update-index --refresh` for the root and each
+linked worktree after pointer repair. This adds one Git launch per checkout;
+candidate/worktree construction still happens once per recipe. Refresh failures
+throw through the existing partial-copy cleanup; no tracked content is reset or
+staged. All refresh writes target the copy.
+
+`BackgroundMergeTrainGateTests.CandidateCopy_StaleIndexes_CanUpdateExistingFilesInRootAndLinkedWorktree`
+arranges stale metadata with fixed file timestamps, then advances refs and runs
+the same two-tree checkout operation on existing tracked files in both checkouts,
+without an intervening status/refresh. It asserts the updated contents, clean
+checkouts, and unchanged template index bytes, refs and contents. It uses no
+wall-clock pacing. Acceptance must run this regression and the original failing
+scenario to confirm the hypothesis and repair; workers have not executed either.
+Include the added regression in the class's after total and test count.
 
 The candidate `4cef23c8e0178f827a4793442654601d7d44867b` failed pointer
 repair at `CohortCandidateTemplate.Copy` with `UnauthorizedAccessException`

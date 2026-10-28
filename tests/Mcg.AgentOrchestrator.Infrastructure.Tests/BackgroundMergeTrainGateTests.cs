@@ -348,6 +348,60 @@ public sealed class BackgroundMergeTrainGateTests(CohortCandidateTemplate templa
     }
 
     [Fact]
+    public void CandidateCopy_StaleIndexes_CanUpdateExistingFilesInRootAndLinkedWorktree()
+    {
+        const string key = "stale-indexes";
+        const string path = "existing.txt";
+        byte[]? rootIndex = null;
+        byte[]? memberIndex = null;
+        var copy = template.Copy(key, 1, (repo, ids) =>
+        {
+            File.WriteAllText(Path.Combine(repo, path), "before");
+            RunGit(repo, "add", path);
+            RunGit(repo, "commit", "-m", "Track existing file");
+            CreateWorktreeCandidate(repo, ids[0], path, "after");
+            var worktree = Assert.IsType<string>(GoalWorktrees.TryResolve(repo, ids[0]));
+            // Force stale stat entries without pacing or changing any tracked content.
+            File.SetLastWriteTimeUtc(Path.Combine(repo, path), DateTime.UnixEpoch);
+            File.SetLastWriteTimeUtc(Path.Combine(worktree, path), DateTime.UnixEpoch);
+            rootIndex = File.ReadAllBytes(Path.Combine(repo, ".git", "index"));
+            memberIndex = File.ReadAllBytes(Path.GetFullPath(
+                RunGitOutput(worktree, "rev-parse", "--git-path", "index").Trim(), worktree));
+        });
+        try
+        {
+            var worktree = Assert.IsType<string>(GoalWorktrees.TryResolve(copy.Repo, copy.GoalIds[0]));
+            var baseline = RunGitOutput(copy.Repo, "rev-parse", "HEAD").Trim();
+            var candidate = copy.Revisions[0];
+            // No preparatory refresh: the returned copy must already support read-tree.
+            RunGit(copy.Repo, "update-ref", "refs/heads/main", candidate, baseline);
+            RunGit(copy.Repo, "read-tree", "-m", "-u", baseline, candidate);
+            Assert.Equal("after", File.ReadAllText(Path.Combine(copy.Repo, path)));
+            Assert.Empty(RunGitOutput(copy.Repo, "status", "--porcelain").Trim());
+            RunGit(worktree, "update-ref", "refs/heads/" + GoalWorktrees.BranchName(copy.GoalIds[0]), baseline, candidate);
+            RunGit(worktree, "read-tree", "-m", "-u", candidate, baseline);
+            Assert.Equal("before", File.ReadAllText(Path.Combine(worktree, path)));
+            Assert.Empty(RunGitOutput(worktree, "status", "--porcelain").Trim());
+
+            var source = template.TemplatePath(key);
+            var sourceWorktree = Assert.IsType<string>(GoalWorktrees.TryResolve(source, copy.GoalIds[0]));
+            Assert.NotNull(rootIndex);
+            Assert.NotNull(memberIndex);
+            Assert.Equal(rootIndex, File.ReadAllBytes(Path.Combine(source, ".git", "index")));
+            Assert.Equal(memberIndex, File.ReadAllBytes(Path.GetFullPath(
+                RunGitOutput(sourceWorktree, "rev-parse", "--git-path", "index").Trim(), sourceWorktree)));
+            Assert.Equal(baseline, RunGitOutput(source, "rev-parse", "main").Trim());
+            Assert.Equal(candidate, RunGitOutput(sourceWorktree, "rev-parse", "HEAD").Trim());
+            Assert.Equal("before", File.ReadAllText(Path.Combine(source, path)));
+            Assert.Equal("after", File.ReadAllText(Path.Combine(sourceWorktree, path)));
+        }
+        finally
+        {
+            DeleteDirectory(copy.Repo);
+        }
+    }
+
+    [Fact]
     public void CandidateCopy_RealConstruction_PreservesTopologyAndTrainOutcome()
     {
         var fresh = CreateReducedAcceptanceCohortRepository();

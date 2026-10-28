@@ -45,9 +45,13 @@ public sealed class CohortCandidateTemplate : IDisposable
                 File.WriteAllText(backlink, gitFile.Replace('\\', '/') + "\n");
                 // Git marks this existing file hidden on Windows. Create semantics reject
                 // hidden files; truncate in place to preserve their attributes and isolation.
-                using var writer = new StreamWriter(File.Open(gitFile, FileMode.Truncate, FileAccess.Write));
-                writer.Write("gitdir: " + entry.Replace('\\', '/') + "\n");
+                using (var writer = new StreamWriter(File.Open(gitFile, FileMode.Truncate, FileAccess.Write)))
+                    writer.Write("gitdir: " + entry.Replace('\\', '/') + "\n");
+                Builder.RefreshIndex(Path.GetDirectoryName(gitFile)!);
             }
+            // Index stat data describes the template's files, not this copy. Status runs
+            // with GIT_OPTIONAL_LOCKS=0 and cannot persist a refresh before read-tree -m -u.
+            Builder.RefreshIndex(repo);
             return new PreparedRepository(repo, source.GoalIds.ToArray(), source.Revisions.ToArray());
         }
         catch
@@ -102,6 +106,7 @@ public sealed class CohortCandidateTemplate : IDisposable
         internal static string ProcessRoot => SeedRepositoryProcessRootPath;
         internal static string CreateRepository() => CreateReducedAcceptanceCohortRepository();
         internal static string Revision(string repo, string revision) => RunGitOutput(repo, "rev-parse", revision).Trim();
+        internal static void RefreshIndex(string repo) => RunGit(repo, "update-index", "--refresh");
         internal static void Remove(string repo) => DeleteDirectory(repo);
     }
 }
