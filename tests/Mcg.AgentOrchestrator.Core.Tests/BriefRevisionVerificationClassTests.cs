@@ -136,13 +136,18 @@ public sealed class BriefRevisionVerificationClassTests
             AcceptanceGateOwnedAcceptanceCriteria = [GateCriterion]
         });
         var old = Xunit.Assert.Single(goal.OutstandingCriterionEvidenceObligations);
-        kernel.RecordCriterionEvidence(goal.Id, old.Id, CriterionEvidenceOwner.Acceptance,
+        old = kernel.MapCriterionEvidenceOwner(goal.Id, old.CriterionIndex, old.CriterionVersion,
+            CriterionEvidenceOwner.Acceptance, "operator", old.RequiredScope,
+            expectedCandidateSha: "candidate-a");
+        var priorReceipt = kernel.RecordCriterionEvidence(goal.Id, old.Id, CriterionEvidenceOwner.Acceptance,
             "candidate-a", "old-gate", old.RequiredScope, true, "Prior gate passed");
         Xunit.Assert.Empty(goal.OutstandingCriterionEvidenceObligations);
 
         kernel.ReviseGoalBrief(goal.Id, Brief(GateCriterion, OperatorCriterion));
-        kernel.RecordCriterionEvidence(goal.Id, old.Id, CriterionEvidenceOwner.Acceptance,
-            "candidate-a", "late-old-gate", old.RequiredScope, true, "Late historical gate");
+        // Replay the same historical receipt; a new receipt cannot replace satisfied evidence.
+        var replayed = kernel.RecordCriterionEvidence(goal.Id, old.Id, CriterionEvidenceOwner.Acceptance,
+            "candidate-a", "old-gate", old.RequiredScope, true, "Prior gate passed");
+        Xunit.Assert.Equal(priorReceipt, replayed);
 
         var restored = Reload(kernel).GetGoal(goal.Id);
         Xunit.Assert.Equal(VerificationClass.RealWorldDependent, restored.RefinedSpec!.VerificationClass);
@@ -150,6 +155,8 @@ public sealed class BriefRevisionVerificationClassTests
         Xunit.Assert.Equal([OperatorCriterion], restored.RefinedSpec.OperatorOwnedAcceptanceCriteria);
         Xunit.Assert.Equal(CriterionEvidenceState.Satisfied,
             Xunit.Assert.Single(restored.CriterionEvidenceObligations, item => item.Id == old.Id).State);
+        Xunit.Assert.Equal("old-gate",
+            Xunit.Assert.Single(restored.CriterionEvidenceObligations, item => item.Id == old.Id).ReceiptId);
         var current = restored.GetOutstandingCriterionEvidenceObligations("candidate-a");
         Xunit.Assert.Equal(2, current.Count);
         Xunit.Assert.Equal([CriterionEvidenceOwner.Acceptance, CriterionEvidenceOwner.Operator],
