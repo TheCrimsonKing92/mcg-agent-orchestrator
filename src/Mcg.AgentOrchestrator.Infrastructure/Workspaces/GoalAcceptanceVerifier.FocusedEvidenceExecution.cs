@@ -97,7 +97,8 @@ internal static class FocusedEvidenceExecution
         DotnetBuildEnvironmentLease? stableSlotLease = null,
         bool runBaselineArm = false,
         CancellationToken cancellationToken = default,
-        FindingEvidenceNegativeControl? negativeControl = null, IReadOnlyList<string>? revertPaths = null, FindingEvidenceMutation? mutation = null, IReadOnlyList<string>? declaredPaths = null)
+        FindingEvidenceNegativeControl? negativeControl = null, IReadOnlyList<string>? revertPaths = null, FindingEvidenceMutation? mutation = null, IReadOnlyList<string>? declaredPaths = null,
+        SourceRevertedEvidenceContinuation? continuation = null)
     {
         var executionOwner = (AcceptanceFocusedVerificationOwner)(executionContext ?? throw new InvalidOperationException(
             "Focused verification execution context was not supplied."));
@@ -121,6 +122,28 @@ internal static class FocusedEvidenceExecution
         }
 
         var candidateSha = GoalAcceptanceVerifier.ResolveGitScalar(worktreePath, "rev-parse", "HEAD") ?? "unavailable";
+        // Baseline experiments, mutations and implicit reverts keep their original execution path.
+        continuation = !runBaselineArm && negativeControl == FindingEvidenceNegativeControl.RevertSrc &&
+            revertPaths is { Count: > 0 } && mutation is null ? continuation : null;
+        var continuationIdentity = continuation is null ? string.Empty : SourceRevertedEvidenceContinuation.Fingerprint(new
+        {
+            Candidate = candidateSha, Request = request, Checks = focusedChecks, Settings = engineSettings,
+            Coverage = coverage, Control = negativeControl,
+            Revert = revertPaths is null ? null : FindingEvidenceRevertPaths.Canonicalize(revertPaths),
+            Declared = declaredPaths?.Order(StringComparer.Ordinal).ToArray(),
+            Baseline = resolveFocusedEvidenceMergeBase(worktreePath),
+            executionOwner.ProjectHomeDirectory,
+            Runtime = System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription,
+            OS = System.Runtime.InteropServices.RuntimeInformation.OSDescription,
+            Architecture = System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture
+        });
+        FocusedEvidenceRunResult? retained = null;
+        if (continuation is not null)
+        {
+            var status = GitCli.Run(worktreePath, "status", "--porcelain", "--untracked-files=all");
+            if (status.Succeeded && !status.DrainTimedOut && GitCli.ParseCommitWorthyStatusPaths(status.Output).Length == 0)
+                retained = continuation.Resume(continuationIdentity);
+        }
         FocusedEvidenceArmRunResult candidate;
         if (runBaselineArm)
         {
@@ -129,7 +152,7 @@ internal static class FocusedEvidenceExecution
 
         try
         {
-            candidate = await runFocusedEvidenceArm(
+            candidate = retained?.Arms?.Single(arm => arm.Arm == FindingEvidenceArm.Candidate) ?? await runFocusedEvidenceArm(
                 FindingEvidenceArm.Candidate,
                 candidateSha,
                 worktreePath,
@@ -161,7 +184,7 @@ internal static class FocusedEvidenceExecution
                 executionOwner.MarkSuccessful();
             }
 
-            return await addSourceRevertedEvidence(new FocusedEvidenceRunResult(
+            var candidateEvidence = new FocusedEvidenceRunResult(
                 request,
                 Accepted: true,
                 Passed: candidate.Disposition == FindingEvidenceArmDisposition.Green,
@@ -175,8 +198,19 @@ internal static class FocusedEvidenceExecution
                     FindingEvidenceArmDisposition.Red => FindingEvidenceOutcomeReason.CandidateRed,
                     FindingEvidenceArmDisposition.ApparatusFailure => FindingEvidenceOutcomeReason.ApparatusFailure,
                     _ => FindingEvidenceOutcomeReason.CandidateInconclusive
-                }), negativeControl, worktreePath, goalId, focusedChecks, coverage,
-                stableSlotIndex, stableSlotLease, executionOwner, revertPaths: revertPaths, mutation: mutation, declaredPaths: declaredPaths).ConfigureAwait(false);
+                });
+            if (retained is null && candidateEvidence.IsValidEvidence)
+                continuation?.Observe(continuationIdentity, candidateEvidence);
+            try
+            {
+                return await addSourceRevertedEvidence(candidateEvidence, negativeControl, worktreePath, goalId, focusedChecks, coverage,
+                    stableSlotIndex, stableSlotLease, executionOwner, revertPaths: revertPaths, mutation: mutation, declaredPaths: declaredPaths).ConfigureAwait(false);
+            }
+            catch (DotnetBuildSlotsBusyException)
+            {
+                continuation?.Deferred();
+                throw;
+            }
         }
 
         var baselineSha = resolveFocusedEvidenceMergeBase(worktreePath);
