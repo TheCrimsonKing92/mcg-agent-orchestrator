@@ -68,13 +68,23 @@ public sealed class ConductorAuthorHostRetryTests
             Xunit.Assert.Equal("runtime", payload.Precedent);
         }
         else Xunit.Assert.Empty(intents);
-        if (scenario == "ask-owner") Xunit.Assert.NotEmpty(harness.Kernel.HumanInputRequests);
+        if (scenario == "ask-owner")
+        {
+            var hold = goal.CurrentHold;
+            Xunit.Assert.NotNull(hold);
+            Xunit.Assert.Equal("author-owner-question", hold.State);
+            Xunit.Assert.Contains($"item=Clarification:{item.Id}", hold.Blocker);
+            Xunit.Assert.Contains("reason=model-ask-owner", hold.Blocker);
+            Xunit.Assert.Contains("question=Which runtime?", hold.Blocker);
+            Xunit.Assert.Contains("recommendation=Use Windows", hold.Blocker);
+        }
         using var connection = harness.OpenClaims();
         using var query = connection.CreateCommand();
         query.CommandText = "SELECT attempt, outcome FROM author_claims";
         using var reader = query.ExecuteReader();
         Xunit.Assert.True(reader.Read());
         Xunit.Assert.Equal(2, reader.GetInt32(0));
+        if (scenario == "ask-owner") Xunit.Assert.Equal("owner-question", reader.GetString(1));
         Xunit.Assert.NotEqual("retryable", reader.GetString(1));
         Xunit.Assert.NotEqual("in-flight", reader.GetString(1));
     }
