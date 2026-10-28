@@ -43,7 +43,7 @@ public sealed class AcceptancePartitionVerdictCacheRerunCreditTests : IDisposabl
         Assert.Equal(AcceptanceLaneRerunEvidence.Flake, credited.Outcome);
         Assert.Equal([Identity], credited.FirstFailingTestIdentities);
         Assert.Equal("attempt:first:0", credited.FirstInvocationId);
-        Assert.Equal(BuildInvocationIdentity(_partition, 2, "attempt"), credited.RerunInvocationId);
+        Assert.Equal(AcceptanceInvocationEvidenceProvenance.BuildInvocationIdentity(_partition, 2, "attempt"), credited.RerunInvocationId);
         Assert.Equal(["confirmation.trx"], credited.RerunTestResultPaths);
         Assert.Equal($"LANE_RERUN_CREDIT lane=\"{_partition.Name}\" identities=1 history_goals={H} confirm_invocation={credited.RerunInvocationId}", Assert.Single(_lines));
     }

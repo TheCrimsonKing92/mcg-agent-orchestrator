@@ -313,9 +313,7 @@ public sealed partial record AcceptanceCohortReceipt(
         ValidForLanding &&
         Invalidation is null &&
         GateExitCode == 0 &&
-        AcceptanceCohortGateEvidence.HasContentBoundEvidence(
-            GateTestResultPaths,
-            GateEvidenceArtifacts);
+        HasDeclaredContentBoundEvidence();
 }
 
 public static class AcceptanceCohortGateEvidence
@@ -388,7 +386,7 @@ public static class AcceptanceCohortGateEvidence
         return true;
     }
 
-    private static bool IsContentBoundArtifact(AcceptanceCohortEvidenceArtifact artifact)
+    public static bool IsContentBoundArtifact(AcceptanceCohortEvidenceArtifact artifact)
     {
         if (string.IsNullOrWhiteSpace(artifact.Kind) ||
             string.IsNullOrWhiteSpace(artifact.Path) ||
