@@ -43,7 +43,10 @@ public sealed class CohortCandidateTemplate : IDisposable
                     throw new InvalidOperationException($"Candidate template '{key}' has an external worktree: {oldGitFile}");
                 var gitFile = Path.Combine(repo, relative);
                 File.WriteAllText(backlink, gitFile.Replace('\\', '/') + "\n");
-                File.WriteAllText(gitFile, "gitdir: " + entry.Replace('\\', '/') + "\n");
+                // Git marks this existing file hidden on Windows. Create semantics reject
+                // hidden files; truncate in place to preserve their attributes and isolation.
+                using var writer = new StreamWriter(File.Open(gitFile, FileMode.Truncate, FileAccess.Write));
+                writer.Write("gitdir: " + entry.Replace('\\', '/') + "\n");
             }
             return new PreparedRepository(repo, source.GoalIds.ToArray(), source.Revisions.ToArray());
         }

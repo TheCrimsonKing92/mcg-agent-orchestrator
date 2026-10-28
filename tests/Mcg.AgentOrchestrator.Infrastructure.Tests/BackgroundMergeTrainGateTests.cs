@@ -310,6 +310,44 @@ public sealed class BackgroundMergeTrainGateTests(CohortCandidateTemplate templa
     }
 
     [Fact]
+    public void CandidateCopy_HiddenGitFile_RepairsPointersAndPreservesAttributes()
+    {
+        const string key = "hidden-git-file";
+        byte[]? originalPointer = null;
+        var copy = template.Copy(key, 1, (repo, ids) =>
+        {
+            CreateWorktreeCandidate(repo, ids[0], "hidden-candidate.txt", "candidate");
+            var worktree = Assert.IsType<string>(GoalWorktrees.TryResolve(repo, ids[0]));
+            var gitFile = Path.Combine(worktree, ".git");
+            if (OperatingSystem.IsWindows())
+            {
+                File.SetAttributes(gitFile, File.GetAttributes(gitFile) | FileAttributes.Hidden);
+                Assert.True(File.GetAttributes(gitFile).HasFlag(FileAttributes.Hidden));
+            }
+            originalPointer = File.ReadAllBytes(gitFile);
+        });
+        try
+        {
+            var worktree = Assert.IsType<string>(GoalWorktrees.TryResolve(copy.Repo, copy.GoalIds[0]));
+            var gitFile = Path.Combine(worktree, ".git");
+            var administration = Assert.Single(Directory.GetDirectories(Path.Combine(copy.Repo, ".git", "worktrees")));
+            Assert.Equal("gitdir: " + administration.Replace('\\', '/') + "\n", File.ReadAllText(gitFile));
+            Assert.Equal(gitFile.Replace('\\', '/') + "\n", File.ReadAllText(Path.Combine(administration, "gitdir")));
+            if (OperatingSystem.IsWindows())
+                Assert.True(File.GetAttributes(gitFile).HasFlag(FileAttributes.Hidden));
+            Assert.Equal(copy.Revisions[0], RunGitOutput(worktree, "rev-parse", "HEAD").Trim());
+            Assert.Empty(RunGitOutput(worktree, "status", "--porcelain").Trim());
+            var sourceWorktree = Assert.IsType<string>(GoalWorktrees.TryResolve(template.TemplatePath(key), copy.GoalIds[0]));
+            Assert.NotNull(originalPointer);
+            Assert.Equal(originalPointer, File.ReadAllBytes(Path.Combine(sourceWorktree, ".git")));
+        }
+        finally
+        {
+            DeleteDirectory(copy.Repo);
+        }
+    }
+
+    [Fact]
     public void CandidateCopy_RealConstruction_PreservesTopologyAndTrainOutcome()
     {
         var fresh = CreateReducedAcceptanceCohortRepository();
