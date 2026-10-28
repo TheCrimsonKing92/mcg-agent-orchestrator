@@ -14,10 +14,12 @@ internal static class CliReadOnlyQueryExecutor
         ref IReadOnlyList<AgentDefinition> agents,
         ref WorkerProfileCatalog workerProfiles,
         ref Goal? currentGoal,
-        IClock? diagnosticsClock = null)
+        IClock? diagnosticsClock = null,
+        BacklogQueryReadContext? backlogReads = null)
     {
         var context = new CliExecutionContext(kernel, workspace, providers, agents, workerProfiles,
-            currentGoal, channel) { IsReadOnlyQuery = true, DiagnosticsClock = diagnosticsClock };
+            currentGoal, channel) { IsReadOnlyQuery = true, DiagnosticsClock = diagnosticsClock,
+                BacklogReads = backlogReads };
         try
         {
             CliCommandHelp.ThrowIfInvalidFlags(args);

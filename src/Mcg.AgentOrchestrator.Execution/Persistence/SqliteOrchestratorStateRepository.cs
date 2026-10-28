@@ -23,6 +23,7 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
     private readonly SqliteWriteTelemetry _writeTelemetry;
     private readonly Action? _beforeOutboxCommit;
     private readonly StateDbConnectionProfile _connectionProfile;
+    private readonly Action<GoalSnapshotReadObservation>? _readObserver;
     private readonly ConcurrentDictionary<TerminalMetadataCacheKey, Lazy<TerminalGoalMetadataValues>> _terminalMetadataCache = new();
     private static readonly AsyncLocal<string?> CurrentWriteOperationTag = new();
     private static readonly string[] CoreSchemaTableNames =
@@ -47,13 +48,16 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
     {
     }
 
-    public static SqliteOrchestratorStateRepository OpenReadOnly(string dbPath) =>
+    public static SqliteOrchestratorStateRepository OpenReadOnly(string dbPath) => OpenReadOnly(dbPath, null);
+
+    public static SqliteOrchestratorStateRepository OpenReadOnly(
+        string dbPath, Action<GoalSnapshotReadObservation>? readObserver) =>
         new(
             dbPath,
             statementObserver: null,
             telemetryOptions: null,
             beforeOutboxCommit: null,
-            StateDbConnectionProfile.QueryOnlyRead);
+            StateDbConnectionProfile.QueryOnlyRead, readObserver);
 
     public static string VerifyJournalMode(string dbPath)
     {
@@ -138,13 +142,15 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
         Action<string>? statementObserver,
         SqliteWriteTelemetryOptions? telemetryOptions,
         Action? beforeOutboxCommit,
-        StateDbConnectionProfile connectionProfile)
+        StateDbConnectionProfile connectionProfile,
+        Action<GoalSnapshotReadObservation>? readObserver = null)
     {
         _dbPath = dbPath;
         _statementObserver = statementObserver;
         _writeTelemetry = new SqliteWriteTelemetry(dbPath, telemetryOptions);
         _beforeOutboxCommit = beforeOutboxCommit;
         _connectionProfile = connectionProfile;
+        _readObserver = readObserver;
     }
 
     internal static string? AmbientWriteOperationTag => CurrentWriteOperationTag.Value;
@@ -571,10 +577,12 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(goalIds);
+        foreach (var id in goalIds)
+            _readObserver?.Invoke(new("requested", id.Value));
         return await WithBusyRetryAsync(async () =>
         {
             await using var conn = OpenConnection();
-            return await LoadFromConnectionAsync(conn, goalIds, cancellationToken);
+            return await LoadFromConnectionAsync(conn, goalIds, cancellationToken, _readObserver);
         }, cancellationToken);
     }
 
@@ -1573,6 +1581,7 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
     public async Task<IReadOnlyList<GoalSummary>> ListGoalMetadataAsync(
         bool includeTerminalCreatedAt, CancellationToken cancellationToken = default)
     {
+        _readObserver?.Invoke(new("metadata", null));
         await using var conn = OpenConnection();
         var results = new List<GoalSummary>();
         var hasPromotionFacts = HasPromotionFactsTable(conn);
@@ -2051,7 +2060,8 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
     private static async Task<AgentOrchestratorKernel> LoadFromConnectionAsync(
         SqliteConnection conn,
         IReadOnlyCollection<GoalId>? goalIds,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Action<GoalSnapshotReadObservation>? readObserver = null)
     {
         var goalSnapshots = new List<GoalSnapshot>();
         var humanInputSnapshots = new List<HumanInputRequestSnapshot>();
@@ -2078,16 +2088,19 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
             await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
             while (await reader.ReadAsync(cancellationToken))
             {
+                var json = reader.GetString(1);
+                readObserver?.Invoke(new("hot-attempt", reader.GetString(0), json.Length));
                 if (TryReadGoalSnapshot(
                     reader.GetString(0),
-                    reader.GetString(1),
+                    json,
                     null,
                     logQuarantine: true,
                     out var snap))
                 {
+                    readObserver?.Invoke(new("hot-deserialized", reader.GetString(0), json.Length));
                     goalSnapshots.Add(goalIds is null
                         ? snap
-                        : (await SnapshotArchive.HydrateAsync(conn, snap, cancellationToken))!);
+                        : (await SnapshotArchive.HydrateAsync(conn, snap, cancellationToken, readObserver))!);
                 }
             }
         }
