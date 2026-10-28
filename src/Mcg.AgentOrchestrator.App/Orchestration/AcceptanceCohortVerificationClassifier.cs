@@ -5,6 +5,10 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal static class AcceptanceCohortVerificationClassifier
 {
+    internal static IReadOnlyList<string> FailedCheckNames(AcceptanceVerificationResult result) =>
+        result.Checks?.Where(check => !check.Passed && !check.Advisory)
+            .Select(check => check.Name).ToArray() ?? [];
+
     internal static AcceptanceCohortGateOutcome ClassifyCohortVerification(AcceptanceVerificationResult result) =>
         ClassifyCohortVerificationResult(result).Outcome;
 

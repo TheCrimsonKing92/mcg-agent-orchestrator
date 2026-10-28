@@ -18,4 +18,12 @@ public sealed record AcceptanceVerificationResult(
 
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? AttemptId { get; init; }
+
+    internal static IReadOnlyList<string> CollectTestResultPaths(IEnumerable<AcceptanceCheckResult> checks) =>
+        checks
+            .SelectMany(check => check.CrosswalkDiagnostics is not null
+                ? check.NormalizedTestResultPaths ?? [] : check.TestResultPaths ?? [])
+            .Where(path => !string.IsNullOrWhiteSpace(path))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
 }

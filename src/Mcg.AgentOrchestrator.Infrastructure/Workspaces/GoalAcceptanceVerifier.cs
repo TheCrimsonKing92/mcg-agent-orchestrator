@@ -899,7 +899,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var failedCheck = checks.FirstOrDefault(check => !check.Advisory && !check.Passed);
         var partialCoverage = checks.FirstOrDefault(check => check.Name == AcceptanceLaneEarlyStop.ReceiptName);
         var artifactsPath = checks.LastOrDefault(check => !string.IsNullOrWhiteSpace(check.ArtifactsPath))?.ArtifactsPath;
-        var testResultPaths = CollectTestResultPaths(checks);
+        var testResultPaths = AcceptanceVerificationResult.CollectTestResultPaths(checks);
 
         var verification = new AcceptanceVerificationResult(
             Passed: failedCheck is null,
@@ -1665,14 +1665,6 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             throw new OperationCanceledException("acceptance gate attempt cancelled by goal disposition");
         }
     }
-
-    private static IReadOnlyList<string> CollectTestResultPaths(IEnumerable<AcceptanceCheckResult> checks) =>
-        checks
-            .SelectMany(check => check.CrosswalkDiagnostics is not null
-                ? check.NormalizedTestResultPaths ?? [] : check.TestResultPaths ?? [])
-            .Where(path => !string.IsNullOrWhiteSpace(path))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToArray();
 
     internal static bool TryBuildFocusedEvidenceChecks(
         string request,
