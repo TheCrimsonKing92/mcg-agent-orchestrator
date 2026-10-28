@@ -7,6 +7,16 @@ internal static class LaneSubstringCollisionCheck
 {
     internal const string Rule = "lane-substring-collision";
 
+    // Both intake and completion use resolved membership, including exclusions and collection ownership.
+    internal static IReadOnlyList<(AcceptanceTestLane Lane, IReadOnlyList<string> Patterns)> SubstringSelections(
+        IReadOnlyList<AcceptanceTestLane> lanes, AcceptanceTestClassDescriptor descriptor) =>
+        AcceptanceLaneMembership.LanesIncluding(lanes, descriptor.FullName)
+            .Where(lane => !lane.Name.Equals("Remainder", StringComparison.OrdinalIgnoreCase) &&
+                (descriptor.Collection is null || !lane.OwnedCollections.Contains(descriptor.Collection, StringComparer.Ordinal)))
+            .Select(lane => (Lane: lane, Patterns: AcceptanceLaneMembership.MatchingIncludePatterns(lane, descriptor.FullName)))
+            .Where(selection => selection.Patterns.All(pattern => pattern.StartsWith('*') && pattern.EndsWith('*')))
+            .ToArray();
+
     internal static IReadOnlyList<TestCollectionGuardViolation> Find(
         IReadOnlyList<AcceptanceTestLane> baseLanes, IReadOnlyList<AcceptanceTestLane> candidateLanes,
         IReadOnlyList<AcceptanceTestClassDescriptor> candidateClasses, string diffText)
@@ -31,11 +41,9 @@ internal static class LaneSubstringCollisionCheck
             if (!added.Contains(simpleName) || removed.Contains(simpleName)) continue;
             var lanes = AcceptanceLaneMembership.LanesIncluding(candidateLanes, descriptor.FullName);
             if (lanes.Count != 1 || lanes[0].Name.Equals("Remainder", StringComparison.OrdinalIgnoreCase)) continue;
-            var lane = lanes[0];
-            if (descriptor.Collection is not null && lane.OwnedCollections.Contains(descriptor.Collection, StringComparer.Ordinal))
-                continue;
-
-            var patterns = AcceptanceLaneMembership.MatchingIncludePatterns(lane, descriptor.FullName);
+            var selections = SubstringSelections(candidateLanes, descriptor);
+            if (selections.Count == 0) continue;
+            var (lane, patterns) = selections[0];
             var baseLane = baseLanes.FirstOrDefault(item => item.Name.Equals(lane.Name, StringComparison.OrdinalIgnoreCase));
             var basePatterns = baseLane is null ? []
                 : AcceptanceLaneMembership.MatchingIncludePatterns(baseLane, descriptor.FullName);
