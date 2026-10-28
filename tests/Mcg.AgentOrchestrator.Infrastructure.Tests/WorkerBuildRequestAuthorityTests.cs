@@ -9,7 +9,7 @@ public sealed class WorkerBuildRequestAuthorityTests
     [Fact]
     public async Task ForeignPipePeerCannotReachHostService()
     {
-        using var fixture = new WorkerBuildRequestFixture();
+        using var fixture = new WorkerBuildRequestFixture(compilerMode: WorkerBuildRequestFixture.CompilerMode.Fake);
         var observed = new TaskCompletionSource<(int Pid, bool Admitted)>(TaskCreationOptions.RunContinuationsAsynchronously);
         var service = new CountingService();
         using var channel = new WorkerBuildRequestChannel(fixture.RepositoryRoot, service,
@@ -56,7 +56,7 @@ public sealed class WorkerBuildRequestAuthorityTests
     [InlineData("admission")]
     public void WrongOriginCannotAuthorizeHost(string control)
     {
-        using var fixture = new WorkerBuildRequestFixture();
+        using var fixture = new WorkerBuildRequestFixture(compilerMode: WorkerBuildRequestFixture.CompilerMode.Fake);
         var reference = control switch
         {
             "dispatch" => fixture.Reference with { DispatchId = "forged-dispatch" },
@@ -77,7 +77,7 @@ public sealed class WorkerBuildRequestAuthorityTests
     [InlineData("image", false)]
     public void WrongOrReusedHostProcessCannotAuthorizeLaunchOrConsumption(string control, bool requireRunning)
     {
-        using var fixture = new WorkerBuildRequestFixture();
+        using var fixture = new WorkerBuildRequestFixture(compilerMode: WorkerBuildRequestFixture.CompilerMode.Fake);
         using var current = Process.GetCurrentProcess();
         var identity = WorkerBuildRequestChannel.ReadIdentity(current);
         identity = control switch
@@ -93,7 +93,7 @@ public sealed class WorkerBuildRequestAuthorityTests
     [Fact]
     public void MissingPersistedHostImageCannotAuthorizeAnEnrolledDispatch()
     {
-        using var fixture = new WorkerBuildRequestFixture();
+        using var fixture = new WorkerBuildRequestFixture(compilerMode: WorkerBuildRequestFixture.CompilerMode.Fake);
         var process = fixture.Kernel.GetTask(fixture.GoalId, fixture.TaskId).LastProcess!;
         fixture.Kernel.RecordTaskProcessStarted(fixture.GoalId, fixture.TaskId,
             process with { ProcessIdentityImagePath = null });
@@ -104,7 +104,7 @@ public sealed class WorkerBuildRequestAuthorityTests
     [Fact]
     public void UnstartedSuppressionCannotReplaceCanonicalHostImage()
     {
-        using var fixture = new WorkerBuildRequestFixture();
+        using var fixture = new WorkerBuildRequestFixture(compilerMode: WorkerBuildRequestFixture.CompilerMode.Fake);
         var task = fixture.Kernel.GetTask(fixture.GoalId, fixture.TaskId);
         var process = task.LastProcess!;
         var unrelated = process with { CompletedAt = DateTimeOffset.UtcNow,
@@ -122,7 +122,7 @@ public sealed class WorkerBuildRequestAuthorityTests
     [InlineData("image")]
     public async Task ChangedCanonicalHostCannotConsumeGenuineCompilation(string component)
     {
-        using var fixture = new WorkerBuildRequestFixture();
+        using var fixture = new WorkerBuildRequestFixture(compilerMode: WorkerBuildRequestFixture.CompilerMode.Fake);
         var invocation = await fixture.RunHelper();
         Assert.Equal(WorkerBuildOutcome.Success, invocation.Outcome);
         var process = fixture.Kernel.GetTask(fixture.GoalId, fixture.TaskId).LastProcess!;
@@ -164,7 +164,7 @@ public sealed class WorkerBuildRequestAuthorityTests
     [Fact]
     public async Task EditedWorkerReceiptCannotSupplyHostEvidence()
     {
-        using var fixture = new WorkerBuildRequestFixture();
+        using var fixture = new WorkerBuildRequestFixture(compilerMode: WorkerBuildRequestFixture.CompilerMode.Fake);
         File.WriteAllText(Path.Combine(fixture.RepositoryRoot, ".orchestrator-context", "worker-build-receipt.json"),
             "{\"outcome\":\"Success\",\"compilerStarted\":true,\"exitCode\":0}");
         var consumed = fixture.Consume();
@@ -177,7 +177,7 @@ public sealed class WorkerBuildRequestAuthorityTests
     [Fact]
     public async Task ChangedCandidateCannotBorrowAnEarlierHostPass()
     {
-        using var fixture = new WorkerBuildRequestFixture();
+        using var fixture = new WorkerBuildRequestFixture(compilerMode: WorkerBuildRequestFixture.CompilerMode.Fake);
         Assert.Equal(WorkerBuildOutcome.Success, (await fixture.RunHelper()).Outcome);
         File.AppendAllText(Path.Combine(fixture.RepositoryRoot, WorkerBuildRequestFixture.Source), "\ninvalid later edit;");
         Assert.True(fixture.Consume().MissingEvidence);
@@ -187,7 +187,7 @@ public sealed class WorkerBuildRequestAuthorityTests
     [Fact]
     public async Task CandidateChangeAtRegistrationPreventsCompilerResume()
     {
-        using var fixture = new WorkerBuildRequestFixture();
+        using var fixture = new WorkerBuildRequestFixture(compilerMode: WorkerBuildRequestFixture.CompilerMode.Fake);
         var changed = false;
         var invocation = await fixture.RunHelper(i =>
         {
