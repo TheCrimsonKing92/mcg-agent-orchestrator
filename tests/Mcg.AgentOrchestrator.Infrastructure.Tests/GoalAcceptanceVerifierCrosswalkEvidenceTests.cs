@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Xml.Linq;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Infrastructure;
@@ -160,13 +161,135 @@ public sealed class GoalAcceptanceVerifierCrosswalkEvidenceTests
     }
 
     [Fact]
-    public async Task TrxOnlyCohortConsumer_ReportsExplicitIncompatibility()
+    public async Task SolutionCoverage_WithCrosswalk_PreservesInvocationProvenance()
+    {
+        using var fixture = new CrosswalkAcceptanceFixture();
+        File.WriteAllText(Path.Combine(fixture.Root, "config", "acceptance-manifest.json"),
+            AcceptanceManifestTestDefaults.WithEngine("""
+            {
+              "version": 1,
+              "checks": [
+                { "name": "crosswalk selection", "type": "crosswalk-test" },
+                { "name": "project tests", "type": "dotnet-test", "project": "tests/Sample.Tests.csproj" },
+                { "name": "solution tests", "type": "dotnet-test" }
+              ],
+              "forbiddenChangedPathGlobs": []
+            }
+            """));
+        var crosswalkCalls = 0;
+        var testCalls = new List<string[]>();
+        var verifier = new GoalAcceptanceVerifier(fixture.TestOverrides, (args, _, _, _) =>
+        {
+            var command = args.LastOrDefault() ?? "";
+            if (command.StartsWith("& '", StringComparison.Ordinal))
+            {
+                crosswalkCalls++;
+                return Task.FromResult(fixture.Result(command.Contains("' list '", StringComparison.Ordinal)
+                    ? fixture.Discovery : fixture.Output));
+            }
+            if (args is ["dotnet", "test", ..])
+            {
+                testCalls.Add(args);
+                GoalAcceptanceVerifierDotnetBuildSlotTestsTrustedBaselineDiscovery.WriteVstestTrx(
+                    args, "Sample.Tests.Passes");
+                var resultsDirectory = args[Array.IndexOf(args, "--results-directory") + 1];
+                var fileName = args[Array.IndexOf(args, "--logger") + 1]["trx;LogFileName=".Length..];
+                var trxPath = Path.Combine(resultsDirectory, fileName);
+                var document = XDocument.Load(trxPath);
+                XNamespace ns = "http://microsoft.com/schemas/VisualStudio/TeamTest/2010";
+                foreach (var element in document.Root!.DescendantsAndSelf())
+                    element.Name = ns + element.Name.LocalName;
+                document.Root.Add(new XElement(ns + "ResultSummary", new XElement(ns + "Counters",
+                    new XAttribute("total", 1), new XAttribute("executed", 1),
+                    new XAttribute("passed", 1), new XAttribute("failed", 0))));
+                document.Save(trxPath);
+                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0,
+                    "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."));
+            }
+            return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, ""));
+        });
+
+        var result = await verifier.RunAsync(fixture.Root);
+
+        Assert.True(result.Passed, result.OutputTail);
+        Assert.Equal(2, crosswalkCalls);
+        var solutionCall = Assert.Single(testCalls);
+        Assert.DoesNotContain(solutionCall, arg => arg.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(3, result.Checks!.Count);
+        var solution = Assert.Single(result.Checks, check => check.Name == "solution tests");
+        Assert.Equal(Path.GetFileName(fixture.Prefix), result.AttemptId);
+        Assert.Equal(result.AttemptId, solution.TestResultAttemptId);
+        Assert.Equal(0, solution.TestResultRunOrdinal);
+        Assert.False(solution.TestResultIsExplicitCrossAttemptReuse);
+        Assert.True(File.Exists(Assert.Single(solution.TestResultPaths!)));
+        Assert.True(AcceptanceCohortGateEvidence.HasCoherentTrxEvidence(solution.TestResultPaths));
+        Assert.Null(solution.NormalizedTestResultWriteFailure);
+        Assert.Single(solution.NormalizedTestResultPaths!);
+        var project = Assert.Single(result.Checks, check => check.Name == "project tests");
+        Assert.Equal([solution.Name], project.CoveredBy);
+        Assert.Equal("covered by: solution tests", project.ResultSummary);
+
+        var classified = AcceptanceCohortVerificationClassifier.ClassifyCohortVerificationResultWithPaths(result);
+        Assert.Equal(AcceptanceCohortGateOutcome.Passed, classified.Classification.Outcome);
+        Assert.Equal(2, classified.Checks.Count);
+        Assert.All(classified.Checks, check => Assert.Equal(result.AttemptId, check.AttemptId));
+        var trx = Assert.Single(classified.Checks, check => check.Format == AcceptanceCohortCheckEvidence.TrxFormat);
+        Assert.Equal(solution.Name, trx.CheckName);
+        Assert.Equal(solution.TestResultRunOrdinal, trx.RunOrdinal);
+        Assert.Equal(1, trx.ExecutedTestCount);
+        Assert.Equal(1, Assert.Single(classified.Checks,
+            check => check.Format == AcceptanceCohortCheckEvidence.NormalizedFormat).ExecutedTestCount);
+
+        // Removing or substituting provenance must still fail closed at the consumer.
+        foreach (var invalidAttempt in new string?[] { null, "unrelated-attempt" })
+        {
+            var invalid = result with { Checks = result.Checks.Select(check => check.Name == solution.Name
+                ? check with { TestResultAttemptId = invalidAttempt } : check).ToArray() };
+            Assert.Equal(AcceptanceCohortGateOutcome.InfrastructureFailure,
+                AcceptanceCohortVerificationClassifier.ClassifyCohortVerification(invalid));
+        }
+
+        // A producer pass cannot compensate for an invalid declared TRX contract.
+        var retainedTrxPath = Assert.Single(solution.TestResultPaths!);
+        var validTrx = File.ReadAllText(retainedTrxPath);
+        foreach (var missingNamespace in new[] { false, true })
+        {
+            var invalidTrx = XDocument.Parse(validTrx);
+            if (missingNamespace)
+            {
+                foreach (var element in invalidTrx.Root!.DescendantsAndSelf())
+                {
+                    element.Name = element.Name.LocalName;
+                    element.Attributes().Where(attribute => attribute.IsNamespaceDeclaration).Remove();
+                }
+            }
+            else
+            {
+                invalidTrx.Descendants().Single(element => element.Name.LocalName == "Counters").Remove();
+            }
+            invalidTrx.Save(retainedTrxPath);
+            Assert.False(AcceptanceCohortGateEvidence.HasCoherentTrxEvidence(solution.TestResultPaths));
+            Assert.Equal(AcceptanceCohortGateOutcome.InfrastructureFailure,
+                AcceptanceCohortVerificationClassifier.ClassifyCohortVerification(result));
+        }
+    }
+
+    [Fact]
+    public async Task DeclaredCrosswalkEvidence_IsAcceptedByCohortConsumer()
     {
         using var fixture = new CrosswalkAcceptanceFixture();
         var check = await fixture.RunAsync();
-        var classification = AcceptanceCohortVerificationClassifier.ClassifyCohortVerificationResult(
-            new(true, false, 0, null, Checks: [check], TestResultPaths: check.NormalizedTestResultPaths));
-        Assert.Equal(AcceptanceCohortGateOutcome.InfrastructureFailure, classification.Outcome);
-        Assert.Contains("incompatible", classification.InfrastructureDetail, StringComparison.Ordinal);
+        Assert.True(check.Passed);
+        Assert.Equal(0, check.TestResultRunOrdinal);
+        var classified = AcceptanceCohortVerificationClassifier.ClassifyCohortVerificationResultWithPaths(
+            new(true, false, 0, null, Checks: [check], TestResultPaths: check.NormalizedTestResultPaths)
+            {
+                AttemptId = check.TestResultAttemptId, RequiredCrosswalkChecks = [check.Name], RequiredTestCheckNames = [check.Name]
+            });
+        Assert.Equal(AcceptanceCohortGateOutcome.Passed, classified.Classification.Outcome);
+        var evidence = Assert.Single(classified.Checks);
+        Assert.Equal(0, evidence.RunOrdinal);
+        Assert.Equal(1, evidence.ExecutedTestCount);
+        Assert.Equal(check.NormalizedTestResultPaths, classified.NormalizedTestResultPaths);
     }
 }
