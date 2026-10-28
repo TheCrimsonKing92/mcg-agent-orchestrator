@@ -240,7 +240,7 @@ public sealed class CompilerCapExperimentContractTests
         {
             Assert.Equal(report["Arms"]![0]!["Measurements"]!["Diagnostics"]!.ToJsonString(),
                 report["Arms"]![1]!["Measurements"]!["Diagnostics"]!.ToJsonString());
-            Assert.Contains("<repo>/src/Program.cs", report["Arms"]![0]!["Measurements"]!["Diagnostics"]!.ToJsonString(), StringComparison.Ordinal);
+            Assert.Contains("<repo>/src/Program.cs", report["Arms"]![0]!["Measurements"]!["Diagnostics"]![0]!.GetValue<string>(), StringComparison.Ordinal);
         }
         else Assert.Contains("diagnostic-multiset-mismatch", comparison["Reasons"]!.ToJsonString(), StringComparison.Ordinal);
     }
@@ -254,14 +254,16 @@ public sealed class CompilerCapExperimentContractTests
         fixture.EnableNativeProcess(exitCode);
         var before = fixture.SourceDigest();
         var result = fixture.Invoke(run: true);
-        Assert.Equal(exitCode == 0 ? 0 : 1, result.ExitCode);
         var report = fixture.Report();
+        var evidence = result.Stdout + result.Stderr + report.ToJsonString();
+        Assert.True(result.ExitCode == (exitCode == 0 ? 0 : 1), evidence);
         Assert.Equal(exitCode == 0 ? "completed" : "terminated", report["Status"]!.GetValue<string>());
         var invocations = report["Invocations"]!.AsArray();
         Assert.Equal(exitCode == 0 ? 6 : 1, invocations.Count);
         foreach (var invocation in invocations)
         {
             var phase = invocation!["Result"]!;
+            Assert.True(phase is not null, evidence);
             Assert.Equal("completed", phase["Status"]!.GetValue<string>());
             Assert.Equal(exitCode, phase["ExitCode"]!.GetValue<int>());
             Assert.True(phase["CleanupConfirmed"]!.GetValue<bool>());
@@ -300,13 +302,24 @@ public sealed class CompilerCapExperimentContractTests
         var readyName = "Local\\compiler-cap-ready-" + Guid.NewGuid().ToString("N");
         using var deadline = new EventWaitHandle(false, EventResetMode.ManualReset, deadlineName);
         using var ready = new EventWaitHandle(false, EventResetMode.ManualReset, readyName);
+        using var invocationComplete = new ManualResetEvent(false);
         fixture.EnableNativeProcess(0, deadlineName, readyName);
-        var invocation = Task.Run(() => fixture.Invoke(run: true));
+        var invocation = Task.Run(() =>
+        {
+            try { return fixture.Invoke(run: true); }
+            finally { invocationComplete.Set(); }
+        });
         Process? child = null;
         Process? descendant = null;
         try
         {
-            Assert.True(ready.WaitOne(TestHangGuard.HangSafetyBound), "Native fixture did not publish its child/descendant ready receipt.");
+            var signal = WaitHandle.WaitAny([ready, invocationComplete], TestHangGuard.HangSafetyBound);
+            if (signal == 1)
+            {
+                var failed = await invocation;
+                Assert.Fail("Native fixture exited before its ready receipt: " + failed.Stdout + failed.Stderr + fixture.Report().ToJsonString());
+            }
+            Assert.True(signal == 0, "Native fixture did not publish its child/descendant ready receipt.");
             var phaseRoot = Path.Combine(fixture.Root, "experiments", "fixture-run", "baseline", "setup");
             var receipt = JsonNode.Parse(File.ReadAllText(Path.Combine(phaseRoot, "child.json")))!;
             Assert.True(receipt["InJob"]!.GetValue<bool>());

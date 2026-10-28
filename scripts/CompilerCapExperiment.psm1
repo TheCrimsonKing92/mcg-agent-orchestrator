@@ -411,7 +411,10 @@ function Invoke-CapNativePhase {
     $runRoot = Split-Path -Parent (Split-Path -Parent $EvidenceRoot)
     if (-not (Test-Path -LiteralPath (Join-Path $runRoot 'owner.json') -PathType Leaf)) { throw 'observation-owned-root-required' }
     $owner = Get-Content -LiteralPath (Join-Path $runRoot 'owner.json') -Raw | ConvertFrom-Json -AsHashtable
-    if ($owner.Root -ne $runRoot -or $owner.OwnerPid -ne $PID -or $owner.OwnerStartUtc -ne (Get-Process -Id $PID).StartTime.ToUniversalTime().ToString('O')) { throw 'observation-owner-identity-mismatch' }
+    # ConvertFrom-Json can materialize an ISO timestamp as DateTime. Compare the exact
+    # UTC instant, retaining subsecond identity rather than coercing it to display text.
+    $ownerStartUtc = ([datetime]$owner.OwnerStartUtc).ToUniversalTime()
+    if ($owner.Root -ne $runRoot -or $owner.OwnerPid -ne $PID -or $ownerStartUtc.Ticks -ne (Get-Process -Id $PID).StartTime.ToUniversalTime().Ticks) { throw 'observation-owner-identity-mismatch' }
     $null = Assert-CapOwnedPath $EvidenceRoot $runRoot
     $deadlineEvent = $null
     $deadlineEventName = ''
