@@ -270,7 +270,7 @@ public sealed class ToolchainDetectionTests
             Xunit.Assert.Contains($"  Suggested command shape: `{command}`", broker, StringComparison.Ordinal);
             Xunit.Assert.Contains("- static-policy-checks", broker, StringComparison.Ordinal);
             Xunit.Assert.Contains("- acceptance-evidence", broker, StringComparison.Ordinal);
-            if (marker == "package.json" && role == AgentRole.Developer)
+            if (role == AgentRole.Developer)
             {
                 Xunit.Assert.Contains("  Artifact: current-task.md plus source-survey.md", broker, StringComparison.Ordinal);
                 Xunit.Assert.Contains("  Artifact: source-survey.md plus diff-summary.md", broker, StringComparison.Ordinal);

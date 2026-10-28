@@ -576,6 +576,10 @@ internal sealed partial class WorkerArtifactWriter
             lines.AddRange(WorkerStackVerificationGuidance.GoDeveloperBuildAndPolicyBrokerLines(testImpactPlan, verificationPolicy));
         else if (toolchain == Toolchain.Node && task.RequiredRole == AgentRole.Developer)
             lines.AddRange(WorkerStackVerificationGuidance.NodeDeveloperBuildAndPolicyBrokerLines(testImpactPlan, verificationPolicy));
+        else if (toolchain == Toolchain.Python && task.RequiredRole == AgentRole.Developer)
+            lines.AddRange(WorkerStackVerificationGuidance.PythonDeveloperBuildAndPolicyBrokerLines(testImpactPlan, verificationPolicy));
+        else if (toolchain == Toolchain.Unknown && task.RequiredRole == AgentRole.Developer)
+            lines.AddRange(WorkerStackVerificationGuidance.UnknownDeveloperBuildAndPolicyBrokerLines(testImpactPlan, verificationPolicy));
         else
         {
             lines.AddRange([
@@ -603,6 +607,8 @@ internal sealed partial class WorkerArtifactWriter
             lines.AddRange(WorkerStackVerificationGuidance.GoDeveloperAcceptanceEvidenceBrokerLines());
         else if (toolchain == Toolchain.Node && task.RequiredRole == AgentRole.Developer)
             lines.AddRange(WorkerStackVerificationGuidance.NodeDeveloperAcceptanceEvidenceBrokerLines());
+        else if (toolchain is Toolchain.Python or Toolchain.Unknown && task.RequiredRole == AgentRole.Developer)
+            lines.AddRange(WorkerStackVerificationGuidance.NativeDeveloperAcceptanceEvidenceBrokerLines());
         else if (!developerBuildOnly)
         {
             lines.AddRange([
