@@ -3449,8 +3449,14 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
         ]));
         var kernel = new AgentOrchestratorKernel();
         var task = new TaskSpec(TaskId.New(), "Implement from legacy evidence.", AgentRole.Developer);
-        var goal = kernel.CreateGoal("Preserve legacy evidence", [task]);
+        var priorTask = new TaskSpec(TaskId.New(), "Retained earlier verification.", AgentRole.Planner);
+        var goal = kernel.CreateGoal("Preserve legacy evidence", [priorTask, task]);
         kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        kernel.RecordTaskVerification(goal.Id, priorTask.Id, new TaskVerificationRecord(
+            "legacy verification", workingDirectory, 1, "retained earlier attempt", string.Empty,
+            DateTimeOffset.Parse("2026-10-28T12:00:00Z"),
+            FullStandardOutput: "retained earlier attempt", FullStandardError: string.Empty));
+        Assert.NotEqual(WorkTaskStatus.Completed, priorTask.Status);
         var profile = new WorkerProfile("codex-cli", "codex exec --sandbox {sandboxMode} --cd {workingDirectory}");
 
         var result = WorkerProfileDispatcher.PrepareTask(

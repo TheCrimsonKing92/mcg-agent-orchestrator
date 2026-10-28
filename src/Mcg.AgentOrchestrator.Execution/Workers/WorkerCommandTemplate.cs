@@ -8,7 +8,8 @@ public sealed record WorkerDispatchPreparation(string PromptPath, string Command
 
 public static partial class WorkerCommandTemplate
 {
-    public static void WriteHandoffFile(
+    // Return only this preparation's generated input; an existing file is not evidence of generation.
+    public static string? WriteHandoffFile(
         IReadOnlyList<TaskSpec> goalTasks,
         TaskId taskId,
         string workingDirectory)
@@ -20,7 +21,7 @@ public static partial class WorkerCommandTemplate
 
         if (priorCompletedTasks.Count == 0)
         {
-            return;
+            return null;
         }
 
         var lines = new List<string> { "# Prior Task Handoff" };
@@ -56,9 +57,11 @@ public static partial class WorkerCommandTemplate
         }
 
         Directory.CreateDirectory(workingDirectory);
+        var handoff = string.Join(Environment.NewLine, lines);
         File.WriteAllText(
             Path.Combine(workingDirectory, ".orchestrator-handoff.md"),
-            string.Join(Environment.NewLine, lines));
+            handoff);
+        return handoff;
     }
 
     public static WorkerDispatchPreparation Prepare(
