@@ -374,7 +374,14 @@ public sealed class ConductorDriverTestsGreenTesterReceiptClosure
             }
             Requester = Goal.Tasks.Single(task => task.RequiredRole == role);
             foreach (var task in Goal.Tasks.TakeWhile(task => task.Id != Requester.Id))
+            {
                 PassVerification(Kernel, Goal, task, hasCommittedChanges: task.RequiredRole == AgentRole.Developer);
+                if (task.RequiredRole == AgentRole.Developer)
+                {
+                    Kernel.RecordDispatchResultCommit(Goal.Id, task.Id, CandidateSha);
+                    Assert.Equal(CandidateSha, task.LastDispatch!.ResultCommit);
+                }
+            }
             _driver = MakeDriver(
                 getPreReviewEvidenceContext: _ => NoPreReviewContext(CandidateSha),
                 focusedEvidenceAttemptCoordinator: new ConductorParallelAcceptanceAttemptCoordinator(

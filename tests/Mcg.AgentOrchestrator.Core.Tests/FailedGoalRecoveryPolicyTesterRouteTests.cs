@@ -23,6 +23,63 @@ public sealed class FailedGoalRecoveryPolicyTesterRouteTests
         Assert.Equal(new TaskId("developer-target"), route.TargetTaskId);
     }
 
+    [Fact]
+    public void CommittedTargetRequirementRejectsRoleOnlyFallback()
+    {
+        var route = FailedGoalRecoveryPolicy.SelectVerifyingFindingRoute(Facts(AgentRole.Developer) with
+        {
+            ExplicitTargetTaskId = null,
+            RequiresCommittedTarget = true
+        });
+
+        Assert.Equal(FailedGoalVerifyingFindingRouteKind.TargetUnavailable, route.Kind);
+        Assert.Null(route.TargetTaskId);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void CommittedTargetRetainsRetryBounds(bool lifetime)
+    {
+        var facts = Facts(AgentRole.Developer) with
+        {
+            RequiresCommittedTarget = true,
+            Round = lifetime ? 1 : 3,
+            LifetimeRound = lifetime ? 6 : 0,
+            LifetimeBackstop = 6
+        };
+
+        var route = FailedGoalRecoveryPolicy.SelectVerifyingFindingRoute(facts);
+
+        Assert.Equal(lifetime ? FailedGoalVerifyingFindingRouteKind.LifetimeBackstopReached
+            : FailedGoalVerifyingFindingRouteKind.RetryCapReached, route.Kind);
+        Assert.Equal(facts.ExplicitTargetTaskId, route.TargetTaskId);
+    }
+
+    [Fact]
+    public void CommittedTargetDoesNotOverrideOperatorEvidenceAuthority()
+    {
+        var route = FailedGoalRecoveryPolicy.SelectVerifyingFindingRoute(Facts(AgentRole.Developer) with
+        {
+            RequiresCommittedTarget = true,
+            ReviewerEscalatesToOperator = true
+        });
+
+        Assert.Equal(FailedGoalVerifyingFindingRouteKind.OperatorEvidenceRequired, route.Kind);
+    }
+
+    [Fact]
+    public void CommittedTargetDoesNotBypassRepeatedFailureConvergenceHold()
+    {
+        var route = FailedGoalRecoveryPolicy.SelectVerifyingFindingRoute(Facts(AgentRole.Developer) with
+        {
+            RequiresCommittedTarget = true,
+            RepeatedFailure = new PreReviewRepeatedFailureSummary(3, ["repeated-test"])
+        });
+
+        Assert.Equal(FailedGoalVerifyingFindingRouteKind.RepeatedFailingTestSet, route.Kind);
+    }
+
     private static FailedGoalVerifyingFindingRouteFacts Facts(AgentRole projectedRole) =>
         new(new TaskId("tester-trigger"), AgentRole.Tester, "verification:1:none",
             ExplicitTargetTaskId: new TaskId("developer-target"), RequiresCommittedTarget: false,

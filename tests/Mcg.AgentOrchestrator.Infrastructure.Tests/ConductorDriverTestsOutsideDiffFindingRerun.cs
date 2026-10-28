@@ -318,7 +318,7 @@ public sealed class ConductorDriverTestsOutsideDiffFindingRerun
         fixture.ReportAndSeed();
         fixture.AdvanceToDecision();
         Assert.Equal(ReviewFindingState.Open, fixture.Finding.State);
-        fixture.CompleteDeveloperAndReopen(LaterSha);
+        fixture.ReopenOnCandidate(LaterSha);
         fixture.AdvanceToDecision();
         Assert.Equal(2, fixture.Requests.Count);
         Assert.Equal(2, fixture.RequestMarkers.Count());
@@ -455,15 +455,19 @@ public sealed class ConductorDriverTestsOutsideDiffFindingRerun
 
         public void ReopenOnCandidate(string sha)
         {
+            // A later candidate needs a new Developer attempt, not a relabelled old result.
+            if (Developer.LastVerification?.Succeeded == true)
+                Kernel.RetryTask(Goal.Id, Developer.Id, "produce later candidate", RetryCause.ContractClarification);
+            DispatchTask(Kernel, Goal, Developer, baseCommit: Sha);
+            Kernel.RecordTaskVerification(Goal.Id, Developer.Id, new TaskVerificationRecord(
+                "test.exe", "C:\\tmp", 0, "ok", "", DateTimeOffset.UtcNow, HasCommittedChanges: true));
+            Kernel.RecordDispatchResultCommit(Goal.Id, Developer.Id, sha);
+            Assert.Equal(Sha, Developer.LastDispatch!.BaseCommit);
+            Assert.Equal(sha, Developer.LastDispatch.ResultCommit);
+            Assert.True(Developer.LastVerification!.Succeeded);
             Sha = sha;
             Kernel.RetryTask(Goal.Id, Tester.Id, "verify later candidate", RetryCause.ContractClarification);
             ReportAndSeed();
-        }
-
-        public void CompleteDeveloperAndReopen(string sha)
-        {
-            PassVerification(Kernel, Goal, Developer, hasCommittedChanges: true);
-            ReopenOnCandidate(sha);
         }
 
         public void ReloadAndRecreateDriver()
