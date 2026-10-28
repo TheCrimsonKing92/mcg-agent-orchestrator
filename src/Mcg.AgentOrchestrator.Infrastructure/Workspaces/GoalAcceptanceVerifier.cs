@@ -364,6 +364,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     private readonly TimeProvider _timeProvider;
     private readonly Action<TimeSpan> _leaseSleep;
     private readonly IAcceptanceRunExecutionContext? _executionContext;
+    internal SourceRevertedEvidenceContinuation? SourceRevertedContinuation { get; init; }
     private string IntegrationBranch => _executionContext?.IntegrationBranch ?? TrunkBranchName.Default;
     private readonly AcceptanceInvocationContext? _invocationContext;
     private readonly GoalAcceptanceVerifierTestOverrides _testOverrideSource, _testOverrides;
@@ -468,6 +469,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         _leaseSleep = source._leaseSleep;
         _requiresTestTelemetryReceipt = source._requiresTestTelemetryReceipt;
         _executionContext = executionContext;
+        SourceRevertedContinuation = source.SourceRevertedContinuation;
         _testOverrideSource = source._testOverrideSource; _testOverrides = source._testOverrides;
     }
     private GoalAcceptanceVerifier(GoalAcceptanceVerifier source, AcceptanceInvocationContext invocationContext)
@@ -481,6 +483,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         _leaseSleep = source._leaseSleep;
         _requiresTestTelemetryReceipt = source._requiresTestTelemetryReceipt;
         _executionContext = source._executionContext;
+        SourceRevertedContinuation = source.SourceRevertedContinuation;
         _invocationContext = invocationContext;
         _testOverrideSource = source._testOverrideSource;
         _testOverrides = source._testOverrides;
@@ -1205,7 +1208,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             _executionContext, RunFocusedEvidenceArmAsync, RunBaselineFocusedEvidenceArmAsync,
             AddSourceRevertedEvidenceAsync, path => ResolveFocusedEvidenceMergeBase(path, IntegrationBranch),
             worktreePath, goalId, request, stableSlotIndex, stableSlotLease, runBaselineArm,
-            cancellationToken, negativeControl, revertPaths, mutation, declaredPaths);
+            cancellationToken, negativeControl, revertPaths, mutation, declaredPaths, SourceRevertedContinuation);
 
     private Task<FocusedEvidenceArmRunResult> RunFocusedEvidenceArmAsync(
         FindingEvidenceArm arm,

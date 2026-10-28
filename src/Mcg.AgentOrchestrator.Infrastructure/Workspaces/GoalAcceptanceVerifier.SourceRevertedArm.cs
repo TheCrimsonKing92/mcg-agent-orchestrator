@@ -80,6 +80,7 @@ public sealed partial class GoalAcceptanceVerifier
         DotnetBuildEnvironment? environment = null;
         GoalId? environmentId = null;
         List<string>? restoredPaths = null, droppedPaths = null;
+        if (SourceRevertedContinuation is { } continuation) continuation.RestorationVerified = false;
         try
         {
             if (string.IsNullOrWhiteSpace(mergeBase))
@@ -182,8 +183,10 @@ public sealed partial class GoalAcceptanceVerifier
         {
             if (revertedPath is not null)
             {
-                _ = GitCli.Run(candidatePath, "worktree", "remove", "--force", revertedPath);
+                var removed = GitCli.Run(candidatePath, "worktree", "remove", "--force", revertedPath);
                 TryDeleteFocusedEvidenceBaselineDirectory(root, revertedPath);
+                if (SourceRevertedContinuation is { } handoff)
+                    handoff.RestorationVerified = removed.Succeeded && !removed.DrainTimedOut && !Directory.Exists(revertedPath);
             }
             if (environment is not null)
                 DotnetBuildEnvironmentManager.TryCleanupSuccessfulRun(environment, _storageRoot);
