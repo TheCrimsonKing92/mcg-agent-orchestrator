@@ -19,6 +19,8 @@ public sealed class ConductorDriverTestsGreenTesterFindingDelivery
             var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
             var tester = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Tester);
             PassVerification(kernel, goal, developer, hasCommittedChanges: true);
+            kernel.RecordDispatchResultCommit(goal.Id, developer.Id, candidateSha);
+            Assert.Equal(candidateSha, developer.LastDispatch!.ResultCommit);
             DispatchTask(kernel, goal, tester, "test", baseCommit: candidateSha);
             var findings = new[]
             {
