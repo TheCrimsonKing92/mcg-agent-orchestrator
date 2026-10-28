@@ -113,7 +113,6 @@ internal sealed partial class ConductorDriver
     {
         observation = FailedGoalFindingObservation.None;
         var pendingNotes = new List<FailedGoalPendingNote>();
-        if (TryObserveFindingEvidenceContinuation(goal, policy, out observation)) return true;
         var trigger = goal.Tasks
             .Select(task => BuildTesterDeveloperOwnedFindingTrigger(goal, task))
             .FirstOrDefault(candidate =>

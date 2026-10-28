@@ -10,7 +10,7 @@ internal sealed partial class ConductorDriver
     private ConductEventLogWriter? _candidateIdentityEventWriter;
     private AgentOrchestratorKernel? _unchangedCandidateReinstatementKernel;
 
-    private Func<Goal, (CandidateIdentity? Identity, string Failure)> _resolveCandidateIdentity =
+    internal Func<Goal, (CandidateIdentity? Identity, string Failure)> _resolveCandidateIdentity =
         _ => (null, "resolver-unavailable");
 
     internal void OverrideCandidateIdentityResolverForTests(Func<Goal, CandidateIdentity?> resolver) =>
@@ -42,7 +42,7 @@ internal sealed partial class ConductorDriver
         var current = _resolveCandidateIdentity(goal).Identity;
         if (current is null) return new HashSet<TaskId>();
         return ReadyCandidateTasks(goal)
-            .Where(task => FindingEvidenceContinuationInvalid(goal, task) ||
+            .Where(task => FindingEvidenceContinuationCoordinator.FindingEvidenceContinuationInvalid(this, goal, task) ||
                 UnchangedCandidateRule.Evaluate(goal, task, current) is not null)
             .Select(task => task.Id).ToHashSet();
     }
@@ -53,17 +53,17 @@ internal sealed partial class ConductorDriver
     {
         result = null!;
         if (goal.Tasks.Any(task => task.LastDispatch?.FindingEvidenceReviewContinuation is not null &&
-            task.LastProcess is null && task.Status == WorkTaskStatus.Running && FindingEvidenceContinuationInvalid(goal, task)))
+            task.LastProcess is null && task.Status == WorkTaskStatus.Running && FindingEvidenceContinuationCoordinator.FindingEvidenceContinuationInvalid(this, goal, task)))
         {
             result = MakeResult(goal.Id.Value, goalPrefix, policy, new ConductorAdvanceOutcome.Held(fromState,
                 "Finding evidence continuation held: prepared dispatch evidence no longer qualifies."));
             return true;
         }
         if (fromState != GoalLifecycleState.WorkspaceReady) { ResetUnchangedCandidateHold(goal.Id); return false; }
-        PrepareReadyFindingEvidenceContinuations(goal, policy);
+        FindingEvidenceContinuationCoordinator.PrepareReadyFindingEvidenceContinuations(this, goal, policy);
         var ready = ReadyCandidateTasks(goal);
         if (ready.Length == 0) { ResetUnchangedCandidateHold(goal.Id); return false; }
-        if (ready.Any(task => FindingEvidenceContinuationInvalid(goal, task)))
+        if (ready.Any(task => FindingEvidenceContinuationCoordinator.FindingEvidenceContinuationInvalid(this, goal, task)))
         {
             result = MakeResult(goal.Id.Value, goalPrefix, policy, new ConductorAdvanceOutcome.Held(fromState,
                 "Finding evidence continuation held: selected evidence no longer qualifies for the recorded review decision."));
@@ -135,7 +135,7 @@ internal sealed partial class ConductorDriver
         }
     }
 
-    private static TaskSpec[] ReadyCandidateTasks(Goal goal) => goal.Tasks
+    internal static TaskSpec[] ReadyCandidateTasks(Goal goal) => goal.Tasks
         .Where(DispatchReadinessRules.IsSubscriptionStartCandidate)
         .Where(task => DispatchReadinessRules.IsRefinementEligible(goal, task))
         .Where(task => !goal.Tasks.Any(other =>

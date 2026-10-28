@@ -41,7 +41,8 @@ internal sealed partial class ConductorDriver
                 if (verifyingFindingObservationCompleted)
                     throw new InvalidOperationException("Verifying-finding observation repeated after it was fulfilled.");
                 var landingFileScopes = _getLandingFileScopes(goal);
-                hasObservation = TryObserveVerifyingFindingRecovery(goal, policy, landingFileScopes, out observation);
+                hasObservation = FindingEvidenceContinuationCoordinator.TryObserveFindingEvidenceContinuation(this, goal, policy, out observation) ||
+                    TryObserveVerifyingFindingRecovery(goal, policy, landingFileScopes, out observation);
                 verifyingFindingObservationCompleted = true;
                 verifyingFindingObservation = hasObservation ? observation : null;
             }
@@ -124,12 +125,7 @@ internal sealed partial class ConductorDriver
         ApplyPendingFailedGoalNotes(goal, pendingNotes);
         var targetTaskId = decision.Identity.TaskId ??
             throw new InvalidOperationException($"Recovery action {decision.Action} must identify a target task.");
-        if (verifyingFindingObservation?.EvidenceContinuation is { } continuation &&
-            targetTaskId.Value == continuation.TaskId && decision.RetryCause == RetryCause.NewTestFinding)
-        {
-            (_cohortKernel ?? _conductorTickKernel ?? throw new InvalidOperationException("Continuation requires conductor state ownership."))
-                .RecordFindingEvidenceReviewContinuation(goal.Id, targetTaskId, continuation);
-        }
+        FindingEvidenceContinuationCoordinator.RecordObservation(this, goal, targetTaskId, decision, verifyingFindingObservation);
         var conflictMessage = FailedGoalRetryApplicationExecutor.Apply(
             goal.Id,
             targetTaskId,
@@ -315,11 +311,8 @@ internal sealed partial class ConductorDriver
             _recordTaskNote(goal.Id, note.TaskId, note.Message);
     }
 
-    private static string BuildFailedGoalAttemptIdentity(TaskSpec task) => task.LastProcess is { } process
-        ? $"process:{process.ProcessId}:{process.StartedAt.UtcTicks}"
-        : task.LastVerification is { } verification
-            ? $"verification:{verification.CompletedAt.UtcTicks}:{verification.ChildProcessId?.ToString() ?? "none"}"
-            : "unobserved-attempt";
+    internal static string BuildFailedGoalAttemptIdentity(TaskSpec task) =>
+        FailedGoalFindingObservation.BuildAttemptIdentity(task);
 
     private static string BuildFailedGoalRecoveryContextVersion(Goal goal, GoalLifecycleState state)
     {

@@ -85,10 +85,10 @@ internal sealed partial class ConductorDriver
     internal readonly bool _focusedEvidenceRunnerConfigured;
     internal readonly Func<Goal, PreReviewEvidenceContext> _getPreReviewEvidenceContext;
     internal readonly Func<Goal, AcceptanceGateEngineSettings> _getFindingEvidenceEngineSettings;
-    private readonly Func<Goal, string, string, IReadOnlyList<string>> _resolveFindingEvidenceSiblingClasses;
+    internal readonly Func<Goal, string, string, IReadOnlyList<string>> _resolveFindingEvidenceSiblingClasses;
     private readonly Action<GoalId, TaskId, PreReviewEvidenceReceipt> _recordPreReviewEvidence;
     private readonly Action<GoalId, TaskId, string, int> _recordPreReviewMappingEscalationSuppressed;
-    private readonly Func<GoalId, TaskId, string, RetryRoundKind?, RetryCause, TaskSpec> _retryTask;
+    internal readonly Func<GoalId, TaskId, string, RetryRoundKind?, RetryCause, TaskSpec> _retryTask;
     private readonly Action<GoalId, TaskId, string> _recordTaskNote;
     internal readonly Action<GoalId, TaskId, string> _recordFindingEvidenceRequest;
     internal readonly Action<GoalId, TaskId, string> _recordFindingEvidenceRun;
@@ -123,7 +123,7 @@ internal sealed partial class ConductorDriver
     internal readonly Func<Goal, IReadOnlyList<string>> _getLandingFileScopes;
     private readonly Func<Goal, bool> _isVerificationGateSatisfied;
     private readonly GateReadyCandidateProjector? _gateReadyCandidateProjector;
-    private readonly AgentOrchestratorKernel? _cohortKernel;
+    internal readonly AgentOrchestratorKernel? _cohortKernel;
     internal readonly OrchestratorWorkspace? _cohortWorkspace;
     private readonly GoalWorktreeCleanupHooks _cohortCleanupHooks = new();
     private readonly IGoalAcceptanceVerifier? _cohortAcceptanceVerifier;
@@ -164,7 +164,7 @@ internal sealed partial class ConductorDriver
     private Action<ConductorLandingReceipt>? _successfulLandingSink;
     private bool _buildServerShutdownRanThisTick;
     private bool _isConductorTick;
-    private AgentOrchestratorKernel? _conductorTickKernel;
+    internal AgentOrchestratorKernel? _conductorTickKernel;
     private int _conductorTick;
 
     internal Action<string>? PhaseTimingSink { get; set; }
@@ -399,7 +399,7 @@ internal sealed partial class ConductorDriver
                     profiles,
                     providers ?? new InMemoryModelProviderRegistry([]),
                     approveHighRiskOwnership: policy.AllowsAutonomousHighRiskOwnership,
-                    checkpointBeforeWorkerStart: FindingEvidenceDispatchCheckpoint(dispatchCheckpoint),
+                    checkpointBeforeWorkerStart: FindingEvidenceContinuationCoordinator.FindingEvidenceDispatchCheckpoint(this, dispatchCheckpoint),
                     readCurrentInterruptedDispatchState: readCurrentInterruptedDispatchState,
                     conductorPolicy: policy,
                     recordDurableGoalBaseline: recordDurableGoalBaseline,
@@ -465,7 +465,7 @@ internal sealed partial class ConductorDriver
                     kernel,
                     workspace,
                     goal,
-                    checkpointBeforeWorkerStart: FindingEvidenceDispatchCheckpoint(dispatchCheckpoint),
+                    checkpointBeforeWorkerStart: FindingEvidenceContinuationCoordinator.FindingEvidenceDispatchCheckpoint(this, dispatchCheckpoint),
                     readCurrentInterruptedDispatchState: readCurrentInterruptedDispatchState,
                     conductorPolicy: policy,
                     recordDurableGoalBaseline: recordDurableGoalBaseline);

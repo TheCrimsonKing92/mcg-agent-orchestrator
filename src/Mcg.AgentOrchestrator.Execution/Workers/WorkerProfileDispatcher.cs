@@ -310,22 +310,12 @@ public static partial class WorkerProfileDispatcher
             dispatchVariables,
             dispatchedAt);
         contextPackageReceipt = WorkerRetryFeedbackPromptGuard.Validate(goal, task, contextPackage, contextPackageReceipt, preparation.PromptPath);
-        var retryContextFingerprint = RetryContextFingerprintFactory.Build(
-            goal,
-            task,
-            providerName,
-            modelName,
-            paidRoute,
+        var retryContextFingerprint = FindingEvidenceDispatchContext.RetryFingerprint(goal, task, providerName, modelName, paidRoute,
             priorDispatch?.ResultCommit ?? priorDispatch?.BaseCommit ?? task.LastVerification?.ReviewedCommit,
             targetContext?.HeadCommit ?? priorDispatch?.BaseCommit,
             currentMainIdentity);
         WorkerBuildScopeDispatchPreparation.Prepare(goal, task, workingDirectory, integrationBranch);
-        var reviewEvidenceContext = task.RequiredRole == AgentRole.Reviewer && targetContext?.HeadCommit is { } reviewCandidate
-            ? FindingEvidenceReviewContext.Capture(goal, task, reviewCandidate, dispatchedAt, includePeerEvidence: usesTypedContextPackage) : null;
-        var evidenceContinuation = task.PendingRetryCause == RetryCause.NewTestFinding
-            ? task.FindingEvidenceReviewContinuation : null;
-        if (evidenceContinuation is not null)
-            retryContextFingerprint = new RetryContextFingerprint(RetryContextFingerprint.CurrentSchemaVersion, evidenceContinuation.Key);
+        var reviewEvidenceContext = FindingEvidenceDispatchContext.Capture(goal, task, targetContext?.HeadCommit, dispatchedAt, usesTypedContextPackage);
         kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
             profile.Name,
             preparation.Command,
@@ -353,7 +343,7 @@ public static partial class WorkerProfileDispatcher
             ClaudeCredentialSourceDirectory: claudeCredentialSelection?.DirectoryPath,
             ClaudeCredentialSourceIsExplicit: claudeCredentialSelection?.IsExplicitSource ?? false,
             FindingEvidenceReviewContext: reviewEvidenceContext,
-            FindingEvidenceReviewContinuation: evidenceContinuation,
+            FindingEvidenceReviewContinuation: FindingEvidenceDispatchContext.Continuation(task),
             ShadowDecision: shadowRecorder?.Record(task.RequiredRole, goal.Objective, task.Description, reviewerScopeChangedFiles, providerName, modelName, reasoningEffort)),
             allowPendingRecordedDispatchRefresh);
         ReviewerChangedExistingTestScope.RecordConductEvent(goal, task, changedExistingTests, promptRoot, dispatchedAt, allowPendingRecordedDispatchRefresh);

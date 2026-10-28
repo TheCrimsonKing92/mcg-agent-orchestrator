@@ -1,11 +1,11 @@
 namespace Mcg.AgentOrchestrator.Core;
 
-public sealed partial class AgentOrchestratorKernel
+public static class FindingEvidenceContinuationRecorder
 {
-    public void RecordFindingEvidenceReviewContinuation(GoalId goalId, TaskId taskId,
+    public static void RecordFindingEvidenceReviewContinuation(this AgentOrchestratorKernel kernel, GoalId goalId, TaskId taskId,
         FindingEvidenceReviewContinuation continuation)
     {
-        var goal = GetGoal(goalId);
+        var goal = kernel.GetGoal(goalId);
         var task = goal.FindTask(taskId);
         var prior = task.VerificationHistory.LastOrDefault();
         if (task.RequiredRole != AgentRole.Reviewer || prior is null ||
