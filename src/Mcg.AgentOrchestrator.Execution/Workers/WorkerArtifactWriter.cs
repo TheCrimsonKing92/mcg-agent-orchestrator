@@ -572,6 +572,8 @@ internal sealed partial class WorkerArtifactWriter
         };
         if (developerBuildOnly)
             lines.AddRange(WorkerStackVerificationGuidance.DeveloperBuildOnlyBrokerLines());
+        else if (toolchain == Toolchain.Go && task.RequiredRole == AgentRole.Developer)
+            lines.AddRange(WorkerStackVerificationGuidance.GoDeveloperBuildAndPolicyBrokerLines(testImpactPlan, verificationPolicy));
         else
         {
             lines.AddRange([
@@ -595,7 +597,9 @@ internal sealed partial class WorkerArtifactWriter
             "  Use for: existing workspace changes, changed files, diff stat, and generated-output noise checks.",
             "  Failure handling: unexpected dirty files are blockers unless they are part of the assigned task.",
         ]);
-        if (!developerBuildOnly)
+        if (toolchain == Toolchain.Go && task.RequiredRole == AgentRole.Developer)
+            lines.AddRange(WorkerStackVerificationGuidance.GoDeveloperAcceptanceEvidenceBrokerLines());
+        else if (!developerBuildOnly)
         {
             lines.AddRange([
                 "- acceptance-evidence",
