@@ -9,46 +9,134 @@ supplied measurements, not new worker runs. The operator did not supply the main
 commit or host identifier for each gate. Source inspection started at
 `617daadddcb038cce07f0074e2e1b1c1f1d9fdcf`.
 
-Workers do not execute tests, the managed runner, or timing harnesses. The Tester
-must request the ten changed concrete classes below, plus
-`MergeTrainDeferralFixtureEquivalenceTests`, through Acceptance. Acceptance uses
-the managed runner behind `scripts/Invoke-TestSummary.ps1 -Target
-tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj`
-with those class selectors. This is an execution handoff, not a receipt.
+The Tester inspected the existing conductor receipt **R**,
+`finding-evidence-22f3701019771228c6b3b692`, for candidate
+`814471a4ed99608806b8832b13e8d54ea3e767b7`. Its result file is
+`C:/Users/miles/vcs/mcg-agent-orchestrator/.orchestrator/pre-review-evidence-attempts/ea0f333b1aec4d1490c4e359e744ff61/ea0f333b-0-20261028205116612-145e3f320829413ea5e88e343b2cc03f.result.json`.
+It records accepted/passed focused evidence, seven successful checks, exit 0,
+and no unexecuted selections. The three Infrastructure.Tests TRX files contain
+495 passed results; 169 belong to the twelve exact classes below (151 in the ten
+changed classes). No worker executed tests or a timing harness.
 
-For the after column, the Tester must record the receipt ID, candidate revision,
-host, exact invocation/selectors and settings, and sum its per-test durations per
-class. Run on the operator's baseline host. Each fixture is constructed empty;
-template preparation happens lazily inside the first consuming test, under that
-test's capacity lease, so preparation is included in the after test-seconds.
-Fixture disposal happens after the class. Include the new real-path contract
-test in BackgroundMergeTrainGateTests' after total, and disclose changed test
-counts alongside the historical means. These full-gate means are not an
-exact-candidate focused-run baseline; do not describe the comparison as a
-controlled performance experiment.
+The after column sums `UnitTestResult.duration` by joining `testId` to
+`TestDefinitions.UnitTest.TestMethod.className`, using exact class equality.
+Every theory row is included once. Values are rounded to three decimals only
+after summation. Counts and outcomes were cross-checked against the receipt's
+normalized CTRF files; their millisecond rounding changes class sums by less
+than 0.003 seconds. The unchanged deferral and workspace classes are included as
+context, not as optimized classes.
+
+Each fixture is constructed empty; template preparation happens lazily inside
+the first consuming test for each recipe, under that test's capacity lease, so
+preparation is included in the after test-seconds. Fixture disposal happens after
+the class and is outside these per-test sums. BackgroundMergeTrainGateTests'
+after total includes all three added copy contract/regression tests.
 
 ## Before and after
 
-`Pending` means no conductor receipt exists yet; it is not zero or a performance
-claim. All dominant-step findings below are source-inspection hypotheses. The
-Tester must confirm or correct them when entering after values and receipt IDs.
-If a class regresses, investigate the measured case before attributing a cause;
-overlapping execution alone does not establish contention.
+| Class | Before seconds/gate | Tests/gate | After seconds | After tests | Receipt / run |
+|---|---:|---:|---:|---:|---|
+| MergeTrainRedAttributionReplayScenarioTests | 201.9 | 8.7 | 143.311 | 13 | R / R2 |
+| AcceptanceCohortWorkflowTestsTrainRedAttribution | 179.7 | 14.3 | 534.614 | 43 | R / R1 |
+| PassedMergeTrainReceiptHoldTests | 158.4 | 11 | 62.304 | 11 | R / L1 |
+| AcceptanceCohortWorkflowTestsMergeTrain | 156.2 | 6.7 | 1026.470 | 20 | R / R1 |
+| MergeTrainDeferralFixtureEquivalenceTests | 149.5 | 4 | 109.914 | 6 | R / R2 |
+| AcceptanceCohortWorkflowTestsLandingAndReceipts | 142.1 | 4.7 | 484.121 | 14 | R / R1 |
+| AcceptanceCohortWorkflowTestsGroupedGateAttempts | 142.1 | 4.3 | 950.586 | 13 | R / R1 |
+| BackgroundMergeTrainGateTests | 141.6 | 5 | 559.754 | 8 | R / R1 |
+| AcceptanceCohortWorkflowTestsTrainImplicatedExclusion | 139.9 | 3.7 | 892.956 | 11 | R / R1 |
+| AcceptanceCohortWorkflowTestsFollowerGateStart | 137.6 | 3.7 | 524.698 | 11 | R / R1 |
+| MergeTrainBisectSlotLossTests | 137.6 | 7 | 95.073 | 7 | R / R2 |
+| AcceptanceCohortWorkflowTestsWorkspacePreparation | 136.2 | 4 | 446.413 | 12 | R / R1 |
 
-| Class | Before seconds/gate | Tests/gate | After seconds | Receipt / confirmation |
-|---|---:|---:|---:|---|
-| MergeTrainRedAttributionReplayScenarioTests | 201.9 | 8.7 | Pending | Acceptance / Tester pending |
-| AcceptanceCohortWorkflowTestsTrainRedAttribution | 179.7 | 14.3 | Pending | Acceptance / Tester pending |
-| PassedMergeTrainReceiptHoldTests | 158.4 | 11 | Pending | Acceptance / Tester pending |
-| AcceptanceCohortWorkflowTestsMergeTrain | 156.2 | 6.7 | Pending | Acceptance / Tester pending |
-| MergeTrainDeferralFixtureEquivalenceTests | 149.5 | 4 | — | Unchanged; independent-arm rerun required |
-| AcceptanceCohortWorkflowTestsLandingAndReceipts | 142.1 | 4.7 | Pending | Acceptance / Tester pending |
-| AcceptanceCohortWorkflowTestsGroupedGateAttempts | 142.1 | 4.3 | Pending | Acceptance / Tester pending |
-| BackgroundMergeTrainGateTests | 141.6 | 5 | Pending | Acceptance / Tester pending |
-| AcceptanceCohortWorkflowTestsTrainImplicatedExclusion | 139.9 | 3.7 | Pending | Acceptance / Tester pending |
-| AcceptanceCohortWorkflowTestsFollowerGateStart | 137.6 | 3.7 | Pending | Acceptance / Tester pending |
-| MergeTrainBisectSlotLossTests | 137.6 | 7 | Pending | Acceptance / Tester pending |
-| AcceptanceCohortWorkflowTestsWorkspacePreparation | 136.2 | 4 | — | Unchanged; real setup is asserted behavior |
+All rows cite receipt R above. Run labels identify its exact TRX artifacts:
+
+| Run | Host / executor | UTC execution window | TRX run ID |
+|---|---|---|---|
+| R1 | MCGAO-RUNNER-1 / mcg-exec-1 | 2026-10-28 20:53:41–21:13:08 | fd6ac3d6-adb3-47eb-b4bf-ee6cde720085 |
+| R2 | MCGAO-RUNNER-2 / mcg-exec-2 | 2026-10-28 20:53:46–20:56:13 | 7b3cabd5-a928-4848-9724-7ff01e114760 |
+| L1 | SEVENTHSON / local acceptance | 2026-10-28 21:13:33–21:14:46 | 14b34c92-9a21-4a85-b8f0-b67e745bb56b |
+
+Relative to the result file's directory, the TRX paths are:
+
+- R1: `remote-first/f230cf29bbc4f167/fe-12b7b226/summary-Mcg.AgentOrchestrator.Infrastructure.Tests-1-r1-FullyQualifiedName-AcceptanceCohortWorkflowTests-f1746887559584c6.trx`
+- R2: `remote-first/f230cf29bbc4f167/fe-3daf6294/summary-Mcg.AgentOrchestrator.Infrastructure.Tests-1-r1-FullyQualifiedName-ConsoleReplacementSourceGuard-07f13123d754337f.trx`
+- L1: `ea0f333b-pre-review-20261028205118789-e7bd0a300b8d4510a80d5cdf5f789044-candidate.reviewer-focused-evidence-infrastructure-tests-fullyqualifiedname-orchestratortemprootsourceguardt-c3e2fdd5545e61c6.trx`
+
+The receipt records execution mode/reason
+`explicit-focused-mapping+compatible-same-project-batch+unbatched:Infrastructure.Tests=bounded-filter-overflow`.
+All three TRX files label TestSettings `default`; their adapter identifies
+version 3.2.2. The receipt records filters rather than the original launcher
+command or all runtime settings. The managed-runner entry point is
+`scripts/Invoke-TestSummary.ps1 -Target tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj`;
+this identifies the runner surface, not a reconstructed invocation.
+The actual recorded filters follow, including additional classes batched by the
+conductor. The abstract-base substring selects other cohort classes too; only
+the twelve exact class names contribute to the table.
+
+<details>
+<summary>R1: recorded managed-runner filter</summary>
+
+```text
+FullyQualifiedName~AcceptanceCohortWorkflowTests|FullyQualifiedName~AcceptanceCohortWorkflowTestsFollowerGateStart|FullyQualifiedName~AcceptanceCohortWorkflowTestsGroupedGateAttempts|FullyQualifiedName~AcceptanceCohortWorkflowTestsLandingAndReceipts|FullyQualifiedName~AcceptanceCohortWorkflowTestsMergeTrain|FullyQualifiedName~AcceptanceCohortWorkflowTestsTrainImplicatedExclusion|FullyQualifiedName~AcceptanceCohortWorkflowTestsTrainRedAttribution|FullyQualifiedName~AcceptanceCohortWorkflowTestsWorkspacePreparation|FullyQualifiedName~AssemblyTempRedirectProjectGuardTests|FullyQualifiedName~BackgroundMergeTrainGateTests|FullyQualifiedName~BuildServerShutdownSourceGuardTests|FullyQualifiedName~CallerFilePathRootSourceGuardTests|FullyQualifiedName~CanaryEngineSurfaceCoverageTests|FullyQualifiedName~CliChildProcessBoundSourceGuardTests|FullyQualifiedName~ConductorLoopHandoffVerificationClockSourceGuardTests|FullyQualifiedName~ConductorRefusedGroupedIdentityGuardTests
+```
+
+</details>
+
+<details>
+<summary>R2: recorded managed-runner filter</summary>
+
+```text
+FullyQualifiedName~ConsoleReplacementSourceGuardTests|FullyQualifiedName~DashboardRemnantSourceGuardTests|FullyQualifiedName~DirectGitLaunchSourceGuardTests|FullyQualifiedName~ExecutionOwnedGroupCloseSourceGuardTests|FullyQualifiedName~ExecutionWorkspacesReferenceGuardTests|FullyQualifiedName~GoalAcceptanceLaneIsolatedRootGuardTests|FullyQualifiedName~GoalAcceptanceVerifierSplitFactParityTests|FullyQualifiedName~GoalPriorityStarvationGuardTests|FullyQualifiedName~HealthInspectorNetworkSourceGuardTests|FullyQualifiedName~LaneIsolatedRootGuardTests|FullyQualifiedName~LegacySparkNameSourceGuardTests|FullyQualifiedName~LineEndingPolicySourceGuardTests|FullyQualifiedName~LockContentionWaitSourceGuardTests|FullyQualifiedName~MergeTrainBisectSlotLossTests|FullyQualifiedName~MergeTrainDeferralFixtureEquivalenceTests|FullyQualifiedName~MergeTrainRedAttributionReplayScenarioTests|FullyQualifiedName~OperatorControlPlaneRemovalGuardTests|FullyQualifiedName~OrchestratorAttemptRootLeakGuardTests
+```
+
+</details>
+
+<details>
+<summary>L1: recorded managed-runner filter</summary>
+
+```text
+FullyQualifiedName~OrchestratorTempRootSourceGuardTests|FullyQualifiedName~OrderingEventSourceGuardTests|FullyQualifiedName~ParallelSharedStateSourceGuardTests|FullyQualifiedName~PassedMergeTrainReceiptHoldTests|FullyQualifiedName~PowerShellLaunchSourceGuardTests|FullyQualifiedName~ProcessStartInfoSourceGuardTests|FullyQualifiedName~ReadOnlyRoleMainIntegrationGuardTests|FullyQualifiedName~RealTimeConditionSourceGuardTests|FullyQualifiedName~RealTimeWindowSourceGuardTests|FullyQualifiedName~RealWorkerProcessGuardTests|FullyQualifiedName~RedirectedStreamDrainSourceGuardTests|FullyQualifiedName~RuntimeAssemblyArchitectureTests|FullyQualifiedName~SlotFixtureCollectionGuardTests|FullyQualifiedName~StopwatchThresholdSourceGuardTests|FullyQualifiedName~TestProcessStopIdentityGuardTests|FullyQualifiedName~WholeTestTimeoutSourceGuardTests|FullyQualifiedName~WorkerSkillCatalogRepositoryGuardTests
+```
+
+</details>
+
+## Timing interpretation
+
+The ten changed classes total **1,537.1 before seconds/gate versus 5,273.887 after
+test-seconds**. Seven have higher raw class sums; replay, bisect and receipt-hold
+results must also be read with their differing hosts/counts. This receipt does
+**not** demonstrate an aggregate speedup. It is a successful correctness run,
+not a controlled performance comparison: historical full-gate means and current
+focused-run counts differ, the baseline hosts/settings are unspecified, and the
+after run uses three hosts. No repeated run is requested for already covered
+correctness selections.
+
+The per-class check below narrows the observed high-cost case. Whole-test
+durations contain no setup/store/production-git phase split, so they cannot
+confirm which step dominates any class. The source-supported hypotheses in the
+next section remain **unconfirmed for every class**. In particular, the slowest
+landing/receipt test below is store-only and never calls the new helper; candidate
+setup therefore cannot explain that entire class's measured cost. The mechanism
+behind the higher sums is undetermined. Neither overlap nor these totals prove
+contention. Establishing a causal speedup or dominant phase would require
+comparable baseline/candidate execution on an identified host with phase evidence,
+under operator/Acceptance ownership.
+
+| Class | Slowest measured test (parameters as in TRX) | Seconds | Hypothesis disposition |
+|---|---|---:|---|
+| MergeTrainRedAttributionReplayScenarioTests | `ReadOnlyChild_SharedReachDoesNotFailParentGoals(count: 3)` | 23.489 | Unconfirmed: whole-test timing only. |
+| AcceptanceCohortWorkflowTestsTrainRedAttribution | `OwnedTimeout_SavesFailedReceiptAndImplicatesItsMember(culprit: 0, mtp: False)` | 110.509 | Unconfirmed: whole-test timing only. |
+| PassedMergeTrainReceiptHoldTests | `BlockedReceipt_ReleasesAtTickTenAndReadmitsMembers` | 26.115 | Unconfirmed: whole-test timing only. |
+| AcceptanceCohortWorkflowTestsMergeTrain | `ExactTestedMergeTrainCommit_LandsThreeGoalsWithPerGoalCoverage(scenario: "late-legacy")` | 151.457 | Unconfirmed: whole-test timing only. |
+| MergeTrainDeferralFixtureEquivalenceTests | `Reset_FiveOrderedScenarios_RestoreStateWithoutRebuilding` | 43.655 | Unconfirmed: whole-test timing only. |
+| AcceptanceCohortWorkflowTestsLandingAndReceipts | `Store_InfrastructureCauseRoundTripsLegacyUnknown` | 144.688 | Unconfirmed: whole-test timing only; slowest case is store-only. |
+| AcceptanceCohortWorkflowTestsGroupedGateAttempts | `SuccessorAdoptsMatchingLiveAttemptAndReplaysPublishedReceipt(train: False)` | 144.197 | Unconfirmed: whole-test timing only. |
+| BackgroundMergeTrainGateTests | `CandidateCopy_RealConstruction_PreservesTopologyAndTrainOutcome` | 156.864 | Unconfirmed: whole-test timing only. |
+| AcceptanceCohortWorkflowTestsTrainImplicatedExclusion | `ApparatusRed_RecordsNeitherImplicationNorPairSuppression(memberCount: 3, remainderPasses: True)` | 148.416 | Unconfirmed: whole-test timing only. |
+| AcceptanceCohortWorkflowTestsFollowerGateStart | `ChildSavesVerdictBoundToRecordedIdentity(passed: False)` | 126.505 | Unconfirmed: whole-test timing only. |
+| MergeTrainBisectSlotLossTests | `FailedFirstGate_BusyBisectKeepsReceiptAndImplicatesBeforeLease(grouped: True)` | 33.685 | Unconfirmed: whole-test timing only. |
+| AcceptanceCohortWorkflowTestsWorkspacePreparation | `DisposableWorkspace_CleanupFailurePersistsTypedDebt_AndCanBeRetried` | 145.139 | Unconfirmed: whole-test timing only. |
 
 ## Source inspection
 
@@ -113,9 +201,10 @@ arranges stale metadata with fixed file timestamps, then advances refs and runs
 the same two-tree checkout operation on existing tracked files in both checkouts,
 without an intervening status/refresh. It asserts the updated contents, clean
 checkouts, and unchanged template index bytes, refs and contents. It uses no
-wall-clock pacing. Acceptance must run this regression and the original failing
-scenario to confirm the hypothesis and repair; workers have not executed either.
-Include the added regression in the class's after total and test count.
+wall-clock pacing. Receipt R passes this regression (84.949 s, R1) and the original
+failing scenario (10.435 s, R2) on the current candidate. This verifies the repaired
+behavior in those cases; it does not isolate the historical failure's cause.
+The regression is included in the class's after total and test count.
 
 The candidate `4cef23c8e0178f827a4793442654601d7d44867b` failed pointer
 repair at `CohortCandidateTemplate.Copy` with `UnauthorizedAccessException`
@@ -126,8 +215,9 @@ now opens the existing file with `FileMode.Truncate`, preserving its attributes.
 `BackgroundMergeTrainGateTests.CandidateCopy_HiddenGitFile_RepairsPointersAndPreservesAttributes`
 explicitly arranges the hidden attribute on Windows and checks both repaired
 pointers, retained attributes, usable Git state and unchanged template bytes.
-Execution and confirmation of this diagnosis remain Acceptance-owned; include
-this added regression case in the class's after total and test count.
+Receipt R passes this regression (30.017 s, R1). Its arranged hidden-file case
+therefore verifies the repair; the historical diagnosis remains a hypothesis.
+This regression is included in the class's after total and test count.
 
 `BackgroundMergeTrainGateTests.CandidateCopy_RealConstruction_PreservesTopologyAndTrainOutcome`
 builds the fresh arm through the unchanged base builders. It compares main and
@@ -136,10 +226,23 @@ copy-local non-prunable topology. Both arms execute real RunMergeTrain with
 explicit passed receipt, three completed members, zero ejections and one verifier
 run, alongside member-outcome equivalence. Mutations of copied main/member
 branches leave template refs unchanged; a sibling copy and template store bytes
-also witness isolation. Acceptance must execute this contract before relying on
-the optimization.
+also witness isolation. Receipt R passes this real-path contract (156.864 s, R1).
+The source assertions at BackgroundMergeTrainGateTests.cs:425-488 check those
+outcomes, and :500-508 executes RunMergeTrain in both arms with explicit counts.
+
+Receipt R also passes both independent fresh/shared deferral theory rows:
+busyRounds 2 (18.510 s) and 3 (23.589 s), in R2. The unchanged test still invokes
+RunFreshDeferral separately at MergeTrainDeferralFixtureEquivalenceTests.cs:17;
+MergeTrainDeferralSharedFixture.cs:119-130 constructs and cleans a fresh
+repository, and :192-208 builds its scenario candidates through the unchanged
+base builder. Neither that fixture, its equivalence class, nor the base has a
+diff from 617daaddd. The five-scenario reset test also passes (43.655 s).
 
 No existing assertions, Facts, Theories or InlineData rows are removed. No class
 is assigned to an IsolatedProcessSpawning collection. The abstract base and both
-deferral fixture/equivalence files remain unchanged. After values and dominant
-step confirmation remain Tester-owned until the conductor receipt is available.
+deferral fixture/equivalence files remain unchanged. Criteria 2 and 4 now have
+matching candidate execution evidence; criterion 5's eleven Developer-deferred
+classes are all covered by R, so no duplicate evidence request is needed.
+Assertion preservation, notes acceptance, collection policy and shipping-source
+scope remain Reviewer-owned (criteria 1, 3 and 6). The timing limitation above
+remains open for that review; no dominant phase or causal speedup is attested.
