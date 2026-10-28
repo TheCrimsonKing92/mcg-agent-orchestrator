@@ -7,6 +7,30 @@ public sealed class OrchestratorSnapshotStatusTimeoutTests
     // Keep the status timeout comfortably above the shim's deliberate pre-sentinel delay so startup variance cannot decide the test.
     private const int SnapshotStatusTimeoutSeconds = 20;
     private const int SnapshotShimSentinelDelaySeconds = 6;
+    private const string EmptyInventoryLockMessage =
+        "No matching lock-holder processes were observed; in-tree build-lock state is UNVERIFIED.";
+
+    [Xunit.Fact]
+    public void EmptyInventoryReportsUnverifiedAndIndependentData()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        using var fixture = new PreparedRuntimeFixture();
+        var result = fixture.Invoke("Get-OrchestratorSnapshot.ps1",
+            $"-AppDll {PsLiteral(fixture.RelativeRuntime)} -GoalPrefix ok");
+
+        AssertSuccessfulSnapshot(result);
+        Assert.Contains("No matching repo processes found.", result.Stdout);
+        Assert.Contains(EmptyInventoryLockMessage, result.Stdout);
+        Assert.DoesNotContain("FREE", result.Stdout, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("LOCK id=", result.Stdout);
+        Assert.DoesNotContain("PROCESS_QUERY_UNAVAILABLE", result.Stdout);
+        Assert.Contains("status ok ok", result.Stdout);
+        var calls = fixture.Calls();
+        Assert.Equal(2, calls.Length);
+        Assert.Equal(InventoryArguments(fixture.Runtime), calls[0]);
+        Assert.Equal(new[] { fixture.Runtime, "status", "ok" }, calls[1]);
+        fixture.AssertNoResolutionOrLauncher();
+    }
 
     [Xunit.Theory]
     [Xunit.InlineData(false)]
@@ -77,7 +101,8 @@ public sealed class OrchestratorSnapshotStatusTimeoutTests
         Assert.Contains("explicit App DLL unavailable:", snapshot.Stdout);
         Assert.Contains("status unavailable:", snapshot.Stdout);
         Assert.Contains("lock query unavailable:", snapshot.Stdout);
-        Assert.DoesNotContain("build lock is FREE", snapshot.Stdout);
+        Assert.DoesNotContain("FREE", snapshot.Stdout, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(EmptyInventoryLockMessage, snapshot.Stdout);
         Assert.Empty(fixture.Calls());
         fixture.AssertNoResolutionOrLauncher();
     }
@@ -110,7 +135,8 @@ public sealed class OrchestratorSnapshotStatusTimeoutTests
         Assert.Contains("PROCESS_QUERY_UNAVAILABLE operation=fixture-unsupported", result.Stdout);
         Assert.Contains("status ok ok", result.Stdout);
         Assert.Contains("lock query unavailable:", result.Stdout);
-        Assert.DoesNotContain("build lock is FREE", result.Stdout);
+        Assert.DoesNotContain("FREE", result.Stdout, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(EmptyInventoryLockMessage, result.Stdout);
         var calls = fixture.Calls();
         Assert.Equal(2, calls.Length);
         Assert.Equal(InventoryArguments(fixture.Runtime), calls[0]);
