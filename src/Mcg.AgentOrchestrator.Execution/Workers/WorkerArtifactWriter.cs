@@ -574,6 +574,8 @@ internal sealed partial class WorkerArtifactWriter
             lines.AddRange(WorkerStackVerificationGuidance.DeveloperBuildOnlyBrokerLines());
         else if (toolchain == Toolchain.Go && task.RequiredRole == AgentRole.Developer)
             lines.AddRange(WorkerStackVerificationGuidance.GoDeveloperBuildAndPolicyBrokerLines(testImpactPlan, verificationPolicy));
+        else if (toolchain == Toolchain.Node && task.RequiredRole == AgentRole.Developer)
+            lines.AddRange(WorkerStackVerificationGuidance.NodeDeveloperBuildAndPolicyBrokerLines(testImpactPlan, verificationPolicy));
         else
         {
             lines.AddRange([
@@ -599,6 +601,8 @@ internal sealed partial class WorkerArtifactWriter
         ]);
         if (toolchain == Toolchain.Go && task.RequiredRole == AgentRole.Developer)
             lines.AddRange(WorkerStackVerificationGuidance.GoDeveloperAcceptanceEvidenceBrokerLines());
+        else if (toolchain == Toolchain.Node && task.RequiredRole == AgentRole.Developer)
+            lines.AddRange(WorkerStackVerificationGuidance.NodeDeveloperAcceptanceEvidenceBrokerLines());
         else if (!developerBuildOnly)
         {
             lines.AddRange([
