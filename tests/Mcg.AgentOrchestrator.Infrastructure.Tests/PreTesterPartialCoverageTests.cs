@@ -243,6 +243,78 @@ public sealed class PreTesterPartialCoverageTests
     [InlineData("red")]
     [InlineData("rejected")]
     [InlineData("incomplete")]
+    public void InFlightBetaVetoCannotRegainCoverageThroughSurvivingAlpha(string outcome)
+    {
+        using var scenario = new Scenario();
+        var original = scenario.RunPreTester();
+        var originalBytes = File.ReadAllText(original.ResultPath);
+        Assert.Equal(["AlphaTests", "BetaTests"], original.OriginalFocusedReceipt!.Request.Selections
+            .Select(selection => selection.TestClass));
+        scenario.Report("AlphaTests", "BetaTests", third: "GammaTests");
+        var gate = new ConductorParallelAcceptanceAttemptCompletionGateForTests();
+        var driver = scenario.Driver(gate);
+        scenario.Tick(driver);
+        var pending = gate.RequiredHandleForTests(scenario.Goal.Id.Value);
+        Assert.Equal(["GammaTests"], Classes(pending.Attempt.FocusedEvidenceRequest!));
+        var veto = scenario.RecordNewerBeta(outcome);
+        var vetoBytes = JsonSerializer.Serialize(veto);
+        scenario.Tick(driver);
+        Assert.Equal(1, gate.HeldCount);
+        Assert.Single(scenario.Requests);
+        Assert.Equal(ReviewFindingState.Open, scenario.Finding.State);
+
+        pending.CompleteForTests();
+        scenario.Tick(driver);
+
+        Assert.Equal(2, scenario.Requests.Count);
+        Assert.Equal(["GammaTests"], Classes(scenario.Requests[1]));
+        Assert.Equal(ReviewFindingState.Open, scenario.Finding.State);
+        Assert.NotEqual(WorkTaskStatus.Completed, scenario.Tester.Status);
+        Assert.False(FindingReceiptClosureDiagnosis.Evaluate(scenario.Goal, scenario.Tester, CandidateSha).IsClosable);
+        Assert.Equal("reused-pre-tester-invalidated:pending-execution", scenario.Finding.EvidenceOutcome!.DecisionReason);
+        Assert.Equal(FindingEvidenceOutcomeReason.Unknown, scenario.Finding.EvidenceOutcome.ResultReason);
+        var retainedC = scenario.Verification.FindingEvidenceReceipts!.Single(receipt =>
+            receipt.Request.Selections.SingleOrDefault()?.TestClass == "GammaTests");
+        Assert.True(retainedC.Passed);
+        Assert.Equal(JsonSerializer.Serialize(original.OriginalFocusedReceipt), JsonSerializer.Serialize(
+            scenario.Verification.FindingEvidenceReceipts!.Single(receipt => receipt.ReceiptId == original.FocusedEvidenceReceiptId)));
+        Assert.Equal(vetoBytes, JsonSerializer.Serialize(scenario.Verification.FindingEvidenceReceipts!
+            .Single(receipt => receipt.ReceiptId == veto.ReceiptId)));
+        Assert.Equal(originalBytes, File.ReadAllText(original.ResultPath));
+
+        scenario.Tick(driver);
+        Assert.Equal(ReviewFindingState.Open, scenario.Finding.State);
+        Assert.Equal(2, scenario.Requests.Count);
+        if (outcome == "red")
+        {
+            Assert.Equal(0, gate.HeldCount);
+            var developer = scenario.Goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
+            Assert.Contains(scenario.Goal.Timeline, item => item.Kind == ProgressKind.TaskRetried &&
+                item.TaskId == developer.Id && item.Message.Contains("ACTIONABLE_CANDIDATE_RED", StringComparison.Ordinal) &&
+                item.Message.Contains($"receipt_id={veto.ReceiptId};", StringComparison.Ordinal));
+        }
+        else
+        {
+            var repair = gate.RequiredHandleForTests(scenario.Goal.Id.Value);
+            Assert.Equal(["BetaTests"], Classes(repair.Attempt.FocusedEvidenceRequest!));
+            scenario.Tick(driver);
+            Assert.Equal(1, gate.HeldCount);
+            Assert.Equal(2, scenario.Requests.Count);
+            repair.CompleteForTests();
+            scenario.Tick(driver);
+            Assert.Equal(3, scenario.Requests.Count);
+            Assert.Equal(["BetaTests"], Classes(scenario.Requests[2]));
+            Assert.Equal(ReviewFindingState.Resolved, scenario.Finding.State);
+            Assert.Contains(original.FocusedEvidenceReceiptId!, scenario.Finding.EvidenceOutcome!.SourceReceiptIds!);
+            Assert.Contains(retainedC.ReceiptId, scenario.Finding.EvidenceOutcome.SourceReceiptIds!);
+        }
+    }
+
+    [Theory(Timeout = TestHangGuard.WholeTestMilliseconds)]
+    [Trait("Category", "CrossTick")]
+    [InlineData("red")]
+    [InlineData("rejected")]
+    [InlineData("incomplete")]
     public void NewerNonGreenBetaDefeatsOlderPreTesterGreen(string outcome)
     {
         using var scenario = new Scenario();
@@ -328,10 +400,10 @@ public sealed class PreTesterPartialCoverageTests
             return attempt;
         }
 
-        public void Report(string first, string second, bool negativeControl = false)
+        public void Report(string first, string second, bool negativeControl = false, string? third = null)
         {
             var finding = EvidenceFindingWithRequest("Need combined evidence", id: "mixed", category: FindingCategory.TestEvidence,
-                classes: [first, second]);
+                classes: third is null ? [first, second] : [first, second, third]);
             if (negativeControl) finding = finding with { EvidenceRequest = finding.EvidenceRequest! with
                 { NegativeControl = FindingEvidenceNegativeControl.RevertSrc } };
             DispatchTask(Kernel, Goal, Tester, "test", workingDirectory: Root, baseCommit: Candidate);

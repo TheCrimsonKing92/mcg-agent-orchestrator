@@ -435,7 +435,6 @@ internal sealed partial class ConductorDriver
                 "Focused evidence selected zero tests; its apparatus receipt was attached for correction and reissue.");
             return true;
         }
-
         var incompletePreTesterCoverage = false;
         foreach (var finding in runnable.Findings)
         {

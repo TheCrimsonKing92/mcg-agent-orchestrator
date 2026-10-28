@@ -69,9 +69,13 @@ internal static class PreTesterCoverageComposition
 
     private static IReadOnlyList<FindingEvidenceReceipt> RevalidateSources(ConductorDriver driver, Goal goal, TaskSpec task,
         FindingEvidenceRequest originalRequest, string candidateSha, string basis,
-        IReadOnlyList<FindingEvidenceReceipt> sources)
+        IReadOnlyList<FindingEvidenceReceipt> sources, out IReadOnlySet<string> eligibleSelections)
     {
+        eligibleSelections = sources.SelectMany(source =>
+            FindingEvidenceExecutedCoverage.ExecutedSelections(source, FormatFindingEvidenceSelection))
+            .Select(FormatFindingEvidenceSelection).ToHashSet(StringComparer.Ordinal);
         if (!sources.Any(source => source.FindingRoundFingerprint == "pre-tester-deferred")) return sources;
+        eligibleSelections = new HashSet<string>(StringComparer.Ordinal);
         if (!TryNormalizeFindingEvidenceRequest(originalRequest, driver._getFindingEvidenceEngineSettings(goal),
                 (project, name) => driver._resolveFindingEvidenceSiblingClasses(goal, project, name),
                 out originalRequest, out _, out _, out _)) return [];
@@ -79,19 +83,25 @@ internal static class PreTesterCoverageComposition
         if (!string.Equals(liveSha, candidateSha, StringComparison.OrdinalIgnoreCase) ||
             BuildFindingEvidenceExecutionBasisIdentity(driver._getFindingEvidenceEngineSettings(goal)) != basis) return [];
         TryResolveFindingEvidenceCoverage(task, originalRequest, candidateSha, basis,
-            out var current, out _, out _, ReadCoverage(driver, goal, candidateSha, basis));
+            out var current, out _, out _, out var currentBySelection, ReadCoverage(driver, goal, candidateSha, basis));
+        var sourceIds = sources.Select(source => source.ReceiptId).ToHashSet(StringComparer.Ordinal);
+        // Eligibility belongs to a selection and its latest receipt, not to the whole immutable
+        // receipt. A surviving A must never restore a vetoed B from their shared historical receipt.
+        eligibleSelections = currentBySelection.Where(pair => sourceIds.Contains(pair.Value.ReceiptId))
+            .Select(pair => pair.Key).ToHashSet(StringComparer.Ordinal);
         return sources.Where(source => current.Any(valid => valid.ReceiptId == source.ReceiptId)).ToArray();
     }
 
     private static bool CombinedCoverageIsComplete(ConductorDriver driver, Goal goal, FindingEvidenceRequest request,
-        FindingEvidenceReceipt executed, IReadOnlyList<FindingEvidenceReceipt> reused)
+        FindingEvidenceReceipt executed, IReadOnlySet<string> eligibleReusedSelections)
     {
         if (!TryNormalizeFindingEvidenceRequest(request, driver._getFindingEvidenceEngineSettings(goal),
                 (project, name) => driver._resolveFindingEvidenceSiblingClasses(goal, project, name),
                 out var normalized, out _, out _, out _)) return false;
-        var coverage = reused.Append(executed).SelectMany(receipt =>
-            FindingEvidenceExecutedCoverage.ExecutedSelections(receipt, FormatFindingEvidenceSelection)).ToHashSet();
-        return coverage.IsSupersetOf(FindingEvidenceRoundPlanner.ExpandSelections(normalized.Selections));
+        var coverage = FindingEvidenceExecutedCoverage.ExecutedSelections(executed, FormatFindingEvidenceSelection)
+            .Select(FormatFindingEvidenceSelection).Concat(eligibleReusedSelections).ToHashSet(StringComparer.Ordinal);
+        return coverage.IsSupersetOf(FindingEvidenceRoundPlanner.ExpandSelections(normalized.Selections)
+            .Select(FormatFindingEvidenceSelection));
     }
 
     internal sealed record Completion(FindingEvidenceReceipt Receipt,
@@ -103,12 +113,12 @@ internal static class PreTesterCoverageComposition
         string candidateSha, string basis, string round, FindingEvidenceOutcomeReason? resultReason)
     {
         var validSources = RevalidateSources(driver, goal, task, finding.EvidenceRequest!,
-            candidateSha, basis, member.ReusedSourceReceipts ?? []);
+            candidateSha, basis, member.ReusedSourceReceipts ?? [], out var eligibleReusedSelections);
         var invalidated = validSources.Count != (member.ReusedSourceReceipts?.Count ?? 0);
         var preTesterComposition = member.CoverageDecisionReason == "pre-tester-authority-missing" ||
             (member.ReusedSourceReceipts ?? []).Any(source => source.FindingRoundFingerprint == "pre-tester-deferred");
         var incomplete = preTesterComposition && (invalidated ||
-            !CombinedCoverageIsComplete(driver, goal, finding.EvidenceRequest!, receipt, validSources));
+            !CombinedCoverageIsComplete(driver, goal, finding.EvidenceRequest!, receipt, eligibleReusedSelections));
         if (incomplete)
         {
             // Keep C's execution receipt while the original B+C request remains pending.

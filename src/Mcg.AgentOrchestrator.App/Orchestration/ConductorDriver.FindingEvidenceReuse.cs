@@ -356,10 +356,24 @@ internal sealed partial class ConductorDriver
         out IReadOnlyList<FindingEvidenceSelection> uncoveredSelections,
         out string coverageReason,
         IReadOnlyList<PreTesterCoverageComposition.PreTesterCoverageSource>? preTesterCoverage = null)
+        => TryResolveFindingEvidenceCoverage(requestingTask, normalizedRequest, candidateSha, executionBasisIdentity,
+            out reusableReceipts, out uncoveredSelections, out coverageReason, out _, preTesterCoverage);
+
+    internal static bool TryResolveFindingEvidenceCoverage(
+        TaskSpec requestingTask,
+        FindingEvidenceRequest normalizedRequest,
+        string candidateSha,
+        string executionBasisIdentity,
+        out IReadOnlyList<FindingEvidenceReceipt> reusableReceipts,
+        out IReadOnlyList<FindingEvidenceSelection> uncoveredSelections,
+        out string coverageReason,
+        out IReadOnlyDictionary<string, FindingEvidenceReceipt> reusableSelectionReceipts,
+        IReadOnlyList<PreTesterCoverageComposition.PreTesterCoverageSource>? preTesterCoverage = null)
     {
         reusableReceipts = [];
         uncoveredSelections = normalizedRequest.Selections;
         coverageReason = string.Empty;
+        reusableSelectionReceipts = new Dictionary<string, FindingEvidenceReceipt>(StringComparer.Ordinal);
         if (normalizedRequest.NegativeControl is not null || normalizedRequest.RevertPaths is not null ||
             normalizedRequest.Mutation is not null) preTesterCoverage = [];
         if (candidateSha == "unavailable" ||
@@ -448,6 +462,7 @@ internal sealed partial class ConductorDriver
         }
 
         var expandedSelections = FindingEvidenceRoundPlanner.ExpandSelections(normalizedRequest.Selections);
+        reusableSelectionReceipts = reusableBySelection;
         uncoveredSelections = expandedSelections
             .Where(selection => !reusableBySelection.ContainsKey(FormatFindingEvidenceSelection(selection)))
             .ToArray();
