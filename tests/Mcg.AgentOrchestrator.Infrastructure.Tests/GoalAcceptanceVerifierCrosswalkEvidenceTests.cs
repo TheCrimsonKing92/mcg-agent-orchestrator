@@ -160,6 +160,82 @@ public sealed class GoalAcceptanceVerifierCrosswalkEvidenceTests
     }
 
     [Fact]
+    public async Task SolutionCoverage_WithCrosswalk_PreservesInvocationProvenance()
+    {
+        using var fixture = new CrosswalkAcceptanceFixture();
+        File.WriteAllText(Path.Combine(fixture.Root, "config", "acceptance-manifest.json"),
+            AcceptanceManifestTestDefaults.WithEngine("""
+            {
+              "version": 1,
+              "checks": [
+                { "name": "crosswalk selection", "type": "crosswalk-test" },
+                { "name": "project tests", "type": "dotnet-test", "project": "tests/Sample.Tests.csproj" },
+                { "name": "solution tests", "type": "dotnet-test" }
+              ],
+              "forbiddenChangedPathGlobs": []
+            }
+            """));
+        var crosswalkCalls = 0;
+        var testCalls = new List<string[]>();
+        var verifier = new GoalAcceptanceVerifier(fixture.TestOverrides, (args, _, _, _) =>
+        {
+            var command = args.LastOrDefault() ?? "";
+            if (command.StartsWith("& '", StringComparison.Ordinal))
+            {
+                crosswalkCalls++;
+                return Task.FromResult(fixture.Result(command.Contains("' list '", StringComparison.Ordinal)
+                    ? fixture.Discovery : fixture.Output));
+            }
+            if (args is ["dotnet", "test", ..])
+            {
+                testCalls.Add(args);
+                GoalAcceptanceVerifierDotnetBuildSlotTestsTrustedBaselineDiscovery.WriteVstestTrx(
+                    args, "Sample.Tests.Passes");
+                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0,
+                    "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."));
+            }
+            return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, ""));
+        });
+
+        var result = await verifier.RunAsync(fixture.Root);
+
+        Assert.True(result.Passed, result.OutputTail);
+        Assert.Equal(2, crosswalkCalls);
+        var solutionCall = Assert.Single(testCalls);
+        Assert.DoesNotContain(solutionCall, arg => arg.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(3, result.Checks!.Count);
+        var solution = Assert.Single(result.Checks, check => check.Name == "solution tests");
+        Assert.False(string.IsNullOrWhiteSpace(result.AttemptId));
+        Assert.Equal(result.AttemptId, solution.TestResultAttemptId);
+        Assert.Equal(0, solution.TestResultRunOrdinal);
+        Assert.False(solution.TestResultIsExplicitCrossAttemptReuse);
+        Assert.True(File.Exists(Assert.Single(solution.TestResultPaths!)));
+        var project = Assert.Single(result.Checks, check => check.Name == "project tests");
+        Assert.Equal([solution.Name], project.CoveredBy);
+        Assert.Equal("covered by: solution tests", project.ResultSummary);
+
+        var classified = AcceptanceCohortVerificationClassifier.ClassifyCohortVerificationResultWithPaths(result);
+        Assert.Equal(AcceptanceCohortGateOutcome.Passed, classified.Classification.Outcome);
+        Assert.Equal(2, classified.Checks.Count);
+        Assert.All(classified.Checks, check => Assert.Equal(result.AttemptId, check.AttemptId));
+        var trx = Assert.Single(classified.Checks, check => check.Format == AcceptanceCohortCheckEvidence.TrxFormat);
+        Assert.Equal(solution.Name, trx.CheckName);
+        Assert.Equal(solution.TestResultRunOrdinal, trx.RunOrdinal);
+        Assert.Equal(1, trx.ExecutedTestCount);
+        Assert.Equal(1, Assert.Single(classified.Checks,
+            check => check.Format == AcceptanceCohortCheckEvidence.NormalizedFormat).ExecutedTestCount);
+
+        // Removing or substituting provenance must still fail closed at the consumer.
+        foreach (var invalidAttempt in new string?[] { null, "unrelated-attempt" })
+        {
+            var invalid = result with { Checks = result.Checks.Select(check => check.Name == solution.Name
+                ? check with { TestResultAttemptId = invalidAttempt } : check).ToArray() };
+            Assert.Equal(AcceptanceCohortGateOutcome.InfrastructureFailure,
+                AcceptanceCohortVerificationClassifier.ClassifyCohortVerification(invalid));
+        }
+    }
+
+    [Fact]
     public async Task DeclaredCrosswalkEvidence_IsAcceptedByCohortConsumer()
     {
         using var fixture = new CrosswalkAcceptanceFixture();

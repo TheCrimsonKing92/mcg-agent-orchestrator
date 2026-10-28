@@ -1635,7 +1635,14 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 _executionContext?.ResolveCancellationProbe(boundary: false), cancellationToken);
         var result = await (_executionContext?.TrackStarted(invocationTask) ?? invocationTask).ConfigureAwait(false);
         ThrowIfGateCancellationRequested(cancellationToken);
-        return result;
+        // Direct invocations (including solution-wide coverage) bypass the partition
+        // cache wrapper, so bind fresh evidence to its actual owner here as well.
+        return (result.Result with
+        {
+            TestResultAttemptId = (_executionContext as AcceptanceAttemptExecutionOwner)?.Identity.AttemptId
+                ?? result.Result.TestResultAttemptId,
+            TestResultRunOrdinal = invocation.Ordinal
+        }, result.Retried);
     }
 
     internal Task<(AcceptanceCheckResult Result, bool Retried)> RunInvocationForOwnerTestsAsync(
