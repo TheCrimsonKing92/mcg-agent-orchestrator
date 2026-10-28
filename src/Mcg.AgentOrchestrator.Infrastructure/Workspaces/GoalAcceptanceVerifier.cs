@@ -910,7 +910,14 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             Retried: retried,
             ArtifactsPath: artifactsPath,
             Checks: checks,
-            TestResultPaths: testResultPaths);
+            TestResultPaths: testResultPaths)
+        {
+            RequiredCrosswalkChecks = effectiveChecks.Where(check => !check.Advisory &&
+                check.Type.Equals("crosswalk-test", StringComparison.OrdinalIgnoreCase)).Select(check => check.Name).ToArray(),
+            RequiredTestCheckNames = effectiveChecks.Where(check => !check.Advisory &&
+                (check.Type.Equals("crosswalk-test", StringComparison.OrdinalIgnoreCase) ||
+                 check.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase))).Select(check => check.Name).ToArray()
+        };
         if (verification.Passed)
         {
             AcceptanceLaneDurationStore.Flush();

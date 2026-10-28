@@ -457,7 +457,8 @@ internal sealed partial class ConductorDriver
                 GateTestResultPaths: gateTestResultPaths,
                 ValidForLanding: classification.Outcome == AcceptanceCohortGateOutcome.Passed,
                 InfrastructureReasonCode: classification.InfrastructureReasonCode,
-                InfrastructureDetail: classification.InfrastructureDetail));
+                InfrastructureDetail: classification.InfrastructureDetail)
+                { GateChecks = classifiedVerification.Checks.Select(check => check.BindToCohort(identity)).ToArray() });
         }
         catch (Exception ex) when (!gateExecutionComplete && ex is (
             AcceptanceInfrastructureDeferredException or DotnetBuildSlotsBusyException or

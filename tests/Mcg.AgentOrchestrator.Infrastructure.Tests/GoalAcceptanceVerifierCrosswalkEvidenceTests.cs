@@ -160,13 +160,15 @@ public sealed class GoalAcceptanceVerifierCrosswalkEvidenceTests
     }
 
     [Fact]
-    public async Task TrxOnlyCohortConsumer_ReportsExplicitIncompatibility()
+    public async Task DeclaredCrosswalkEvidence_IsAcceptedByCohortConsumer()
     {
         using var fixture = new CrosswalkAcceptanceFixture();
         var check = await fixture.RunAsync();
         var classification = AcceptanceCohortVerificationClassifier.ClassifyCohortVerificationResult(
-            new(true, false, 0, null, Checks: [check], TestResultPaths: check.NormalizedTestResultPaths));
-        Assert.Equal(AcceptanceCohortGateOutcome.InfrastructureFailure, classification.Outcome);
-        Assert.Contains("incompatible", classification.InfrastructureDetail, StringComparison.Ordinal);
+            new(true, false, 0, null, Checks: [check], TestResultPaths: check.NormalizedTestResultPaths)
+            {
+                AttemptId = check.TestResultAttemptId, RequiredCrosswalkChecks = [check.Name], RequiredTestCheckNames = [check.Name]
+            });
+        Assert.Equal(AcceptanceCohortGateOutcome.Passed, classification.Outcome);
     }
 }

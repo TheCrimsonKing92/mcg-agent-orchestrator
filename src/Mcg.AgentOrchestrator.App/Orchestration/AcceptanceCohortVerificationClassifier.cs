@@ -13,7 +13,7 @@ internal static class AcceptanceCohortVerificationClassifier
         ClassifyCohortVerificationResultWithPaths(result).Classification;
 
     internal static ClassifiedCohortVerification ClassifyCohortVerificationResultWithPaths(
-        AcceptanceVerificationResult result)
+        AcceptanceVerificationResult result, bool allowNormalized = true)
     {
         ArgumentNullException.ThrowIfNull(result);
         IReadOnlyList<string> normalizedTestResultPaths;
@@ -45,7 +45,29 @@ internal static class AcceptanceCohortVerificationClassifier
                     result.OutputTail ?? "Acceptance verification did not report an exit code."),
                 normalizedTestResultPaths);
         }
-        if (result.Checks?.Any(check => check.CrosswalkDiagnostics is not null) == true)
+        if (result.RequiredCrosswalkChecks.Count > 0 && allowNormalized)
+        {
+            try
+            {
+                var checks = CohortDeclaredCheckEvidence.Resolve(result);
+                var assessment = checks is null ? null : CohortTestResultEvidence.Assess(checks);
+                if (assessment?.Coherent != true)
+                    return new(InfrastructureClassification(AcceptanceCohortInfrastructureReasonCodes.TrxEvidenceIncoherent,
+                        "Declared cohort test evidence is missing, stale or incoherent."), normalizedTestResultPaths);
+                return new(new(result.Passed && result.ExitCode == 0 && assessment.Passed &&
+                    (result.Checks ?? []).All(check => check.Advisory || (check.Passed && check.ExitCode is null or 0))
+                    ? AcceptanceCohortGateOutcome.Passed : AcceptanceCohortGateOutcome.Failed),
+                    NormalizeCohortTestResultPaths(checks!.SelectMany(check => check.AllArtifacts).Select(a => a.Path).ToArray()))
+                    { Checks = checks! };
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+            {
+                return new(InfrastructureClassification(AcceptanceCohortInfrastructureReasonCodes.TrxEvidenceIncoherent,
+                    ex.Message), normalizedTestResultPaths);
+            }
+        }
+        if (result.Checks?.Any(check => check.CrosswalkDiagnostics is not null || check.CohortEvidence is not null) == true ||
+            result.RequiredCrosswalkChecks.Count > 0)
         {
             return new ClassifiedCohortVerification(InfrastructureClassification(
                 AcceptanceCohortInfrastructureReasonCodes.TrxEvidenceIncoherent,
@@ -75,7 +97,10 @@ internal static class AcceptanceCohortVerificationClassifier
 
     internal sealed record ClassifiedCohortVerification(
         AcceptanceCohortGateClassification Classification,
-        IReadOnlyList<string> NormalizedTestResultPaths);
+        IReadOnlyList<string> NormalizedTestResultPaths)
+    {
+        internal IReadOnlyList<AcceptanceCohortCheckEvidence> Checks { get; init; } = [];
+    }
 
     internal static AcceptanceCohortGateClassification ClassifyCohortInfrastructureException(Exception exception)
     {
