@@ -9,7 +9,7 @@ public sealed class FreshFindingEvidenceConductorTests
     [InlineData(true)]
     public void TesterReceiptClosureRetainsOriginAndResumesReviewer(bool reload)
     {
-        using var fixture = new FreshFindingEvidenceFixture();
+        using var fixture = new FreshFindingEvidenceFixture(unresolvedTesterFinding: true);
         fixture.ReexecuteTesterAfterVerdict(needsClosure: true);
         Assert.Equal(WorkTaskStatus.Failed, fixture.Tester.Status);
         var receipt = fixture.Receipt();
@@ -43,7 +43,7 @@ public sealed class FreshFindingEvidenceConductorTests
     [Fact]
     public void ClosedTesterWithoutAuthoritativeOriginCannotResumeReviewer()
     {
-        using var fixture = new FreshFindingEvidenceFixture();
+        using var fixture = new FreshFindingEvidenceFixture(unresolvedTesterFinding: true);
         fixture.ReexecuteTesterAfterVerdict(needsClosure: true);
         var receipt = fixture.Receipt();
         fixture.Attach(receipt);

@@ -28,7 +28,7 @@ internal sealed class FreshFindingEvidenceFixture : IDisposable
     };
 
     internal FreshFindingEvidenceFixture(bool twoRequests = false, bool retryReview = true, bool sourceFinding = false,
-        bool compositeRequest = false, bool negativeControl = false)
+        bool compositeRequest = false, bool negativeControl = false, bool unresolvedTesterFinding = false)
     {
         Directory.CreateDirectory(Root);
         Kernel = new AgentOrchestratorKernel(new FixedClock(Now.AddMinutes(5)));
@@ -52,8 +52,9 @@ internal sealed class FreshFindingEvidenceFixture : IDisposable
                 RevertPaths = ["src/Guard.cs"]
             }
         };
-        Record(tester, findings.Select(item => item with { State = ReviewFindingState.Resolved }).ToArray(),
-            Now.AddMinutes(-4), Now.AddMinutes(-3), "pass");
+        Record(tester, findings.Select(item => item with
+            { State = unresolvedTesterFinding ? ReviewFindingState.Open : ReviewFindingState.Resolved }).ToArray(),
+            Now.AddMinutes(-4), Now.AddMinutes(-3), unresolvedTesterFinding ? "needs-work" : "pass");
         var old = Receipt(FindingId, ["OldGuard"], "finding-evidence-ae20831594d6ef6afe9a1bed");
         Attach(old, FindingId);
         var reviewFindings = compositeRequest
@@ -137,6 +138,8 @@ internal sealed class FreshFindingEvidenceFixture : IDisposable
                 State = needsClosure ? ReviewFindingState.Open : finding.State }).ToArray();
         Kernel.RetryTask(Goal.Id, Tester.Id, "Run the exact requested guard", RetryCause.NewTestFinding, invalidateDownstream: false);
         Record(Tester, findings, Now.AddMinutes(1), Now.AddMinutes(2), needsClosure ? "needs-work" : "pass");
+        Assert.Null(Tester.LastVerification!.ReviewFindingContractViolation);
+        Assert.NotNull(Tester.LastVerification.MergedReviewFindings);
     }
 
     internal void RecordCompositeReuse(FindingEvidenceReceipt first, FindingEvidenceReceipt second)
