@@ -42,6 +42,7 @@ public static class CriterionOwnershipDerivation
         return currentSpec with
         {
             AcceptanceCriteria = declaredCriteria.ToArray(),
+            VerificationClass = VerificationClassDerivation.Classify(declaredCriteria),
             AcceptanceGateOwnedAcceptanceCriteria = ownership.AcceptanceGateOwned,
             OperatorOwnedAcceptanceCriteria = ownership.OperatorOwned,
             OpenQuestions = questions
