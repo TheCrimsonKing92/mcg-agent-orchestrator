@@ -92,7 +92,8 @@ public sealed class OwnerConsolePreviewCompletionTests
             {
                 if (Environment.CurrentManagedThreadId != Volatile.Read(ref layoutThread) ||
                     Interlocked.Exchange(ref held, 1) != 0) return;
-                Assert.Equal(98, label.Viewport.Width);
+                // The window and SELECTED frame each consume two border columns.
+                Assert.Equal(96, label.Viewport.Width);
                 Assert.StartsWith("Load", label.Text);
                 layoutWriting.SetResult();
                 if (!finishLayout.Wait(TestHangGuard.Bound, Token))
