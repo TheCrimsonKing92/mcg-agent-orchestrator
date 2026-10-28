@@ -138,7 +138,7 @@ internal static class ConductorOperatorIntentBoundary
                 result.Lines.AddRange(application.Lines);
                 if (application.Result.MutatedGoalState || application.Result.RejectedAdjudication)
                     result.ChangedGoalIds.Add(goalId);
-                if (application.Result.MutatedGoalState)
+                if (application.Result.MutatedGoalState && goal.Status != GoalStatus.Completed)
                     result.AppliedGoalIds.Add(goalId);
             }
             catch (Exception ex)

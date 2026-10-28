@@ -417,7 +417,15 @@ internal sealed partial class GoalRefinementService
         {
             OperatorOwnedAcceptanceCriteria = operatorOwnedCriteria,
             AcceptanceGateOwnedAcceptanceCriteria = acceptanceGateOwnedCriteria,
-            ClarificationAnswerHistory = clarificationAnswerHistory
+            ClarificationAnswerHistory = clarificationAnswerHistory,
+            CriterionEvidenceDeclarations = output.CriterionEvidenceDeclarations.Select(declaration =>
+            {
+                var matches = output.CriterionOwnerships.Where(item => item.Text == declaration.Criterion).ToArray();
+                var criterion = matches.Length == 1 && matches[0].DeclaredIndex is { } number &&
+                    number > 0 && number <= acceptanceCriteria.Count
+                    ? acceptanceCriteria[number - 1] : declaration.Criterion;
+                return declaration with { Criterion = criterion };
+            }).ToArray()
         };
 
         kernel.RecordGoalRefinement(goalId, spec);

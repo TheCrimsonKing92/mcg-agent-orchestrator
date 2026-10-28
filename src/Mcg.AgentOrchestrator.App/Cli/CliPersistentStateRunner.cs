@@ -2592,7 +2592,7 @@ internal static partial class CliPersistentStateRunner
                         }
 
                         var outstandingEvidence = transactionKernel.GetGoal(request.GoalId)
-                            .GetOutstandingCriterionEvidenceObligations(request.TestedWorktreeHead);
+                            .GetLandingPrerequisiteObligations(request.TestedWorktreeHead);
                         if (outstandingEvidence.Count > 0)
                         {
                             var evidenceMismatch = new AcceptanceMergeGuardMismatch(
@@ -2609,15 +2609,7 @@ internal static partial class CliPersistentStateRunner
                         }
 
                         var result = request.Merge();
-                        if (result.FastForwarded)
-                        {
-                            transactionKernel.ClearAcceptanceFailure(request.GoalId);
-                            transactionKernel.CompleteGoal(request.GoalId, request.CompletionReason);
-                        }
-                        else if (result.Message is not null)
-                        {
-                            transactionKernel.RecordAcceptanceFailure(request.GoalId, ["merge"]);
-                        }
+                        CliWorkspaceMerge.ApplyAcceptanceResult(transactionKernel, request, result);
 
                         var updatedSnapshot = ExportGoalSnapshot(transactionKernel, request.GoalId);
                         return Task.FromResult<(bool ShouldSave, GoalSnapshot? NewSnapshot, (AcceptanceMergeCommitResult Result, GoalSnapshot Snapshot) Result)>(

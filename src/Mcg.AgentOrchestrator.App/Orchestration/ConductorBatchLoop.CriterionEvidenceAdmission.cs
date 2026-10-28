@@ -11,7 +11,7 @@ internal sealed partial class ConductorBatchLoop
         IReadOnlySet<string> activeCohortMemberGoalIds)
     {
         var excludedGoalIds = eligibleGoals
-            .Where(goal => goal.OutstandingCriterionEvidenceObligations.Any(obligation =>
+            .Where(goal => goal.LandingPrerequisiteObligations.Any(obligation =>
                 obligation.Owner != CriterionEvidenceOwner.Acceptance))
             .Select(goal => goal.Id.Value)
             .ToHashSet(StringComparer.Ordinal);
@@ -25,7 +25,7 @@ internal sealed partial class ConductorBatchLoop
     internal static IReadOnlySet<string> TrainIneligibleCriterionEvidenceGoalIds(IReadOnlyList<Goal> eligibleGoals) =>
         eligibleGoals
             .Where(goal => AcceptanceCriterionEvidence.DescribeTrainOperatorEvidenceGap(goal) is not null ||
-                goal.OutstandingCriterionEvidenceObligations.Any(obligation =>
+                goal.LandingPrerequisiteObligations.Any(obligation =>
                     obligation.Owner != CriterionEvidenceOwner.Acceptance))
             .Select(goal => goal.Id.Value)
             .ToHashSet(StringComparer.Ordinal);

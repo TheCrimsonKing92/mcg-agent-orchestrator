@@ -308,7 +308,8 @@ internal sealed record AcceptanceMergeGuardPreflightResult(
 internal sealed record AcceptanceMergeCommitResult(
     bool FastForwarded,
     string? Message,
-    AcceptanceMergeGuardMismatch? GuardAbort = null)
+    AcceptanceMergeGuardMismatch? GuardAbort = null,
+    GoalPromotionFact? Publication = null)
 {
     public bool GuardAborted => GuardAbort is not null;
 }

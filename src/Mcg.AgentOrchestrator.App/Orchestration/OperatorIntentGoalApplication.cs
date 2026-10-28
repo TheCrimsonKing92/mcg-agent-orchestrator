@@ -26,7 +26,7 @@ internal static class OperatorIntentGoalApplication
     {
         var result = intents.ExecutePending(kernel, goal, intentIds);
         var lines = new List<string>();
-        if (result.MutatedGoalState)
+        if (result.MutatedGoalState && goal.Status != GoalStatus.Completed)
         {
             var invalidation = AcceptanceAttemptRetryInvalidation.Apply(
                 kernel,
@@ -42,7 +42,7 @@ internal static class OperatorIntentGoalApplication
         }
 
         lines.AddRange(result.ProgressLines);
-        if (result.MutatedGoalState && !result.PreserveGoalHold)
+        if (result.MutatedGoalState && !result.PreserveGoalHold && goal.Status != GoalStatus.Completed)
             kernel.ClearGoalHold(goal.Id);
         return new OperatorIntentGoalApplicationResult(result, lines);
     }
@@ -67,14 +67,28 @@ internal static class OperatorIntentGoalApplication
 
         using (lease)
         {
+            // The checkpoint compares persisted JSON. Domain restore can normalize it
+            // (for example, timeline order), so its re-export is not the stored baseline.
+            // Read before hydration so an intervening write still fails RejectConflict.
+            var baseline = await repository.LoadGoalAsync(goalId);
+            if (baseline is null)
+                return new OperatorIntentOfflineOutcome.NothingPending();
+
             var kernel = await repository.LoadGoalsAsync([goalId]);
             var goal = kernel.Goals.SingleOrDefault(candidate => candidate.Id == goalId);
             if (goal is null)
                 return new OperatorIntentOfflineOutcome.NothingPending();
 
-            var baseline = kernel.ExportGoalSnapshot(goalId);
+            var publicationBound = false;
+            if (goal.OutstandingPostLandingDuties.Any(item => item.Publication is null) &&
+                await repository.ReadPromotionFactAsync(goalId) is { } publication)
+            {
+                kernel.BindPostLandingPublication(goalId, publication);
+                publicationBound = goal.CriterionEvidenceObligations.Any(item => item.Publication is not null &&
+                    baseline.CriterionEvidenceObligations?.Any(prior => prior.Id == item.Id && prior.Publication is null) == true);
+            }
             var application = ApplyPending(kernel, goal, intents, attempts);
-            if (!application.Result.MutatedGoalState)
+            if (!application.Result.MutatedGoalState && !publicationBound)
             {
                 return application.Lines.Count == 0
                     ? new OperatorIntentOfflineOutcome.NothingPending()

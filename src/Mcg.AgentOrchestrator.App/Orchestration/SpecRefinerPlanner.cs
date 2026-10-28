@@ -44,6 +44,7 @@ internal sealed record SpecRefinementOutput(
 {
     public IReadOnlyList<string> ParseDiagnostics { get; init; } = [];
     public IReadOnlyList<SpecRefinementCriterionOwnership> CriterionOwnerships { get; init; } = [];
+    public IReadOnlyList<CriterionEvidenceDeclaration> CriterionEvidenceDeclarations { get; init; } = [];
 
     public bool IsValid => ValidationErrors.Count == 0;
 
@@ -88,6 +89,7 @@ internal static class SpecRefinerPlanner
         - "behavioralContract": string — one paragraph: WHAT the system does, observable from the outside
         - "acceptanceCriteria": array — each entry is either a string (worker-owned) or {"text": string, "declared_index": integer, "evidence_owner": "worker" | "acceptance-gate" | "operator"}; when the OBJECTIVE declares numbered criteria, include its 1-based declared_index and echo its declared text
         - Use evidence_owner "acceptance-gate" when evidence is a test execution or gate receipt that no worker may run under docs/role-capability-matrix.md. Use "operator" when evidence needs a real host, a human, or post-landing observation. Missing means "worker".
+        - Phase is independent of owner: omit phase for PreLanding, or explicitly declare "phase":"PostLanding", "atomic":true, "observation_scope":{"kind":"Runtime" or "RepositoryState","condition":"one observable condition/event","target":"runtime/environment or repository identity"}. PostLanding requires operator ownership and an explicit subsequent-observation scope authorized by the objective. Never infer phase from operator ownership or prose. Mixed pre/post requirements require separate atomic criteria and explicit phase declarations; return a validation error rather than guessing or splitting an authoritative criterion.
         - Never split one numbered objective criterion into multiple refined entries, and never merge multiple numbered objective criteria into one refined entry.
         - "verificationClass": "TestVerifiable" | "RealWorldDependent"
         - "decisions": array of {question, choice, rationale} — forks you resolved yourself
@@ -142,6 +144,14 @@ internal static class SpecRefinerPlanner
                 return SpecRefinementOutput.Invalid("Missing 'behavioralContract' field.");
 
             var criteria = ReadAcceptanceCriteria(root, declaredCriteriaCount);
+            var declarations = ReadEvidenceDeclarations(root);
+            CriterionEvidenceLifecycle.Validate(new RefinedSpec(contract, criteria.Criteria,
+                VerificationClass.TestVerifiable, [], [])
+            {
+                OperatorOwnedAcceptanceCriteria = criteria.OperatorOwned,
+                AcceptanceGateOwnedAcceptanceCriteria = criteria.AcceptanceGateOwned,
+                CriterionEvidenceDeclarations = declarations
+            });
             var vc = string.Equals(ReadString(root, "verificationClass"), "RealWorldDependent", StringComparison.Ordinal)
                 ? VerificationClass.RealWorldDependent
                 : VerificationClass.TestVerifiable;
@@ -160,12 +170,17 @@ internal static class SpecRefinerPlanner
                 [])
             {
                 ParseDiagnostics = criteria.Diagnostics,
-                CriterionOwnerships = criteria.Ownerships
+                CriterionOwnerships = criteria.Ownerships,
+                CriterionEvidenceDeclarations = declarations
             };
         }
         catch (JsonException ex)
         {
             return SpecRefinementOutput.Invalid($"Failed to parse spec refiner JSON: {ex.Message}");
+        }
+        catch (ArgumentException ex)
+        {
+            return SpecRefinementOutput.Invalid(ex.Message);
         }
     }
 
@@ -304,6 +319,32 @@ internal static class SpecRefinerPlanner
         }
 
         return new(criteria, acceptanceGateOwned, operatorOwned, ownerships, diagnostics);
+    }
+
+    private static IReadOnlyList<CriterionEvidenceDeclaration> ReadEvidenceDeclarations(JsonElement root)
+    {
+        var result = new List<CriterionEvidenceDeclaration>();
+        if (!root.TryGetProperty("acceptanceCriteria", out var array) || array.ValueKind != JsonValueKind.Array) return result;
+        foreach (var item in array.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.Object || !item.TryGetProperty("phase", out var phaseElement)) continue;
+            if (phaseElement.ValueKind != JsonValueKind.String ||
+                phaseElement.GetString() is not ("PreLanding" or "PostLanding"))
+                throw new ArgumentException(CriterionEvidenceLifecycle.AtomicDeclarationRequired);
+            var phase = Enum.Parse<CriterionEvidencePhase>(phaseElement.GetString()!);
+            CriterionObservationScope? scope = null;
+            if (item.TryGetProperty("observation_scope", out var value))
+            {
+                if (value.ValueKind != JsonValueKind.Object ||
+                    ReadString(value, "kind") is not ("Runtime" or "RepositoryState"))
+                    throw new ArgumentException(CriterionEvidenceLifecycle.AtomicDeclarationRequired);
+                scope = new(Enum.Parse<CriterionObservationKind>(ReadString(value, "kind")),
+                    ReadString(value, "condition"), ReadString(value, "target"));
+            }
+            result.Add(new(FirstNonEmpty(ReadString(item, "text"), ReadString(item, "criterion")).Trim(), phase, scope,
+                item.TryGetProperty("atomic", out var atomic) && atomic.ValueKind == JsonValueKind.True));
+        }
+        return result;
     }
 
     private static int? ReadDeclaredIndex(
