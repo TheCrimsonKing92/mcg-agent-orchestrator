@@ -114,7 +114,10 @@ internal sealed class FreshFindingEvidenceFixture : IDisposable
 
     internal void ReexecuteTesterAfterVerdict()
     {
-        var findings = Tester.LastVerification!.MergedReviewFindings!;
+        // A new worker round requests new execution; the old conductor-owned outcome
+        // is not worker-authored input or evidence for that execution.
+        var findings = Tester.LastVerification!.MergedReviewFindings!
+            .Select(finding => finding with { EvidenceOutcome = null }).ToArray();
         Kernel.RetryTask(Goal.Id, Tester.Id, "Run the exact requested guard", RetryCause.NewTestFinding, invalidateDownstream: false);
         Record(Tester, findings, Now.AddMinutes(1), Now.AddMinutes(2), "pass");
     }
@@ -157,6 +160,8 @@ internal sealed class FreshFindingEvidenceFixture : IDisposable
             },
             dispatchAndStart: _ =>
             {
+                if (Reviewer.Status is not (WorkTaskStatus.Pending or WorkTaskStatus.Assigned))
+                    return DispatchStartOutcome.EmptyBatch("No ready Reviewer task");
                 Launches++;
                 Kernel.RecordTaskDispatch(Goal.Id, Reviewer.Id, new TaskDispatchRecord("fixture", "review", Root, Now.AddMinutes(10),
                     CandidateIdentity: Identity, FindingEvidenceReviewContext: FindingEvidenceReviewContext.Capture(Goal, Reviewer, Candidate, Now.AddMinutes(10)),

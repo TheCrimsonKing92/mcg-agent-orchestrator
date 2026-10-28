@@ -145,7 +145,8 @@ public static class RetryAdmissionSnapshotReservation
             RetryContextFingerprintFactory.GetOpenBlockingFindings(goal),
             reservationOwnerId,
             reservationLeaseExpiresAt,
-            reservationRecoveryConfirmed);
+            reservationRecoveryConfirmed,
+            preparedDispatch.FindingEvidenceReviewContinuation);
         result = RetryAdmissionReceiptContext.Enrich(goal, task, preparedDispatch, result);
         if (result.AllowsProcessStart)
             task.BindPreparedDispatch(preparedDispatch);
@@ -462,7 +463,8 @@ public static class RetryAdmissionPolicy
         IReadOnlyList<ReviewFinding>? openBlockingFindings = null,
         string? reservationOwnerId = null,
         DateTimeOffset? reservationLeaseExpiresAt = null,
-        bool reservationRecoveryConfirmed = false)
+        bool reservationRecoveryConfirmed = false,
+        FindingEvidenceReviewContinuation? evidenceContinuation = null)
     {
         ArgumentNullException.ThrowIfNull(task);
         ArgumentNullException.ThrowIfNull(fingerprint);
@@ -547,6 +549,17 @@ public static class RetryAdmissionPolicy
                 reservationOwnerId,
                 reservationLeaseExpiresAt);
         }
+
+        // A continuation belongs to one held decision, even if a caller prepares a new
+        // dispatch timestamp or fingerprint. Recover the existing reservation instead.
+        if (evidenceContinuation is { } proposed && task.RetryAdmissionHistory.LastOrDefault(receipt =>
+                receipt.FindingEvidenceReviewContinuation?.DecisionKey == proposed.DecisionKey &&
+                (receipt.LinkedDispatchAt != linkedDispatchAt || receipt.Fingerprint != fingerprint) &&
+                receipt.ReservationReleasedAt is null &&
+                receipt.Decision is RetryAdmissionDecision.Allowed or RetryAdmissionDecision.ResumedReservation) is { } reserved)
+            return Create(task, fingerprint, paidRoute, cause, RetryAdmissionDecision.Prevented,
+                RetryAdmissionRoute.ReservationLease, linkedDispatchAt, recordedAt, reserved.LinkedDispatchAt,
+                reservationOwnerId, reservationLeaseExpiresAt);
 
         var activeSameContextReservation = isPaidRetry
             ? task.RetryAdmissionHistory.LastOrDefault(receipt =>

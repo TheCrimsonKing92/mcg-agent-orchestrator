@@ -54,9 +54,11 @@ public sealed class FindingEvidenceContinuationPersistenceTests
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task DurablePreparationAndStartClaimSurviveInterruption(bool claimBeforeReload)
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public async Task DurablePreparationAndStartClaimSurviveInterruption(bool claimBeforeReload, bool differentFingerprint)
     {
         using var fixture = new FreshFindingEvidenceFixture();
         fixture.Attach(fixture.Receipt());
@@ -77,6 +79,14 @@ public sealed class FindingEvidenceContinuationPersistenceTests
         var reserved = await RetryAdmissionReservationStore.TryReserveAsync(database, fixture.Goal.Id, fixture.Reviewer.Id,
             fingerprint, PaidRouteClassification.Paid, RetryCause.NewTestFinding, prepared, at, "owner", at.AddMinutes(1));
         Assert.True(reserved!.Admission.AllowsProcessStart);
+        var duplicateFingerprint = differentFingerprint
+            ? fingerprint with { Value = fingerprint.Value + "-another-preparation" }
+            : fingerprint;
+        var duplicateDispatch = prepared with { DispatchedAt = at.AddMinutes(2), RetryContextFingerprint = duplicateFingerprint };
+        var duplicateBeforeLaunch = await RetryAdmissionReservationStore.TryReserveAsync(database, fixture.Goal.Id, fixture.Reviewer.Id,
+            duplicateFingerprint, PaidRouteClassification.Paid, RetryCause.NewTestFinding, duplicateDispatch,
+            at.AddMinutes(2), "another-owner", at.AddMinutes(3));
+        Assert.False(duplicateBeforeLaunch!.Admission.AllowsProcessStart);
         if (claimBeforeReload)
             Assert.True(await RetryAdmissionReservationStore.TryClaimStartAsync(database, fixture.Goal.Id, fixture.Reviewer.Id, at, "owner", at));
 
@@ -90,9 +100,17 @@ public sealed class FindingEvidenceContinuationPersistenceTests
         Assert.False(await RetryAdmissionReservationStore.TryClaimStartAsync(database, fixture.Goal.Id, fixture.Reviewer.Id, at, "owner", at));
         var confirmed = await RetryAdmissionReservationStore.TryConfirmStartAsync(database, fixture.Goal.Id, fixture.Reviewer.Id, at, "owner", at);
         Assert.True(confirmed!.Claimed);
+        var sameDispatchDuplicate = await RetryAdmissionReservationStore.TryReserveAsync(database, fixture.Goal.Id, fixture.Reviewer.Id,
+            duplicateFingerprint, PaidRouteClassification.Paid, RetryCause.NewTestFinding, duplicateDispatch with { DispatchedAt = at },
+            at.AddMinutes(2), "another-owner", at.AddMinutes(3));
+        Assert.False(sameDispatchDuplicate!.Admission.AllowsProcessStart);
         var duplicate = await RetryAdmissionReservationStore.TryReserveAsync(database, fixture.Goal.Id, fixture.Reviewer.Id,
-            fingerprint, PaidRouteClassification.Paid, RetryCause.NewTestFinding, prepared with { DispatchedAt = at.AddMinutes(2) },
+            duplicateFingerprint, PaidRouteClassification.Paid, RetryCause.NewTestFinding, duplicateDispatch,
             at.AddMinutes(2), "another-owner", at.AddMinutes(3));
         Assert.False(duplicate!.Admission.AllowsProcessStart);
+        var afterDuplicate = (await repository.LoadGoalAsync(fixture.Goal.Id))!.Tasks.Single(task => task.Id == fixture.Reviewer.Id.Value);
+        Assert.Equal(at, afterDuplicate.LastDispatch!.DispatchedAt);
+        Assert.Single(afterDuplicate.RetryAdmissionHistory!.Where(receipt =>
+            receipt.Decision is RetryAdmissionDecision.Allowed or RetryAdmissionDecision.ResumedReservation));
     }
 }

@@ -76,7 +76,11 @@ public sealed class ConductorDriverTestsFreshFindingEvidence
         if (invalid == "corrupt") File.AppendAllText(arm.TestResultPaths!.Single(), "corrupted");
         if (invalid == "superseded")
             fixture.Kernel.RecordFindingEvidenceRequestDispositions(fixture.Goal.Id, fixture.Tester.Id,
-                [receipt.RequestDispositions!.Single() with { Decision = FindingEvidenceRequestDecision.Superseded }]);
+                [receipt.RequestDispositions!.Single() with
+                {
+                    Decision = FindingEvidenceRequestDecision.Superseded,
+                    Reason = "A later selection superseded this execution"
+                }]);
         Assert.False(fixture.Select(out _, out _));
 
         var result = fixture.Driver().AdvanceOnce(fixture.Goal, ConductorAutonomyPolicy.Permissive);
@@ -153,6 +157,8 @@ public sealed class ConductorDriverTestsFreshFindingEvidence
 
         Assert.Equal(1, fixture.Launches);
         Assert.Equal(RetryCause.NewTestFinding, Assert.Single(fixture.Causes));
+        Assert.Equal(RetryCause.NewTestFinding, fixture.Reviewer.FindingEvidenceReviewContinuation!.Cause);
+        Assert.Single(fixture.Goal.Timeline.Where(item => item.Kind == ProgressKind.TaskRetried && item.TaskId == fixture.Reviewer.Id));
         Assert.NotEqual(GoalStatus.Completed, fixture.Goal.Status);
     }
 
@@ -179,13 +185,18 @@ public sealed class ConductorDriverTestsFreshFindingEvidence
         var tasks = snapshot.Tasks.Select(task => task.RequiredRole == AgentRole.Tester ? task with
         {
             DispatchHistory = wrongGoal ? task.DispatchHistory!.Select(dispatch => dispatch with { GoalId = GoalId.New() }).ToArray() : task.DispatchHistory,
+            LastDispatch = wrongGoal ? task.LastDispatch! with { GoalId = GoalId.New() } : task.LastDispatch,
             LastVerification = wrongGoal ? task.LastVerification : task.LastVerification! with { DispatchStartedAt = FreshFindingEvidenceFixture.Now.AddDays(-1) },
             VerificationHistory = wrongGoal ? task.VerificationHistory : task.VerificationHistory!.Select(record => record with { DispatchStartedAt = FreshFindingEvidenceFixture.Now.AddDays(-1) }).ToArray()
         } : task).ToArray();
-        var goal = AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot([snapshot with { Tasks = tasks }], [])).Goals.Single();
+        fixture.Kernel = AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot([snapshot with { Tasks = tasks }], []));
+        var goal = fixture.Goal;
         Assert.False(FindingEvidenceReceiptSelector.TrySelectReviewContinuation(goal,
             goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer), FreshFindingEvidenceFixture.Candidate,
             fixture.Identity, request => request, ConductorDriver.BuildFindingEvidenceExecutionBasisIdentity(fixture.Settings), out _, out _));
+        Assert.IsType<ConductorAdvanceOutcome.Held>(fixture.Driver().AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive).Outcome);
+        Assert.Equal(0, fixture.Launches);
+        Assert.Empty(fixture.Causes);
     }
 
     [Fact]

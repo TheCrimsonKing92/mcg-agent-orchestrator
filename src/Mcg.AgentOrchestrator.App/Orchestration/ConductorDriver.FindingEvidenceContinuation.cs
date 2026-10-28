@@ -47,7 +47,7 @@ internal sealed partial class ConductorDriver
             if (cap.Round >= policy.ReviewAutoRetryStopRound || cap.LifetimeRound >= cap.LifetimeBackstop)
                 return false;
             observation = FailedGoalFindingObservation.Routed(
-                FailedGoalFindingObservationKind.FindingEvidenceDeliveryRecorded, reviewer.Id,
+                FailedGoalFindingObservationKind.FindingRouteObserved, reviewer.Id,
                 BuildFailedGoalAttemptIdentity(reviewer), continuation!.Render(), null,
                 observedCause: RetryCause.NewTestFinding) with { EvidenceContinuation = continuation };
             return true;
