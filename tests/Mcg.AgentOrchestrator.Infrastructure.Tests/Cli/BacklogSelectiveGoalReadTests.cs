@@ -686,6 +686,98 @@ public sealed class BacklogSelectiveGoalReadTests(ITestOutputHelper output) : Cl
         AssertSimilarityDomainFailure(fixture, args, typeof(ArgumentException), "objective");
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Similarity_MetadataActiveStatus_PreservesHydrationFailure(bool archive)
+    {
+        using var fixture = await Fixture.Create(4, 256);
+        if (archive) await fixture.MakeTerminalAndArchive(CompletedId);
+        fixture.ReplaceSnapshotMember(CompletedId, "IsMetadataOnly", "true", archive);
+        string[] args = ["backlog-similar", "quartz"];
+        var before = Run(args, fixture.Workspace, false);
+        Assert.Contains($"kind=goal id={CompletedId[..8]}", before.Text);
+        Assert.Equal(Run(args, fixture.Workspace, true).Text, before.Text);
+        Assert.Equal(1, before.Count("similarity-projected"));
+
+        // Keep the indexed row Completed so both query paths select this payload.
+        fixture.ReplaceSnapshotMember(CompletedId, "Status", "\"Active\"", archive);
+        AssertSimilarityDomainFailure(fixture, args, typeof(ArgumentException), "metadata");
+    }
+
+    [Theory]
+    [InlineData(false, GoalStatus.Completed)]
+    [InlineData(true, GoalStatus.Completed)]
+    [InlineData(false, GoalStatus.Failed)]
+    [InlineData(true, GoalStatus.Failed)]
+    [InlineData(false, GoalStatus.Cancelled)]
+    [InlineData(true, GoalStatus.Cancelled)]
+    [InlineData(false, GoalStatus.Superseded)]
+    [InlineData(true, GoalStatus.Superseded)]
+    public async Task Similarity_TerminalMetadata_PreservesCorpus(bool archive, GoalStatus status)
+    {
+        using var fixture = await Fixture.Create(4, 256);
+        const string validId = "55555555555555555555555555555555";
+        await fixture.AddSimilarityTwin(validId);
+        if (archive) await fixture.MakeTerminalAndArchive(CompletedId);
+        fixture.ReplaceSnapshotMember(CompletedId, "IsMetadataOnly", "true", archive);
+        fixture.ReplaceSnapshotMember(CompletedId, "Status", JsonSerializer.Serialize(status.ToString()), archive);
+
+        string[] args = ["backlog-similar", "quartz", "--limit", "100"];
+        var baseline = Run(args, fixture.Workspace, true);
+        var candidate = Run(args, fixture.Workspace, false);
+        Assert.Equal(baseline.Text, candidate.Text);
+        Assert.Contains($"kind=goal id={validId[..8]}", candidate.Text);
+        if (status == GoalStatus.Completed)
+            Assert.Contains($"kind=goal id={CompletedId[..8]}", candidate.Text);
+        else
+            Assert.DoesNotContain($"kind=goal id={CompletedId[..8]}", candidate.Text);
+        Assert.Equal(status == GoalStatus.Completed ? 2 : 1, candidate.Count("similarity-projected"));
+        Assert.Empty(candidate.Requested);
+        Assert.Empty(candidate.Deserialized);
+        Assert.Empty(candidate.Archived);
+    }
+
+    [Theory]
+    [InlineData(false, GoalStatus.Completed, GoalStatus.Active, GoalStatus.Parked)]
+    [InlineData(true, GoalStatus.Completed, GoalStatus.Active, GoalStatus.Parked)]
+    [InlineData(false, GoalStatus.Parked, GoalStatus.Active, GoalStatus.Parked)]
+    [InlineData(true, GoalStatus.Parked, GoalStatus.Active, GoalStatus.Parked)]
+    [InlineData(false, GoalStatus.Completed, GoalStatus.Cancelled, GoalStatus.Cancelled)]
+    [InlineData(true, GoalStatus.Completed, GoalStatus.Cancelled, GoalStatus.Cancelled)]
+    [InlineData(false, GoalStatus.Completed, GoalStatus.Superseded, GoalStatus.Superseded)]
+    [InlineData(true, GoalStatus.Completed, GoalStatus.Superseded, GoalStatus.Superseded)]
+    public async Task Similarity_ExplicitPark_PreservesEffectiveStatusCorpus(
+        bool archive, GoalStatus storedStatus, GoalStatus retainedStatus, GoalStatus effectiveStatus)
+    {
+        using var fixture = await Fixture.Create(4, 256);
+        const string validId = "55555555555555555555555555555555";
+        await fixture.AddSimilarityTwin(validId);
+        if (archive) await fixture.MakeTerminalAndArchive(CompletedId);
+        string[] args = ["backlog-similar", "quartz", "--limit", "100"];
+        var before = Run(args, fixture.Workspace, false);
+        Assert.Equal(Run(args, fixture.Workspace, true).Text, before.Text);
+        Assert.Contains($"kind=goal id={CompletedId[..8]}", before.Text);
+        Assert.Equal(2, before.Count("similarity-projected"));
+
+        fixture.ReplaceSnapshotMember(CompletedId, "ExplicitDisposition", """{"Revision":1,"Action":"Park"}""", archive);
+        fixture.ReplaceSnapshotMember(CompletedId, "ParkedLifecycleStatus", JsonSerializer.Serialize(retainedStatus.ToString()), archive);
+        fixture.ReplaceSnapshotMember(CompletedId, "Status", JsonSerializer.Serialize(storedStatus.ToString()), archive);
+        var repository = SqliteOrchestratorStateRepository.OpenReadOnly(fixture.Workspace.SqliteStatePath);
+        var hydrated = await repository.LoadGoalsAsync([new GoalId(CompletedId)]);
+        Assert.Equal(effectiveStatus, Assert.Single(hydrated.Goals).Status);
+
+        var baseline = Run(args, fixture.Workspace, true);
+        var candidate = Run(args, fixture.Workspace, false);
+        Assert.Equal(baseline.Text, candidate.Text);
+        Assert.DoesNotContain($"kind=goal id={CompletedId[..8]}", candidate.Text);
+        Assert.Contains($"kind=goal id={validId[..8]}", candidate.Text);
+        Assert.Equal(1, candidate.Count("similarity-projected"));
+        Assert.Empty(candidate.Requested);
+        Assert.Empty(candidate.Deserialized);
+        Assert.Empty(candidate.Archived);
+    }
+
     private static void AssertSimilarityDomainFailure(Fixture fixture, string[] args, Type exceptionType,
         string? parameter = null)
     {

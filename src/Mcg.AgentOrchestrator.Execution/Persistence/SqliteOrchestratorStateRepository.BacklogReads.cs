@@ -61,7 +61,7 @@ public sealed partial class SqliteOrchestratorStateRepository
                 Console.Error.WriteLine($"QUARANTINED goal {ShortGoalId(id)}: JsonException: deserialized goal snapshot was null");
                 continue;
             }
-            ValidateSimilarityDomain(fields, () => reader.GetStream(1));
+            var status = ValidateSimilarityDomain(fields, () => reader.GetStream(1));
             if (fields is { IsMetadataOnly: true })
             {
                 using var archive = connection.CreateCommand();
@@ -74,9 +74,9 @@ public sealed partial class SqliteOrchestratorStateRepository
                 using var stream = GoalSnapshotArchiveCodec.OpenDecodedStream(value);
                 if (stream is not null)
                     fields = ReadGoalSimilarityFields(stream, () => GoalSnapshotArchiveCodec.OpenDecodedStream(value)!);
-                ValidateSimilarityDomain(fields, () => GoalSnapshotArchiveCodec.OpenDecodedStream(value)!);
+                status = ValidateSimilarityDomain(fields, () => GoalSnapshotArchiveCodec.OpenDecodedStream(value)!);
             }
-            if (fields is not { Status: GoalStatus.Completed }) continue;
+            if (fields is null || status != GoalStatus.Completed) continue;
             var objective = fields.Objective.Trim();
             // Goal.FromSnapshot uses a bounded first-line title and metadata timestamps only
             // for metadata-only snapshots. Full goals use their latest timeline event.
@@ -91,7 +91,7 @@ public sealed partial class SqliteOrchestratorStateRepository
             var updated = fields.IsMetadataOnly
                 ? fields.TerminatedAt ?? fields.CreatedAt ?? DateTimeOffset.MinValue
                 : fields.Timeline?.Latest ?? DateTimeOffset.MinValue;
-            documents.Add(new("goal", fields.Id, fields.Status.ToString(), title, updated, objective));
+            documents.Add(new("goal", fields.Id, status.ToString(), title, updated, objective));
             _readObserver?.Invoke(new("similarity-projected", id, objective.Length + title.Length));
         }
         return documents;
@@ -113,17 +113,22 @@ public sealed partial class SqliteOrchestratorStateRepository
         }
     }
 
-    private static void ValidateSimilarityDomain(GoalSimilarityFields? fields, Func<Stream> reopenStream)
+    private static GoalStatus ValidateSimilarityDomain(GoalSimilarityFields? fields, Func<Stream> reopenStream)
     {
         if (fields is not null && !string.IsNullOrWhiteSpace(fields.Objective) &&
-            (fields.IsMetadataOnly || fields is { Tasks: { Count: > 0, RequiresReconstruction: false }, Timeline.HasNullEntry: false }
-                && !fields.Domain.RequiresReconstruction(fields.Objective.Trim()))) return;
+            (fields.IsMetadataOnly
+                ? fields.Status is GoalStatus.Completed or GoalStatus.Failed or GoalStatus.Cancelled or GoalStatus.Superseded
+                : fields is { Tasks: { Count: > 0, RequiresReconstruction: false }, Timeline.HasNullEntry: false }
+                    && !fields.Domain.HasExplicitPark && !fields.Domain.RequiresReconstruction(fields.Objective.Trim())))
+            return fields.Status;
 
         // These are reconstruction failures, not deserialization failures. Replay only
         // suspect documents, outside hot quarantine, so Core owns the exception contract.
         using var stream = reopenStream();
         var snapshot = JsonSerializer.Deserialize<GoalSnapshot>(stream, SerializerOptions);
-        _ = AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot([snapshot!], []));
+        // Explicit parks also need Core's effective status: reconstruction can normalize
+        // a stored Completed status to Parked or retain a terminal stop.
+        return AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot([snapshot!], [])).Goals.Single().Status;
     }
 
     private sealed class InvalidSimilarityShapeException : Exception { }
@@ -209,6 +214,8 @@ public sealed partial class SqliteOrchestratorStateRepository
         private GoalStatus? _parkedStatus;
         private SimilarityVersionChain? _briefChain, _specChain;
         private bool _invalidSpec, _invalidCorrections, _invalidFailure, _nullObligation;
+
+        internal bool HasExplicitPark => _disposition?.Action == GoalExplicitDispositionAction.Park;
 
         internal bool RequiresReconstruction(string objective) =>
             _briefChain?.Invalid == true || _specChain?.Invalid == true ||
