@@ -256,6 +256,14 @@ public sealed class CompilerCapExperimentContractTests
         var result = fixture.Invoke(run: true);
         var report = fixture.Report();
         var evidence = result.Stdout + result.Stderr + report.ToJsonString();
+        // Put the native completion reason before the full report, which can be truncated
+        // by the test host. A launch/drain failure must identify the failing phase.
+        foreach (var invocation in report["Invocations"]!.AsArray())
+        {
+            var phase = invocation!["Result"]!;
+            Assert.True(phase?["Status"]?.GetValue<string>() == "completed",
+                $"Native {invocation["Arm"]}/{invocation["Phase"]}: {phase?.ToJsonString()}\n{evidence}");
+        }
         Assert.True(result.ExitCode == (exitCode == 0 ? 0 : 1), evidence);
         Assert.Equal(exitCode == 0 ? "completed" : "terminated", report["Status"]!.GetValue<string>());
         var invocations = report["Invocations"]!.AsArray();
@@ -484,9 +492,17 @@ public sealed class CompilerCapExperimentContractTests
         {
             var script = Path.Combine(Root, "bounded process & adapter.ps1");
             File.WriteAllText(script, """
-                param([string]$EvidenceRoot, [string]$DeadlineEventName)
                 Set-StrictMode -Version Latest
                 $ErrorActionPreference = 'Stop'
+                # -File binds colon-bearing MSBuild switches in $args (for example
+                # -target:Restore becomes two entries). Observe the actual native argv
+                # instead, without PowerShell parameter binding changing its shape.
+                $nativeArguments = [Environment]::GetCommandLineArgs()
+                $scriptIndex = [Array]::IndexOf($nativeArguments, $PSCommandPath)
+                if ($scriptIndex -lt 0 -or $nativeArguments.Length -le $scriptIndex + 3) { throw 'native-argument-prefix-missing' }
+                $EvidenceRoot = $nativeArguments[$scriptIndex + 1]
+                $DeadlineEventName = $nativeArguments[$scriptIndex + 2]
+                $forwardedArguments = @($nativeArguments[($scriptIndex + 3)..($nativeArguments.Length - 1)])
                 Add-Type -TypeDefinition @'
                 using System;
                 using System.Runtime.InteropServices;
@@ -500,7 +516,7 @@ public sealed class CompilerCapExperimentContractTests
                 if (-not [FixtureJob]::IsProcessInJob($self.Handle, [IntPtr]::Zero, [ref]$inJob)) { throw 'job-query-failed' }
                 $receipt = [ordered]@{
                     InJob = $inJob; Gate = [IO.File]::ReadAllText((Join-Path $EvidenceRoot 'start-owned'))
-                    Arguments = @($args); CliHome = $env:DOTNET_CLI_HOME; ProcessorCount = $env:DOTNET_PROCESSOR_COUNT
+                    Arguments = $forwardedArguments; CliHome = $env:DOTNET_CLI_HOME; ProcessorCount = $env:DOTNET_PROCESSOR_COUNT
                     Process = [ordered]@{ Pid = $PID; StartUtc = $self.StartTime.ToUniversalTime().ToString('O'); Image = $self.Path }
                     Descendant = $null
                 }
