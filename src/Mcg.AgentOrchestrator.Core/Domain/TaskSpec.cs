@@ -73,6 +73,19 @@ public sealed partial class TaskSpec
 
     public TaskDispatchRecord? LastDispatch { get; private set; }
 
+    public FindingEvidenceReviewContinuation? FindingEvidenceReviewContinuation { get; private set; }
+
+    internal void RecordFindingEvidenceReviewContinuation(FindingEvidenceReviewContinuation continuation)
+    {
+        if (FindingEvidenceReviewContinuation is { } existing && existing.DecisionKey == continuation.DecisionKey)
+        {
+            if (existing.Key != continuation.Key)
+                throw new InvalidOperationException("A held review decision already owns a different evidence continuation.");
+            return;
+        }
+        FindingEvidenceReviewContinuation = continuation;
+    }
+
     public IReadOnlyList<TaskDispatchRecord> DispatchHistory => _dispatchHistory;
 
     public IReadOnlyList<RetryAdmissionReceipt> RetryAdmissionHistory => _retryAdmissionHistory;
@@ -392,7 +405,7 @@ public sealed partial class TaskSpec
             LatestRetryInherited,
             SubscriptionDeferralReleasedAt,
             CompletionBuildEvidence,
-            WorkerBuildInvocations);
+            WorkerBuildInvocations, FindingEvidenceReviewContinuation);
     }
 
     internal static TaskSpec FromSnapshot(TaskSnapshot snapshot)
@@ -659,6 +672,7 @@ public sealed partial class TaskSpec
         task.PendingPreDispatchIntegrationReceipt = snapshot.PendingPreDispatchIntegrationReceipt;
         task.LatestProviderBudgetRecoveryAt = snapshot.LatestProviderBudgetRecoveryAt;
         task.RetryAdmissionHoldRoute = snapshot.RetryAdmissionHoldRoute;
+        task.FindingEvidenceReviewContinuation = snapshot.FindingEvidenceReviewContinuation;
         task._preReviewEvidenceHistory.AddRange(
             snapshot.PreReviewEvidenceHistory ??
             (snapshot.PreReviewEvidenceReceipt is null ? [] : [snapshot.PreReviewEvidenceReceipt]));
@@ -1336,7 +1350,7 @@ public sealed partial class TaskSpec
         dispatch.ProviderUsage,
         dispatch.InconclusiveRoundInputs, dispatch.ShadowDecision,
         dispatch.FailedRoundCheckpointReceipt, dispatch.FailedRoundCheckpointDecision, dispatch.SelectedSkills, dispatch.WorkerBuildScope,
-        dispatch.WorkerBuildProtocolVersion);
+        dispatch.WorkerBuildProtocolVersion, dispatch.FindingEvidenceReviewContext, dispatch.FindingEvidenceReviewContinuation);
 
     private static TaskDispatchRecord FromDispatchSnapshot(TaskDispatchSnapshot dispatch) => new(
         dispatch.WorkerName,
@@ -1380,7 +1394,7 @@ public sealed partial class TaskSpec
         dispatch.ProviderUsage,
         dispatch.InconclusiveRoundInputs, dispatch.ShadowDecision,
         dispatch.FailedRoundCheckpointReceipt, dispatch.FailedRoundCheckpointDecision, dispatch.SelectedSkills, dispatch.WorkerBuildScope,
-        dispatch.WorkerBuildProtocolVersion);
+        dispatch.WorkerBuildProtocolVersion, dispatch.FindingEvidenceReviewContext, dispatch.FindingEvidenceReviewContinuation);
 
     private static string? NormalizeOptional(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();

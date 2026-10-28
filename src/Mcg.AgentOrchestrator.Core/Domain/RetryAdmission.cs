@@ -86,7 +86,8 @@ public sealed record RetryAdmissionReceipt(
     IReadOnlyList<string>? EvidenceIdentities = null,
     string? RequiredTaskChangeId = null,
     bool EvidenceIdentitiesTruncated = false,
-    DateTimeOffset? ReservationReleasedAt = null);
+    DateTimeOffset? ReservationReleasedAt = null,
+    FindingEvidenceReviewContinuation? FindingEvidenceReviewContinuation = null);
 
 public sealed record RetryAdmissionResult(
     RetryAdmissionDecision Decision,
@@ -126,6 +127,14 @@ public static class RetryAdmissionSnapshotReservation
         ArgumentNullException.ThrowIfNull(snapshot);
         var goal = Goal.FromSnapshot(snapshot);
         var task = goal.FindTask(taskId);
+        if (preparedDispatch.FindingEvidenceReviewContinuation is { } continuation)
+        {
+            var prior = task.VerificationHistory.LastOrDefault();
+            if (cause != RetryCause.NewTestFinding || task.RequiredRole != AgentRole.Reviewer || prior is null ||
+                !continuation.AppliesTo(goal, task, prior, preparedDispatch.CandidateIdentity ?? continuation.CandidateIdentity))
+                throw new InvalidOperationException("Prepared evidence continuation lost its held review decision.");
+            task.RecordFindingEvidenceReviewContinuation(continuation);
+        }
         var result = RetryAdmissionPolicy.Evaluate(
             task,
             fingerprint,
@@ -136,7 +145,8 @@ public static class RetryAdmissionSnapshotReservation
             RetryContextFingerprintFactory.GetOpenBlockingFindings(goal),
             reservationOwnerId,
             reservationLeaseExpiresAt,
-            reservationRecoveryConfirmed);
+            reservationRecoveryConfirmed,
+            preparedDispatch.FindingEvidenceReviewContinuation);
         result = RetryAdmissionReceiptContext.Enrich(goal, task, preparedDispatch, result);
         if (result.AllowsProcessStart)
             task.BindPreparedDispatch(preparedDispatch);
@@ -178,6 +188,19 @@ public static class RetryAdmissionReceiptContext
             .Distinct(StringComparer.Ordinal)
             .OrderBy(id => id, StringComparer.Ordinal)
             .ToArray();
+        if (preparedDispatch.FindingEvidenceReviewContinuation is { } continuation)
+            return result with
+            {
+                Receipt = result.Receipt with
+                {
+                    CandidateSha = continuation.CandidateSha,
+                    StableFindingIds = continuation.Selections.Select(selection => selection.FindingId).Distinct().Order(StringComparer.Ordinal).ToArray(),
+                    EvidenceIdentities = continuation.Selections.Select(selection => selection.ReceiptId).Distinct().Order(StringComparer.Ordinal).ToArray(),
+                    RequiredTaskChangeId = heldTask.Id.Value,
+                    FindingEvidenceReviewContinuation = continuation,
+                    EvidenceIdentitiesTruncated = false
+                }
+            };
         return result with
         {
             Receipt = result.Receipt with
@@ -440,7 +463,8 @@ public static class RetryAdmissionPolicy
         IReadOnlyList<ReviewFinding>? openBlockingFindings = null,
         string? reservationOwnerId = null,
         DateTimeOffset? reservationLeaseExpiresAt = null,
-        bool reservationRecoveryConfirmed = false)
+        bool reservationRecoveryConfirmed = false,
+        FindingEvidenceReviewContinuation? evidenceContinuation = null)
     {
         ArgumentNullException.ThrowIfNull(task);
         ArgumentNullException.ThrowIfNull(fingerprint);
@@ -525,6 +549,17 @@ public static class RetryAdmissionPolicy
                 reservationOwnerId,
                 reservationLeaseExpiresAt);
         }
+
+        // A continuation belongs to one held decision, even if a caller prepares a new
+        // dispatch timestamp or fingerprint. Recover the existing reservation instead.
+        if (evidenceContinuation is { } proposed && task.RetryAdmissionHistory.LastOrDefault(receipt =>
+                receipt.FindingEvidenceReviewContinuation?.DecisionKey == proposed.DecisionKey &&
+                (receipt.LinkedDispatchAt != linkedDispatchAt || receipt.Fingerprint != fingerprint) &&
+                receipt.ReservationReleasedAt is null &&
+                receipt.Decision is RetryAdmissionDecision.Allowed or RetryAdmissionDecision.ResumedReservation) is { } reserved)
+            return Create(task, fingerprint, paidRoute, cause, RetryAdmissionDecision.Prevented,
+                RetryAdmissionRoute.ReservationLease, linkedDispatchAt, recordedAt, reserved.LinkedDispatchAt,
+                reservationOwnerId, reservationLeaseExpiresAt);
 
         var activeSameContextReservation = isPaidRetry
             ? task.RetryAdmissionHistory.LastOrDefault(receipt =>
