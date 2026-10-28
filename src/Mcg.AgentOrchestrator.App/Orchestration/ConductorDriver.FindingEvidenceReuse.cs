@@ -355,7 +355,7 @@ internal sealed partial class ConductorDriver
         out IReadOnlyList<FindingEvidenceReceipt> reusableReceipts,
         out IReadOnlyList<FindingEvidenceSelection> uncoveredSelections,
         out string coverageReason,
-        IReadOnlyList<PreTesterCoverageSource>? preTesterCoverage = null)
+        IReadOnlyList<PreTesterCoverageComposition.PreTesterCoverageSource>? preTesterCoverage = null)
     {
         reusableReceipts = [];
         uncoveredSelections = normalizedRequest.Selections;
@@ -472,7 +472,7 @@ internal sealed partial class ConductorDriver
         return true;
     }
 
-    private static bool IsReusableGreenFindingEvidenceReceipt(
+    internal static bool IsReusableGreenFindingEvidenceReceipt(
         FindingEvidenceReceipt receipt,
         string candidateSha,
         string executionBasisIdentity)

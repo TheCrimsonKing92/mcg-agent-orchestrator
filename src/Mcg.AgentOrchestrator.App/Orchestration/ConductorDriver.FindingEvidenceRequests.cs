@@ -91,7 +91,7 @@ internal sealed partial class ConductorDriver
             }
         }
 
-        var preTesterCoverage = ReadPreTesterCoverage(goal, telemetryCandidateSha, executionBasisIdentity);
+        var preTesterCoverage = PreTesterCoverageComposition.ReadCoverage(this, goal, telemetryCandidateSha, executionBasisIdentity);
         var groups = new List<FindingEvidenceRequestGroup>();
         var normalizationRefused = false;
         var reusedGreenReceipt = false;
@@ -134,7 +134,7 @@ internal sealed partial class ConductorDriver
                 continue;
             }
 
-            if (TryResumePreTesterRemainder(goal, requestingTask, telemetryCandidateSha,
+            if (PreTesterCoverageComposition.TryResumeRemainder(this, goal, requestingTask, telemetryCandidateSha,
                     findingRoundFingerprint, identity, executionBasisIdentity, typedRequest, out var pendingRemainder, out var pendingSources))
             {
                 typedRequest = pendingRemainder;
@@ -439,70 +439,27 @@ internal sealed partial class ConductorDriver
         foreach (var finding in runnable.Findings)
         {
             var member = runnable.Members.Single(candidate => candidate.Findings.Contains(finding));
-            var validSources = RevalidatePreTesterSources(goal, requestingTask, finding.EvidenceRequest!,
-                candidateSha!, executionBasisIdentity, member.ReusedSourceReceipts ?? []);
-            var invalidated = validSources.Count != (member.ReusedSourceReceipts?.Count ?? 0);
-            var preTesterComposition = member.CoverageDecisionReason == "pre-tester-authority-missing" ||
-                (member.ReusedSourceReceipts ?? []).Any(source => source.FindingRoundFingerprint == "pre-tester-deferred");
-            var incompleteComposition = preTesterComposition && (invalidated ||
-                !CombinedPreTesterCoverageIsComplete(goal, finding.EvidenceRequest!, receipt, validSources));
-            if (incompleteComposition)
-            {
-                incompletePreTesterCoverage = true;
-                // Keep C's execution receipt while the original B+C request remains pending.
-                // An execution disposition for C does not assert that B executed again.
-                var executedSelections = FindingEvidenceExecutedCoverage.ExecutedSelections(receipt, FormatFindingEvidenceSelection);
-                var retainedExecution = new List<FindingEvidenceRequestDisposition>();
-                if (executedSelections.Count > 0 && (receipt.Arms ?? []).Any(arm =>
-                        arm is { Arm: FindingEvidenceArm.Candidate, Accepted: true, ExecutedTestCount: > 0 }))
-                    retainedExecution.Add(new(finding.StableId,
-                        BuildFindingEvidenceIdentity(receipt.Request with { Selections = executedSelections }),
-                        "executed-standalone", "retained-uncovered-execution", FindingEvidenceRequestDecision.Executed,
-                        candidateSha, findingRoundFingerprint, SourceReceiptIds: [receiptId], ExecutionBasisIdentity: executionBasisIdentity));
-                retainedExecution.Add(new(finding.StableId, member.Identity,
-                    "incomplete", "reused-pre-tester-invalidated-or-incomplete", FindingEvidenceRequestDecision.PendingExecution,
-                    candidateSha, findingRoundFingerprint, SourceReceiptIds: [receiptId], ExecutionBasisIdentity: executionBasisIdentity));
-                receipt = receipt with { RequestDispositions = (receipt.RequestDispositions ?? [])
-                    .Where(item => item.FindingStableId != finding.StableId)
-                    .Concat(retainedExecution)
-                    .ToArray() };
-                requestDispositions = receipt.RequestDispositions;
-                _recordFindingEvidenceRequestDispositions(goal.Id, requestingTask.Id, requestDispositions);
-            }
-            var sourceReceiptIds = validSources
-                .Select(sourceReceipt => sourceReceipt.ReceiptId)
-                .Append(receiptId)
-                .Distinct(StringComparer.Ordinal)
-                .ToArray();
-            var outcome = new FindingEvidenceOutcome(
-                Honoured: true,
-                ReceiptId: receiptId,
-                ResultReason: incompleteComposition ? FindingEvidenceOutcomeReason.Unknown : evidence.OutcomeReason ?? FindingEvidenceOutcomeReason.Unknown,
-                RequestedSelectionIdentity: member.Identity,
-                DecisionReason: incompleteComposition ? "reused-pre-tester-invalidated:pending-execution" : member.CoverageDecisionReason is null
-                    ? "executed-focused-evidence"
-                    : $"executed-uncovered-after-reuse:{member.CoverageDecisionReason}",
-                SourceReceiptIds: sourceReceiptIds);
-            foreach (var sourceReceipt in validSources)
+            var completion = PreTesterCoverageComposition.Complete(this, goal, requestingTask, finding, member,
+                receipt, candidateSha!, executionBasisIdentity, findingRoundFingerprint, evidence.OutcomeReason);
+            incompletePreTesterCoverage |= completion.Incomplete;
+            receipt = completion.Receipt;
+            if (completion.Incomplete)
+                _recordFindingEvidenceRequestDispositions(goal.Id, requestingTask.Id, requestDispositions = receipt.RequestDispositions!);
+            var outcome = completion.Outcome;
+            foreach (var contributingReceipt in completion.ContributingReceipts)
             {
                 _recordFindingEvidenceOutcome(
-                    goal.Id, requestingTask.Id, finding.StableId, outcome, sourceReceipt);
+                    goal.Id, requestingTask.Id, finding.StableId, outcome, contributingReceipt);
             }
-            _recordFindingEvidenceOutcome(
-                goal.Id, requestingTask.Id, finding.StableId,
-                outcome,
-                receipt);
-            var resultReason = FindingEvidenceOutcomeReasonJsonConverter.ToWireValue(
-                evidence.OutcomeReason ?? FindingEvidenceOutcomeReason.Unknown);
             _recordFindingEvidenceRequest(
                 goal.Id, requestingTask.Id,
                 $"finding-evidence disposition=honoured; role={requestingTask.RequiredRole}; task_id={requestingTask.Id}; " +
-                $"finding_id={finding.StableId}; candidate_sha={candidateSha}; receipt_id={receiptId}; reason={resultReason}; " +
-                $"decision={outcome.DecisionReason}; source_receipt_ids={string.Join(',', sourceReceiptIds)}");
+                $"finding_id={finding.StableId}; candidate_sha={candidateSha}; receipt_id={receiptId}; reason={completion.ExecutionResultReason}; " +
+                $"decision={outcome.DecisionReason}; source_receipt_ids={string.Join(',', outcome.SourceReceiptIds!)}");
             _recordFindingEvidenceRun(
                 goal.Id, requestingTask.Id,
                 $"finding-evidence role={requestingTask.RequiredRole}; task_id={requestingTask.Id}; finding_id={finding.StableId}; " +
-                $"candidate_sha={candidateSha}; receipt_id={receiptId}; reason={resultReason}; {FormatFocusedEvidenceResult(evidence)}");
+                $"candidate_sha={candidateSha}; receipt_id={receiptId}; reason={completion.ExecutionResultReason}; {FormatFocusedEvidenceResult(evidence)}");
         }
 
         if (actionableCandidateRed is not null)
