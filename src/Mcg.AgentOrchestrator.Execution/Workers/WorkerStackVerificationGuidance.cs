@@ -83,76 +83,45 @@ internal static class WorkerStackVerificationGuidance
     }
 
     internal static IReadOnlyList<string> GoDeveloperBuildAndPolicyBrokerLines(
-        RepositoryTestImpactPlan testImpactPlan, VerificationPolicy verificationPolicy)
-    {
-        var lines = new List<string>
-        {
-            "- build-test-selection",
-            "  Artifact: current-task.md plus source-survey.md",
-            "  Use for: choosing focused Go package tests from the source survey and following the native build/vet/test instructions owned by current-task.md.",
-            "  Suggested command shape: `go test ./...`",
-            "  Local checks: Run `go build ./...`, `go vet ./...` and `go test ./...` from the worktree root; use `go test ./<package> -run '<TestRegex>'` while iterating.",
-            $"  Current recommendation: {testImpactPlan.Summary}",
-            "  Recommendation source: generated test-impact plan; it does not replace the native Go checks required by current-task.md.",
-            "  Evidence: Record each permitted local command, result and failure in WORKER_RESULT; leave unrun checks explicitly pending.",
-            "  Failure handling: failing required checks are actionable verification failures; include the command and exit evidence.",
-            "- static-policy-checks",
-            "  Artifact: source-survey.md plus diff-summary.md",
-            "  Use for: comparing changed files with the surveyed scope, checking generated-path risk and worker-result completeness, and reporting applicable policy requirements and evidence gaps.",
-            $"  Current policy: {verificationPolicy.Summary}",
-            "  Policy source: generated verification policy. Gate checks and required human review remain with their existing owners; report their status or missing evidence without expanding local execution permissions."
-        };
-        foreach (var check in verificationPolicy.Checks)
-            lines.Add($"  Policy check: {check.Name}; kind={check.Kind}; required={check.Required}; reason={check.Reason}");
-        lines.Add("  Failure handling: required policy failures block acceptance until fixed or explicitly explained.");
-        return lines;
-    }
+        RepositoryTestImpactPlan testImpactPlan, VerificationPolicy verificationPolicy) =>
+        NativeDeveloperBrokerGuidance.BuildAndPolicyLines(testImpactPlan, verificationPolicy,
+            "choosing focused Go package tests from the source survey and following the native build/vet/test instructions owned by current-task.md.",
+            "go test ./...",
+            "Run `go build ./...`, `go vet ./...` and `go test ./...` from the worktree root; use `go test ./<package> -run '<TestRegex>'` while iterating.",
+            "it does not replace the native Go checks required by current-task.md.");
 
     internal static IReadOnlyList<string> GoDeveloperAcceptanceEvidenceBrokerLines() =>
-    [
-        "- acceptance-evidence",
-        "  Artifact: current-task.md plus diff-summary.md",
-        "  Use for: reporting native Go command results against the assigned task and changed files, model-fit evidence, WORKER_RESULT completeness, and pending acceptance manifest or verification evidence.",
-        "  Evidence: Record commands, exit results, failures and missing evidence; never report unrun checks as passed.",
-        "  Verification ownership: Local command-result reporting does not authorize a formal acceptance verdict. The acceptance gate re-runs the Go checks and decides the verdict; required review remains with its existing owner.",
-        "  Failure handling: missing acceptance evidence should become an explicit blocker or a verify command, not a silent pass."
-    ];
+        NativeDeveloperBrokerGuidance.AcceptanceEvidenceLines("native Go command results", "the Go checks");
 
     internal static IReadOnlyList<string> NodeDeveloperBuildAndPolicyBrokerLines(
-        RepositoryTestImpactPlan testImpactPlan, VerificationPolicy verificationPolicy)
-    {
-        var lines = new List<string>
-        {
-            "- build-test-selection",
-            "  Artifact: current-task.md plus source-survey.md",
-            "  Use for: choosing focused Node tests from the source survey within the assigned scope and reporting requirements in current-task.md.",
-            "  Suggested command shape: `npm test (or package.json test script)`",
-            "  Local checks: Use `npm test` (or the package.json test script) to run the test suite. Use `npm run build` to verify the project builds. Check package.json scripts for the project's test and lint commands.",
-            $"  Current recommendation: {testImpactPlan.Summary}",
-            "  Recommendation source: generated test-impact plan; discover the project's native commands from package.json.",
-            "  Evidence: Record each permitted local command, result and failure in WORKER_RESULT; leave unrun checks explicitly pending.",
-            "  Failure handling: failing required checks are actionable verification failures; include the command and exit evidence.",
-            "- static-policy-checks",
-            "  Artifact: source-survey.md plus diff-summary.md",
-            "  Use for: comparing changed files with the surveyed scope, checking generated-path risk and worker-result completeness, and reporting applicable policy requirements and evidence gaps.",
-            $"  Current policy: {verificationPolicy.Summary}",
-            "  Policy source: generated verification policy. Gate checks and required human review remain with their existing owners; report their status or missing evidence without expanding local execution permissions."
-        };
-        foreach (var check in verificationPolicy.Checks)
-            lines.Add($"  Policy check: {check.Name}; kind={check.Kind}; required={check.Required}; reason={check.Reason}");
-        lines.Add("  Failure handling: required policy failures block acceptance until fixed or explicitly explained.");
-        return lines;
-    }
+        RepositoryTestImpactPlan testImpactPlan, VerificationPolicy verificationPolicy) =>
+        NativeDeveloperBrokerGuidance.BuildAndPolicyLines(testImpactPlan, verificationPolicy,
+            "choosing focused Node tests from the source survey within the assigned scope and reporting requirements in current-task.md.",
+            "npm test (or package.json test script)",
+            "Use `npm test` (or the package.json test script) to run the test suite. Use `npm run build` to verify the project builds. Check package.json scripts for the project's test and lint commands.",
+            "discover the project's native commands from package.json.");
 
     internal static IReadOnlyList<string> NodeDeveloperAcceptanceEvidenceBrokerLines() =>
-    [
-        "- acceptance-evidence",
-        "  Artifact: current-task.md plus diff-summary.md",
-        "  Use for: reporting native Node command results against the assigned task and changed files, model-fit evidence, WORKER_RESULT completeness, and pending acceptance manifest or verification evidence.",
-        "  Evidence: Record commands, exit results, failures and missing evidence; never report unrun checks as passed.",
-        "  Verification ownership: Local command-result reporting does not authorize a formal acceptance verdict. The acceptance gate re-runs the project's acceptance manifest checks and decides the verdict; required review remains with its existing owner.",
-        "  Failure handling: missing acceptance evidence should become an explicit blocker or a verify command, not a silent pass."
-    ];
+        NativeDeveloperBrokerGuidance.AcceptanceEvidenceLines("native Node command results", "the project's acceptance manifest checks");
+
+    internal static IReadOnlyList<string> PythonDeveloperBuildAndPolicyBrokerLines(
+        RepositoryTestImpactPlan testImpactPlan, VerificationPolicy verificationPolicy) =>
+        NativeDeveloperBrokerGuidance.BuildAndPolicyLines(testImpactPlan, verificationPolicy,
+            "choosing focused Python tests from the source survey within the assigned scope and reporting requirements in current-task.md.",
+            "python -m pytest (or project test command)",
+            "Use `python -m pytest` (or the project test command) to run tests. Check pyproject.toml or requirements.txt for test configuration.",
+            "discover the project's native commands and test configuration from pyproject.toml or requirements.txt.");
+
+    internal static IReadOnlyList<string> UnknownDeveloperBuildAndPolicyBrokerLines(
+        RepositoryTestImpactPlan testImpactPlan, VerificationPolicy verificationPolicy) =>
+        NativeDeveloperBrokerGuidance.BuildAndPolicyLines(testImpactPlan, verificationPolicy,
+            "discovering the project's standard build and test commands from the source survey within the assigned scope and reporting requirements in current-task.md.",
+            "run the project's test suite",
+            "Run the project's standard build and test commands. Check the repository README or CI configuration for the correct commands. If no standard command can be established, report the missing command and evidence rather than guessing a toolchain.",
+            "discover project-standard commands from README or CI configuration; report missing command evidence explicitly.");
+
+    internal static IReadOnlyList<string> NativeDeveloperAcceptanceEvidenceBrokerLines() =>
+        NativeDeveloperBrokerGuidance.AcceptanceEvidenceLines("project-native command results", "the project's acceptance manifest checks");
 
     internal static IReadOnlyList<string> DeveloperBuildOnlyBrokerLines()
     {
