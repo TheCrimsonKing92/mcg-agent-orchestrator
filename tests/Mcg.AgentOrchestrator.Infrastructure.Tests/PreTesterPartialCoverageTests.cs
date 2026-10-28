@@ -156,10 +156,10 @@ public sealed class PreTesterPartialCoverageTests
         Assert.Equal(ReviewFindingState.Open, scenario.Finding.State);
         Assert.False(FindingReceiptClosureDiagnosis.Evaluate(scenario.Goal, scenario.Tester, CandidateSha).IsClosable);
         Assert.Contains(scenario.Verification.FindingEvidenceReceipts!, receipt =>
-            receipt.Request.Selections.SingleOrDefault()?.TestClass == "GammaTests" && receipt.Passed);
+            receipt.Request.Selections.Count == 1 && receipt.Request.Selections[0].TestClass == "GammaTests" && receipt.Passed);
         Assert.Equal("reused-pre-tester-invalidated:pending-execution", scenario.Finding.EvidenceOutcome!.DecisionReason);
         var retainedC = scenario.Verification.FindingEvidenceReceipts!.Single(receipt =>
-            receipt.Request.Selections.SingleOrDefault()?.TestClass == "GammaTests");
+            receipt.Request.Selections.Count == 1 && receipt.Request.Selections[0].TestClass == "GammaTests");
         var retainedCBytes = JsonSerializer.Serialize(retainedC);
 
         scenario.Tick(driver);
@@ -175,7 +175,7 @@ public sealed class PreTesterPartialCoverageTests
         Assert.Equal(["BetaTests"], Classes(scenario.Requests[2]));
         Assert.Equal(ReviewFindingState.Resolved, scenario.Finding.State);
         var repairedB = scenario.Verification.FindingEvidenceReceipts!.Single(receipt =>
-            receipt.Request.Selections.SingleOrDefault()?.TestClass == "BetaTests" && receipt.Passed);
+            receipt.Request.Selections.Count == 1 && receipt.Request.Selections[0].TestClass == "BetaTests" && receipt.Passed);
         Assert.NotEqual(retainedC.ReceiptId, repairedB.ReceiptId);
         Assert.Equal(retainedCBytes, JsonSerializer.Serialize(scenario.Verification.FindingEvidenceReceipts!
             .Single(receipt => receipt.ReceiptId == retainedC.ReceiptId)));
@@ -210,7 +210,7 @@ public sealed class PreTesterPartialCoverageTests
         pending.CompleteForTests();
         scenario.Tick(driver);
         var retainedC = scenario.Verification.FindingEvidenceReceipts!.Single(receipt =>
-            receipt.Request.Selections.SingleOrDefault()?.TestClass == "GammaTests");
+            receipt.Request.Selections.Count == 1 && receipt.Request.Selections[0].TestClass == "GammaTests");
         Assert.True(retainedC.Passed);
         var retainedCBytes = JsonSerializer.Serialize(retainedC);
         Assert.Equal("reused-pre-tester-invalidated:pending-execution", scenario.Finding.EvidenceOutcome!.DecisionReason);
@@ -274,7 +274,7 @@ public sealed class PreTesterPartialCoverageTests
         Assert.Equal("reused-pre-tester-invalidated:pending-execution", scenario.Finding.EvidenceOutcome!.DecisionReason);
         Assert.Equal(FindingEvidenceOutcomeReason.Unknown, scenario.Finding.EvidenceOutcome.ResultReason);
         var retainedC = scenario.Verification.FindingEvidenceReceipts!.Single(receipt =>
-            receipt.Request.Selections.SingleOrDefault()?.TestClass == "GammaTests");
+            receipt.Request.Selections.Count == 1 && receipt.Request.Selections[0].TestClass == "GammaTests");
         Assert.True(retainedC.Passed);
         Assert.Equal(JsonSerializer.Serialize(original.OriginalFocusedReceipt), JsonSerializer.Serialize(
             scenario.Verification.FindingEvidenceReceipts!.Single(receipt => receipt.ReceiptId == original.FocusedEvidenceReceiptId)));
