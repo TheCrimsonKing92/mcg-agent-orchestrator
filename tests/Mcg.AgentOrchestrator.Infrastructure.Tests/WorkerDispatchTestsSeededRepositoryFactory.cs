@@ -967,6 +967,48 @@ internal sealed partial class WorkerDispatchTestsSeededRepositoryFactory
         string HeadCommit,
         string Status);
 
+    internal sealed record GitProbeOperationObservation(
+        bool Attempted = false,
+        bool Completed = false,
+        bool? Exited = null,
+        string? ExceptionType = null,
+        string? ExceptionMessage = null,
+        bool ExceptionMessageTruncated = false)
+    {
+        internal GitProbeOperationObservation WithException(Exception exception)
+        {
+            const int maximumExceptionCharacters = 512;
+            var message = exception.Message;
+            var type = exception.GetType().FullName ?? exception.GetType().Name;
+            return this with
+            {
+                ExceptionType = type[..Math.Min(type.Length, maximumExceptionCharacters)],
+                ExceptionMessage = message[..Math.Min(message.Length, maximumExceptionCharacters)],
+                ExceptionMessageTruncated = message.Length > maximumExceptionCharacters
+            };
+        }
+
+        public override string ToString() =>
+            $"attempted={Attempted}; completed={Completed}; exited={Exited?.ToString() ?? "unknown"}; " +
+            $"exceptionType={ExceptionType ?? "none"}; exceptionMessage={ExceptionMessage ?? "none"}; " +
+            $"exceptionMessageTruncated={ExceptionMessageTruncated}";
+    }
+
+    internal sealed record GitProbeObservations(
+        GitProbeOperationObservation Wait,
+        GitProbeOperationObservation CleanupWait,
+        GitProbeOperationObservation Exit)
+    {
+        internal bool Failed => Wait.ExceptionType is not null || CleanupWait.ExceptionType is not null ||
+            Exit.ExceptionType is not null;
+
+        internal string FailureMessages => string.Join(" | ",
+            new[] { Wait, CleanupWait, Exit }.Select(operation => operation.ExceptionMessage)
+                .Where(message => !string.IsNullOrEmpty(message)));
+
+        public override string ToString() => $"wait=({Wait}); cleanupWait=({CleanupWait}); exit=({Exit})";
+    }
+
     internal sealed record GitProbeResult(
         string Command,
         bool ProcessStarted,
@@ -989,7 +1031,8 @@ internal sealed partial class WorkerDispatchTestsSeededRepositoryFactory
         string FixtureAttemptId = "not-assigned",
         int ProbeOrdinal = 0,
         ValidationCheck? Check = null,
-        GitProbeClassification Classification = GitProbeClassification.NotRun)
+        GitProbeClassification Classification = GitProbeClassification.NotRun,
+        GitProbeObservations? Observations = null)
     {
         internal bool Succeeded =>
             Classification == GitProbeClassification.Success &&
@@ -1038,7 +1081,7 @@ internal sealed partial class WorkerDispatchTestsSeededRepositoryFactory
             $"stdoutBytes={StandardOutputByteCount}; stdoutTruncated={StandardOutputTruncated}; stdout={StandardOutput.Trim()}; " +
             $"stderrBytes={StandardErrorByteCount}; stderrTruncated={StandardErrorTruncated}; stderr={StandardError.Trim()}; " +
             $"drainTimedOut={DrainTimedOut}; timedOut={TimedOut}; drainFailed={DrainFailed}; " +
-            $"environment={EnvironmentContract}";
+            $"environment={EnvironmentContract}; observations=({Observations?.ToString() ?? "not-recorded"})";
     }
 
     internal sealed record FileSystemObservation(

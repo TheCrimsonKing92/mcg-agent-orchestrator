@@ -15,7 +15,9 @@ public sealed record WorkerProcessRunRequest(
 public sealed record WorkerProcessRunResult(
     int ExitCode,
     string StandardOutput,
-    string StandardError);
+    string StandardError,
+    bool TimedOut = false,
+    bool CaptureLimited = false);
 
 public static class WorkerProcessRunner
 {
