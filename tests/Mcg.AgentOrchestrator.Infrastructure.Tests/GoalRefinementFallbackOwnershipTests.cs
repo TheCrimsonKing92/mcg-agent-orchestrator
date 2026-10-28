@@ -12,6 +12,40 @@ public sealed class GoalRefinementFallbackOwnershipTests
         "The live widget export is observed. REAL-WORLD-DEPENDENT; OPERATOR owns live execution.";
     private const string UnclassifiedCriterion = "The widget label is readable.";
 
+    [Xunit.Fact]
+    public void EmptyCriteria_Classification_RemainsRealWorldDependent()
+    {
+        Xunit.Assert.Equal(VerificationClass.RealWorldDependent,
+            FallbackVerificationClassPolicy.Classify([]));
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("Acceptance owns execution.", VerificationClass.TestVerifiable)]
+    [Xunit.InlineData("Acceptance owns execution. REAL-WORLD-DEPENDENT.", VerificationClass.TestVerifiable)]
+    [Xunit.InlineData("Reviewer owns execution. test-verifiable.", VerificationClass.TestVerifiable)]
+    [Xunit.InlineData("Reviewer owns execution. REAL-WORLD-DEPENDENT. TEST-VERIFIABLE.", VerificationClass.TestVerifiable)]
+    [Xunit.InlineData("REAL-WORLD-DEPENDENT. TEST-VERIFIABLE.", VerificationClass.RealWorldDependent)]
+    [Xunit.InlineData("Operator owns execution. TEST-VERIFIABLE.", VerificationClass.RealWorldDependent)]
+    [Xunit.InlineData("Operator owns execution; Acceptance owns execution. TEST-VERIFIABLE.", VerificationClass.RealWorldDependent)]
+    [Xunit.InlineData("No classification is declared.", VerificationClass.RealWorldDependent)]
+    [Xunit.InlineData("TEST-VERIFIABLE. An unmarked final sentence.", VerificationClass.RealWorldDependent)]
+    public async Task InvalidOutput_ClassificationSignals_PreserveConservativeAggregate(
+        string signals, VerificationClass expected)
+    {
+        var criterion = $"The additional result is observed. {signals}";
+        var objective = $"Show widget information.\n\n## Acceptance criteria\n- {GateCriterion}\n- {criterion}";
+        var (service, kernel, goalId) = CreateScenario(objective);
+
+        var result = await service.RefineAsync(kernel, goalId);
+
+        Xunit.Assert.Equal(RefinementDisposition.Fallback, result.Disposition);
+        var spec = kernel.GetGoal(goalId).RefinedSpec!;
+        Xunit.Assert.Equal([GateCriterion, criterion], spec.AcceptanceCriteria);
+        Xunit.Assert.Equal(expected, spec.VerificationClass);
+        Xunit.Assert.Contains($"verification_class={expected}", GetOwnershipReceipt(kernel, goalId),
+            StringComparison.Ordinal);
+    }
+
     [Xunit.Theory]
     [Xunit.InlineData("Operator owns execution; Acceptance owns execution. TEST-VERIFIABLE.", "both Operator and Acceptance")]
     [Xunit.InlineData("OPERATOR-OWNED; ACCEPTANCE-GATE-OWNED. TEST-VERIFIABLE.", "both Operator and Acceptance")]
