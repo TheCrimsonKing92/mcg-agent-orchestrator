@@ -497,7 +497,7 @@ try {
             Write-Output "lock query incomplete: relevant process inspection was unavailable"
         }
         elseif ($lockHolders.Count -eq 0) {
-            Write-Output "No orchestrator lock-holders running; in-tree build lock is FREE."
+            Write-Output "No matching lock-holder processes were observed; in-tree build-lock state is UNVERIFIED."
         }
     }
 }
