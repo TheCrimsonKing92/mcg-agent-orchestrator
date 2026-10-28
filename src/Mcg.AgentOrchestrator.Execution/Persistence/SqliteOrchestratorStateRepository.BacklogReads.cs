@@ -108,10 +108,11 @@ public sealed partial class SqliteOrchestratorStateRepository
         {
             return JsonSerializer.Deserialize<GoalSimilarityFields>(stream, SimilarityJson.Options);
         }
-        catch (InvalidSimilarityShapeException)
+        catch (Exception ex) when (ex is InvalidSimilarityShapeException || IsSnapshotDeserializeException(ex))
         {
-            // Replay only malformed payloads with the original contract, preserving the
-            // exception type, nested member path and byte location of full hydration.
+            // Replay both converter shape failures and direct projection member failures
+            // with the original contract, preserving its type names, member paths and
+            // byte locations in diagnostics before hot quarantine or archive propagation.
             using var diagnosticStream = reopenStream();
             _ = JsonSerializer.Deserialize<GoalSnapshot>(diagnosticStream, SerializerOptions);
             throw new InvalidOperationException("Malformed snapshot unexpectedly passed standard deserialization.");
