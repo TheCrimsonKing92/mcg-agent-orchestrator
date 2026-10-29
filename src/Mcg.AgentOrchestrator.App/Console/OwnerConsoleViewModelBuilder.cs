@@ -10,7 +10,8 @@ internal sealed class OwnerConsoleViewModelBuilder(IOrchestratorStateQueries sta
     Func<OwnerConductEvent, OwnerActivityTestEvidence?>? testEvidence = null, Func<string, string?>? gateMotion = null,
     Func<DateTimeOffset?>? latestTick = null,
     Func<IReadOnlyDictionary<string, string>, OwnerConsoleGateProgress?>? gateProgress = null,
-    OwnerConsoleRefreshGoalSnapshots? snapshots = null)
+    OwnerConsoleRefreshGoalSnapshots? snapshots = null,
+    Func<Goal, (string? Candidate, IReadOnlyList<GoalOperationJournalEntry> Attempts)?>? candidateGate = null)
 {
     internal const int MaxActivityItems = 100;
     internal const int RecentTerminalTitleRows = 200;
@@ -97,7 +98,8 @@ internal sealed class OwnerConsoleViewModelBuilder(IOrchestratorStateQueries sta
             foreach (var (goal, key) in ranked)
             {
                 var stage = OwnerConsoleStageDescriber.Describe(goal, key,
-                    key.Rank == OwnerConsoleAttention.WaitingForGate && gate?.ForMember(goal.Id.Value) is null ? ++queuePosition : null, now, gate);
+                    key.Rank == OwnerConsoleAttention.WaitingForGate && gate?.ForMember(goal.Id.Value) is null ? ++queuePosition : null,
+                    now, gate, candidateGate);
                 if (key.Rank == OwnerConsoleAttention.GateRunning && (gate is null || gate.ForMember(goal.Id.Value) is not null) &&
                     gateMotion?.Invoke(goal.Id.Value) is { } motion &&
                     !string.IsNullOrWhiteSpace(motion)) stage += ", " + motion;

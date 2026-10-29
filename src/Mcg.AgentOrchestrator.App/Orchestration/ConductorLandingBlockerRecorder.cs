@@ -42,6 +42,19 @@ internal static class ConductorLandingBlockerRecorder
                     kind, held.Reason.Replace('\r', ' ').Replace('\n', ' '),
                     kind + ":" + (held.StableIdentity ?? ""), observedAt, next.Actor, next.Verb));
             }
+            else if (outcome is ConductorAdvanceOutcome.Escalated escalated
+                && (escalated.State == GoalLifecycleState.Verified || current.Status == GoalStatus.Verified)
+                && escalated.Decision is { Stage: "landing", DiscriminatingEvidence: "acceptance-not-accepted" }
+                && escalated.Reason.TrimStart().StartsWith("acceptance passed at ", StringComparison.Ordinal))
+            {
+                const string kind = "landing/landing-held-after-pass";
+                // The landing decision supplies the post-pass classification. The board independently
+                // checks the full current candidate SHA against the latest journal outcome.
+                var candidate = escalated.Reason.TrimStart()["acceptance passed at ".Length..]
+                    .Split([';', ' ', '\r', '\n'], StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? "";
+                changed = current.ObserveLandingBlocker(new GoalLandingBlocker(
+                    kind, escalated.Reason, kind + ":" + candidate, observedAt, "unmapped", "unmapped"));
+            }
             else
             {
                 changed = current.ClearLandingBlocker();

@@ -104,7 +104,6 @@ internal static IReadOnlyList<string> RecognizedCommands { get; } =
     "operator-inbox",
     "operator-inbox-ack",
     "operator-intent-status",
-    "operator-listen",
     "operator-commands",
     "goal-diagnostics",
     "next",
@@ -208,7 +207,6 @@ internal static IReadOnlyList<string> RecognizedCommands { get; } =
     "backlog-view",
     "backlog-similar",
     "goals-prune",
-    "operator-channel",
     "goal-changes"
 ];
 

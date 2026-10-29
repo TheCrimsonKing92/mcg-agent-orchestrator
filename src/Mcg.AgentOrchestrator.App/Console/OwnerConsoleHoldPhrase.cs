@@ -7,6 +7,7 @@ internal static class OwnerConsoleHoldPhrase
 {
     private static readonly IReadOnlyDictionary<string, string> Typed = new Dictionary<string, string>(StringComparer.Ordinal)
     {
+        ["landing-held-after-pass"] = "landing held",
         ["criterion-evidence-hold"] = "waiting for criterion evidence",
         ["acceptance-apparatus-hold"] = "gate apparatus problem: operator retry needed",
         ["environmental-apparatus-hold"] = "gate apparatus problem: operator retry needed",

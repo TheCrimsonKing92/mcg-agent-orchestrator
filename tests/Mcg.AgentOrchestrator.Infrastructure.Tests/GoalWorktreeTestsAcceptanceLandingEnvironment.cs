@@ -13,14 +13,14 @@ using Microsoft.Data.Sqlite;
 
 public sealed class GoalWorktreeTestsAcceptanceLandingEnvironment : GoalWorktreeTestBase
 {
-    [Xunit.Fact(DisplayName = "Cli_acceptance_lands_when_discord_token_is_invalid")]
-    public void CliAcceptanceLandsWhenDiscordTokenIsInvalid()
+    [Xunit.Fact(DisplayName = "Cli_acceptance_lands_with_legacy_operator_channel_catalog")]
+    public void CliAcceptanceLandsWithLegacyOperatorChannelCatalog()
     {
         var repo = CreateSeededRepository();
         try
         {
             var kernel = new AgentOrchestratorKernel();
-            var goal = kernel.CreateGoal("Acceptance gate ignores Discord auth", [new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer)]);
+            var goal = kernel.CreateGoal("Acceptance gate uses null operator channel", [new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer)]);
             kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
             var task = goal.Tasks.Single();
             kernel.RecordTaskVerification(
@@ -35,22 +35,14 @@ public sealed class GoalWorktreeTestsAcceptanceLandingEnvironment : GoalWorktree
             RunGit(worktreePath, "commit", "-m", "Goal work");
 
             var workspace = OrchestratorWorkspace.ForDirectory(repo);
-            OperatorChannelStore.Save(
+            File.WriteAllText(
                 workspace.OperatorChannelPath,
-                new OperatorChannelCatalog("discord", ForumChannelId: "42"));
+                """{ "channelType": "discord", "forumChannelId": "42" }""");
             IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
             var providers = new InMemoryModelProviderRegistry([]);
             var profiles = WorkerProfileCatalog.Default();
-            var botToken = OperatorChannelFactory.ResolveBotToken((name, target) =>
-                {
-                    Assert.Equal("MCGO_DISCORD_BOT_TOKEN", name);
-                    Assert.Equal(EnvironmentVariableTarget.Process, target);
-                    return "invalid-token-for-acceptance-test";
-                });
-            Assert.True(string.Equals(botToken, "invalid-token-for-acceptance-test", StringComparison.Ordinal));
             var channel = OperatorChannelComposition.Create(
                 OperatorChannelStore.Load(workspace.OperatorChannelPath),
-                botToken,
                 workspace.OrchestratorDirectory);
             var fakeVerifier = FakeAcceptanceVerifier.Passed();
             var context = new CliExecutionContext(kernel, workspace, providers, agents, profiles, goal, channel)
