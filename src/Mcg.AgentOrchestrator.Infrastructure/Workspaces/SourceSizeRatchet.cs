@@ -159,7 +159,7 @@ internal static class SourceSizeRatchet
             // Goal 4ff31b70 (ConductorDriver size relief) moved git and lease helpers unchanged to this partial.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.GitAndLeaseHelpers.cs", 130),
             // Goal 4ff31b70 (ConductorDriver size relief) moved pre-review evidence routing unchanged to this partial.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.PreReviewEvidenceRouting.cs", 184),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.PreReviewEvidenceRouting.cs", 182),
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Core/Application/FailedGoalRecoveryPolicy.cs", 704),
             // Raised for goal dadadfac: set-aside re-admission must be decided where the loop already holds
             // the goal, its recorded set-aside entry, and the current sweep blockers together.
@@ -529,7 +529,7 @@ internal static class SourceSizeRatchet
             // Goal 7139117b: the focused runner binds the attribution occupancy heartbeat (+2 lines).
             // Goal 3abf245e: optional reproduction runner and one multi-member attribution call site.
             // Measured 14593 total lines across the same 70 partial files; no extra headroom.
-            new SourceClassCeiling("ConductorDriver", 14589, 70),
+            new SourceClassCeiling("ConductorDriver", 14587, 70),
             // Goal b7c2f833: epic-at-creation validation and post-commit inheritance call sites
             // require handler glue; resolution/assignment remain in the separate EpicAtCreation type.
             // Measured 12223 total lines across the existing 30 partial files after integrating main; no extra headroom.

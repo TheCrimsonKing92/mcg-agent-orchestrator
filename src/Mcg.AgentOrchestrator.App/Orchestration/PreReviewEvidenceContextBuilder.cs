@@ -16,9 +16,11 @@ internal static class PreReviewEvidenceContextBuilder
     private static PreReviewEvidenceContext BuildMappedPreReviewEvidenceContext(
         string? candidateSha, RepositoryChangeSummary changeSummary, RepositoryTestImpactPlan plan)
     {
-        if (!plan.RequiresBuild &&
-            plan.Checks.Count > 0 &&
-            plan.Checks.All(check => check.Command.Count == 0))
+        // Manifest scoping can replace the plan's no-build check; candidate cleanup still takes priority.
+        if (changeSummary.HasGeneratedArtifacts ||
+            (!plan.RequiresBuild &&
+             plan.Checks.Count > 0 &&
+             plan.Checks.All(check => check.Command.Count == 0)))
         {
             var generatedArtifactsBlock = changeSummary.HasGeneratedArtifacts;
             return new PreReviewEvidenceContext(
