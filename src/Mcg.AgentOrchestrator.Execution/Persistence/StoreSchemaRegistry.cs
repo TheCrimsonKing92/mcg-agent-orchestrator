@@ -20,7 +20,6 @@ public static class StoreSchemaRegistry
 {
     private const string Persistence = "src/Mcg.AgentOrchestrator.Execution/Persistence/";
     private const string Conductor = "src/Mcg.AgentOrchestrator.App/Orchestration/";
-    private const string Comms = "src/Mcg.AgentOrchestrator.Infrastructure.OperatorComms/";
 
     public static StoreSchemaEntry Portfolio { get; } =
         new("portfolio", Persistence + "PortfolioStore.cs", "portfolio.db", "portfolio", 3);
@@ -106,7 +105,6 @@ public static class StoreSchemaRegistry
         new("practice-registry", Persistence + "PracticeRegistryStore.cs", "state.db", "collaboration", null),
         AuthorClaims,
         StewardTriggers,
-        new("steward-triage-receipts", Comms + "StewardTriageReceiptStore.cs", "steward-triage-receipts.db", "conductor", null),
         JudgePanel,
         BoardFill,
         ProgressiveReviewGlanceCircuit,
