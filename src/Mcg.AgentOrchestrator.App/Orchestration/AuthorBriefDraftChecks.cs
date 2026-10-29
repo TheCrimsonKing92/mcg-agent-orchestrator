@@ -20,7 +20,7 @@ internal static class AuthorBriefDraftChecks
         var headings = Headings.Matches(markdown).Cast<Match>().ToArray();
         var missing = Sections.Where(section => !headings.Any(heading =>
             heading.Groups[1].Value.Trim().Equals(section, StringComparison.OrdinalIgnoreCase))).ToArray();
-        var criteria = AcceptanceCriteriaParser.ParseDeclared(markdown);
+        var criteria = DeclaredTestRemovalSet.FromObjective(markdown).Ordinary;
         var ownerFailures = criteria.Where(criterion => !Owner.IsMatch(criterion)).ToArray();
         var citationFailures = new List<string>();
         var premise = headings.FirstOrDefault(heading => heading.Groups[1].Value.Trim()

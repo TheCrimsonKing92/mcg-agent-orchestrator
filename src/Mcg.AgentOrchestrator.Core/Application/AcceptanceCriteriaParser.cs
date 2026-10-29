@@ -212,6 +212,9 @@ public static class AcceptanceCriteriaParser
         return null;
     }
 
+    public static bool TryGetTestRemovalIdentity(string bulletText, out string? testIdentity) =>
+        TryMatchTestRemoval(bulletText, out testIdentity);
+
     private static bool TryMatchTestRemoval(string bulletText, out string? testIdentity)
     {
         const string Marker = "test-removal:";

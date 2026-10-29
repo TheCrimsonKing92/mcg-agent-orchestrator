@@ -235,12 +235,7 @@ public sealed partial class AgentOrchestratorKernel
             File.Exists(Path.Combine(contextDirectory!, "research-notes.md")) &&
             new FileInfo(Path.Combine(contextDirectory!, "research-notes.md")).Length > 0;
         var isScoutPlanner = ScoutRoundPolicy.IsScoutPlanner(goal, task);
-        var hasAuthoritativePlannerCriteria =
-            task.RequiredRole == AgentRole.Planner &&
-            goal.RefinedSpec is { AcceptanceCriteria.Count: > 0 };
-        var renderedObjective = hasAuthoritativePlannerCriteria
-            ? AcceptanceCriteriaParser.RemoveDeclaredSection(goal.Objective)
-            : goal.Objective;
+        var declarationContext = new DeclaredTestRemovalBriefContext(goal, task.RequiredRole);
         var headerLines = new List<string>
         {
             "# Agent Task Brief",
@@ -253,7 +248,7 @@ public sealed partial class AgentOrchestratorKernel
         headerLines.AddRange(BuildEffectiveAcceptanceCriteriaCorrectionsBriefBlock(goal, task));
         headerLines.AddRange(BuildAcceptanceFailureBriefBlock(goal, task, workingDirectory));
         headerLines.AddRange([
-            $"Goal: {PromptContextFormatter.TrimPrimaryContextBlock(renderedObjective, complexity)}",
+            $"Goal: {PromptContextFormatter.TrimPrimaryContextBlock(declarationContext.Objective, complexity)}",
             $"Goal id: {goal.Id.Value}",
             $"Goal status: {goal.Status}",
             "Decision context: embedded in this brief and .orchestrator-handoff.md in the working directory when present; do not attempt to reach orchestrator state.",
@@ -318,6 +313,9 @@ public sealed partial class AgentOrchestratorKernel
         instructionLines.Add(string.Empty);
         segments.Add(TaskBriefSegment.Fixed(instructionLines));
 
+        if (declarationContext.RemovalLines.Count > 0)
+            segments.Add(TaskBriefSegment.Fixed(declarationContext.RemovalLines));
+
         var plannerEvidenceLines = PlannerEvidenceBriefSection.Build(goal, HumanInputRequests);
         if (plannerEvidenceLines.Count > 0)
             segments.Add(TaskBriefSegment.Fixed(plannerEvidenceLines));
@@ -327,9 +325,9 @@ public sealed partial class AgentOrchestratorKernel
             var specLines = new List<string>
             {
                 "## Refined Spec",
-                $"Behavioral contract: {(hasAuthoritativePlannerCriteria ? AcceptanceCriteriaParser.RemoveDeclaredSection(refinedSpec.BehavioralContract) : refinedSpec.BehavioralContract)}",
+                $"Behavioral contract: {declarationContext.RenderBehavioralContract(refinedSpec.BehavioralContract)}",
                 string.Empty,
-                hasAuthoritativePlannerCriteria
+                declarationContext.HasAuthoritativePlannerCriteria
                     ? "Acceptance criteria (authoritative list validated by PlannerOutputContract):"
                     : "Acceptance criteria:"
             };
@@ -345,13 +343,13 @@ public sealed partial class AgentOrchestratorKernel
                     .FirstOrDefault();
                 if (waiver is null)
                 {
-                    specLines.Add(hasAuthoritativePlannerCriteria
+                    specLines.Add(declarationContext.HasAuthoritativePlannerCriteria
                         ? $"{criterionIndex + 1}. {criterion}"
                         : $"- {criterion}");
                     continue;
                 }
 
-                specLines.Add(hasAuthoritativePlannerCriteria
+                specLines.Add(declarationContext.HasAuthoritativePlannerCriteria
                     ? $"{criterionIndex + 1}. [WAIVED] {normalizedCriterion}"
                     : $"- [WAIVED] {normalizedCriterion}");
                 specLines.Add($"  Reason: {PromptContextFormatter.TrimPromptBlock(waiver.WaiverReason!)}");

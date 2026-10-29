@@ -10,6 +10,23 @@ public sealed class GoalTextViewCharacterizationTests
 {
     private static readonly DateTimeOffset Start = new(2026, 1, 2, 3, 4, 5, TimeSpan.Zero);
 
+    [Fact]
+    public void PrintGoal_DeclaredRemovals_DoesNotWarnAboutCriterionCount()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Implement behavior.\n## Acceptance criteria\n" +
+            "1. Behavior works.\n2. test-removal: FooTests.Removed");
+        kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec("Implement behavior.",
+            ["Behavior works."], VerificationClass.TestVerifiable, [], []));
+
+        var lines = CaptureLines(() => GoalTextView.PrintGoal(goal));
+
+        Assert.Contains("Brief acceptance criteria (1):", lines);
+        Assert.Contains("Refined acceptance criteria (1):", lines);
+        Assert.DoesNotContain(lines, line => line.Contains("WARNING:", StringComparison.Ordinal));
+        Assert.DoesNotContain("  2. test-removal: FooTests.Removed", lines);
+    }
+
     // Literal formats derived from ConsoleViews.GoalsAndTasks.cs at 09a304658.
     [Fact]
     public void PrintGoal_MinimalGoal_PreservesFullAndTasksOnlyLineSequences()

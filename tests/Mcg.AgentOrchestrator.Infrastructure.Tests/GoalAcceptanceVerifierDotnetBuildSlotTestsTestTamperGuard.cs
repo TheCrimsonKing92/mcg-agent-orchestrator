@@ -69,36 +69,41 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsTestTamperGuard : 
     [Xunit.Fact]
     public async Task TestTamperGuard_DeclaredRemoval_Passes()
     {
-        var diff = string.Join("\n", [
-            "diff --git a/tests/Mcg.AgentOrchestrator.Infrastructure.Tests/FooTests.cs b/tests/Mcg.AgentOrchestrator.Infrastructure.Tests/FooTests.cs",
-            "--- a/tests/Mcg.AgentOrchestrator.Infrastructure.Tests/FooTests.cs",
-            "+++ b/tests/Mcg.AgentOrchestrator.Infrastructure.Tests/FooTests.cs",
-            "@@ -10,5 +10,0 @@",
-            "-    [Xunit.Fact(DisplayName = \"some test\")]",
-            "-    public void SomeTest()",
-            "-    {",
-            "-        Assert.True(something);",
-            "-    }"
-        ]);
-        var criteria = """
-            [
-              {
-                "name": "test-removal: Example.Tests.FooTests.SomeTest",
-                "type": "test-removal",
-                "testIdentity": "Example.Tests.FooTests.SomeTest"
-              }
-            ]
-            """;
+        foreach (var (count, removeUndeclared) in new[] { (1, false), (50, false), (50, true) })
+        {
+            var methods = count == 1 ? new[] { "SomeTest" }
+                : Enumerable.Range(0, count).Select(i => $"Removed{i:D2}").ToArray();
+            var objective = "## Acceptance criteria\n1. Behavior works.\n" +
+                string.Join("\n", methods.Select((method, i) =>
+                    $"{i + 2}. test-removal: Example.Tests.FooTests.{method}"));
+            var criteria = JsonSerializer.Serialize(AcceptanceCriteriaParser.Parse(objective),
+                new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
+            var removed = removeUndeclared ? methods.Append("Undeclared").ToArray() : methods;
+            var diff = string.Join("\n", new[]
+            {
+                "diff --git a/tests/Mcg.AgentOrchestrator.Infrastructure.Tests/FooTests.cs b/tests/Mcg.AgentOrchestrator.Infrastructure.Tests/FooTests.cs",
+                "--- a/tests/Mcg.AgentOrchestrator.Infrastructure.Tests/FooTests.cs",
+                "+++ b/tests/Mcg.AgentOrchestrator.Infrastructure.Tests/FooTests.cs",
+                $"@@ -10,{removed.Length * 5} +10,0 @@ public sealed class FooTests"
+            }.Concat(removed.SelectMany(method => new[]
+            {
+                "-    [Xunit.Fact(DisplayName = \"some test\")]", $"-    public void {method}()", "-    {",
+                "-        Assert.True(something);", "-    }"
+            })));
 
-        var result = await RunTamperGuardAsync(
-            CreateTamperGuardVerifier(diff),
-            ["tests/Mcg.AgentOrchestrator.Infrastructure.Tests/FooTests.cs"],
-            criteria);
+            var result = await RunTamperGuardAsync(
+                CreateTamperGuardVerifier(diff),
+                ["tests/Mcg.AgentOrchestrator.Infrastructure.Tests/FooTests.cs"],
+                criteria);
 
-        var tamperCheck = result.Checks!.Single(c => c.Name == "test tamper guard");
-        Assert.True(tamperCheck.Passed, tamperCheck.OutputTail);
-        Assert.Equal("no test degradation detected", tamperCheck.ResultSummary);
-        Assert.DoesNotContain(result.Checks, check => check.Name.StartsWith("test-removal:", StringComparison.Ordinal));
+            var tamperCheck = Assert.Single(result.Checks!, check => check.Name == "test tamper guard");
+            Assert.Equal(!removeUndeclared, tamperCheck.Passed);
+            if (removeUndeclared)
+                Assert.Contains("tests -1/+0", tamperCheck.OutputTail!, StringComparison.Ordinal);
+            else
+                Assert.Equal("no test degradation detected", tamperCheck.ResultSummary);
+            Assert.DoesNotContain(result.Checks!, check => check.Name.StartsWith("test-removal:", StringComparison.Ordinal));
+        }
     }
 
     [Xunit.Fact]

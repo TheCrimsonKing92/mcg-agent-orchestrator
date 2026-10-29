@@ -19,7 +19,7 @@ internal static class OwnedBriefOwnershipSettlement
                 StringComparison.OrdinalIgnoreCase) == true)
             return false;
 
-        var criteria = AcceptanceCriteriaParser.ParseDeclared(objective);
+        var criteria = DeclaredTestRemovalSet.FromObjective(objective).Ordinary;
         if (criteria.Count == 0 || criteria.Any(criterion =>
                 AcceptanceCriterionOwnershipMarker.ResolveDeclaredEvidenceOwner(criterion).Kind == DeclaredEvidenceOwnerKind.None ||
                 AcceptanceCriterionOwnershipMarker.HasConflictingDeclaredEvidenceOwners(criterion) ||
