@@ -7,6 +7,8 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 internal sealed partial class ConductorDriver
 {
     internal Func<Goal, IReadOnlyList<string>, IReadOnlyDictionary<string, IReadOnlyList<string>>>? PreTesterFailureHistory { get; set; }
+    internal Func<string, string>? PreTesterMainRevision { get; set; }
+    private readonly PreTesterChangedFileGuardClasses _preTesterChangedFileGuards = new();
 
     private PreTesterOutOfDiffRerun OutOfDiffRerun(string worktree) => new(worktree, _executionDirectory,
         _getLandingFileScopes, PreTesterFailureHistory ?? ((goal, identities) => CrossGoalTestFailureHistory.Read(
@@ -114,21 +116,14 @@ internal sealed partial class ConductorDriver
                     selected.AddRange(normalized.Selections);
             }
         }
-        foreach (var selection in PreTesterAlwaysRunGuardTestClasses.Select(worktreePath).Concat(PreTesterTestSourceGuardClasses.Select(worktreePath, _getLandingFileScopes(goal))))
-        {
-            if (TryNormalizeFindingEvidenceRequest(
-                    new FindingEvidenceRequest([selection]), settings,
-                    (_, _) => [],
-                    out var normalized, out _, out _, out _))
-                selected.AddRange(normalized.Selections);
-        }
-        var distinct = selected.DistinctBy(FormatFindingEvidenceSelection).ToArray();
-        // Pre-change attempts keep their original request identity and per-class TRX obligation.
-        if (prior?.Outcome == "started")
-            distinct = distinct.Where(selection =>
-                !(PreTesterAlwaysRunGuardTestClasses.ContainsClass(selection.TestClass) || PreTesterTestSourceGuardClasses.ContainsClass(selection.TestClass)) ||
-                prior.Selections.Contains(FormatFindingEvidenceSelection(selection), StringComparer.OrdinalIgnoreCase))
-                .ToArray();
+        var guards = PreTesterGuardSelections.Create(_preTesterChangedFileGuards, worktreePath,
+            _getLandingFileScopes(goal), PreTesterMainRevision?.Invoke(worktreePath) ??
+            PreTesterGuardSelections.ReadMainRevision(worktreePath, _cohortWorkspace));
+        notRun.AddRange(guards.NotRun.Where(name => prior?.Outcome != "started" ||
+            prior.NotRun.Contains(name, StringComparer.Ordinal)));
+        selected.AddRange(guards.Normalize(settings));
+        var distinct = guards.RetainStartedSelections(selected,
+            prior?.Outcome == "started" ? prior.Selections : null, FormatFindingEvidenceSelection);
         var request = string.Join("; ", distinct.Select(FormatFindingEvidenceSelection));
         var selectionNames = distinct.Select(FormatFindingEvidenceSelection).ToArray();
         if (prior?.Outcome == "started" &&
@@ -184,7 +179,8 @@ internal sealed partial class ConductorDriver
         var attributionBatch = new FindingEvidenceBatch(
             identity, request, new FindingEvidenceRequest(distinct), [], []);
         var (outcome, candidate, failingTests, unusable) = PreTesterApparatusReceiptClassifier.ClassifyOutcome(evidence, completed, candidateSha, distinct,
-            failures => EveryFailingTestIsInsideCandidateChanges(goal, attributionBatch, failures));
+            failures => guards.EveryFailureIsInsideChanges(failures,
+                otherFailures => EveryFailingTestIsInsideCandidateChanges(goal, attributionBatch, otherFailures)));
         if (attempt is not null)
             _focusedEvidenceAttemptCoordinator.RecordFocusedEvidenceRequestDispositions(attempt, requestContext.FindingRoundFingerprint, receiptId, []);
         _recordFindingEvidenceRun(goal.Id, tester.Id, PreTesterUnusableReason.AppendTo(unusable, PreTesterFailureSignatureReader.AppendTo(
