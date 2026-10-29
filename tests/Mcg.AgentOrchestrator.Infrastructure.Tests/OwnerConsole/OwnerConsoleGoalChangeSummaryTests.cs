@@ -105,7 +105,7 @@ public sealed class OwnerConsoleGoalChangeSummaryTests
         {
             await TestHangGuard.WaitAsync(loadEntered.Task, "lifecycle summary load entered");
             Assert.False(previewLoad.IsCompleted);
-            Assert.Equal("Loading…", view.PreviewText);
+            Assert.Equal(string.Join('\n', "Readable goal", "Developer"), view.PreviewText);
             view.Window.Layout(new Size(100, 40));
             Assert.False(previewLoad.IsCompleted);
             Assert.Same(previewLoad, view.PreviewLoad);
@@ -433,7 +433,7 @@ public sealed class OwnerConsoleGoalChangeSummaryTests
             // Hold the query until the initial layout has finished rendering the label.
             Assert.False(previewLoad.IsCompleted);
             view.Window.Layout(new Size(100, 40));
-            Assert.Equal("Loading…", view.PreviewText);
+            Assert.Equal(string.Join('\n', Model(goal).Board[0].Title, Model(goal).Board[0].Stage), view.PreviewText);
             Assert.Same(previewLoad, view.PreviewLoad);
             Assert.False(previewLoad.IsCompleted);
         }

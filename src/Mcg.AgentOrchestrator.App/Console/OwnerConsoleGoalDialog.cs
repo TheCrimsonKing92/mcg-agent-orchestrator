@@ -17,6 +17,7 @@ internal sealed class OwnerConsoleGoalDialog : IDisposable
     private readonly CancellationTokenSource _session;
     private readonly object _gate = new();
     private readonly bool _loadOnStart;
+    private readonly Action<Content>? _remember;
     private bool _contentLoaded;
     private Action<Action> _invoke = action => action();
     private TaskCompletionSource? _loading;
@@ -27,6 +28,7 @@ internal sealed class OwnerConsoleGoalDialog : IDisposable
 
     internal Content Current { get; private set; }
     internal string Title => "Goal";
+    internal string? TitleStatus { get; private set; }
     internal OwnerConsoleTextPage Page { get; }
     internal Task LastLoad { get; private set; } = Task.CompletedTask;
     internal string? RequestedEpicId { get; private set; }
@@ -38,7 +40,8 @@ internal sealed class OwnerConsoleGoalDialog : IDisposable
     internal (OwnerConsoleTextDialog Dialog, Dictionary<char, Button> Buttons) CreateView(
         Action close, Func<char, Task> action)
     {
-        var dialog = new OwnerConsoleTextDialog(Title, Current.Text, Current.ChoiceLines, Page);
+        var dialog = new OwnerConsoleTextDialog(Title, Current.Text, Current.ChoiceLines, Page) { TitleStatus = TitleStatus };
+        dialog.Render();
         var closeButton = new Button { Text = "Close", IsDefault = true };
         closeButton.Accepting += (_, args) => { args.Handled = true; close(); };
         dialog.AddButton(closeButton);
@@ -66,11 +69,14 @@ internal sealed class OwnerConsoleGoalDialog : IDisposable
 
     internal OwnerConsoleGoalDialog(OwnerConsoleScreenController controller, Content initial,
         Func<CancellationToken, Task<Content?>> load, Func<OwnerConsoleDecision, Task> question,
-        Func<string, string, Task> text, CancellationToken token, bool loadOnStart = false)
+        Func<string, string, Task> text, CancellationToken token, bool loadOnStart = false,
+        bool initialContentLoaded = false, Action<Content>? remember = null)
     {
         _controller = controller; Current = initial; _load = load; _question = question; _text = text;
         _session = CancellationTokenSource.CreateLinkedTokenSource(token);
-        _loadOnStart = loadOnStart; _contentLoaded = !loadOnStart;
+        _loadOnStart = loadOnStart; _contentLoaded = !loadOnStart || initialContentLoaded;
+        _remember = remember;
+        TitleStatus = loadOnStart && _contentLoaded ? "refreshing" : null;
         Page = new(initial.Text, 60, 15, initial.ChoiceLines);
     }
 
@@ -88,6 +94,15 @@ internal sealed class OwnerConsoleGoalDialog : IDisposable
         {
             if (_disposed) return;
             _dirty = true; _revision++;
+            _invoke(() =>
+            {
+                lock (_gate)
+                {
+                    if (_disposed || !_dirty && _loading is null) return;
+                    if (_contentLoaded) TitleStatus = "refreshing";
+                    Changed?.Invoke();
+                }
+            });
             if (_loading is not null) return;
             _loading = new(TaskCreationOptions.RunContinuationsAsynchronously);
             LastLoad = _loading.Task;
@@ -120,8 +135,10 @@ internal sealed class OwnerConsoleGoalDialog : IDisposable
                 await ApplyAsync(() =>
                 {
                     if (content is null && _contentLoaded)
-                    { Page.Replace(StaleSummaryText(Current.Text), Current.ChoiceLines); Changed?.Invoke(); return; }
-                    if (content is not null) _contentLoaded = true;
+                    { TitleStatus = "refresh failed: " + OwnerConsoleGoalDetailLoading.UnavailableText; Changed?.Invoke(); return; }
+                    if (content is not null)
+                    { _contentLoaded = true; _remember?.Invoke(content); }
+                    TitleStatus = null;
                     content ??= OwnerConsoleGoalDetailLoading.Unavailable(null);
                     Current = content;
                     Page.Replace(content.Text, content.ChoiceLines);
@@ -134,7 +151,7 @@ internal sealed class OwnerConsoleGoalDialog : IDisposable
                 await ApplyAsync(() =>
                 {
                     if (_contentLoaded)
-                        Page.Replace(StaleSummaryText(Current.Text) + Environment.NewLine + "Refresh failed: " + ex.Message, Current.ChoiceLines);
+                        TitleStatus = "refresh failed: " + ex.Message;
                     else
                     {
                         Current = OwnerConsoleGoalDetailLoading.Unavailable(ex);
@@ -144,13 +161,6 @@ internal sealed class OwnerConsoleGoalDialog : IDisposable
                 }, revision, token).ConfigureAwait(false);
             }
         }
-    }
-
-    private static string StaleSummaryText(string text)
-    {
-        foreach (var heading in new[] { "Planned:", "Changed:", "Reported:", "Verified:", "Candidate:", "Promotion:" })
-            text = text.Replace(Environment.NewLine + heading, Environment.NewLine + heading + " [stale — refresh unavailable]", StringComparison.Ordinal);
-        return text;
     }
 
     private async Task ApplyAsync(Action apply, int revision, CancellationToken token)

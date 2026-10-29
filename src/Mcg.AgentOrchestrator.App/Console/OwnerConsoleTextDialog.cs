@@ -1,4 +1,3 @@
-using System.Collections.ObjectModel;
 using Terminal.Gui.Input;
 using Terminal.Gui.ViewBase;
 using Terminal.Gui.Views;
@@ -11,6 +10,8 @@ internal sealed class OwnerConsoleTextDialog : Dialog
     internal OwnerConsoleTextPage Page { get; }
     internal event Action<int>? ChoiceAccepted;
     private readonly string _baseTitle;
+    private readonly OwnerConsoleListRenderer _source = new();
+    internal string? TitleStatus { get; set; }
     private bool _formatting;
 
     internal OwnerConsoleTextDialog(string title, string text, IReadOnlyList<int>? choiceLines = null,
@@ -56,9 +57,11 @@ internal sealed class OwnerConsoleTextDialog : Dialog
         _formatting = true;
         try
         {
-            Body.SetSource(new ObservableCollection<string>(Page.Visible));
-            Body.SelectedItem = Page.Selected - Page.Offset;
-            var title = OwnerConsoleOverflow.Title(_baseTitle, Page.Overflow, Frame.Width - OwnerConsoleOverflow.TitleChrome);
+            var changed = _source.Apply(Body, Page.Visible);
+            var selected = Page.Selected - Page.Offset;
+            if (changed || Body.SelectedItem != selected) Body.SelectedItem = selected;
+            var title = OwnerConsoleOverflow.Title(_baseTitle + (TitleStatus is null ? "" : $" ({TitleStatus})"),
+                Page.Overflow, Frame.Width - OwnerConsoleOverflow.TitleChrome);
             if (Title != title) Title = title;
         }
         finally { _formatting = wasFormatting; }

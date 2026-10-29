@@ -1,4 +1,3 @@
-using System.Collections.ObjectModel;
 using Terminal.Gui.ViewBase;
 using Terminal.Gui.Views;
 
@@ -7,6 +6,9 @@ namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 internal sealed class OwnerConsoleActivityPane
 {
     private readonly OwnerConsoleActivityFollow _follow = new();
+    private readonly OwnerConsoleLastGood<string, OwnerConsoleActivityItem[]> _lastGood = new();
+    internal OwnerConsoleListRenderer Source { get; } = new();
+    internal string? TitleStatus { get; private set; }
 
     internal ListView List { get; } = new() { Width = Dim.Fill(), Height = Dim.Fill() };
     internal IReadOnlyList<string> Lines { get; private set; } = [];
@@ -15,22 +17,28 @@ internal sealed class OwnerConsoleActivityPane
     internal bool Following => _follow.Following;
     internal string? Filter { get; private set; }
 
-    internal void Render(OwnerConsoleViewModel? model, int width, bool refilter = false)
+    internal void Render(OwnerConsoleViewModel? model, int width, bool refilter = false, bool follow = false)
     {
         var selected = refilter ? null : List.SelectedItem;
         var top = List.Viewport.Y;
         var state = model?.ActivityState;
+        if (state is { Loading: false, Error: null }) state = null;
         var items = model?.Activity.Take(OwnerConsoleViewModelBuilder.MaxActivityItems).ToArray() ?? [];
-        Rows = state is null ? OwnerConsoleActivityRows.Build(items, Filter) : [];
-        Keys = state is null ? Rows.Select(row => row.Key).ToArray() : OwnerConsoleActivityFollow.Keys(items);
-        IEnumerable<string> pane = state is { Loading: true } ? ["loading..."] : state?.Error is { } error
+        if (model is not null && state is null) _lastGood.Remember("activity", items);
+        var retained = false;
+        if (model is not null && state is not null && _lastGood.TryGet("activity", out var prior))
+        { items = prior; retained = true; }
+        var showContent = state is null || retained;
+        TitleStatus = retained ? state is { Loading: true } ? "refreshing" : "refresh failed: " + state!.Error : null;
+        Rows = showContent ? OwnerConsoleActivityRows.Build(items, Filter) : [];
+        Keys = showContent ? Rows.Select(row => row.Key).ToArray() : OwnerConsoleActivityFollow.Keys(items);
+        IEnumerable<string> pane = !retained && state is { Loading: true } ? ["loading..."] : !retained && state?.Error is { } error
             ? ["ACTIVITY unavailable: " + error] : Rows.Select(row => row.Text);
         Lines = pane.Select((line, row) => OwnerConsoleLineFitter.Fit(line,
-            state is not { Loading: true } && state?.Error is null &&
-                model is not null && row < Rows.Count && Rows[row].ItemIndex is { } itemIndex
-                ? OwnerActivityNarrator.LineSpans(model.Activity[itemIndex]) : OwnerConsoleLineSpans.None, width)).ToArray();
-        List.SetSource(new ObservableCollection<string>(Lines));
-        var placement = state is null ? _follow.Place(Keys, selected, top, List.Viewport.Height) : ((int?)0, 0);
+            showContent && row < Rows.Count && Rows[row].ItemIndex is { } itemIndex
+                ? OwnerActivityNarrator.LineSpans(items[itemIndex]) : OwnerConsoleLineSpans.None, width)).ToArray();
+        if (!Source.Apply(List, Lines) && !refilter && !follow) return;
+        var placement = showContent ? _follow.Place(Keys, selected, top, List.Viewport.Height) : ((int?)0, 0);
         List.SelectedItem = placement.Item1;
         List.Viewport = List.Viewport with { Y = placement.Item2 };
     }
@@ -44,7 +52,7 @@ internal sealed class OwnerConsoleActivityPane
     internal void FollowLatest(OwnerConsoleViewModel? model, int width)
     {
         _follow.Follow();
-        Render(model, width);
+        Render(model, width, follow: true);
     }
 
     internal int? SelectedRow(OwnerConsoleViewModel? model) =>
