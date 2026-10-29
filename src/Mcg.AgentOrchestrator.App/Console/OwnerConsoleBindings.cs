@@ -14,6 +14,7 @@ internal static class OwnerConsoleBindings
         Row("goal <id-prefix>", "Open live goal detail, landing status and actions."),
         Row("epics", "Open the epic view", 'e', "Open the epic view (any pane).", owner: OwnerConsoleCommandOwner.View),
         Row("fleet", "Show the fleet diagram: host and executor boxes."),
+        Row("scope [<name>[,<name>...]|all]", "Show or change the BOARD project scope.", effect: OwnerConsoleEffect.ConsoleLocal, owner: OwnerConsoleCommandOwner.View),
         Row("follow", "Follow the newest ACTIVITY row; new events keep it selected until you move the selection or scroll (Home in ACTIVITY does the same).", owner: OwnerConsoleCommandOwner.View),
         Row("filter <text>", "Show only ACTIVITY rows whose goal id starts with <text> or whose line contains <text>; filter with no text shows every row.", '/', "Filter ACTIVITY by goal id prefix or text (any pane).", owner: OwnerConsoleCommandOwner.View),
         Row("landings", "Show delivered goals: landing commit, integration kind and acceptance (landings today|30)", 'l', "Show delivered goals (any pane)."),
@@ -42,6 +43,7 @@ internal static class OwnerConsoleBindings
     internal static OwnerConsoleBinding Quit => All.Single(row => row.Scope == OwnerConsoleScope.Global && row.Command == "quit");
     internal static OwnerConsoleBinding Follow => All.Single(row => row.Scope == OwnerConsoleScope.Global && row.Command == "follow");
     internal static OwnerConsoleBinding Filter => All.Single(row => row.Scope == OwnerConsoleScope.Global && row.Command == "filter");
+    internal static OwnerConsoleBinding ProjectScope => All.Single(row => row.Scope == OwnerConsoleScope.Global && row.Command == "scope");
     internal static IEnumerable<OwnerConsoleBinding> Commands => All.Where(row => TopLevel(row.Scope));
     internal static OwnerConsoleBinding? ForDialogKey(OwnerConsoleScope scope, char key, bool ctrl = false) => All.FirstOrDefault(row =>
         !TopLevel(scope) && row.Scope == scope && row.Ctrl == ctrl && row.Key is { } bound &&

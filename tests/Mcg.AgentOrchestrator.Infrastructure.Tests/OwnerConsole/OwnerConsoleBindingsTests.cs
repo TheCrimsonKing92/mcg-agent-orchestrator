@@ -95,7 +95,7 @@ public sealed class OwnerConsoleBindingsTests
     [Fact]
     public void PromptPreservesCommandOrderAndAdvertisesAliases()
     {
-        const string expected = "conductor start | conductor stop | conductor status | digest | metrics | bell on | bell off | goal <id-prefix> | [e] epics | fleet | follow | [/] filter <text> | [l] landings | [g] gate | [?] help | [q] quit | [a] accept | [r] answer";
+        const string expected = "conductor start | conductor stop | conductor status | digest | metrics | bell on | bell off | goal <id-prefix> | [e] epics | fleet | scope [<name>[,<name>...]|all] | follow | [/] filter <text> | [l] landings | [g] gate | [?] help | [q] quit | [a] accept | [r] answer";
         Assert.Equal(expected, OwnerConsoleBindings.CommandPrompt);
         Assert.Equal(expected.Split(" | "), OwnerConsoleBindings.PromptEntries);
         Assert.Equal(expected, OwnerConsoleKeyHints.CommandPrompt);
@@ -160,6 +160,7 @@ public sealed class OwnerConsoleBindingsTests
             ":bell off: Disable all three bell tiers; use bell <calm|attention|alarm> on|off for one tier.",
             ":goal <id-prefix>: Open live goal detail, landing status and actions.",
             ":fleet: Show the fleet diagram: host and executor boxes.",
+            ":scope [<name>[,<name>...]|all]: Show or change the BOARD project scope.",
             ":follow: Follow the newest ACTIVITY row; new events keep it selected until you move the selection or scroll (Home in ACTIVITY does the same)."
         ];
         Assert.Equal(string.Join("\n", expected.Concat(unkeyed)), OwnerConsoleBindings.HelpText);

@@ -19,14 +19,14 @@ internal static class OwnerConsoleFullScreenHost
     }
 
     internal static async Task<int> RunAsync(OrchestratorWorkspace workspace, CancellationToken cancellationToken,
-        string? inputTracePath = null, OwnerConsoleHostRowOwner? owners = null)
+        string? inputTracePath = null, OwnerConsoleHostRowOwner? owners = null, OwnerConsoleBoardSource? boardSource = null)
     {
-        if (inputTracePath is null) return await RunCoreAsync(workspace, cancellationToken, null, owners);
+        if (inputTracePath is null) return await RunCoreAsync(workspace, cancellationToken, null, owners, boardSource);
         try
         {
             using var destination = OwnerConsoleInputTraceOptions.OpenDestination(inputTracePath);
             var diagnostics = new OwnerConsoleInputDiagnostics();
-            var result = await RunCoreAsync(workspace, cancellationToken, diagnostics, owners);
+            var result = await RunCoreAsync(workspace, cancellationToken, diagnostics, owners, boardSource);
             // RunCoreAsync has disposed the application and restored the terminal before export.
             diagnostics.Export(destination);
             return result;
@@ -39,7 +39,7 @@ internal static class OwnerConsoleFullScreenHost
     }
 
     private static async Task<int> RunCoreAsync(OrchestratorWorkspace workspace, CancellationToken cancellationToken,
-        OwnerConsoleInputDiagnostics? diagnostics, OwnerConsoleHostRowOwner? owners)
+        OwnerConsoleInputDiagnostics? diagnostics, OwnerConsoleHostRowOwner? owners, OwnerConsoleBoardSource? boardSource)
     {
         var clock = TimeProvider.System;
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -130,6 +130,7 @@ internal static class OwnerConsoleFullScreenHost
                         using var goalLoads = snapshots.BeginRefresh();
                         var board = await timings.TimeAsync("board", () => builder.BuildBoardAsync(stepToken));
                         boardIds = board.Board.Select(row => row.GoalId).ToArray();
+                        if (boardSource is not null) board = await boardSource.ComposeAsync(board, stepToken);
                         foreach (var lifecycle in timings.Time("lifecycle-tail", () => activityLoader.ReadNew(boardIds, scope ?? OwnerConsoleRefreshScope.All).ToArray())) OwnerConsoleStartupActivity.Append(recent, builder.EnrichEvent(lifecycle), OwnerConsoleStartupActivity.MaxRawEvents);
                         var programHealth = OwnerConsoleProgramHealthNotice.Current(recent); app.Invoke(() => { if (!token.IsCancellationRequested) view!.NoticeStrip.SetProgramHealth(programHealth); });
                         var (decisions, hidden) = await timings.TimeAsync("decisions", () => builder.ReadDecisionsAsync(stepToken));
@@ -163,7 +164,12 @@ internal static class OwnerConsoleFullScreenHost
             {
                 // Keep Init, initial Render and Run on this host thread. Metadata is
                 // read on the pool before GUI initialization, with the existing bound.
-                var board = OwnerConsoleStartupLoader.LoadingBoard(Task.Run(() => builder.BuildBoardAsync(token), token)
+                var board = OwnerConsoleStartupLoader.LoadingBoard(Task.Run(async () =>
+                {
+                    var own = await builder.BuildBoardAsync(token);
+                    boardIds = own.Board.Select(row => row.GoalId).ToArray();
+                    return boardSource is null ? own : await boardSource.ComposeAsync(own, token);
+                }, token)
                     .WaitAsync(OwnerConsoleLoopOptions.Default.OperationBound, clock, token).GetAwaiter().GetResult());
                 app.Init();
                 var notifications = OwnerConsoleNotificationSettings.Load(
@@ -181,8 +187,7 @@ internal static class OwnerConsoleFullScreenHost
                     fleet: () => OwnerFleetViewModelBuilder.Load(workspace, new ConductorLeaseLiveness(workspace.OrchestratorDirectory), owners: owners),
                     landings: argument => OwnerLandingsPage.Load(state, workspace.OrchestratorDirectory, clock, argument));
                 view = new(app, controller, () => RefreshAsync(), token, clock, OwnerConsoleLoopOptions.Default, diagnostics,
-                    projectLabel: OwnerConsoleProjectLabel.ForWorkspace(workspace));
-                boardIds = board.Board.Select(row => row.GoalId).ToArray();
+                    projectLabel: OwnerConsoleProjectLabel.ForWorkspace(workspace), boardSource: boardSource);
                 view.Render(board);
                 var startup = new OwnerConsoleStartupLoader(builder, activityLoader, action => Post("startup-render", action), clock);
                 fill = startup.FillAsync(board, model => view.Render(model), new(opened, last, [], 0), loaded =>
@@ -191,7 +196,7 @@ internal static class OwnerConsoleFullScreenHost
                     last = loaded.LastActivity;
                     landings = loaded.LandedToday;
                     foreach (var landing in loaded.Recent.Where(OwnerActivityNarrator.IsLanding)) countedLandings.Add(landing);
-                }, token);
+                }, token, ownBoardGoalIds: boardIds);
             }
             catch { rebuild.Release(); throw; }
             using var stop = token.Register(() => app.Invoke(() =>

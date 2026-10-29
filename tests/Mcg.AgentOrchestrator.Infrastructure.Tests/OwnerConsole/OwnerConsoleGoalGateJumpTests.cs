@@ -20,7 +20,7 @@ public sealed class OwnerConsoleGoalGateJumpTests
         Assert.Equal(OwnerConsoleBindings.Gate.Noun, row.Noun);
         Assert.Equal("Gate view (g)", OwnerConsoleDialogBindings.Label(row));
         Assert.Same(OwnerConsoleBindings.Gate, OwnerConsoleBindings.ForLine(":gate 457de2e6"));
-        Assert.Equal("conductor start | conductor stop | conductor status | digest | metrics | bell on | bell off | goal <id-prefix> | [e] epics | fleet | follow | [/] filter <text> | [l] landings | [g] gate | [?] help | [q] quit | [a] accept | [r] answer",
+        Assert.Equal("conductor start | conductor stop | conductor status | digest | metrics | bell on | bell off | goal <id-prefix> | [e] epics | fleet | scope [<name>[,<name>...]|all] | follow | [/] filter <text> | [l] landings | [g] gate | [?] help | [q] quit | [a] accept | [r] answer",
             OwnerConsoleBindings.CommandPrompt);
         var lines = OwnerConsoleBindings.HelpText.Split('\n');
         var epic = Array.IndexOf(lines, "Goal detail e: Open the goal's epic.");
