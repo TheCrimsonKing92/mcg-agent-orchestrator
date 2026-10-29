@@ -19,26 +19,22 @@ public sealed class OwnerConsolePreviewCompletionTests
     public async Task InitialLayout_BeforePublication_PreservesPreviewAndDetail(string expected)
     {
         var text = await RenderControlledViewAsync(expected, completeLayoutBeforeLoad: true);
-        Assert.Contains("Verified: " + expected, text);
+        Assert.Contains(PreviewMarker(expected), text);
     }
 
-    [Fact]
-    public async Task OverlappingLayout_AfterPreviewLoad_ReproducesLoadingAssertion()
+    [Theory]
+    [InlineData("pending")]
+    [InlineData("passed")]
+    public async Task OverlappingLayout_AfterPreviewLoad_PreservesPreviewAndDetail(string expected)
     {
-        var text = await RenderControlledViewAsync("pending", completeLayoutBeforeLoad: false);
-        Assert.Contains("Verified: loading", text);
-        // The identical assertion used by the repaired fixture must reject this schedule.
-        var failure = Record.Exception(() => Assert.Contains("Verified: pending", text));
-        Assert.NotNull(failure);
-        Assert.Contains("Verified: pending", failure.Message);
-        Assert.DoesNotContain("Verified: passed", text);
+        var text = await RenderControlledViewAsync(expected, completeLayoutBeforeLoad: false);
+        Assert.Contains(PreviewMarker(expected), text);
+        Assert.DoesNotContain("Loading…", text);
     }
 
-    // Acceptance RED control: in InitialLayout_BeforePublication_PreservesPreviewAndDetail,
-    // change only completeLayoutBeforeLoad: true to false. Its unchanged final Contains must
-    // fail with loading content (both rows); restore true for GREEN. No production mutation.
-    // This controls a 30 -> 100 column resize to make TextChanging observable; it establishes
-    // the overlapping uninitialized-fixture contract, not the historical 100-column interleaving.
+    // Force both publication orders during an 8 -> 100 column resize. Completing the entire
+    // layout also runs BOARD/ACTIVITY viewport callbacks, which render the current summary;
+    // an older TextChanging callback does not imply that Loading… is the final preview.
     private static async Task<string> RenderControlledViewAsync(string expected, bool completeLayoutBeforeLoad)
     {
         var kernel = new AgentOrchestratorKernel();
@@ -84,15 +80,18 @@ public sealed class OwnerConsolePreviewCompletionTests
                 [new("preview", "Epic", "Preview completion", "Active", "Developer", null, goal.Id.Value)], []));
             await Wait(queries.Entered.Task, "selected goal query entered");
             var completion = view.PreviewLoad;
-            view.Window.Layout(new Size(30, 40));
-            var label = Assert.Single(view.Window.SubViews.OfType<Label>(),
-                item => item.Text.Contains("Verified: loading", StringComparison.Ordinal));
+            view.Window.Layout(new Size(8, 40));
+            var selected = Assert.Single(view.Window.SubViews.OfType<FrameView>(),
+                item => item.Title == "SELECTED preview-");
+            var label = Assert.Single(selected.SubViews.OfType<Label>());
             label.TextChanging += (_, _) =>
             {
                 if (Environment.CurrentManagedThreadId != Volatile.Read(ref layoutThread) ||
                     Interlocked.Exchange(ref held, 1) != 0) return;
-                Assert.Equal(98, label.Viewport.Width);
-                Assert.Contains("loading", label.Text);
+                // The window and SELECTED frame each consume two border columns.
+                Assert.Equal(96, label.Viewport.Width);
+                // TextChanging still exposes the old text fitted to the initial four-cell interior.
+                Assert.Equal("Loa…", label.Text);
                 layoutWriting.SetResult();
                 if (!finishLayout.Wait(TestHangGuard.Bound, Token))
                     throw new TimeoutException("Hang guard: release of layout's loading text write was not signalled.");
@@ -111,7 +110,7 @@ public sealed class OwnerConsolePreviewCompletionTests
             }
             queries.Release.TrySetResult();
             await Wait(completion, "selected preview publication acknowledged");
-            Assert.Contains("Verified: " + expected, view.PreviewText);
+            Assert.Contains(PreviewMarker(expected), view.PreviewText);
             if (!completeLayoutBeforeLoad)
             {
                 // PreviewLoad really completed publication; the independent older layout is still held.
@@ -233,6 +232,7 @@ public sealed class OwnerConsolePreviewCompletionTests
         Assert.Equal("pending", applied.Last().Summary!.Verified.State);
     }
 
+    private static string PreviewMarker(string expected) => expected == "passed" ? "gate passed" : "No committed changes yet";
     private static TaskCompletionSource Signal() => new(TaskCreationOptions.RunContinuationsAsynchronously);
     private static Task Wait(Task task, string name) => TestHangGuard.WaitAsync(task, name);
     private static OwnerGoalChangeSummary Summary(string id) => new(id, 1, "criteria", null,

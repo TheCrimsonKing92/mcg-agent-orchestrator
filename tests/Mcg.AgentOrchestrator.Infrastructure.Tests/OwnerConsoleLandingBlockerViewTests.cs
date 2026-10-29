@@ -17,9 +17,9 @@ public sealed class OwnerConsoleLandingBlockerViewTests
         Since, "unmapped", "unmapped");
 
     [Theory]
-    [InlineData(GoalStatus.Verified, false, "held: acceptance width admission (12m)")]
-    [InlineData(GoalStatus.Verifying, false, "held: AcceptanceQueue (12m)")]
-    [InlineData(GoalStatus.Verified, true, "held: acceptance width admission (2h5m)")]
+    [InlineData(GoalStatus.Verified, false, "waiting for a gate slot, 12m")]
+    [InlineData(GoalStatus.Verifying, false, "waiting for gate, 12m")]
+    [InlineData(GoalStatus.Verified, true, "waiting for a gate slot, 2h5m")]
     public async Task BuildBoard_RecordedBlocker_ShowsExactLabelAndAge(
         GoalStatus status, bool later, string expected)
     {
@@ -142,15 +142,15 @@ public sealed class OwnerConsoleLandingBlockerViewTests
     }
 
     [Theory]
-    [InlineData("stage/one-two/three-four", "one two/three four", 59, "0m")]
-    [InlineData("plain-kind", "plain-kind", 3600, "1h0m")]
-    [InlineData("untyped/Owner-Name", "Owner-Name", -60, "0m")]
+    [InlineData("stage/one-two/three-four", "three four", 59, "0m")]
+    [InlineData("plain-kind", "plain kind", 3600, "1h0m")]
+    [InlineData("untyped/Owner-Name", "owner name", -60, "0m")]
     public void Board_KindAndAgeEdges_UseRecordedLabelAndClampedMinutes(
         string kind, string label, int seconds, string age)
     {
         var goal = Fixture(GoalStatus.Verified, Typed with { Kind = kind }).Kernel.Goals.Single();
 
-        Assert.Equal($"held: {label} ({age})", OwnerConsoleLandingBlockerText.Board(goal, Since.AddSeconds(seconds)));
+        Assert.Equal($"{label}, {age}", OwnerConsoleLandingBlockerText.Board(goal, Since.AddSeconds(seconds)));
     }
 
     [Fact]

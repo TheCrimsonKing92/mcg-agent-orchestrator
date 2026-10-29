@@ -15,7 +15,7 @@ internal static class OwnerConsoleStageDescriber
             return live.TotalCount > 0 ? $"in gate: {live.DoneCount}/{live.TotalCount}, {OwnerConsoleGateFormatter.Remaining(live.RemainingSeconds)} left" :
                 $"gate running {(int)live.Elapsed.TotalMinutes}m";
         if (gate?.ForMember(goal.Id.Value) is null && !(goal.Status == GoalStatus.Verifying && gate is null) &&
-            OwnerConsoleLandingBlockerText.Board(goal, now) is { } held) return held;
+            OwnerConsoleLandingBlockerText.Board(goal, now, queuePosition) is { } held) return held;
         switch (key.Rank)
         {
             case OwnerConsoleAttention.NeedsYou: return OwnerQuestion;
@@ -32,7 +32,7 @@ internal static class OwnerConsoleStageDescriber
             case OwnerConsoleAttention.WaitingForGate:
                 if (gate is { Live: true, Members.Count: > 0 })
                     return $"queued for gate #{queuePosition}, behind {gate.Members[0].Id[..Math.Min(8, gate.Members[0].Id.Length)]}";
-                return "waiting for gate" + (queuePosition is null ? "" : $" ({Ordinal(queuePosition.Value)} in queue)");
+                return "waiting for gate" + (queuePosition is null ? "" : $" ({OwnerConsoleHoldPhrase.Ordinal(queuePosition.Value)} in queue)");
             case OwnerConsoleAttention.WorkerRunning:
                 return OwnerConsoleBoardSortKey.RunningTask(goal)!.RequiredRole.ToString();
             case OwnerConsoleAttention.RecentTerminal:
@@ -47,6 +47,4 @@ internal static class OwnerConsoleStageDescriber
         }
     }
 
-    private static string Ordinal(int position) => position + (position % 100 is 11 or 12 or 13 ? "th" :
-        (position % 10) switch { 1 => "st", 2 => "nd", 3 => "rd", _ => "th" });
 }
