@@ -9,7 +9,7 @@ internal sealed record OwnerConsoleViewModel(
     OwnerConsoleStatus Status, ImmutableArray<OwnerConsoleDecision> Decisions,
     ImmutableArray<OwnerConsoleBoardRow> Board, ImmutableArray<OwnerConsoleActivityItem> Activity,
     OwnerConsolePaneState? DecisionsState = null, OwnerConsolePaneState? ActivityState = null,
-    OwnerConsoleGateProgress? Gate = null);
+    OwnerConsoleGateProgress? Gate = null, OwnerConsoleBoardScope? BoardScope = null);
 
 internal sealed record OwnerConsoleStatus(bool ConductorRunning, int ActiveGoals, int LiveDecisions,
     int HiddenQuestions, TimeSpan? LastEventAge, int LandedToday, int FailedToday = 0, DateTimeOffset? LatestTickAt = null,
@@ -26,6 +26,9 @@ internal sealed record OwnerConsoleBoardRow(string GoalPrefix, string Epic, stri
     string State, string Stage, TimeSpan? Age, string GoalId, bool Dimmed = false, string Priority = "",
     string? PriorityWarning = null)
 {
+    internal string Project { get; init; } = "";
+    internal bool IsForeign { get; init; }
+    internal bool IsDiagnostic { get; init; }
     internal OwnerConsoleBoardSortKey SortKey { get; init; }
     internal string? StageWithoutQuestion { get; init; }
 }

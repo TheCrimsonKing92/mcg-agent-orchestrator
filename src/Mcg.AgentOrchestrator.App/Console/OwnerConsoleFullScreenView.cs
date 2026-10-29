@@ -14,6 +14,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
     private readonly IKeyboard? _keyboard;
     private readonly OwnerConsoleInputDiagnostics? _diagnostics;
     private readonly Func<Task> _refresh;
+    private readonly OwnerConsoleBoardSource? _boardSource;
     private readonly CancellationToken _token;
     private readonly CancellationTokenSource _lifetime;
     private ITimer? _noticeExpiryTimer;
@@ -71,12 +72,16 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
     internal IReadOnlyList<string> DecisionLines => _decisionsPane.Lines;
     internal IReadOnlyList<string> ActivityLines => _activityPane.Lines;
     internal string? SelectedGoalId { get; private set; }
+    internal string? SelectedProject { get; private set; }
+    private OwnerConsoleBoardRow? SelectedBoardRow => _controller.Model is { } model &&
+        _selectedBoardIndex >= 0 && _selectedBoardIndex < model.Board.Length ? model.Board[_selectedBoardIndex] : null;
     internal OwnerConsolePane FocusedPane => _decisions.HasFocus ? OwnerConsolePane.Decisions :
         _board.HasFocus ? OwnerConsolePane.Board : _activity.HasFocus ? OwnerConsolePane.Activity : _focusedPane;
 
     internal OwnerConsoleFullScreenView(IApplication app, OwnerConsoleScreenController controller,
         Func<Task> refresh, CancellationToken token = default, TimeProvider? clock = null,
-        OwnerConsoleLoopOptions? options = null, OwnerConsoleInputDiagnostics? diagnostics = null, string? projectLabel = null)
+        OwnerConsoleLoopOptions? options = null, OwnerConsoleInputDiagnostics? diagnostics = null, string? projectLabel = null,
+        OwnerConsoleBoardSource? boardSource = null)
     {
         _decisions = _decisionsPane.List;
         _activity = _activityPane.List;
@@ -85,6 +90,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
         _diagnostics = diagnostics;
         _controller = controller;
         _refresh = refresh;
+        _boardSource = boardSource;
         _lifetime = CancellationTokenSource.CreateLinkedTokenSource(token);
         _token = _lifetime.Token;
         _clock = clock ?? TimeProvider.System;
@@ -191,11 +197,12 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
         try
         {
             _controller.Apply(model);
+            if (model.BoardScope is { } scope) Window.Title = $"Owner console - {OwnerConsoleProjectLabel.ForScope(scope)}";
             _refreshedAt = _clock.GetUtcNow();
             RenderStatus();
             RenderDecisions();
             RenderBoard();
-            var index = Array.FindIndex(model.Board.ToArray(), row => row.GoalId == SelectedGoalId);
+            var index = Array.FindIndex(model.Board.ToArray(), row => row.GoalId == SelectedGoalId && row.Project == SelectedProject);
             SelectBoard(index < 0 ? _selectedBoardIndex : index, refresh: true);
             RenderActivity();
             RenderHints();
@@ -222,7 +229,8 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
     {
         using var trace = _diagnostics?.Begin("board-source-replacement", TraceState);
         if (_controller.Model is not { } model) return;
-        OwnerConsoleBoardRenderer.Render(BoardTable, _board, model.Board, _board.Viewport.Width, _boardTitleWidth);
+        OwnerConsoleBoardRenderer.Render(BoardTable, _board, model.Board, _board.Viewport.Width, _boardTitleWidth,
+            model.BoardScope is { ProjectCount: > 1 });
         RenderPreview();
     }
 
@@ -403,7 +411,8 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
             if (OwnerConsoleBindings.ForLine(line) is { Owner: OwnerConsoleCommandOwner.View } binding)
                 await RunBindingAsync(binding, line.Trim().TrimStart(':').TrimStart()
                     .Split((char[]?)null, 2, StringSplitOptions.RemoveEmptyEntries).ElementAtOrDefault(1));
-            else await ActAsync(ct => _controller.RunCommandAsync(line, _operation, ct));
+            else if (!(OwnerConsoleBindings.ForLine(line)?.Command == "goal" && RefuseSelectedBoardRow()))
+                await ActAsync(ct => _controller.RunCommandAsync(line, _operation, ct));
             return;
         }
         if (key.AsRune.Value == ':' && !ActionRunning)
@@ -492,6 +501,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
         {
             key.Handled = true;
             if (ActionRunning) return;
+            if (pane == OwnerConsolePane.Board && RefuseSelectedBoardRow()) return;
             if (pane == OwnerConsolePane.Board && SelectedGoalId is { } goalId)
                 await ActAsync(ct => _controller.ShowGoalDetailAsync(goalId, _operation, ct));
             else if (pane == OwnerConsolePane.Decisions && _controller.SelectedIndex >= 0)
@@ -531,7 +541,17 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
             return;
         }
         if (ActionRunning) return;
-        if (binding.Owner == OwnerConsoleCommandOwner.Controller)
+        if ((binding.Command is "goal" or "gate" or "accept" or "answer") && RefuseSelectedBoardRow()) return;
+        if (binding == OwnerConsoleBindings.ProjectScope)
+        {
+            StartAction();
+            var result = _boardSource?.HandleScope(argument) ?? new OwnerConsoleScopeCommandResult(
+                "scope: project registry unavailable in this session", false, false);
+            ShowNotice(result.Message, result.Success ? OwnerConsoleNoticeSeverity.Success : OwnerConsoleNoticeSeverity.Failure,
+                OwnerConsoleNoticeSource.Action);
+            if (result.Changed) await _refresh();
+        }
+        else if (binding.Owner == OwnerConsoleCommandOwner.Controller)
             await ActAsync(ct => _controller.RunCommandAsync(binding.Command, _operation, ct));
         else if (binding == OwnerConsoleBindings.Gate)
         { StartAction(); OpenGate(argument); }
@@ -650,10 +670,13 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
     {
         using var trace = _diagnostics?.Begin("select-board", TraceState);
         if (_controller.Model is not { Board.Length: > 0 } model)
-        { _selectedBoardIndex = -1; SelectedGoalId = null; _summary.Select(null); return; }
+        { _selectedBoardIndex = -1; SelectedGoalId = null; SelectedProject = null; _summary.Select(null); RenderPreview(); return; }
         _selectedBoardIndex = Math.Clamp(index, 0, model.Board.Length - 1);
-        SelectedGoalId = model.Board[_selectedBoardIndex].GoalId;
-        _summary.Select(SelectedGoalId, refresh);
+        var row = model.Board[_selectedBoardIndex];
+        SelectedGoalId = row.IsDiagnostic ? null : row.GoalId;
+        SelectedProject = row.Project;
+        _summary.Select(row.IsForeign || row.IsDiagnostic ? null : SelectedGoalId, refresh);
+        RenderPreview();
         if (_board.Value?.SelectedCell.Y != _selectedBoardIndex)
             _board.SetSelection(0, _selectedBoardIndex, false);
         _board.EnsureCursorIsVisible();
@@ -662,9 +685,25 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
 
     private void RenderPreview()
     {
+        if (SelectedBoardRow is { } row && (row.IsForeign || row.IsDiagnostic))
+        {
+            _previewFrame.Title = OwnerConsoleSelectedPreview.Title(row.IsDiagnostic ? null : row.GoalId);
+            _preview.Text = row.IsDiagnostic ? row.Title : OwnerConsoleBoardSource.ForeignRowMessage(row);
+            return;
+        }
         _previewFrame.Title = OwnerConsoleSelectedPreview.Title(_selectedPreview.GoalId);
-        var stage = _controller.Model?.Board.FirstOrDefault(row => row.GoalId == _selectedPreview.GoalId)?.Stage;
+        var stage = _controller.Model?.Board.FirstOrDefault(item => item.Project == SelectedProject && item.GoalId == _selectedPreview.GoalId)?.Stage;
         _preview.Text = OwnerConsoleBoardRenderer.Preview(_selectedPreview, _preview.Viewport.Width, stage, _clock.LocalTimeZone);
+    }
+
+    private bool RefuseSelectedBoardRow()
+    {
+        if (FocusedPane != OwnerConsolePane.Board || SelectedBoardRow is not { } row ||
+            !row.IsForeign && !row.IsDiagnostic) return false;
+        StartAction();
+        ShowNotice(row.IsDiagnostic ? row.Title : OwnerConsoleBoardSource.ForeignRowMessage(row),
+            OwnerConsoleNoticeSeverity.Failure, OwnerConsoleNoticeSource.Action);
+        return true;
     }
 
     private void Invoke(Action action)
