@@ -2,9 +2,137 @@ using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Xunit;
 
-// Parallel-safe: stateless formatting, classification, and guidance; no shared state mutation.
+// Parallel-safe: unique fixture repositories/SQLite files and fake build children; no ambient edits.
 public sealed class StaleBuildReceiptClassificationTests : WorkerDispatchTestSupport
 {
+    [Fact]
+    public void CompletedRound_EditAfterBuild_ReportsStaleReceiptWithChangedPath()
+    {
+        var task = RefreshWithChangeBeforeCommit(fixture =>
+        {
+            File.AppendAllText(Path.Combine(fixture.Task.LastProcess!.WorkingDirectory, "src/Feature/Feature.cs"),
+                "\npublic sealed class LaterEdit { }");
+            Assert.False(WorkerBuildReceipt.Evaluate(fixture.ReceiptPath, fixture.Task.LastProcess.WorkingDirectory).Matches);
+        });
+
+        var outcome = AssertStaleCompletedRound(task);
+
+        Assert.Contains("the build receipt does not match the final tree; files changed after build: ",
+            task.LastVerification!.StandardError, StringComparison.Ordinal);
+        Assert.Contains("src/Feature/Feature.cs", outcome.EvidenceSummary, StringComparison.Ordinal);
+        Assert.Contains("files changed after build: ", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Assert.Contains("src/Feature/Feature.cs", outcome.ClassifierReceipt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void CompletedRound_UncoveredProject_ReportsStaleReceiptWithProject()
+    {
+        var task = RefreshWithChangeBeforeCommit(fixture =>
+        {
+            fixture.WriteReceipt(["another/project.csproj"]);
+            var receipt = WorkerBuildReceipt.Evaluate(fixture.ReceiptPath, fixture.Task.LastProcess!.WorkingDirectory);
+            Assert.True(receipt.Matches, receipt.Reason);
+            Assert.Equal(["src/Feature/Feature.csproj"],
+                WorkerBuildReceiptCoverage.FindMissingProjects(fixture.Task.CompletionBuildEvidence!.Projects, receipt.Projects));
+        });
+
+        var outcome = AssertStaleCompletedRound(task);
+
+        const string diagnostic = "receipt does not cover project src/Feature/Feature.csproj";
+        Assert.Contains(diagnostic, task.LastVerification!.StandardError, StringComparison.Ordinal);
+        Assert.Equal("Worker build receipt does not match the final tree. " + diagnostic, outcome.EvidenceSummary);
+        Assert.Contains(diagnostic, outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Assert.DoesNotContain("files changed after build:", outcome.EvidenceSummary, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void CompletedRound_NoBuildEvidence_KeepsMissingEvidenceRuleAndOriginalText()
+    {
+        var fixture = new CompletionBuildEvidenceFixture();
+        Assert.False(File.Exists(fixture.ReceiptPath));
+        var buildChecks = 0;
+        var runner = new BackgroundDispatchRunner(fixture.Clock,
+            isStillRunning: _ => false,
+            resolveWorkerBuildReceiptPath: _ => fixture.ReceiptPath,
+            runOrchestratorBuildCheck: _ =>
+            {
+                buildChecks++;
+                return new(false, -1, "Build apparatus unavailable; no build was executed.");
+            });
+
+        runner.RefreshLatestProcess(fixture.Kernel, fixture.GoalId, fixture.TaskId);
+
+        Assert.Equal(1, buildChecks);
+        Assert.Null(fixture.Task.CompletionBuildEvidence);
+        Assert.False(File.Exists(fixture.ReceiptPath));
+        Assert.Equal(WorkTaskStatus.Failed, fixture.Task.Status);
+        Assert.Null(fixture.Task.LastDispatch!.ResultCommit);
+        var verification = Assert.IsType<TaskVerificationRecord>(fixture.Task.LastVerification);
+        Assert.False(verification.Succeeded);
+        Assert.Contains(DispatchFailureDiagnosticMarker.Format("worker-build-evidence-missing"),
+            verification.StandardError, StringComparison.Ordinal);
+        Assert.DoesNotContain("worker-build-receipt-stale", verification.StandardError, StringComparison.Ordinal);
+        var outcome = DispatchFailureClassifier.Classify(fixture.Task, verification);
+        Assert.Equal("worker-build-evidence-missing", TaskOutcomeClassifier.TryExtractRule(outcome.ClassifierReceipt));
+        Assert.StartsWith("Required worker build evidence was not reported.", outcome.EvidenceSummary, StringComparison.Ordinal);
+        Assert.Contains("evidence=Required worker build evidence was not reported.", outcome.ClassifierReceipt, StringComparison.Ordinal);
+    }
+
+    private static TaskSpec RefreshWithChangeBeforeCommit(Action<CompletionBuildEvidenceFixture> change)
+    {
+        var fixture = new CompletionBuildEvidenceFixture();
+        var successReceiptReads = 0;
+        var changed = false;
+        var runner = new BackgroundDispatchRunner(fixture.Clock,
+            isStillRunning: _ => false,
+            completionBuildEvidence: fixture.Coordinator(),
+            resolveWorkerBuildReceiptPath: _ =>
+            {
+                if (fixture.Task.CompletionBuildEvidence is { Phase: CompletionBuildEvidencePhase.Success } built)
+                {
+                    // The first read certifies the build result. Change the candidate only on
+                    // the next read, at the runner's final commit check, without a timing race.
+                    successReceiptReads++;
+                    if (successReceiptReads == 2)
+                    {
+                        var receipt = WorkerBuildReceipt.Evaluate(fixture.ReceiptPath, fixture.Task.LastProcess!.WorkingDirectory);
+                        Assert.True(receipt.Matches, receipt.Reason);
+                        Assert.Empty(WorkerBuildReceiptCoverage.FindMissingProjects(built.Projects, receipt.Projects));
+                        change(fixture);
+                        changed = true;
+                    }
+                }
+                return fixture.ReceiptPath;
+            });
+
+        runner.RefreshLatestProcess(fixture.Kernel, fixture.GoalId, fixture.TaskId);
+        Assert.Equal(CompletionBuildEvidencePhase.Pending, fixture.Task.CompletionBuildEvidence!.Phase);
+        Assert.Null(fixture.Task.LastVerification);
+        fixture.Release();
+        runner.RefreshLatestProcess(fixture.Kernel, fixture.GoalId, fixture.TaskId);
+
+        Assert.True(changed, "The candidate must change after build certification and before commit authorization.");
+        Assert.Equal(1, fixture.Launches);
+        Assert.Equal(CompletionBuildEvidencePhase.StaleCandidate, fixture.Task.CompletionBuildEvidence!.Phase);
+        return fixture.Task;
+    }
+
+    private static DispatchOutcome AssertStaleCompletedRound(TaskSpec task)
+    {
+        Assert.Equal(WorkTaskStatus.Failed, task.Status);
+        Assert.Null(task.LastDispatch!.ResultCommit);
+        var verification = Assert.IsType<TaskVerificationRecord>(task.LastVerification);
+        Assert.False(verification.Succeeded);
+        Assert.Single(task.VerificationHistory);
+        Assert.Contains(DispatchFailureDiagnosticMarker.Format("worker-build-receipt-stale"),
+            verification.StandardError, StringComparison.Ordinal);
+        Assert.DoesNotContain("worker-build-evidence-missing", verification.StandardError, StringComparison.Ordinal);
+        var outcome = DispatchFailureClassifier.Classify(task, verification);
+        Assert.Equal("worker-build-receipt-stale", TaskOutcomeClassifier.TryExtractRule(outcome.ClassifierReceipt));
+        Assert.DoesNotContain("Required worker build evidence was not reported.", outcome.EvidenceSummary, StringComparison.Ordinal);
+        return outcome;
+    }
+
     [Theory]
     [InlineData("worker-build-evidence-missing", true)]
     [InlineData("worker-build-receipt-stale", true)]
