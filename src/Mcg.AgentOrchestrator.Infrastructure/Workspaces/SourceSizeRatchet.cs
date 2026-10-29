@@ -443,7 +443,7 @@ internal static class SourceSizeRatchet
             // interruption cause and PID-identity evidence; owning-suite assertions preserve coverage.
             // Raised for goal 2dd0ece6: the real dispatch leak guard tests exercise the launched-host
             // ownership path without splitting this already consolidated classification fixture.
-            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/WorkerDispatchTestsWorkerResultClassification.cs", 4824),
+            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/WorkerDispatchTestsWorkerResultClassification.cs", 4817),
             // Goal 46ff9f83 adds unequal logical-width/build-permit controls and the typed maximum diagnostic.
             // Goal 289b469d adds the per-stage registration-fault decision table, bounded-cap proof, durable
             // fault/verdict state distinction, and paid-round negative controls owned by this existing class.
