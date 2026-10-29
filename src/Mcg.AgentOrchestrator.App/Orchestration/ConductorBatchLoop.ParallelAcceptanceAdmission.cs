@@ -26,15 +26,7 @@ internal sealed partial class ConductorBatchLoop
         state.Results = new Dictionary<string, ParallelLandingOutcome>(StringComparer.Ordinal);
         state.DeferredByAdmission = 0;
         state.OrderedEligible = OrderParallelAcceptanceEligibleGoals(eligible
-            .Where(goal =>
-                ParallelAcceptanceLifecycleEligibility.IsParallelAcceptanceLifecycleEligible(goal, driver) &&
-                !driver.HasRoutableRecordedCohortAttributionFailure(goal) &&
-                goal.Status is GoalStatus.Verified or GoalStatus.Verifying &&
-                AcceptancePrecheck.HasCompletedPassedVerificationForAllTasks(goal) &&
-                SliceBatchParentExecutionGuard.TryDescribeStreamCompleteHold(goal) is null &&
-                !ConductorDriver.HasPendingDeferredNoChangeEvidence(goal) &&
-                GetDependencyHoldReason(goal, completedGoals, escalatedGoals, kernel) is null &&
-                VerifiedAcceptanceEscalationDecision.TryHasUnresolvedPersistedVerifiedAcceptanceEscalation(goal, driver) == false)
+            .Where(goal => IsParallelAcceptanceInputEligible(goal, driver, kernel, completedGoals, escalatedGoals))
             .ToArray());
         var activeReservations = BuildActiveParallelAcceptanceReservations(
             driver.ParallelAcceptanceAttemptCoordinator,
@@ -63,6 +55,17 @@ internal sealed partial class ConductorBatchLoop
         state.ActiveAttemptSlotIndexes = activeReservations.StableSlotIndexes;
         return state;
     }
+
+    private static bool IsParallelAcceptanceInputEligible(Goal goal, ConductorDriver driver,
+        AgentOrchestratorKernel kernel, HashSet<string> completedGoals, HashSet<string> escalatedGoals) =>
+        ParallelAcceptanceLifecycleEligibility.IsParallelAcceptanceLifecycleEligible(goal, driver) &&
+        !driver.HasRoutableRecordedCohortAttributionFailure(goal) &&
+        goal.Status is GoalStatus.Verified or GoalStatus.Verifying &&
+        AcceptancePrecheck.HasCompletedPassedVerificationForAllTasks(goal) &&
+        SliceBatchParentExecutionGuard.TryDescribeStreamCompleteHold(goal) is null &&
+        !ConductorDriver.HasPendingDeferredNoChangeEvidence(goal) &&
+        GetDependencyHoldReason(goal, completedGoals, escalatedGoals, kernel) is null &&
+        VerifiedAcceptanceEscalationDecision.TryHasUnresolvedPersistedVerifiedAcceptanceEscalation(goal, driver) == false;
 
     private void ReconcileParallelAcceptanceAttempts(
         ParallelAcceptanceBatchState state,
@@ -316,15 +319,12 @@ internal sealed partial class ConductorBatchLoop
                 $"ADMISSION tick={tick} result=escalated reason=pre-landing-merge-conflict goal={goal.Id.Value[..8]}", changedGoalLines);
         }
         var trainAdmission = DecideLiveAcceptanceAdmission(state.AcceptanceCensus, state.ConfiguredAcceptanceWidth);
-        if (!suppressNewAcceptanceAdmission() &&
-            driver.AcceptanceCohortsEnabled &&
-            state.CohortEligible.Length >= ConductorAcceptanceCohortSelector.CohortSize &&
-            !state.CohortEligible.Any(goal => IsAcceptanceEngineCircuitHoldRequired(
-                goal.Status, _acceptanceEngineCircuit?.Read())))
-        {
-            (state.CohortEligible, state.ProductionCandidates) = LandPassedAcceptanceCohortsBeforeTrainSelection(
-                driver, policy, state.CohortEligible, state.ProductionCandidates, state.Results, tick, changedGoalLines, kernel);
-        }
+        (state.CohortEligible, state.ProductionCandidates) = PassedCohortReceiptApprovalHoldAdmission.ApplyBeforeGating(
+            driver, policy, kernel, state.CohortEligible, state.ProductionCandidates, scopedGoals, preWalkIntentChangedGoalIds,
+            goal => IsParallelAcceptanceInputEligible(goal, driver, kernel, completedGoals, escalatedGoals),
+            state.LiveAttemptGoalIds.Concat(activeCohortMemberGoalIds).ToHashSet(StringComparer.Ordinal),
+            state.Results, tick, line => RecordParallelAcceptanceProgress(line, changedGoalLines), suppressNewAcceptanceAdmission,
+            goal => IsAcceptanceEngineCircuitHoldRequired(goal.Status, _acceptanceEngineCircuit?.Read()), changedGoalIds);
         (state.CohortEligible, state.ProductionCandidates) = LandPassedMergeTrainReceiptsBeforeAdmission(
             driver, policy, state.CohortEligible, state.ProductionCandidates, scopedGoals, state.Results, tick, changedGoalLines, kernel);
         CarryFollowerGateReceipts(state, driver, policy, tick, changedGoalLines, kernel);

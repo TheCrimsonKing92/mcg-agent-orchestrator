@@ -4,12 +4,12 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal static partial class LandingExecutor
 {
-    private sealed record LoadedLandingDenylist(LandingDenylist Denylist, string Source);
+    internal sealed record LoadedLandingDenylist(LandingDenylist Denylist, string Source);
 
     private static string InvalidDenylistSource(Exception exception) =>
         "invalid:" + exception.Message.Replace('\r', ' ').Replace('\n', ' ');
 
-    private static LoadedLandingDenylist LoadLandingDenylist(string executionDirectory, string boundMainSha)
+    internal static LoadedLandingDenylist LoadLandingDenylist(string executionDirectory, string boundMainSha)
     {
         // Listing the immutable tree distinguishes absence from a failed git invocation.
         // Read failures escape before mutation; only malformed configuration uses the default.
