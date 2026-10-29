@@ -1485,7 +1485,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsFocusedEvidence : 
         FocusedEvidenceRunResult? result = null;
         try
         {
-            result = await new GoalAcceptanceVerifier().RunFocusedEvidenceAsync(
+            result = await new GoalAcceptanceVerifier(new CrosswalkExecutableResolver()).RunFocusedEvidenceAsync(
                 root,
                 goalId,
                 "Core.Tests: DualArmProbeTests",

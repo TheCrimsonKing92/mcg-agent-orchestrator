@@ -2,6 +2,8 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 
 internal sealed record GoalAcceptanceVerifierTestOverrides
 {
+    // Only runner-injecting test seams may opt into an unconfigured executable.
+    internal CrosswalkExecutableResolver CrosswalkExecutableForTests { get; set; } = new();
     internal TimeSpan? HeartbeatInterval { get; set; }
     internal TimeSpan? ProgressInterval { get; set; }
     internal TimeSpan? CapturePublicationInterval { get; set; }
@@ -56,6 +58,7 @@ internal sealed record GoalAcceptanceVerifierTestOverrides
 
     internal GoalAcceptanceVerifierTestOverrides Snapshot() => new()
     {
+        CrosswalkExecutableForTests = CrosswalkExecutableForTests,
         HeartbeatInterval = HeartbeatInterval,
         ProgressInterval = ProgressInterval,
         CapturePublicationInterval = CapturePublicationInterval,

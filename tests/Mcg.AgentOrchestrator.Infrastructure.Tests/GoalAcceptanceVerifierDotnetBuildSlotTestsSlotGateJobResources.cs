@@ -899,7 +899,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
             """);
         try
         {
-            var verifier = new GoalAcceptanceVerifier(TestOverrides);
+            var verifier = new GoalAcceptanceVerifier(new CrosswalkExecutableResolver(), TestOverrides);
             var result = await verifier.RunAsync(
                 root,
                 new GoalId("24682468246824682468246824682468"),
@@ -948,7 +948,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
             """);
         try
         {
-            var verifier = new GoalAcceptanceVerifier(TestOverrides);
+            var verifier = new GoalAcceptanceVerifier(new CrosswalkExecutableResolver(), TestOverrides);
             var result = await verifier.RunAsync(
                 root,
                 new GoalId("13571357135713571357135713571357"),
@@ -997,7 +997,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
                 """);
             File.WriteAllText(Path.Combine(root, "Program.cs"), "Console.WriteLine(\"slow gate\");");
 
-            var verifier = new GoalAcceptanceVerifier(TestOverrides);
+            var verifier = new GoalAcceptanceVerifier(new CrosswalkExecutableResolver(), TestOverrides);
             var result = await verifier.RunAsync(
                 root,
                 new GoalId("24682468246824682468246824682468"),

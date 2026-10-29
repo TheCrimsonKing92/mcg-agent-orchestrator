@@ -81,6 +81,9 @@ public sealed class CrosswalkExecutableResolverTests : IDisposable
         var missing = resolver.Resolve();
         Assert.Equal("not-configured", missing.Status);
         Assert.Equal(CrosswalkDiagnosticCategory.NotConfigured, missing.DiagnosticCategory);
+        Assert.Contains(Path.Combine(_sandbox.FullName, "tools", "crosswalk", "crosswalk.exe"), missing.ConfigurationDetail);
+        Assert.Contains("missing", missing.ConfigurationDetail);
+        Assert.Contains("orchestrator data root", missing.ConfigurationDetail);
         Assert.Null(missing.Identity);
         Assert.Equal(0, _versionCalls);
         CreateDefault();
@@ -94,6 +97,8 @@ public sealed class CrosswalkExecutableResolverTests : IDisposable
     {
         var result = new CrosswalkExecutableResolver().Resolve();
         Assert.Equal("not-configured", result.Status);
+        Assert.Contains("No data root or explicit crosswalk executable path", result.ConfigurationDetail);
+        Assert.Contains("no path was attempted", result.ConfigurationDetail);
         Assert.Null(result.Identity);
     }
 
@@ -119,6 +124,8 @@ public sealed class CrosswalkExecutableResolverTests : IDisposable
         var result = resolver.Resolve();
         Assert.Equal("missing", result.Status);
         Assert.Equal(CrosswalkDiagnosticCategory.MissingBinary, result.DiagnosticCategory);
+        Assert.Contains(Path.Combine(_sandbox.FullName, "missing.exe"), result.ConfigurationDetail);
+        Assert.Contains("missing at explicit path", result.ConfigurationDetail);
         Assert.Null(result.Identity);
         Assert.Equal(0, _versionCalls);
         Assert.Same(result, resolver.Resolve());
