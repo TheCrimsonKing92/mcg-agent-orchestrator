@@ -40,28 +40,16 @@ public sealed class AcceptanceGateEngineSettingsTests
             lane => Xunit.Assert.True(
                 lane.EstimatedSerialSeconds > 0 && double.IsFinite(lane.EstimatedSerialSeconds),
                 $"Checked-in lane '{lane.Name}' must carry a positive finite serial-duration estimate."));
-        AssertLaneSetPreservesCoverage(
-            settings,
+        var partitionLaneNames = manifestDocument.RootElement.GetProperty("engine")
+            .GetProperty("localTestPartitions").EnumerateArray()
+            .SelectMany(partition => partition.GetProperty("laneNames").EnumerateArray())
+            .Select(name => name.GetString()!).ToArray();
+        var runnableTypes = typeof(AcceptanceGateEngineSettingsTests).Assembly.GetTypes()
+            .Where(IsRunnableTestClass).ToArray();
+        LanePlacementAssertions.AssertGroup(
+            settings.InfrastructureTestLanes,
             ["Goal lifecycle commands", "Goal worktree cleanup cohort", "Goal worktree cleanup git", "Goal worktree parallel"],
-            [
-                "AcceptanceCohortWorkflowTests",
-                "AcceptanceVerdictCarryForwardTests",
-                "CliCommandTestsGoalLifecycleCleanupHooks",
-                "CliCommandTestsPersistentRunnerCommands",
-                "CliPersistentStateRunnerAcceptanceFailureRecoveryTests",
-                "CliCommandTestsSubscriptionDispatchCommands",
-                "GoalGitFactIndexTests",
-                "GoalsPruneTests",
-                "GoalWorktreeTestsAcceptanceLanding",
-                "GoalWorktreeTestsCleanupHookDelegates",
-                "GoalWorktreeTestsCreationResolution",
-                "GoalWorktreeTestsOrphanEphemeralSweep",
-                "GoalWorktreeTestsRebaseMerge",
-                "GoalWorktreeTestsRemoveCleanup",
-                "GoalWorktreeTestsSqliteTooling",
-                "LandingExecutorTests",
-                "SourceBacklogSiblingCreationTests"
-            ]);
+            partitionLaneNames, runnableTypes);
         Xunit.Assert.Empty(settings.InfrastructureTestLanes
             .Single(lane => lane.Name == "Goal worktree parallel")
             .ExclusiveResourceKeys);
@@ -82,55 +70,14 @@ public sealed class AcceptanceGateEngineSettingsTests
         Xunit.Assert.Empty(settings.InfrastructureTestLanes
             .Single(lane => lane.Name == "Goal worktree cleanup git")
             .ExclusiveResourceKeys);
-        AssertLaneSetPreservesCoverage(
-            settings,
-            [
-                "Worker profiles",
-                "Worker dispatch fixtures A",
-                "Worker dispatch fixtures B",
-                "Worker dispatch fixtures C"
-            ],
-            [
-                "AdvanceLoopTests",
-                "ConductLoopLockTests",
-                "ConductorLoopHandoffTests",
-                "DispatchHostLifetimeHandoffTests",
-                "GoalBacklogLinkTests",
-                "GoalLifecycleEventWriterTests",
-                "RealWorkerProcessGuardTests",
-                "SqliteOrchestratorStateRepositoryTests",
-                "WorkerDispatchTestsDispatchPreparation",
-                "WorkerDispatchTestsModelSelectionEnvMutation",
-                "WorkerDispatchTestsSandboxLowIntegrity",
-                "WorkerDispatchTestsSubscriptionPreflight",
-                "WorkerDispatchTestsSubscriptionTerminalContract",
-                "WorkerDispatchTestsWorkerResultClassification",
-                "WorkerProcessJobsTests",
-                "WorkerProfileTests",
-                "WorkspaceConsolidatorTests"
-            ]);
-        AssertLanePairPreservesCoverage(
-            settings,
-            "Goal acceptance verifier",
-            "Goal acceptance build slots",
-            [
-                "AcceptanceGateEngineSettingsTests",
-                "AcceptanceOutputCaptureTests",
-                "AcceptanceOverlappedCheckSchedulingTests",
-                "FocusedEvidenceOverflowContinuationTests",
-                "GoalAcceptanceVerifierCancellationTests",
-                "GoalAcceptanceVerifierCrosswalk",
-                "GoalAcceptanceVerifierTests",
-                "GoalAcceptanceVerifierDotnetBuildSlotTests",
-                "GoalAcceptanceVerifierDotnetBuildSlotTestsAnalyzerAuthority",
-                "HermeticVerificationEnvironmentTests",
-                "PreReviewFocusedEvidenceVerifierTests",
-                "RealProcessShardAlphaSmokeTests",
-                "RealProcessShardBetaSmokeTests",
-                "RemoteLaneDeadlineTests",
-                "StructuralCoverageVerifierPermitWaitTests",
-                "WorkerDispatchJobAccountingTests"
-            ]);
+        LanePlacementAssertions.AssertGroup(
+            settings.InfrastructureTestLanes,
+            ["Worker profiles", "Worker dispatch fixtures A", "Worker dispatch fixtures B", "Worker dispatch fixtures C"],
+            partitionLaneNames, runnableTypes);
+        LanePlacementAssertions.AssertGroup(
+            settings.InfrastructureTestLanes,
+            ["Goal acceptance verifier", "Goal acceptance build slots"],
+            partitionLaneNames, runnableTypes);
 
         const string providerProject =
             "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProviderEnvironment/" +
@@ -2697,37 +2644,9 @@ public sealed class AcceptanceGateEngineSettingsTests
         }
     }
 
-    private static void AssertLanePairPreservesCoverage(
-        AcceptanceGateEngineSettings settings,
-        string firstLaneName,
-        string secondLaneName,
-        IReadOnlyList<string> expectedClasses)
-        => AssertLaneSetPreservesCoverage(settings, [firstLaneName, secondLaneName], expectedClasses);
-
-    private static void AssertLaneSetPreservesCoverage(
-        AcceptanceGateEngineSettings settings,
-        IReadOnlyList<string> laneNames,
-        IReadOnlyList<string> expectedClasses)
-    {
-        var laneClasses = laneNames
-            .Select(name => FilterClasses(settings.InfrastructureTestLanes.Single(lane => lane.Name == name).Filter))
-            .ToArray();
-
-        Xunit.Assert.Equal(
-            laneClasses.Sum(classes => classes.Length),
-            laneClasses.SelectMany(classes => classes).Distinct(StringComparer.Ordinal).Count());
-        Xunit.Assert.Equal(
-            expectedClasses.Order(StringComparer.Ordinal),
-            laneClasses.SelectMany(classes => classes).Order(StringComparer.Ordinal));
-    }
-
     private static bool IsRunnableTestClass(Type type) =>
         type is { IsClass: true, IsAbstract: false } &&
         type.GetMethods(BindingFlags.Instance | BindingFlags.Public)
             .Any(method => method.GetCustomAttributes(inherit: true).Any(attribute => attribute is Xunit.FactAttribute));
 
-    private static string[] FilterClasses(string filter) =>
-        filter.Split('|', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Select(operand => operand["FullyQualifiedName~".Length..])
-            .ToArray();
 }

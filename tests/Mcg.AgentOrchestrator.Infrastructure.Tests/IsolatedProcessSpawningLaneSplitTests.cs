@@ -163,10 +163,10 @@ public sealed class IsolatedProcessSpawningLaneSplitTests
         Xunit.Assert.Contains(LaneB, laneNames);
     }
 
-    private static IReadOnlyList<AcceptanceTestLane> LoadLanes() =>
+    internal static IReadOnlyList<AcceptanceTestLane> LoadLanes() =>
         AcceptanceGateEngineSettings.Load(InfrastructureTestSupport.FindRepositoryRoot()).InfrastructureTestLanes;
 
-    private static Type[] RunnableTypes() =>
+    internal static Type[] RunnableTypes() =>
         typeof(IsolatedProcessSpawningLaneSplitTests).Assembly.GetTypes()
             .Where(type => type is { IsClass: true, IsAbstract: false } &&
                 type.GetMethods(BindingFlags.Instance | BindingFlags.Public)
@@ -185,19 +185,36 @@ public sealed class IsolatedProcessSpawningLaneSplitTests
         Xunit.Assert.Equal(expected, Xunit.Assert.Single(
             AcceptanceLaneMembership.LanesIncluding(lanes, type.FullName!)).Name);
 
-    private static AcceptanceTestLane[] BuildReference(IReadOnlyList<AcceptanceTestLane> lanes)
+    internal static AcceptanceTestLane[] BuildReference(IReadOnlyList<AcceptanceTestLane> lanes)
     {
         Xunit.Assert.Single(lanes, lane => lane.Name == LaneA);
         Xunit.Assert.Single(lanes, lane => lane.Name == LaneB);
-        Xunit.Assert.Single(lanes, lane => lane.Name == Remainder);
+        var remainder = Xunit.Assert.Single(lanes, lane => lane.Name == Remainder);
+        Xunit.Assert.DoesNotContain(remainder.Filter, character => character is '|' or '(' or ')');
+        var referenceClauses = PreSplitRemainderFilter
+            .Split('&', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
+        var seen = referenceClauses.ToHashSet(StringComparer.Ordinal);
+        foreach (var clause in remainder.Filter.Split('&',
+                     StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var arguments = AcceptanceCheckCommandBuilder.TranslateResolvedLaneFilter(clause).ToArray();
+            if (arguments[0] != "--filter-not-class" || seen.Contains(clause))
+                continue;
+            // Prefix exclusions can cover several split classes; use the lane matcher's semantics.
+            if (LaneATypes.Concat(LaneBTypes).Any(type =>
+                    AcceptanceLaneMembership.LanesIncluding([remainder with { Filter = clause }], type.FullName!).Count == 0))
+                continue;
+            seen.Add(clause);
+            referenceClauses.Add(clause);
+        }
         // The reference carries later carve-outs unrelated to this split.
         return lanes.Where(lane => lane.Name != LaneA && lane.Name != LaneB)
             .Select(lane => lane.Name == Remainder
-                ? lane with { Filter = PreSplitRemainderFilter + "&FullyQualifiedName!~AcceptanceExecutionCacheIsolatedBuildTests&FullyQualifiedName!~WorkerBuildRequest&FullyQualifiedName!~ExitReconcileBuild&FullyQualifiedName!~CompletionBuild&FullyQualifiedName!~WorkerBuildScopeDispatch&FullyQualifiedName!~FocusedEvidenceUnionPlanning&FullyQualifiedName!~MergeTrainDeferralFixtureEquivalence&FullyQualifiedName!~MergeTrainRedAttributionReplayScenario&FullyQualifiedName!~LifecycleGoalEpicInheritance&FullyQualifiedName!~SourceSizeRatchetClassRetightener&FullyQualifiedName!~ProviderUsageSelfHeal&FullyQualifiedName!~EpicPlanSourceFacts&FullyQualifiedName!~EpicDetailReadSnapshot&FullyQualifiedName!~RemoteWorkerBuildCheckFallback&FullyQualifiedName!~DeveloperCascade&FullyQualifiedName!~WorkerBuildReceipt&FullyQualifiedName!~ProviderHoldAcrossRestart&FullyQualifiedName!~ProviderUsageHoldSelfRetry&FullyQualifiedName!~ProviderSignInFailover&FullyQualifiedName!~MainIntegrationSquash&FullyQualifiedName!~ProjectIntegrationBranch&FullyQualifiedName!~TerminalGoalSweepTerminalTaskClosure&FullyQualifiedName!~RelaunchDrainV1GroupedGate&FullyQualifiedName!~AttributedFailureAutoRoute&FullyQualifiedName!~AgentRosterReload&FullyQualifiedName!~MergeTrainGateOnlySlotsBusyDeferralTests&FullyQualifiedName!~GoalWorktreeTestsRebaseAdditiveConflictRefusal&FullyQualifiedName!~IntegrationMergeChangedPathsTests&FullyQualifiedName!~GoalWorktreeTestsRebaseAdditiveConflictMerge&FullyQualifiedName!~ConductorConflictIntegrationValidateTests&FullyQualifiedName!~MergeTrainLaunchTickScenarioTests&FullyQualifiedName!~AcceptanceCohortSlotsBusyDeferralTests&FullyQualifiedName!~WorkerBuildProjectScopeSquashedBranchTests&FullyQualifiedName!~FailedRoundCheckpointPreDispatchTests&FullyQualifiedName!~ProviderUsageHoldEventsScenarioTests&FullyQualifiedName!~RemoteExecutorAdmissionConsumersTests&FullyQualifiedName!~ProviderHoldFallbackScenarioTests&FullyQualifiedName!~AcceptanceRunExecutionContextTestsFollowerPinnedBase&FullyQualifiedName!~WorkerDispatchTestsSeededRepositoryFactoryTests&FullyQualifiedName!~PendingStoreSetupCliWriteTests&FullyQualifiedName!~ConductorEvidenceAttemptLifecycleTests&FullyQualifiedName!~WorkerBuildProjectScopeTests&FullyQualifiedName!~MergeTrainMainIntegrationScenarioTests&FullyQualifiedName!~ConflictIntegrationScenarioTests&FullyQualifiedName!~IntegrationMergeDispatchCompletionScenarioTests&FullyQualifiedName!~RemoteLaneCoordinatorTestsQueuedLiveness&FullyQualifiedName!~OrchestratorWorktreeGitExcludeTests&FullyQualifiedName!~SubscriptionVerificationCompletionTests&FullyQualifiedName!~FailedRoundCheckpointReceiptRecordingTests&FullyQualifiedName!~ConductorConflictIntegrationRecordTests&FullyQualifiedName!~WorkerWorkflowBrokerRoleDeliveryTests&FullyQualifiedName!~WorkerDispatchTestsSeededRepositoryFactoryLaunchCountIsolation&FullyQualifiedName!~ConductorConflictIntegrationAdmissionTests&FullyQualifiedName!~WorkerContextRendererDispatchPathTests&FullyQualifiedName!~PassedCohortReceiptPreTrainLandingTests&FullyQualifiedName!~GoalWorktreeTestsGitHelperDiagnostics&FullyQualifiedName!~AcceptanceCohortBriefIdentityTests&FullyQualifiedName!~FailureTriageDecisionTests&FullyQualifiedName!~AcceptanceCohortMergeTrainSlotsBusyDeferralTests&FullyQualifiedName!~GoalWorktreeTestsGitCommitLaunchCount&FullyQualifiedName!~GroupedGateV1SuccessorAdoptionScenarioTests&FullyQualifiedName!~ConductorAcceptanceCohortAttributionTestsFailingTestIdentity&FullyQualifiedName!~RatchetClassCeilingRemeasureTests&FullyQualifiedName!~RatchetConflictDispatchIntegrationTests&FullyQualifiedName!~InterruptedWorkCheckpointAuthorizerTests&FullyQualifiedName!~GoalAcceptanceVerifierCrosswalk&FullyQualifiedName!~RemoteLaneDeadlineTests" }
+                ? lane with { Filter = string.Join("&", referenceClauses) }
                 : lane).ToArray();
     }
 
-    private static Dictionary<Type, string> MembershipReport(IReadOnlyList<AcceptanceTestLane> loaded,
+    internal static Dictionary<Type, string> MembershipReport(IReadOnlyList<AcceptanceTestLane> loaded,
         IReadOnlyList<AcceptanceTestLane> reference, Type[] types)
     {
         var resolvedLoaded = Resolve(loaded, types);
