@@ -100,6 +100,24 @@ public sealed class PassedCohortReceiptApprovalHoldTests : AcceptanceCohortWorkf
         Assert.Empty(eligible);
         Assert.Equal(2, results.Count);
         Assert.All(results.Values, result => Assert.True(PassedCohortReceiptApprovalHold.IsReadOnlyReservation(result.Result)));
+        Assert.All(scenario.Goals, goal =>
+        {
+            var held = Assert.IsType<ConductorAdvanceOutcome.Held>(results[goal.Id.Value].Result.Outcome);
+            var decision = Assert.IsType<PolicyDecisionRecord>(held.Decision);
+            Assert.Equal("cohort-receipt-admission", decision.Stage);
+            Assert.Equal("Hold", decision.Action);
+            Assert.Equal(1, decision.Rung);
+            Assert.Equal("passed-cohort-awaiting-landing-denylist-approval", decision.DiscriminatingEvidence);
+            Assert.Equal(held.Reason, decision.Reason);
+            Assert.Contains($"approve-policy-change {scenario.Goals[0].Id.Value[..8]}", decision.Reason, StringComparison.Ordinal);
+            Assert.Equal(new PolicyDecisionFact[]
+            {
+                new("goalId", goal.Id.Value),
+                new("receiptId", scenario.Receipt.ReceiptId),
+                new("cohortIdentity", scenario.Receipt.Identity.Value),
+                new("observedMainRevision", scenario.Receipt.Identity.ObservedMainRevision)
+            }, decision.Facts);
+        });
         Approve(scenario.Workspace, scenario.Goals[0], scenario.CandidateRevisions[0]);
         results.Clear();
         var (approvedEligible, approvedCandidates) = Apply();

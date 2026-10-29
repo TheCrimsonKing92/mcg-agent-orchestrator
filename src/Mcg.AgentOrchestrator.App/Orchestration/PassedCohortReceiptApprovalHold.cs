@@ -54,7 +54,19 @@ internal static class PassedCohortReceiptApprovalHold
     internal static ConductorAdvanceResult Held(Goal goal, ConductorAutonomyPolicy policy, Decision decision) =>
         new(goal.Id.Value, goal.Id.Value[..8], policy.Name,
             new ConductorAdvanceOutcome.Held(GoalLifecycleState.Verified, decision.Reason,
-                IdentityPrefix + decision.Receipt.ReceiptId) { Owner = ConductorHoldOwner.AcceptanceQueue });
+                IdentityPrefix + decision.Receipt.ReceiptId)
+            {
+                Owner = ConductorHoldOwner.AcceptanceQueue,
+                Decision = new PolicyDecisionRecord("cohort-receipt-admission", "Hold", 1,
+                    "passed-cohort-awaiting-landing-denylist-approval", decision.Reason,
+                    Array.AsReadOnly<PolicyDecisionFact>(
+                    [
+                        new("goalId", goal.Id.Value),
+                        new("receiptId", decision.Receipt.ReceiptId),
+                        new("cohortIdentity", decision.Receipt.Identity.Value),
+                        new("observedMainRevision", decision.Receipt.Identity.ObservedMainRevision)
+                    ]))
+            });
 
     internal static bool IsReadOnlyReservation(ConductorAdvanceResult result) =>
         result.Outcome is ConductorAdvanceOutcome.Held { Owner: ConductorHoldOwner.AcceptanceQueue, StableIdentity: { } identity } &&
