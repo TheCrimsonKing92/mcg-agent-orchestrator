@@ -23,7 +23,7 @@ public sealed class PassedCohortReceiptApprovalHoldTests : AcceptanceCohortWorkf
             Assert.All(scenario.Goals, goal => Assert.Contains(
                 $"goal={goal.Id.Value[..8]}", progress.Single(line =>
                     line.StartsWith("ADMISSION ", StringComparison.Ordinal) &&
-                    line.Contains($"goal={goal.Id.Value[..8]}", StringComparison.Ordinal))));
+                    line.EndsWith($" goal={goal.Id.Value[..8]}", StringComparison.Ordinal))));
             Assert.DoesNotContain(progress, line => line.Contains("ACCEPTANCE_COHORT_ENTRY", StringComparison.Ordinal) ||
                 line.Contains("outcome=inflight", StringComparison.Ordinal) ||
                 line.Contains("result=admitted", StringComparison.Ordinal));
@@ -78,8 +78,9 @@ public sealed class PassedCohortReceiptApprovalHoldTests : AcceptanceCohortWorkf
         var waiting = scenario.Goals[0].Id.Value[..8];
         foreach (var member in scenario.Goals)
         {
+            // The shared reason also names the waiting goal; the final field identifies the recipient.
             var line = Assert.Single(progress.Where(line => line.StartsWith("ADMISSION ", StringComparison.Ordinal) &&
-                line.Contains($"goal={member.Id.Value[..8]}", StringComparison.Ordinal)));
+                line.EndsWith($" goal={member.Id.Value[..8]}", StringComparison.Ordinal)));
             Assert.Contains($"receipt={scenario.Receipt.ReceiptId}", line, StringComparison.Ordinal);
             Assert.Contains($"cohort waits on landing-denylist approval for {waiting}, not on a gate", line, StringComparison.Ordinal);
             Assert.Contains($"approve-policy-change {waiting} {scenario.CandidateRevisions[0]} --text-file <reason-file>", line, StringComparison.Ordinal);
