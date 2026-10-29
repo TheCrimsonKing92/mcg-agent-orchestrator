@@ -102,7 +102,8 @@ internal static class ConductorAcceptanceCohortAttributionVerdicts
             .Where(check => !string.IsNullOrWhiteSpace(check))
             .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
         var detail = $"{EvidencePrefix}{cohort.Identity.Value} cohort-partition={receiptId} " +
-            $"reproduced={string.Join(',', reproduced)}";
+            $"reproduced={string.Join(',', reproduced)}" +
+            AttributedCohortFailureDetail.Format(reproduced, partition.TestResultPaths);
         return new ConductorAcceptanceCohortAttributionVerdict(
             alreadyRecorded ? "skipped" : "recorded", "identity-match", receiptId,
             checks, detail, alreadyRecorded);
