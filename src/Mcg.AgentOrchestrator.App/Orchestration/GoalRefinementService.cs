@@ -355,6 +355,13 @@ internal sealed partial class GoalRefinementService
                     continue;
                 }
 
+                if (OwnedBriefOwnershipSettlement.TrySettle(fork.Kind, fork.Question, goal.Objective, out var settlement))
+                {
+                    AddDecisionIfMissing(decisions, fork.Question, settlement.AnswerText, $"Settled by the brief's declared criterion owners (topic: {topicKey}).");
+                    kernel.RecordGoalPolicyDecision(goalId, $"Spec refiner fork settled by the brief's declared criterion owners: topic={topicKey}");
+                    continue;
+                }
+
                 var precedent = await _precedents.TryGetPrecedentAsync(topicKey, cancellationToken)
                     ?? await _precedents.TryGetPrecedentAsync(fork.Kind, cancellationToken);
                 if (precedent is not null)
