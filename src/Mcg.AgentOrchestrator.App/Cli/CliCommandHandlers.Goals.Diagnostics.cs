@@ -113,7 +113,7 @@ private static void PrintNextFullDetail(CliExecutionContext context, AutonomyPol
     ConsoleViews.PrintLoopHealthReport(context.Kernel.BuildLoopHealthReport(null));
     FailureTriageTextView.PrintFailureTriageReport(FailureTriagePlanner.Build(context.Kernel, goal, context.Agents, context.Workspace.ExecutionDirectory, context.Workspace.IntegrationBranch, policy));
     ConsoleViews.PrintGoalRecoveryReport(GoalRecoveryPlanner.Build(
-        context.Kernel, goal, context.Workspace.ExecutionDirectory, context.Workspace.IntegrationBranch, cleanupHooks: context.CleanupContext.Hooks));
+        context.Kernel, goal, context.Workspace.ExecutionDirectory, context.Workspace.IntegrationBranch, cleanupHooks: context.CleanupContext.Hooks, targetHome: context.TargetHome));
     GoalSupervisorTextView.PrintGoalSupervisorPlan(GoalSupervisor.Build(context.Kernel, goal, context.Agents, context.Workspace.ExecutionDirectory, context.Workspace.IntegrationBranch, policy));
     ConsoleViews.PrintOperatorInbox(OperatorInbox.Build(context.Kernel, context.Agents, context.WorkerProfiles, context.Workspace, goal.Id.Value[..8], includeAcknowledged: false));
 }

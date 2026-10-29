@@ -123,7 +123,7 @@ internal sealed partial class ConductorDriver
         return true;
     }
 
-    internal static PreReviewEvidenceContext BuildPreReviewEvidenceContext(Goal goal, string executionDirectory, string integrationBranch)
+    internal static PreReviewEvidenceContext BuildPreReviewEvidenceContext(Goal goal, string executionDirectory, string integrationBranch, WorkerTargetHome? targetHome = null)
     {
         var worktreePath = GoalWorktrees.TryResolve(executionDirectory, goal.Id);
         var candidateSha = worktreePath is null ? null : TryResolveGitHead(worktreePath);
@@ -133,19 +133,17 @@ internal sealed partial class ConductorDriver
         return BuildPreReviewEvidenceContext(
             candidateSha,
             changedFiles,
-            worktreePath);
+            worktreePath, targetHome);
     }
 
     internal PreReviewEvidenceContext GetPreReviewEvidenceContext(Goal goal) =>
         _getPreReviewEvidenceContext(goal);
 
     internal static PreReviewEvidenceContext BuildPreReviewEvidenceContext(
-        string? candidateSha, IReadOnlyList<string> changedFiles, string? repositoryRoot = null)
+        string? candidateSha, IReadOnlyList<string> changedFiles, string? repositoryRoot = null, WorkerTargetHome? targetHome = null)
     {
         var changeSummary = RepositoryChangeClassifier.Classify(changedFiles);
-        var plan = string.IsNullOrWhiteSpace(repositoryRoot)
-            ? RepositoryTestImpactPlanner.Plan(changeSummary)
-            : RepositoryTestImpactPlanner.Plan(changeSummary, repositoryRoot);
+        var plan = GoalTargetImpactPlanScope.Plan(changeSummary, repositoryRoot, targetHome);
         return BuildPreReviewEvidenceContext(candidateSha, changeSummary, plan);
     }
 

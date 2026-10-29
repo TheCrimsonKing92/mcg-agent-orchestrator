@@ -1000,7 +1000,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             context.CurrentGoal = context.Kernel.GetGoal(context.CurrentGoal.Id);
             ConsoleViews.PrintGoalRecoveryReport(GoalRecoveryPlanner.Build(
                 context.Kernel, context.CurrentGoal, context.Workspace.ExecutionDirectory, context.Workspace.IntegrationBranch,
-                cleanupHooks: context.CleanupContext.Hooks));
+                cleanupHooks: context.CleanupContext.Hooks, targetHome: context.TargetHome));
             return recoverySweep.Changed;
 
         case "dogfood-eval":
