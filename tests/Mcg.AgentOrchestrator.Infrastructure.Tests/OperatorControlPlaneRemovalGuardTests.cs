@@ -132,7 +132,8 @@ public sealed class OperatorControlPlaneRemovalGuardTests
             "StewardInputHasher",
             "IStewardTriageReceiptStore",
             "InMemoryStewardTriageReceiptStore",
-            "SqliteStewardTriageReceiptStore"
+            "SqliteStewardTriageReceiptStore",
+            "SqliteStewardTriageReceiptStore+StoredDisposition"
         ];
         foreach (var name in removedTypes)
             Assert.Null(assembly.GetType("Mcg.AgentOrchestrator.Infrastructure." + name));
