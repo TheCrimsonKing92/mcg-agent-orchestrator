@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Security.Cryptography;
 using System.Xml.Linq;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.App.Orchestration;
@@ -34,6 +35,8 @@ public sealed class GoalAcceptanceVerifierCrosswalkEvidenceTests
         var check = await fixture.RunAsync();
         Assert.Equal(passed, check.Passed);
         Assert.Equal(2, fixture.Calls.Count);
+        Assert.Equal(fixture.Binary, check.CrosswalkExecutablePath);
+        Assert.Equal(Convert.ToHexStringLower(SHA256.HashData(File.ReadAllBytes(fixture.Binary))), check.CrosswalkExecutableSha256);
         if (category is not null) Assert.Contains(check.CrosswalkDiagnostics!, d => d.Category == category);
         if (kind is "duplicate" or "malformed" or "json") Assert.Empty(check.NormalizedTestResultPaths!);
         else
@@ -66,6 +69,8 @@ public sealed class GoalAcceptanceVerifierCrosswalkEvidenceTests
         var roundtrip = JsonSerializer.Deserialize<AcceptanceCheckResult>(JsonSerializer.Serialize(check))!;
         Assert.Equal(check.NormalizedTestResultPaths, roundtrip.NormalizedTestResultPaths);
         Assert.Equal(check.CrosswalkDiagnostics, roundtrip.CrosswalkDiagnostics);
+        Assert.Equal(fixture.Binary, roundtrip.CrosswalkExecutablePath);
+        Assert.Equal(Convert.ToHexStringLower(SHA256.HashData(File.ReadAllBytes(fixture.Binary))), roundtrip.CrosswalkExecutableSha256);
         Assert.Equal(failures, ReceiptTestFailureReader.Read(roundtrip));
     }
 
@@ -90,12 +95,17 @@ public sealed class GoalAcceptanceVerifierCrosswalkEvidenceTests
     [InlineData(true, CrosswalkDiagnosticCategory.MissingBinary)]
     public async Task UnavailableTool_FailsWithoutLaunching(bool missing, CrosswalkDiagnosticCategory expected)
     {
-        using var fixture = new CrosswalkAcceptanceFixture();
-        Environment.SetEnvironmentVariable(CrosswalkClient.PathVariable, missing ? fixture.Binary + ".missing" : null);
+        var resolver = new CrosswalkExecutableResolver(missing ? Path.Combine(Path.GetTempPath(), Guid.NewGuid() + ".missing") : null);
+        using var fixture = new CrosswalkAcceptanceFixture(executable: resolver);
         var check = await fixture.RunAsync();
         Assert.False(check.Passed);
         Assert.Equal(expected, Assert.Single(check.CrosswalkDiagnostics!).Category);
         Assert.Empty(fixture.Calls);
+        Assert.Null(check.CrosswalkExecutablePath);
+        Assert.Null(check.CrosswalkExecutableSha256);
+        using var json = JsonDocument.Parse(JsonSerializer.Serialize(check));
+        Assert.Equal(JsonValueKind.Null, json.RootElement.GetProperty(nameof(check.CrosswalkExecutablePath)).ValueKind);
+        Assert.Equal(JsonValueKind.Null, json.RootElement.GetProperty(nameof(check.CrosswalkExecutableSha256)).ValueKind);
     }
 
     [Fact]
@@ -207,7 +217,7 @@ public sealed class GoalAcceptanceVerifierCrosswalkEvidenceTests
                     "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."));
             }
             return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, ""));
-        });
+        }) { CrosswalkExecutable = fixture.Executable };
 
         var result = await verifier.RunAsync(fixture.Root);
 
@@ -281,6 +291,9 @@ public sealed class GoalAcceptanceVerifierCrosswalkEvidenceTests
         var check = await fixture.RunAsync();
         Assert.True(check.Passed);
         Assert.Equal(0, check.TestResultRunOrdinal);
+        var roundtrip = JsonSerializer.Deserialize<AcceptanceCheckResult>(JsonSerializer.Serialize(check))!;
+        Assert.Equal(fixture.Binary, roundtrip.CrosswalkExecutablePath);
+        Assert.Equal(Convert.ToHexStringLower(SHA256.HashData(File.ReadAllBytes(fixture.Binary))), roundtrip.CrosswalkExecutableSha256);
         var classified = AcceptanceCohortVerificationClassifier.ClassifyCohortVerificationResultWithPaths(
             new(true, false, 0, null, Checks: [check], TestResultPaths: check.NormalizedTestResultPaths)
             {

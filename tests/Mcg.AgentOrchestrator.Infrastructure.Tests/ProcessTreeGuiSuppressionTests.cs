@@ -367,6 +367,21 @@ public sealed class ProcessTreeGuiSuppressionTests
             "Workspaces",
             "AcceptanceCheckProcessInvoker.cs"));
         Assert.Contains("worker = ProcessTreeGuiSuppression.Start(startInfo);", dispatchHost, StringComparison.Ordinal);
+        Assert.Contains("codexLaunch = StartPreparedCodexWorker(startInfo, codexScratch);", dispatchHost, StringComparison.Ordinal);
+        Assert.Contains("var launch = OwnedProcessGroup.StartSuspendedContainedRedirected(startInfo);", dispatchHost, StringComparison.Ordinal);
+        var ownedProcessGroup = File.ReadAllText(Path.Combine(
+            root,
+            "src",
+            "Mcg.AgentOrchestrator.Execution",
+            "Processes",
+            "OwnedProcessGroup.cs"));
+        // The Codex path creates its child suspended through the same suppressed native spawn core.
+        Assert.Contains("var processStart = WindowsJob.StartSuspendedInJobWithStandardHandles(", ownedProcessGroup, StringComparison.Ordinal);
+        Assert.Matches(
+            @"StartSuspendedInJobWithStandardHandles\([^)]*\)\s*=>\s*StartSuspendedInJobCore\(",
+            ownedProcessGroup);
+        Assert.Contains("using var suppression = ProcessTreeGuiSuppression.AcquireSuppressedChildSpawn(requestOwnConsole);", ownedProcessGroup, StringComparison.Ordinal);
+        Assert.Contains("CreateSuspended | CreateUnicodeEnvironment | ExtendedStartupInfoPresent | suppression.ChildCreationFlags,", ownedProcessGroup, StringComparison.Ordinal);
         Assert.Contains(
             "process = StartAcceptanceProcess(startInfo, workingDirectory, registrationIdentityReader);",
             gateVerifier,

@@ -24,7 +24,12 @@ internal static partial class CliCriterionEvidenceIntents
         object payload = verb switch
         {
             OperatorIntentVerbs.CriterionEvidenceMap => BuildCriterionEvidenceMappingPayload(values, target!.Value.Index, target.Value.Version),
-            OperatorIntentVerbs.CriterionEvidenceRecord => BuildCriterionEvidenceReceiptPayload(values),
+            OperatorIntentVerbs.CriterionEvidenceRecord => BuildCriterionEvidenceReceiptPayload(values) with
+            {
+                Observation = ResolveFlagValue(args, "--observation-json") is { } observation
+                    ? JsonSerializer.Deserialize<CriterionPostLandingObservation>(observation, OperatorIntentJson.Options)
+                        ?? throw new ArgumentException("Observation metadata is required.") : null
+            },
             OperatorIntentVerbs.CriterionEvidenceRepair => BuildCriterionEvidenceRepairPayload(values, target!.Value.Index, target.Value.Version),
             _ => throw new ArgumentException($"Unsupported criterion evidence command '{args[0]}'.")
         };
@@ -40,7 +45,8 @@ internal static partial class CliCriterionEvidenceIntents
             Actor: attribution.Actor,
             Channel: attribution.Channel,
             AuthenticationAssurance: attribution.AuthenticationAssurance,
-            CreatedAt: DateTimeOffset.UtcNow);
+            CreatedAt: DateTimeOffset.UtcNow,
+            ActorKind: attribution.ActorKind);
         var persisted = SqliteOperatorIntentStore
             .ForDirectories(workspace.OrchestratorDirectory, workspace.LogDirectory)
             .EnqueueAsync(intent)
@@ -124,7 +130,8 @@ internal static partial class CliCriterionEvidenceIntents
         for (var index = 1; index < args.Count; index++)
         {
             var flag = args[index].ToLowerInvariant();
-            if (args[index] is "--goal" or "--operator-actor" or "--idempotency-key" ||
+            if (args[index] is "--goal" or "--operator-actor" or "--actor-kind" or "--idempotency-key" ||
+                (args[0].ToLowerInvariant() == OperatorIntentVerbs.CriterionEvidenceRecord && flag == "--observation-json") ||
                 (args[0].ToLowerInvariant() is OperatorIntentVerbs.CriterionEvidenceMap or OperatorIntentVerbs.CriterionEvidenceRepair &&
                  flag is "--criterion" or "--version"))
             {

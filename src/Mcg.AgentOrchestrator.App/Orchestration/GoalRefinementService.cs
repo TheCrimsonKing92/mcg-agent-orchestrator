@@ -355,6 +355,13 @@ internal sealed partial class GoalRefinementService
                     continue;
                 }
 
+                if (OwnedBriefOwnershipSettlement.TrySettle(fork.Kind, fork.Question, goal.Objective, out var settlement))
+                {
+                    AddDecisionIfMissing(decisions, fork.Question, settlement.AnswerText, $"Settled by the brief's declared criterion owners (topic: {topicKey}).");
+                    kernel.RecordGoalPolicyDecision(goalId, $"Spec refiner fork settled by the brief's declared criterion owners: topic={topicKey}");
+                    continue;
+                }
+
                 var precedent = await _precedents.TryGetPrecedentAsync(topicKey, cancellationToken)
                     ?? await _precedents.TryGetPrecedentAsync(fork.Kind, cancellationToken);
                 if (precedent is not null)
@@ -417,7 +424,15 @@ internal sealed partial class GoalRefinementService
         {
             OperatorOwnedAcceptanceCriteria = operatorOwnedCriteria,
             AcceptanceGateOwnedAcceptanceCriteria = acceptanceGateOwnedCriteria,
-            ClarificationAnswerHistory = clarificationAnswerHistory
+            ClarificationAnswerHistory = clarificationAnswerHistory,
+            CriterionEvidenceDeclarations = output.CriterionEvidenceDeclarations.Select(declaration =>
+            {
+                var matches = output.CriterionOwnerships.Where(item => item.Text == declaration.Criterion).ToArray();
+                var criterion = matches.Length == 1 && matches[0].DeclaredIndex is { } number &&
+                    number > 0 && number <= acceptanceCriteria.Count
+                    ? acceptanceCriteria[number - 1] : declaration.Criterion;
+                return declaration with { Criterion = criterion };
+            }).ToArray()
         };
 
         kernel.RecordGoalRefinement(goalId, spec);

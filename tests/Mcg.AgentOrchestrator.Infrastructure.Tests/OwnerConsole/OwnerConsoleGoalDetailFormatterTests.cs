@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.App.OwnerConsole;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
@@ -123,6 +124,120 @@ public sealed class OwnerConsoleGoalDetailFormatterTests
         Assert.Contains("Recent events: none", output.Text);
         Assert.DoesNotContain("finished: passed", output.Text);
         Assert.DoesNotContain(message, output.Text);
+    }
+
+    [Fact]
+    public void Render_FreshEvidence_InsertsExactProgressLinesImmediatelyAfterGate()
+    {
+        var lines = RenderEvidence(FreshEvidence()).Split(Environment.NewLine);
+        var gateIndex = Array.FindIndex(lines, line => line.StartsWith("Gate: ", StringComparison.Ordinal));
+
+        Assert.True(gateIndex >= 0, "The fixture must render a live Gate line.");
+        Assert.Equal(new[]
+        {
+            "Evidence: attempt 2, elapsed 3m 12s",
+            "Running: Infrastructure.Tests: AlphaTests +11 classes",
+            "Tests so far: 5 passed, 1 failed",
+            "Updated 4 s ago",
+            "Last attempt: 6.5 min, failed, 163 tests",
+            "Tasks:"
+        }, lines.Skip(gateIndex + 1).Take(6));
+    }
+
+    [Theory]
+    [InlineData(ConductorWatchProgressReporter.DefaultStallWarningMinutes * 60, false)]
+    [InlineData(ConductorWatchProgressReporter.DefaultStallWarningMinutes * 60 + 1, true)]
+    [InlineData(11 * 60, true)]
+    public void Render_HeartbeatAge_UsesStrictExistingStallThreshold(int seconds, bool stalled)
+    {
+        var progress = FreshEvidence();
+        var text = RenderEvidence(progress with { LastProgressAt = progress.ObservedAt.AddSeconds(-seconds) });
+
+        if (stalled)
+        {
+            Assert.Contains($"no progress for {seconds / 60} min - possible stall", text);
+            Assert.DoesNotContain("Updated ", text);
+        }
+        else
+        {
+            Assert.Contains($"Updated {seconds} s ago", text);
+            Assert.DoesNotContain("possible stall", text);
+        }
+    }
+
+    [Fact]
+    public void Render_MissingTrxCounts_OmitsTestsLineAndKeepsOtherProgress()
+    {
+        var text = RenderEvidence(FreshEvidence() with { Passed = null, Failed = null });
+
+        Assert.DoesNotContain("Tests so far:", text);
+        Assert.Contains("Evidence: attempt 2, elapsed 3m 12s", text);
+        Assert.Contains("Running: Infrastructure.Tests: AlphaTests +11 classes", text);
+        Assert.Contains("Updated 4 s ago", text);
+        Assert.Contains("Last attempt: 6.5 min, failed, 163 tests", text);
+    }
+
+    [Fact]
+    public void Render_NoPreviousAttempt_OmitsLastAttemptLine()
+    {
+        var text = RenderEvidence(FreshEvidence() with { Previous = null });
+
+        Assert.DoesNotContain("Last attempt:", text);
+        Assert.Contains("Tests so far: 5 passed, 1 failed", text);
+    }
+
+    [Fact]
+    public void Render_NoProgressRecord_KeepsGateAdjacentToTasks()
+    {
+        var lines = RenderEvidence(null).Split(Environment.NewLine);
+        var gateIndex = Array.FindIndex(lines, line => line.StartsWith("Gate: ", StringComparison.Ordinal));
+
+        Assert.True(gateIndex >= 0);
+        Assert.Equal("Tasks:", lines[gateIndex + 1]);
+        Assert.DoesNotContain(lines, line => line.StartsWith("Evidence:", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Render_EmptyProgressRecord_OmitsAllEvidenceLines()
+    {
+        var now = FreshEvidence().ObservedAt;
+
+        Assert.Equal(RenderEvidence(null), RenderEvidence(new OwnerConsoleEvidenceAttemptProgress(now)));
+    }
+
+    [Fact]
+    public void Render_FutureTimestamps_OmitsDerivedAges()
+    {
+        var progress = FreshEvidence();
+        var text = RenderEvidence(progress with
+        {
+            StartedAt = progress.ObservedAt.AddSeconds(1), LastProgressAt = progress.ObservedAt.AddSeconds(1)
+        });
+
+        Assert.Contains("Evidence: attempt 2" + Environment.NewLine, text);
+        Assert.DoesNotContain("elapsed", text);
+        Assert.DoesNotContain("Updated", text);
+        Assert.DoesNotContain("possible stall", text);
+    }
+
+    private static OwnerConsoleEvidenceAttemptProgress FreshEvidence()
+    {
+        var now = new DateTimeOffset(2026, 10, 28, 12, 0, 0, TimeSpan.Zero);
+        return new(now, 2, now.AddSeconds(-192), "verification-check",
+            "Infrastructure.Tests: AlphaTests +11 classes", now.AddSeconds(-4), 5, 1,
+            new("11111111", "previous", 390, "failed", 163));
+    }
+
+    private static string RenderEvidence(OwnerConsoleEvidenceAttemptProgress? progress)
+    {
+        var harness = new OwnerConsoleHarness();
+        var goal = harness.AddGoal("11111111", "Evidence progress", AgentRole.Developer);
+        var gate = new OwnerConsoleGateProgress(true, "acceptance", [new(goal.Id.Value, "Evidence progress")],
+            null, TimeSpan.Zero, [], 0, 0, 0, 0);
+        var output = new OwnerConsoleHarness.FakeOutput();
+        OwnerConsoleGoalDetailFormatter.Render(new(goal, null, [], Gate: gate, Evidence: progress),
+            output, TimeZoneInfo.Utc);
+        return output.Text;
     }
 
     private sealed class Tail(string[] lines) : IGoalEventTail

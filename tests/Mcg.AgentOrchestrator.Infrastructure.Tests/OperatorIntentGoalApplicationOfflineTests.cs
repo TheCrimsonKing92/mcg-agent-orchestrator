@@ -50,6 +50,39 @@ public sealed class OperatorIntentGoalApplicationOfflineTests
     }
 
     [Xunit.Fact]
+    public async Task RestoredTimelineNormalization_DoesNotRejectUnchangedStoredBaseline()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var seed = await CreateSeed(root);
+            var stored = (await seed.Repository.LoadGoalAsync(seed.GoalId))!;
+            Assert.True(stored.Timeline.Count > 1);
+            stored = stored with
+            {
+                Timeline = stored.Timeline
+                    .Select((item, index) => item with { OccurredAt = DateTimeOffset.UnixEpoch.AddMinutes(index) })
+                    .OrderByDescending(item => item.OccurredAt).ToArray()
+            };
+            await seed.Repository.SaveGoalSnapshotsAsync([stored]);
+
+            var restored = (await seed.Repository.LoadGoalsAsync([seed.GoalId])).ExportGoalSnapshot(seed.GoalId);
+            Assert.NotEqual(JsonSerializer.Serialize(stored), JsonSerializer.Serialize(restored));
+            Assert.Equal(stored.Timeline.OrderBy(item => item.OccurredAt), restored.Timeline);
+
+            var outcome = await OperatorIntentGoalApplication.ApplyOffline(
+                seed.Workspace, seed.Repository, new OperatorIntentCoordinator(seed.Store), seed.Attempts, seed.GoalId);
+            Assert.True(outcome is OperatorIntentOfflineOutcome.Applied,
+                outcome is OperatorIntentOfflineOutcome.NotDurable failure ? failure.Reason : outcome.ToString());
+            await AssertAppliedOnce(seed);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Xunit.Fact]
     public async Task CompetingSaveKeepsClaimAndStoredChangeThenFreshRunAppliesOnce()
     {
         var root = CreateTempDirectory();

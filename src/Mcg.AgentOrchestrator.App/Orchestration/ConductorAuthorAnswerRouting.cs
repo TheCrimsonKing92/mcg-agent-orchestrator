@@ -23,8 +23,24 @@ internal static class ConductorAuthorAnswerRouting
         IReadOnlyList<string>? evidenceReferences, string? brief, IReadOnlyList<string>? briefCitations)
     {
         var reason = ConductorAuthorOwnerClassCheck.Evaluate(item.Question, text, evidenceReferences);
-        return reason is not null && ConductorAuthorBriefGrounding.TryGround(brief, text, briefCitations, reason, out var citations)
-            ? new(null, text, citations)
+        if (reason is not null && ConductorAuthorBriefGrounding.TryGround(brief, text, briefCitations, reason, out var citations))
+            return new(null, text, citations);
+        return reason == "missing-evidence" && SettleOwnedBrief(item, brief) is { } settlement
+            ? settlement
             : new(reason, text);
+    }
+
+    internal static ConductorAuthorAnswerRoute? SettleOwnedBrief(ConductorAuthorItem item, string? brief)
+    {
+        if (!OwnedBriefOwnershipSettlement.TrySettle(item.ForkKind, item.Question, brief, out var settlement))
+            return null;
+
+        // The generated answer must satisfy the same owner-class rules as a model
+        // answer. Brief ownership can supply evidence, never owner authority.
+        var reason = ConductorAuthorOwnerClassCheck.Evaluate(item.Question, settlement.AnswerText, null);
+        return reason == "missing-evidence" && ConductorAuthorBriefGrounding.TryGround(
+                brief, settlement.AnswerText, settlement.Citations, reason, out var citations)
+            ? new(null, settlement.AnswerText, citations)
+            : null;
     }
 }

@@ -9,13 +9,28 @@ internal sealed class CrosswalkAcceptanceCheck(
     IAcceptanceRunExecutionContext owner,
     AcceptanceInvocationContext invocation,
     TimeProvider timeProvider,
+    CrosswalkExecutableResolver executableResolver,
     bool requiresTestTelemetryReceipt,
     Func<string[], GateHeartbeatContext> createHeartbeat,
     Func<string[], string, TimeSpan, GateHeartbeatContext, CancellationToken, CancellationToken, Task<CommandResult>> runProcess)
 {
-    internal async Task<AcceptanceCheckResult> RunAsync(
-        AcceptanceManifestCheck check, string worktreePath, TimeSpan timeout, CancellationToken cancellationToken)
+    internal static Task<AcceptanceCheckResult> RunOwnedAsync(
+        AcceptanceManifestCheck check, string worktreePath,
+        IAcceptanceRunExecutionContext? owner, AcceptanceInvocationContext? invocation,
+        TimeProvider timeProvider, CrosswalkExecutableResolver executableResolver,
+        bool requiresTestTelemetryReceipt, Func<string[], GateHeartbeatContext> createHeartbeat,
+        Func<string[], string, TimeSpan, GateHeartbeatContext, CancellationToken, CancellationToken, Task<CommandResult>> runProcess,
+        CancellationToken cancellationToken)
+        => new CrosswalkAcceptanceCheck(
+            owner ?? throw new InvalidOperationException("Crosswalk requires an acceptance execution owner."),
+            invocation ?? throw new InvalidOperationException("Crosswalk requires an owned invocation."),
+            timeProvider, executableResolver, requiresTestTelemetryReceipt, createHeartbeat, runProcess)
+            .RunAsync(check, worktreePath, cancellationToken);
+
+    private async Task<AcceptanceCheckResult> RunAsync(
+        AcceptanceManifestCheck check, string worktreePath, CancellationToken cancellationToken)
     {
+        var timeout = owner.Settings.ResolveCheckTimeout(check.TimeoutMinutes);
         var started = timeProvider.GetTimestamp();
         using var deadline = new CancellationTokenSource(timeout, timeProvider);
         using var ownerLifetime = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, owner.CancellationToken);
@@ -30,10 +45,11 @@ internal sealed class CrosswalkAcceptanceCheck(
         int? discovered = null;
         CommandResult? lastProcess = null;
         string? heartbeatPath = null;
+        CrosswalkExecutableIdentity? executable = null;
         try
         {
             var root = ResolveCrosswalkProjectRoot(worktreePath, check.Project);
-            var client = new CrosswalkClient(runProcessAsync: async (request, token) =>
+            var client = new CrosswalkClient(executableResolver, runProcessAsync: async (request, token) =>
             {
                 // Revalidate links immediately before each launch. Execute the resolved directory,
                 // never an unverified external artifact path.
@@ -51,6 +67,7 @@ internal sealed class CrosswalkAcceptanceCheck(
             });
 
             var list = await client.ListAsync(root, Remaining(), lifetime.Token).ConfigureAwait(false);
+            executable = list.Executable;
             AddDiagnostics(list.Diagnostics);
             stderr.Add(list.StandardError);
             exitCode = list.ExitCode;
@@ -154,7 +171,10 @@ internal sealed class CrosswalkAcceptanceCheck(
                 DiscoveredTestCount: discovered, ProcessStderr: string.Concat(stderr), ProcessStderrPath: lastProcess?.StderrPath,
                 GateHeartbeatPath: heartbeatPath, ChildProcessId: lastProcess?.ChildProcessId, ChildProcessStartedAt: lastProcess?.ChildProcessStartedAt,
                 SkippedTestIdentities: records.Where(r => r.Status == TestResultStatus.Skipped).Select(r => r.Id).ToArray())
-            { NormalizedTestResultPaths = paths, CrosswalkDiagnostics = diagnostics.ToArray(), CohortEvidence = cohortEvidence };
+            {
+                NormalizedTestResultPaths = paths, CrosswalkDiagnostics = diagnostics.ToArray(), CohortEvidence = cohortEvidence,
+                CrosswalkExecutablePath = executable?.Path, CrosswalkExecutableSha256 = executable?.Sha256
+            };
         }
     }
 

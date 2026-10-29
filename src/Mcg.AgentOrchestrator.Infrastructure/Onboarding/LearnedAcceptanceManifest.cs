@@ -16,7 +16,10 @@ public static class LearnedAcceptanceManifest
             .ThenBy(answer => answer.RecordedUtc).ThenBy(answer => answer.Value, StringComparer.Ordinal).ToArray());
         var (checks, unresolved) = LearnedTestCheckDeriver.Derive(model, applied);
         var isGo = model.Stack == ProjectStack.Go;
-        var checkNames = isGo ? default : LearnedCheckNames.Assign(checks.Select(check => check.ProjectPath).ToArray());
+        var isNode = model.Stack == ProjectStack.Node;
+        var isDotnet = !isGo && !isNode;
+        var nodeChecks = isNode ? NodeVerificationChecks.For(model) : default;
+        var checkNames = isDotnet ? LearnedCheckNames.Assign(checks.Select(check => check.ProjectPath).ToArray()) : default;
         var learned = LearnedEngineSettingsDeriver.Derive(model);
         var settings = OwnerAnsweredEngineSettings.Overlay(learned, applied);
         var questions = settings.OwnerQuestions.Concat(applied.OpenQuestions)
@@ -30,12 +33,14 @@ public static class LearnedAcceptanceManifest
 
         var blockers = unresolved.Select(unit => new ManifestBlocker(unit.FactKey,
             isGo ? $"no confident go runner for {unit.UnitId}" : $"no confident VSTest or MTP runner for {unit.UnitId}")).ToList();
-        if (!isGo)
+        if (isNode)
+            blockers.AddRange(nodeChecks.Blockers);
+        if (isDotnet)
             foreach (var check in checks.Where(check => check.Runner == "mtp"))
                 if (mtpLayoutRefusals?.TryGetValue(check.ProjectPath, out var reason) == true)
                     blockers.Add(new ManifestBlocker("engine/mtpInvocations", reason));
         blockers.AddRange(questions.Select(question => new ManifestBlocker(question.FactKey, question.Question)));
-        if (!isGo && checkNames.Collisions.Count > 0)
+        if (isDotnet && checkNames.Collisions.Count > 0)
             blockers.Add(new ManifestBlocker("checks/names",
                 $"Two or more test projects produce the same check name: {string.Join(", ", checkNames.Collisions)}."));
         if (blockers.Count > 0)
@@ -52,6 +57,23 @@ public static class LearnedAcceptanceManifest
                     ["command"] = check.Command,
                     ["arguments"] = new JsonArray(check.Arguments.Select(argument => (JsonNode?)JsonValue.Create(argument)).ToArray())
                 });
+        }
+        else if (isNode)
+        {
+            foreach (var check in nodeChecks.Checks)
+            {
+                var emittedCheck = new JsonObject
+                {
+                    ["name"] = check.Name,
+                    ["type"] = check.Type
+                };
+                if (check.Command is not null)
+                    emittedCheck["command"] = check.Command;
+                if (check.Project is not null)
+                    emittedCheck["project"] = check.Project;
+                emittedCheck["arguments"] = new JsonArray(check.Arguments.Select(argument => (JsonNode?)JsonValue.Create(argument)).ToArray());
+                emittedChecks.Add(emittedCheck);
+            }
         }
         else
         {
@@ -89,7 +111,7 @@ public static class LearnedAcceptanceManifest
             ["checks"] = emittedChecks,
             ["forbiddenChangedPathGlobs"] = new JsonArray()
         };
-        if (!isGo)
+        if (isDotnet)
         {
             var mtpInvocations = new JsonArray();
             foreach (var check in checks.Where(check => check.Runner == "mtp")

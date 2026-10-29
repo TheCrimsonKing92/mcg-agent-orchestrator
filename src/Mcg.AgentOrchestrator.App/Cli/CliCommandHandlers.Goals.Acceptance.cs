@@ -512,7 +512,7 @@ internal static bool RunAcceptanceWorkspaceMergeCore(CliExecutionContext context
     }
 
     var preMergeObligations = context.Kernel.GetGoal(goal.Id)
-        .GetOutstandingCriterionEvidenceObligations(testedWorktreeHead);
+        .GetLandingPrerequisiteObligations(testedWorktreeHead);
     if (preMergeObligations.Count > 0)
     {
         Console.WriteLine(
@@ -530,10 +530,8 @@ internal static bool RunAcceptanceWorkspaceMergeCore(CliExecutionContext context
             Merge: () =>
             {
                 var pendingRollback = GoalRollbackPlanner.CapturePendingAcceptance(context.Workspace.ExecutionDirectory, goal.Id, context.Workspace.IntegrationBranch);
-                var merge = context.Worktrees.TryFastForwardMerge(
-                    context.Workspace.ExecutionDirectory,
-                    goal.Id,
-                    () => PostLandingCanaryFactory.BuildMutationBlockReason(context.Workspace));
+                var merge = CliWorkspaceMerge.MergeWithPublication(context, goal, out var publication,
+                    mutationBlocker: () => PostLandingCanaryFactory.BuildMutationBlockReason(context.Workspace));
 
                 if (merge is null)
                 {
@@ -550,7 +548,8 @@ internal static bool RunAcceptanceWorkspaceMergeCore(CliExecutionContext context
                     landingChangedFiles = merge.ChangedFiles;
                 }
 
-                return new AcceptanceMergeCommitResult(merge.FastForwarded, FormatWorkspaceMerge(merge));
+                return new AcceptanceMergeCommitResult(merge.FastForwarded, FormatWorkspaceMerge(merge),
+                    Publication: publication);
             },
             "Acceptance completed goal after merge; cleanup deferred to conductor sweep."));
     mergeStarted.Stop();

@@ -4,6 +4,8 @@ using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Security.Principal;
+using Microsoft.Win32.SafeHandles;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
@@ -53,7 +55,8 @@ internal sealed record IntegrityLabelState(
     bool Low,
     bool Inheritable,
     bool Medium = false,
-    int? NativeQueryError = null);
+    int? NativeQueryError = null,
+    bool Unlabeled = false);
 
 internal sealed class WorkerSandboxPreparer(IWorkerIntegrityLabeler labeler)
 {
@@ -82,6 +85,229 @@ internal sealed class WorkerSandboxPreparer(IWorkerIntegrityLabeler labeler)
     };
 
     public static WorkerSandboxPreparer CreateDefault() => new(new IcaclsIntegrityLabeler());
+
+    internal CodexScratchScope OpenCodexScratch(string worktree, string sandboxRoot) =>
+        new(worktree, sandboxRoot, labeler);
+
+    // Authority is invocation-local and handle-backed. Neither a receipt nor CODEX_HOME grants it.
+    internal sealed class CodexScratchScope : IDisposable
+    {
+        internal const int MaximumEntries = 4096;
+        internal const int MaximumDepth = 32;
+        private readonly Dictionary<string, HeldEntry> entries = new(StringComparer.OrdinalIgnoreCase);
+        private readonly IWorkerIntegrityLabeler integrity;
+        private readonly string owner;
+        private readonly string sandbox;
+        private readonly string home;
+        private readonly List<string> targets = [];
+
+        internal CodexScratchScope(string worktree, string sandboxRoot, IWorkerIntegrityLabeler integrity)
+        {
+            this.integrity = integrity;
+            owner = WindowsIdentity.GetCurrent().User?.Value
+                ?? throw Refused(worktree, "owner-unavailable");
+            var workspace = Path.TrimEndingDirectorySeparator(Path.GetFullPath(worktree));
+            sandbox = Path.TrimEndingDirectorySeparator(Path.GetFullPath(sandboxRoot));
+            var boundary = Path.Combine(workspace, ".mcg-sandbox");
+            if (!sandbox.Equals(boundary, StringComparison.OrdinalIgnoreCase) &&
+                !sandbox.StartsWith(boundary + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+                throw Refused(sandbox, "outside-generated-sandbox");
+            home = Path.Combine(sandbox, "codex-home");
+            try
+            {
+                // Lock every ancestor, including the workspace, before touching generated paths.
+                HoldAncestors(workspace);
+                var relative = Path.GetRelativePath(workspace, sandbox);
+                var current = workspace;
+                foreach (var part in relative.Split(Path.DirectorySeparatorChar))
+                {
+                    current = Path.Combine(current, part);
+                    EnsureDirectory(current);
+                }
+                // This is the existing selected-home materialization, under the retained boundary.
+                EnsureDirectory(home);
+                CaptureTargets();
+            }
+            catch (Exception failure)
+            {
+                Dispose();
+                if (failure is WorkerSandboxRefusedException) throw;
+                throw Refused(home, "safety-inspection-failed", failure);
+            }
+        }
+
+        internal void ValidateAndRepair()
+        {
+            try { ValidateCore(); }
+            catch (Exception failure) when (failure is not WorkerSandboxRefusedException)
+            {
+                throw Refused(home, "validation-failed", failure);
+            }
+        }
+
+        private void ValidateCore()
+        {
+            CaptureTargets(); // Includes children created by provider materialization.
+            VerifyIdentities();
+            foreach (var path in targets)
+            {
+                var directory = (entries[path].Identity.Attributes & (uint)FileAttributes.Directory) != 0;
+                var state = integrity.Query(path);
+                if (!state.Exists || state.NativeQueryError is not null)
+                    throw Refused(path, $"label-query-failed-native-{state.NativeQueryError}");
+                if (state.Low && (!directory || state.Inheritable)) continue;
+                if (!state.Low && !state.Medium && !state.Unlabeled)
+                    throw Refused(path, "label-unverifiable");
+                VerifyIdentities();
+                var level = directory ? LowInheritableLevel : "L";
+                if (integrity is IcaclsIntegrityLabeler native)
+                {
+                    var result = native.SetIntegrityWithDiagnostics(path, level, recursive: false);
+                    if (!result.Succeeded)
+                        throw Refused(path, "label-repair-failed", new InvalidOperationException(result.Diagnostic));
+                }
+                else if (!integrity.SetIntegrity(path, level, recursive: false))
+                    throw Refused(path, "label-repair-failed");
+                VerifyIdentities();
+                state = integrity.Query(path);
+                if (!state.Exists || !state.Low || (directory && !state.Inheritable) || state.NativeQueryError is not null)
+                    throw Refused(path, $"label-readback-failed-native-{state.NativeQueryError}");
+            }
+            VerifyIdentities();
+        }
+
+        private void CaptureTargets()
+        {
+            targets.Clear();
+            targets.Add(home);
+            foreach (var name in new[] { "tmp", "sessions" })
+                Visit(Path.Combine(home, name), 0);
+        }
+
+        private void Visit(string path, int depth)
+        {
+            if (depth > MaximumDepth || targets.Count >= MaximumEntries)
+                throw Refused(path, "scratch-budget-exceeded");
+            var held = Hold(path, owned: true, allowMissing: true);
+            if (held is null) return; // Nearest existing directory is checked for Low inheritance.
+            if ((depth == 0 || path.Equals(Path.Combine(home, "tmp", "arg0"), StringComparison.OrdinalIgnoreCase)) &&
+                (held.Identity.Attributes & (uint)FileAttributes.Directory) == 0)
+                throw Refused(path, "expected-directory");
+            targets.Add(path);
+            if ((held.Identity.Attributes & (uint)FileAttributes.Directory) == 0) return;
+            foreach (var child in Directory.EnumerateFileSystemEntries(path))
+                Visit(child, depth + 1);
+        }
+
+        private void HoldAncestors(string path)
+        {
+            var ancestors = new Stack<string>();
+            for (string? current = path; current is not null; current = Path.GetDirectoryName(current))
+            {
+                if (ancestors.Count >= 128) throw Refused(path, "ancestor-budget-exceeded");
+                ancestors.Push(current);
+            }
+            foreach (var ancestor in ancestors)
+                _ = Hold(ancestor, owned: false, allowMissing: false);
+        }
+
+        private void EnsureDirectory(string path)
+        {
+            var held = Hold(path, owned: true, allowMissing: true);
+            if (held is null)
+            {
+                Directory.CreateDirectory(path);
+                held = Hold(path, owned: true, allowMissing: false)!;
+            }
+            if ((held.Identity.Attributes & (uint)FileAttributes.Directory) == 0)
+                throw Refused(path, "expected-directory");
+        }
+
+        private HeldEntry? Hold(string path, bool owned, bool allowMissing)
+        {
+            if (entries.TryGetValue(path, out var existing)) return existing;
+            // FILE_READ_DATA (FILE_LIST_DIRECTORY for directories) makes this open participate in
+            // Windows sharing checks; metadata-only access does not prevent file replacement.
+            // No contents are read. Deny write/delete sharing while path-based label APIs execute.
+            // Handles are non-inheritable and survive through startup.
+            var handle = CreateFile(IcaclsIntegrityLabeler.NativeFilePath(path), 0x20081, 1,
+                IntPtr.Zero, 3, 0x02200000, IntPtr.Zero);
+            if (handle.IsInvalid)
+            {
+                var error = Marshal.GetLastWin32Error();
+                handle.Dispose();
+                if (allowMissing && error is 2 or 3) return null;
+                throw Refused(path, $"identity-open-failed-native-{error}");
+            }
+            try
+            {
+                if (!GetFileInformationByHandle(handle, out var identity))
+                    throw Refused(path, $"identity-query-failed-native-{Marshal.GetLastWin32Error()}");
+                if ((identity.Attributes & (uint)FileAttributes.ReparsePoint) != 0)
+                    throw Refused(path, "reparse-target");
+                if (owned && (identity.Attributes & (uint)FileAttributes.Directory) == 0 && identity.Links != 1)
+                    throw Refused(path, "hardlinked-target");
+                if (owned) VerifyOwner(handle, path);
+                var entry = new HeldEntry(handle, identity, owned);
+                entries.Add(path, entry);
+                return entry;
+            }
+            catch { handle.Dispose(); throw; }
+        }
+
+        private void VerifyOwner(SafeFileHandle handle, string path)
+        {
+            var result = GetSecurityInfo(handle, 1, 1, out var sid, out _, out _, out _, out var descriptor);
+            try
+            {
+                if (result != 0 || sid == IntPtr.Zero || new SecurityIdentifier(sid).Value != owner)
+                    throw Refused(path, $"owner-mismatch-native-{result}");
+            }
+            finally { if (descriptor != IntPtr.Zero) _ = ScratchLocalFree(descriptor); }
+        }
+
+        private void VerifyIdentities()
+        {
+            foreach (var (path, entry) in entries)
+            {
+                if (!GetFileInformationByHandle(entry.Handle, out var current) ||
+                    current.Volume != entry.Identity.Volume || current.IndexHigh != entry.Identity.IndexHigh ||
+                    current.IndexLow != entry.Identity.IndexLow || current.Attributes != entry.Identity.Attributes ||
+                    current.Links != entry.Identity.Links)
+                    throw Refused(path, "identity-changed");
+                if (entry.Owned) VerifyOwner(entry.Handle, path);
+            }
+        }
+
+        private static WorkerSandboxRefusedException Refused(string path, string check, Exception? inner = null) =>
+            new($"codex-scratch-{check};remediation=recreate-owned-sandbox-before-retry", path, inner);
+
+        public void Dispose()
+        {
+            foreach (var entry in entries.Values.Reverse()) entry.Handle.Dispose();
+            entries.Clear();
+        }
+
+        private sealed record HeldEntry(SafeFileHandle Handle, ScratchFileIdentity Identity, bool Owned);
+        [StructLayout(LayoutKind.Sequential)]
+        private struct ScratchFileIdentity
+        {
+            public uint Attributes;
+            public System.Runtime.InteropServices.ComTypes.FILETIME Creation, Access, Write;
+            public uint Volume, SizeHigh, SizeLow, Links, IndexHigh, IndexLow;
+        }
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true, EntryPoint = "CreateFileW")]
+        private static extern SafeFileHandle CreateFile(string path, uint access, uint share, IntPtr security,
+            uint disposition, uint flags, IntPtr template);
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool GetFileInformationByHandle(SafeFileHandle handle, out ScratchFileIdentity information);
+        [DllImport("advapi32.dll")]
+        private static extern uint GetSecurityInfo(SafeFileHandle handle, uint type, uint information,
+            out IntPtr owner, out IntPtr group, out IntPtr dacl, out IntPtr sacl, out IntPtr descriptor);
+        [DllImport("kernel32.dll", EntryPoint = "LocalFree")]
+        private static extern IntPtr ScratchLocalFree(IntPtr memory);
+    }
 
     public WorkerSandboxPreparationResult Prepare(string worktree, string sandboxRoot)
     {
@@ -524,7 +750,12 @@ internal sealed class IcaclsIntegrityLabeler : IWorkerIntegrityLabeler
                 return NativeQueryFailed(checked((int)result));
             }
 
-            if (systemAcl == IntPtr.Zero || !TryCopyAcl(systemAcl, out var acl))
+            if (systemAcl == IntPtr.Zero)
+            {
+                // A successful query with no label means implicit Medium, not failed readback.
+                return new IntegrityLabelState(Exists: true, Low: false, Inheritable: false, Unlabeled: true);
+            }
+            if (!TryCopyAcl(systemAcl, out var acl))
             {
                 return new IntegrityLabelState(Exists: true, Low: false, Inheritable: false);
             }
@@ -561,7 +792,7 @@ internal sealed class IcaclsIntegrityLabeler : IWorkerIntegrityLabeler
 
         var aclSize = BinaryPrimitives.ReadUInt16LittleEndian(acl.Slice(2, sizeof(ushort)));
         var aceCount = BinaryPrimitives.ReadUInt16LittleEndian(acl.Slice(4, sizeof(ushort)));
-        if (aclSize != acl.Length || aclSize < AclHeaderSize || aceCount == 0)
+        if (aclSize != acl.Length || aclSize < AclHeaderSize)
         {
             return new IntegrityLabelState(Exists: true, Low: false, Inheritable: false);
         }
@@ -596,9 +827,10 @@ internal sealed class IcaclsIntegrityLabeler : IWorkerIntegrityLabeler
             offset += aceSize;
         }
 
-        return offset == acl.Length && mandatoryLabelCount == 1
-            ? labelState
-            : new IntegrityLabelState(Exists: true, Low: false, Inheritable: false);
+        if (offset != acl.Length)
+            return new IntegrityLabelState(Exists: true, Low: false, Inheritable: false);
+        return mandatoryLabelCount == 1 ? labelState
+            : new IntegrityLabelState(Exists: true, Low: false, Inheritable: false, Unlabeled: true);
     }
 
     private static IntegrityLabelState NativeQueryFailed(int errorCode) =>
@@ -640,8 +872,9 @@ internal sealed class IcaclsIntegrityLabeler : IWorkerIntegrityLabeler
             return false;
         }
 
+        // Later-created tmp/arg0 needs transitive inheritance, not just a one-generation label.
         var inheritable = (aceFlags & (ObjectInheritAce | ContainerInheritAce)) ==
-            (ObjectInheritAce | ContainerInheritAce);
+            (ObjectInheritAce | ContainerInheritAce) && (aceFlags & 0x04) == 0;
         state = integrityRid switch
         {
             LowIntegrityRid => new IntegrityLabelState(Exists: true, Low: true, Inheritable: inheritable),

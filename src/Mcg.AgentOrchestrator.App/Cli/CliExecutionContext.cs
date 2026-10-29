@@ -166,7 +166,8 @@ public TextReader StandardInput { get; } = standardInput ?? Console.In;
 
 public bool IsStandardInputRedirected { get; } = isStandardInputRedirected ?? Console.IsInputRedirected;
 
-public IGoalAcceptanceVerifier AcceptanceVerifier { get; init; } = new GoalAcceptanceVerifier();
+public IGoalAcceptanceVerifier AcceptanceVerifier { get; init; } = new GoalAcceptanceVerifier
+    { CrosswalkExecutable = CrosswalkExecutableComposition.ForProcess };
 
 public bool RunInjectedAcceptanceVerifierInCurrentProcess { get; init; }
 
@@ -308,7 +309,8 @@ internal sealed record AcceptanceMergeGuardPreflightResult(
 internal sealed record AcceptanceMergeCommitResult(
     bool FastForwarded,
     string? Message,
-    AcceptanceMergeGuardMismatch? GuardAbort = null)
+    AcceptanceMergeGuardMismatch? GuardAbort = null,
+    GoalPromotionFact? Publication = null)
 {
     public bool GuardAborted => GuardAbort is not null;
 }

@@ -16,11 +16,13 @@ internal sealed class WorkerBuildRequestHost : IWorkerBuildRequestService
     private readonly DotnetBuildStorageRoot _storageRoot;
     private readonly Func<int, uint, uint, bool>? _executionQosSetter;
     private readonly TimeSpan? _executionQosInterval;
+    private readonly Func<string, ProcessStartInfo, ProcessStartInfo>? _launchOverride;
     private readonly List<object> _unresolved = [];
 
     internal WorkerBuildRequestHost(WorkerBuildHostReference reference, TimeProvider? time = null,
         TimeSpan? budget = null, Action<WorkerBuildInvocation>? observe = null, DotnetBuildStorageRoot? storageRoot = null,
-        Func<int, uint, uint, bool>? executionQosSetter = null, TimeSpan? executionQosInterval = null)
+        Func<int, uint, uint, bool>? executionQosSetter = null, TimeSpan? executionQosInterval = null,
+        Func<string, ProcessStartInfo, ProcessStartInfo>? launchOverride = null)
     {
         _reference = reference;
         _operations = new(reference.StatePath, reference.ExecutionDirectory);
@@ -31,6 +33,7 @@ internal sealed class WorkerBuildRequestHost : IWorkerBuildRequestService
         _observe = observe;
         _executionQosSetter = executionQosSetter;
         _executionQosInterval = executionQosInterval;
+        _launchOverride = launchOverride;
         _storageRoot = storageRoot ?? (reference.StorageRoot is { } root
             ? new DotnetBuildStorageRoot(root) : DotnetBuildStorageLayout.CaptureStorageRoot());
         if (reference.Admission is not { } admission || admission.GoalId != reference.GoalId ||
@@ -147,6 +150,7 @@ internal sealed class WorkerBuildRequestHost : IWorkerBuildRequestService
                     CheckCurrent();
                     Advance(WorkerBuildPhase.PreparingLaunch);
                     var info = BuildStartInfo(root, project, request.Configuration, slot.Environment.Arguments, tempRoot, gcEnvironment);
+                    if (_launchOverride is { } launchOverride) info = launchOverride(project, info);
                     terminalSafe = false;
                     child = OwnedProcessGroup.StartSuspendedContainedWithFileCapture(info,
                         Path.Combine(logRoot, $"{invocation.Children?.Count ?? 0}.out.log"),

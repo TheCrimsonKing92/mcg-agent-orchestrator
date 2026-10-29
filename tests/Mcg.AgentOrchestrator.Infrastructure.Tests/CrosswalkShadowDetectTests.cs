@@ -1,8 +1,9 @@
 using System.Text.Json;
+using System.Security.Cryptography;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Xunit;
 
-// Parallel-safe: private temporary roots, injected environment/runner/clock, no real processes.
+// Parallel-safe: private temporary roots, explicit resolvers and injected runner/clock, no real processes.
 public sealed class CrosswalkShadowDetectTests : IDisposable
 {
     private readonly DirectoryInfo _sandbox = Directory.CreateTempSubdirectory("crosswalk-shadow-");
@@ -32,6 +33,7 @@ public sealed class CrosswalkShadowDetectTests : IDisposable
         Assert.Contains("orchestrator=node crosswalk=go", record.Detail);
         Assert.Contains("\"path\":\"go.mod\"", record.Detail);
         Assert.Contains("\"reason\":\"found go marker\"", record.Detail);
+        Assert.EndsWith(IdentityDetail(), record.Detail);
 
         var second = CreateRoot("package.json");
         Assert.Equal(TargetToolchainDetector.Detect(second), ProjectStackResolver.Resolve(second, home, shadow));
@@ -134,8 +136,7 @@ public sealed class CrosswalkShadowDetectTests : IDisposable
     {
         var root = CreateRoot(marker);
         var home = CreateHome();
-        var reads = 0;
-        var shadow = new CrosswalkShadowDetect(new CrosswalkClient(_ => { reads++; return null; }, (_, _) =>
+        var shadow = new CrosswalkShadowDetect(new CrosswalkClient(new(dataRoot: _sandbox.FullName), (_, _) =>
         {
             Interlocked.Increment(ref _calls);
             return Task.FromResult(new WorkerProcessRunResult(0, GoJson, ""));
@@ -146,7 +147,6 @@ public sealed class CrosswalkShadowDetectTests : IDisposable
         Assert.Equal(baseline, ProjectStackResolver.Resolve(root, home, shadow));
         Assert.Equal(baseline, ProjectStackResolver.Resolve(root, home, shadow));
 
-        Assert.Equal(1, reads);
         Assert.Equal(0, _calls);
         Assert.Equal(before, Directory.GetFileSystemEntries(home, "*", SearchOption.AllDirectories).Order().ToArray());
     }
@@ -175,7 +175,7 @@ public sealed class CrosswalkShadowDetectTests : IDisposable
         Assert.Null(record.GoalId);
         var detail = status switch { "start-failed" => "InvalidOperationException", "exit-nonzero" => "exit=2", _ => "" };
         Assert.Equal($"CROSSWALK_SHADOW_UNAVAILABLE reason={status} root={JsonSerializer.Serialize(root)} " +
-            $"detail={JsonSerializer.Serialize(detail)}", record.Detail);
+            $"detail={JsonSerializer.Serialize(detail)}" + IdentityDetail(status == "missing"), record.Detail);
 
         var second = CreateRoot("package.json");
         Assert.Equal(TargetToolchainDetector.Detect(second), ProjectStackResolver.Resolve(second, home, shadow));
@@ -245,11 +245,20 @@ public sealed class CrosswalkShadowDetectTests : IDisposable
         var path = Path.Combine(_sandbox.FullName, "crosswalk.exe");
         if (!missing)
             File.WriteAllText(path, "");
-        return new(new CrosswalkClient(_ => path, (request, token) =>
+        var resolver = new CrosswalkExecutableResolver(path, _sandbox.FullName,
+            (_, _) => Task.FromResult(new WorkerProcessRunResult(0, "test-version", "")));
+        return new(new CrosswalkClient(resolver, (request, token) =>
         {
             Interlocked.Increment(ref _calls);
             return runner is null ? Task.FromResult(new WorkerProcessRunResult(0, GoJson, "")) : runner(request, token);
         }), utcNow ?? (() => Now));
+    }
+
+    private string IdentityDetail(bool missing = false)
+    {
+        var path = Path.Combine(_sandbox.FullName, "crosswalk.exe");
+        var hash = missing ? null : Convert.ToHexStringLower(SHA256.HashData(File.ReadAllBytes(path)));
+        return $" executablePath={JsonSerializer.Serialize(missing ? null : path)} executableSha256={JsonSerializer.Serialize(hash)}";
     }
 
     private string CreateRoot(string marker)

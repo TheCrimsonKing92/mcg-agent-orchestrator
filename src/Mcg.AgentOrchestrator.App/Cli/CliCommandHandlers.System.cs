@@ -32,19 +32,8 @@ internal static partial class CliCommandHandlers
         !string.IsNullOrWhiteSpace(item.CorrelationKey) &&
         item.CorrelationKey!.StartsWith("spec-clarification:", StringComparison.Ordinal);
 
-    internal static Goal ResolveAttentionGoal(AgentOrchestratorKernel kernel, string goalPrefix)
-    {
-        var matches = kernel.Goals
-            .Where(goal => goal.Id.Value.StartsWith(goalPrefix, StringComparison.OrdinalIgnoreCase))
-            .ToList();
-
-        return matches.Count switch
-        {
-            1 => matches[0],
-            0 => throw new KeyNotFoundException($"No goal found matching prefix '{goalPrefix}'."),
-            _ => throw new InvalidOperationException($"Goal prefix '{goalPrefix}' is ambiguous ({matches.Count} matches).")
-        };
-    }
+    internal static Goal ResolveAttentionGoal(AgentOrchestratorKernel kernel, string goalPrefix) =>
+        AttentionReadGoalSelection.Resolve(kernel, goalPrefix);
 
     private static CollaborationItem ResolveAttentionItemById(
         IReadOnlyList<CollaborationItem> items,
@@ -380,6 +369,7 @@ internal static partial class CliCommandHandlers
 
                     if (goalPrefix is null)
                     {
+                        PostLandingDutiesTextView.Print(context.Kernel.Goals);
                         var showWaits = HumanWaitsForAttention(context.Kernel, null, includeHistory);
                         if (showWaits.Count > 0 || context.Kernel.Goals.Any(goal => goal.GateTestObligations.Count > 0))
                         {
@@ -411,6 +401,7 @@ internal static partial class CliCommandHandlers
                     }
 
                     var goal = ResolveAttentionGoal(context.Kernel, goalPrefix);
+                    PostLandingDutiesTextView.Print([goal]);
                     var clarificationIdentityUniverse = AllClarifications(store)
                         .Where(item => string.Equals(item.GoalId, goal.Id.Value, StringComparison.OrdinalIgnoreCase))
                         .ToList();
@@ -487,6 +478,7 @@ internal static partial class CliCommandHandlers
                 var migratedHumanWaits = context.IsReadOnlyQuery ? 0 : context.Kernel.SweepParkedGoalHumanWaits();
                 var migratedCollaborationItems = context.IsReadOnlyQuery ? 0 : ResolveParkedAttentionItems(context.Kernel, store);
                 var waits = HumanWaitsForAttention(context.Kernel, null, includeHistory: false);
+                PostLandingDutiesTextView.Print(context.Kernel.Goals);
                 if (waits.Count > 0 || context.Kernel.Goals.Any(goal => goal.GateTestObligations
                         .Any(item => item.BriefVersion == goal.AuthoritativeBrief.Version)))
                 {

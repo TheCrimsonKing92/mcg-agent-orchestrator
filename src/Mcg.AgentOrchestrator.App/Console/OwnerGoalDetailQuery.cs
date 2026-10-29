@@ -5,7 +5,8 @@ using Mcg.AgentOrchestrator.App.Orchestration;
 namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 
 internal sealed class OwnerGoalDetailQuery(IOrchestratorStateQueries state, IGoalEventTail tail,
-    Func<OwnerConsoleGateProgress?>? gate = null, OwnerGoalChangeSummaryQuery? summary = null)
+    Func<OwnerConsoleGateProgress?>? gate = null, OwnerGoalChangeSummaryQuery? summary = null,
+    OwnerConsoleEvidenceAttemptProgressReader? evidence = null)
 {
     private readonly OwnerGoalChangeSummaryQuery _summary = summary ?? new();
 
@@ -38,7 +39,10 @@ internal sealed class OwnerGoalDetailQuery(IOrchestratorStateQueries state, IGoa
         var events = tail.ReadLast(goalId, 100)
             .Select(line => OwnerGoalLifecycleEvent.TryParse(line, goalId, out var item) ? item : null)
             .Where(item => item is not null).Select(item => OwnerGoalLifecycleEvent.WithRole(item!, roles)).ToArray();
-        return new OwnerGoalDetailSnapshot(goal, position, events,
-            Changes: await _summary.LoadAsync(goal, cancellationToken)).WithGate(gate?.Invoke());
+        return Observe(new OwnerGoalDetailSnapshot(goal, position, events,
+            Changes: await _summary.LoadAsync(goal, cancellationToken)), gate?.Invoke());
     }
+
+    internal OwnerGoalDetailSnapshot Observe(OwnerGoalDetailSnapshot detail, OwnerConsoleGateProgress? observed) =>
+        detail.WithGate(observed) with { Evidence = evidence?.Read(detail.Goal.Id.Value, observed) };
 }

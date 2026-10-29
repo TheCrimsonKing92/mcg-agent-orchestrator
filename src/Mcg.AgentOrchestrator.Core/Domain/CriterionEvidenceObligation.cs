@@ -49,7 +49,12 @@ public sealed record CriterionEvidenceObligation(
     string? ExpectedCandidateSha = null,
     IReadOnlyList<CriterionEvidenceReceipt>? PriorReceipts = null,
     string? ReplacementObligationId = null,
-    CriterionEvidenceOwner? ReplacementOwner = null)
+    CriterionEvidenceOwner? ReplacementOwner = null,
+    CriterionEvidencePhase Phase = CriterionEvidencePhase.PreLanding,
+    CriterionObservationScope? ObservationScope = null,
+    GoalPromotionFact? Publication = null,
+    CriterionPostLandingObservation? Observation = null,
+    string? ObservationActor = null)
 {
     [JsonIgnore]
     public int CriterionNumber => CriterionIndex + 1;
@@ -62,7 +67,27 @@ public sealed record CriterionEvidenceObligation(
 
     public bool IsPending => State == CriterionEvidenceState.Pending;
 
+    public bool IsValidatedPostLanding => Phase == CriterionEvidencePhase.PostLanding &&
+        CriterionEvidenceLifecycle.IsValid(Phase, Owner, ObservationScope);
+
+    public bool IsLandingPrerequisite => !(IsValidatedPostLanding &&
+        State is CriterionEvidenceState.Pending or CriterionEvidenceState.Satisfied && HasValidEvidenceState);
+
     internal bool HasValidEvidenceState =>
+        CriterionEvidenceLifecycle.IsValid(Phase, Owner, ObservationScope) &&
+        (Phase != CriterionEvidencePhase.PreLanding ||
+         (Publication is null && Observation is null && ObservationActor is null &&
+          (PriorReceipts is null || PriorReceipts.All(receipt => receipt is { Observation: null })))) &&
+        (Phase != CriterionEvidencePhase.PostLanding ||
+         (State == CriterionEvidenceState.Pending ||
+          (Observation is not null && !string.IsNullOrWhiteSpace(ObservationActor) &&
+           CriterionEvidenceLifecycle.MatchesObservation(this, Observation, RecordedAt)))) &&
+        (State != CriterionEvidenceState.Pending || Observation is null && ObservationActor is null) &&
+        (Phase != CriterionEvidencePhase.PostLanding || PriorReceipts is null ||
+         PriorReceipts.All(receipt => receipt is not null && receipt.Owner == CriterionEvidenceOwner.Operator &&
+             receipt.Observation is not null && !string.IsNullOrWhiteSpace(receipt.Actor) &&
+             string.Equals(receipt.CandidateSha, Publication?.CandidateRevision, StringComparison.OrdinalIgnoreCase) &&
+             CriterionEvidenceLifecycle.MatchesObservation(this, receipt.Observation, receipt.RecordedAt))) &&
         Owner is CriterionEvidenceOwner.Operator or CriterionEvidenceOwner.Acceptance or CriterionEvidenceOwner.Unknown &&
         State is CriterionEvidenceState.Pending or CriterionEvidenceState.Failed or CriterionEvidenceState.Satisfied or CriterionEvidenceState.Repaired &&
         (Owner != CriterionEvidenceOwner.Unknown || State is CriterionEvidenceState.Pending or CriterionEvidenceState.Repaired) &&
@@ -96,7 +121,7 @@ public sealed record CriterionEvidenceObligation(
     private CriterionEvidenceReceipt? CurrentReceipt() =>
         State is not (CriterionEvidenceState.Pending or CriterionEvidenceState.Repaired) && CandidateSha is not null && ReceiptId is not null && Detail is not null
             ? new(Owner, CandidateSha, ReceiptId, RequiredScope, State == CriterionEvidenceState.Satisfied,
-                Detail, Provenance, RecordedAt)
+                Detail, Provenance, RecordedAt, Observation, ObservationActor)
             : null;
 
     public static string BuildId(int criterionVersion, int criterionIndex) =>
