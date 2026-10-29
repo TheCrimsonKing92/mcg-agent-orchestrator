@@ -1,5 +1,6 @@
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 // Real git repositories use the existing landing runner's isolated fixture and cleanup.
@@ -132,6 +133,95 @@ public sealed class LandingExecutorRoleReportEvidenceTests
         {
             LandingExecutorTests.TryDeleteDirectory(repo);
         }
+    }
+
+    [Theory]
+    [InlineData("conductor")]
+    [InlineData("worker")]
+    [InlineData("goal-work")]
+    public void Execute_OwnerRoundsBeforeMerge_UsesRangeProof(string change)
+    {
+        var repo = LandingExecutorTests.CreateGitRepository();
+        try
+        {
+            // Seed a real ceiling row before C, then follow C with an integration merge and retighten.
+            var authority = Path.Combine(repo, SourceSizeRatchet.SourcePath);
+            Directory.CreateDirectory(Path.GetDirectoryName(authority)!);
+            File.WriteAllText(authority, "new SourceSizeCeiling(\"src/guarded.cs\", 20),\n");
+            ConductorOnlyCandidateRangeTests.Commit(repo);
+            var (workspace, kernel, goal, reviewerWait, reviewed) = CreateCandidate(repo, owner: "reviewer");
+            var worktree = workspace.ResolveExecutionDirectory(goal.Id);
+            LandingExecutorTests.AppendCommit(repo, "upstream.txt", "new main content");
+            ConductorOnlyCandidateRangeTests.RunAs(worktree,
+                change == "worker" ? "worker" : "MCG Acceptance Gate",
+                change == "worker" ? "worker@example.invalid" : "acceptance-gate@localhost",
+                "merge", "--no-ff", "main", "-m", "Integrate main before acceptance");
+            File.WriteAllText(Path.Combine(worktree, SourceSizeRatchet.SourcePath),
+                "new SourceSizeCeiling(\"src/guarded.cs\", 19),\n");
+            if (change == "goal-work") File.WriteAllText(Path.Combine(worktree, "src/role-report.txt"), "unreviewed work\n");
+            var candidate = ConductorOnlyCandidateRangeTests.Commit(worktree,
+                "MCG Acceptance Gate", "acceptance-gate@localhost");
+            var developer = Assert.Single(goal.Tasks.Where(task => task.RequiredRole == AgentRole.Developer));
+            kernel.RecordDispatchResultCommit(goal.Id, developer.Id, candidate);
+            foreach (var role in new[] { AgentRole.Reviewer, AgentRole.Tester })
+            {
+                var task = kernel.AddTask(goal.Id, role, "Pass owner round on C", AgentCatalog.Default().Agents);
+                var started = new DateTimeOffset(2026, 10, 29, 5, 0, 0, TimeSpan.Zero);
+                kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
+                    "codex-cli", "inspect", worktree, started, BaseCommit: reviewed));
+                kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord(
+                    "inspect", worktree, 0, RoleReportEvidenceClosureTests.RoleOutput("pass"), string.Empty,
+                    started.AddSeconds(1), WorkerResultPresent: true));
+                kernel.ReportWorkerTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Pass round recorded.");
+                Assert.Equal(reviewed, task.LastVerification!.ReviewedCommit);
+            }
+            var testerWait = kernel.RequestHumanInputDeduplicated(goal.Id, developer.Id, "Provide Tester pass",
+                kind: HumanWaitKind.ProspectiveAcceptanceEvidence, evidenceOwner: "tester",
+                plannerIdentity: new PlannerEvidenceIdentity(goal.Id.Value, developer.Id.Value,
+                    goal.AuthoritativeBrief.Version, 1, "tester-report"),
+                plannerEvidence: new PlannerEvidencePayload(1, "tester-report", "post-implementation", "tester",
+                    "Tester pass", "Tester owns; Acceptance executes", null, null, null)).Request;
+            var mainBefore = LandingExecutorTests.ReadGit(repo, "rev-parse", "main");
+            GoalOperationJournal.AcceptancePassed(repo, goal, "conductor:acceptance", candidate, mainBefore,
+                "Passed latest candidate", DateTimeOffset.UtcNow);
+            ProspectiveEvidenceGateFixture.WriteAttempt(workspace.OrchestratorDirectory,
+                goal, candidate, ProspectiveEvidenceGateFixture.PassingRows);
+            Assert.Equal(2, kernel.GetPendingHumanInput(goal.Id).Count);
+
+            // The retighten touches shared infrastructure; permit that independent ownership gate
+            // so this fixture tests whether the owner evidence waits allow landing.
+            var result = LandingExecutor.Execute(kernel, goal, workspace,
+                policy: ConductorAutonomyPolicy.Permissive);
+
+            if (change == "conductor")
+            {
+                Assert.True(result.MainAdvanced, result.Message);
+                Assert.IsNotType<LandingDecision.Escalate>(result.Decision);
+                Assert.Empty(kernel.GetPendingHumanInput(goal.Id));
+                Assert.All(new[] { reviewerWait, testerWait }, wait =>
+                {
+                    Assert.True(wait.IsCompleted);
+                    Assert.Contains($"candidate={reviewed} landing_candidate={candidate}", wait.Answer);
+                });
+                Assert.Equal(result.MergeCommitSha, LandingExecutorTests.ReadGit(repo, "rev-parse", "main"));
+            }
+            else
+            {
+                Assert.False(result.MainAdvanced);
+                var escalation = Assert.IsType<LandingDecision.Escalate>(result.Decision);
+                Assert.Equal(2, escalation.Decision!.Rung);
+                Assert.Equal(2, kernel.GetPendingHumanInput(goal.Id).Count);
+                Assert.All(new[] { reviewerWait, testerWait }, wait =>
+                {
+                    Assert.False(wait.IsCompleted);
+                    Assert.Null(wait.Answer);
+                    Assert.Contains(goal.Timeline, item => item.Kind == ProgressKind.TaskNote &&
+                        item.Message == $"ROLE_REPORT_EVIDENCE_SKIPPED request={wait.Id.Value[..8]} reason=owner-candidate-differs");
+                });
+                Assert.Equal(mainBefore, LandingExecutorTests.ReadGit(repo, "rev-parse", "main"));
+            }
+        }
+        finally { LandingExecutorTests.TryDeleteDirectory(repo); }
     }
 
     [Theory]
