@@ -44,8 +44,11 @@ internal sealed class OwnerConsoleGateProgressLoader(string logPath, string mani
                 Capacity = capacity,
                 HostActivity = OwnerConsoleHostEvidenceRuns.Fold(evidence, now),
                 EvidenceEnded = evidence.Select(entry => entry?.End).OfType<OwnerConsoleEvidenceAttemptEnd>().ToArray(),
-                Lanes = gate.Lanes.Select(row => row.State == OwnerConsoleGateLaneState.Done && row.Outcome == "failed" && !row.IsAttribution
-                    ? row with { FailingTestNames = FailureNames.Read(row) } : row).ToArray()
+                Lanes = LoadLanes(gate.Lanes),
+                OtherLiveGates = gate.OtherLiveGates?.Select(other => other with
+                {
+                    Lanes = LoadLanes(other.Lanes)
+                }).ToArray()
             };
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or KeyNotFoundException or
@@ -54,6 +57,14 @@ internal sealed class OwnerConsoleGateProgressLoader(string logPath, string mani
             return null;
         }
     }
+
+    private static IReadOnlyList<OwnerConsoleGateLane> LoadLanes(IReadOnlyList<OwnerConsoleGateLane> lanes) =>
+        OwnerConsoleGateConfirmation.Attach(lanes.Select(row =>
+        {
+            if (row.State != OwnerConsoleGateLaneState.Done || row.Outcome != "failed" || row.IsAttribution) return row;
+            var results = FailureNames.ReadOutcomes(row);
+            return row with { FailingTestNames = results.FailureNames, SkippedTestCount = results.SkippedCount };
+        }).ToArray(), FailureNames);
 
     private static OwnerConsoleGateDuration? ParseDuration(string line)
     {

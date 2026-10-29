@@ -15,7 +15,9 @@ internal static class OwnerConsoleGateLayout
         if (!gate.Live) lines.Add(OwnerConsoleGateFormatter.StatusSegment(gate));
         else
         {
-            var ordinary = gate.Lanes.Where(row => Kind(row) != RowKind.Baseline).ToArray();
+            var observed = OwnerConsoleGateConfirmation.Attach(gate.Lanes);
+            var linked = observed.Select(row => row.Confirmation?.SourceName).OfType<string>().ToHashSet(StringComparer.Ordinal);
+            var ordinary = observed.Where(row => Kind(row) != RowKind.Baseline && !linked.Contains(row.Name)).ToArray();
             var counted = ordinary.Where(row => Kind(row) is RowKind.Lane or RowKind.Check).ToArray();
             var failed = ordinary.Where(Failed).ToArray();
             var running = ordinary.Where(row => row.State == OwnerConsoleGateLaneState.Running).ToArray();
@@ -25,7 +27,10 @@ internal static class OwnerConsoleGateLayout
             var printed = failed.Concat(running).Concat(queued)
                 .Concat(expanded ? baseline.Concat(passed) : []).ToArray();
             var columns = new Columns(printed, width);
-            lines.Add($"GATE {gate.Kind} | elapsed {(int)gate.Elapsed.TotalMinutes}m" + (gate.Failing ? " | FAILING" : ""));
+            var header = $"GATE {gate.Kind} | elapsed {(int)gate.Elapsed.TotalMinutes}m";
+            if (gate.Failing)
+                lines.AddRange(Wrap(header + " | " + OwnerConsoleGateConfirmation.Header(failed.Where(row => !row.IsAttribution).ToArray()), width));
+            else lines.Add(header);
             lines.Add(string.Join(" + ", gate.Members.Select(member => member.Id + (member.Title.Length == 0 ? "" : " " + member.Title))));
             lines.Add($" x {counted.Count(Failed)} failed   > {counted.Count(row => row.State == OwnerConsoleGateLaneState.Running)} running   + {counted.Count(row => row.State == OwnerConsoleGateLaneState.Done && row.Outcome == "passed")} passed   = {counted.Count(row => row.State == OwnerConsoleGateLaneState.Cached)} cached   . {counted.Count(row => row.State == OwnerConsoleGateLaneState.Queued)} queued");
             if (!gate.Failing) lines.Add(OwnerConsoleGateFormatter.ProgressLine(gate));
@@ -67,9 +72,11 @@ internal static class OwnerConsoleGateLayout
                     foreach (var row in ordered)
                     {
                         lines.Add(columns.Row(row));
-                        if (!failureNames || Kind(row) == RowKind.Confirming || row.FailingTestNames is not { } names) continue;
-                        lines.AddRange(names.Take(3).Select(name => "     " + name));
-                        if (names.Count > 3) lines.Add($"     +{names.Count - 3} more");
+                        if (!failureNames || Kind(row) == RowKind.Confirming) continue;
+                        lines.AddRange((row.FailingTestNames ?? []).Select(name => "     " + name));
+                        if (row.SkippedTestCount > 0) lines.Add($"     ({row.SkippedTestCount} skipped, not failures)");
+                        if (row.Confirmation is { } confirmation)
+                            lines.AddRange(Wrap(confirmation.Line, width, "     "));
                     }
                 }
             }
@@ -98,6 +105,19 @@ internal static class OwnerConsoleGateLayout
         (gate.Members.Count > 3 ? "+" + (gate.Members.Count - 3) : "");
     private static string Ascii(string value) => new(value.Select(c => c is >= ' ' and <= '~' || c == '…' ? c : '?').ToArray());
     private static string Fit(string value, int width) => value.Length <= width ? value : value[..(width - 1)] + "…";
+    private static IEnumerable<string> Wrap(string value, int width, string indent = "")
+    {
+        indent = indent[..Math.Min(indent.Length, width - 1)];
+        var available = width - indent.Length;
+        while (value.Length > available)
+        {
+            var split = value.LastIndexOf(' ', available, available + 1);
+            if (split <= 0) split = available;
+            yield return indent + value[..split];
+            value = value[split..].TrimStart();
+        }
+        if (value.Length > 0) yield return indent + value;
+    }
     private static string Bar(double fraction)
     {
         var filled = double.IsFinite(fraction) ? (int)Math.Floor(Math.Clamp(fraction, 0, 1) * 10) : 0;
