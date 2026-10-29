@@ -17,9 +17,12 @@ public sealed class StaleBuildReceiptClassificationTests : WorkerDispatchTestSup
     }
 
     [Theory]
-    [InlineData(true, "the build receipt does not match the final tree; files changed after build: src/Feature.cs")]
-    [InlineData(false, "receipt does not cover project src/Feature.csproj")]
-    public void Classify_StaleReceipt_PreservesSpecificDiagnostic(bool treeChanged, string diagnostic)
+    [InlineData(true, "the build receipt does not match the final tree; files changed after build: src/Feature.cs",
+        "the build receipt does not match the final tree, files changed after build: src/Feature.cs")]
+    [InlineData(false, "receipt does not cover project src/Feature.csproj",
+        "receipt does not cover project src/Feature.csproj")]
+    public void Classify_StaleReceipt_PreservesSpecificDiagnostic(
+        bool treeChanged, string diagnostic, string receiptDiagnostic)
     {
         var marker = DispatchFailureDiagnosticMarker.FormatWorkerBuildReceiptStale(
             treeChanged, ["src/Feature.cs"], treeChanged ? [] : ["src/Feature.csproj"]);
@@ -37,7 +40,9 @@ public sealed class StaleBuildReceiptClassificationTests : WorkerDispatchTestSup
         Assert.Equal(RecoveryRecommendation.OperatorNeeded, outcome.RecoveryRecommendation);
         Assert.Equal("worker-build-receipt-stale", TaskOutcomeClassifier.TryExtractRule(outcome.ClassifierReceipt));
         Assert.Equal("Worker build receipt does not match the final tree. " + diagnostic, outcome.EvidenceSummary);
-        Assert.Contains(diagnostic, outcome.ClassifierReceipt, StringComparison.Ordinal);
+        // Receipt values escape semicolon field delimiters; the evidence summary above stays verbatim.
+        Assert.EndsWith("; evidence=Worker build receipt does not match the final tree. " + receiptDiagnostic,
+            outcome.ClassifierReceipt, StringComparison.Ordinal);
     }
 
     [Fact]
