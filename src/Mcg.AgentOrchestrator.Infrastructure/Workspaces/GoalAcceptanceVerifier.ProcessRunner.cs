@@ -41,6 +41,19 @@ public sealed partial class GoalAcceptanceVerifier
             keepCaptureFiles: keepCaptureFiles,
             resumeObserver: resumeObserver);
 
+    internal static Task<CommandResult> RunManifestCommandForTestsAsync(
+        AcceptanceManifestCheck check,
+        string workingDirectory,
+        TimeSpan commandTimeout,
+        IReadOnlyDictionary<string, string?> childEnvironmentOverrides,
+        bool resolveBareCommand = true,
+        CancellationToken cancellationToken = default) =>
+        RunProcessAsync(
+            BuildCommandArguments(check), workingDirectory, commandTimeout,
+            forceUtf8ConsoleOutput: false, cancellationToken,
+            resolveBareCommand: resolveBareCommand,
+            childEnvironmentOverrides: childEnvironmentOverrides);
+
     internal static Task<(CommandResult Result, string HeartbeatPath)> RunProcessWithHeartbeatForTestsAsync(
         string[] arguments,
         string workingDirectory,
@@ -128,7 +141,9 @@ public sealed partial class GoalAcceptanceVerifier
         TimeSpan? capturePublicationInterval = null,
         bool stopOnCaptureLimit = false,
         bool? keepCaptureFiles = null,
-        Action<int>? resumeObserver = null) =>
+        Action<int>? resumeObserver = null,
+        bool resolveBareCommand = false,
+        IReadOnlyDictionary<string, string?>? childEnvironmentOverrides = null) =>
         await AcceptanceCheckProcessInvoker.RunAsync(
             arguments, workingDirectory, commandTimeout, forceUtf8ConsoleOutput, cancellationToken,
             timeoutSignal, registrationIdentityReader, new AcceptanceProcessRequest
@@ -147,6 +162,8 @@ public sealed partial class GoalAcceptanceVerifier
                 StopOnCaptureLimit = stopOnCaptureLimit,
                 KeepCaptureFiles = keepCaptureFiles,
                 ResumeObserver = resumeObserver,
+                ResolveBareCommand = resolveBareCommand,
+                ChildEnvironmentOverrides = childEnvironmentOverrides,
             }).ConfigureAwait(false);
 
     internal static class ProcessInvokerAccess

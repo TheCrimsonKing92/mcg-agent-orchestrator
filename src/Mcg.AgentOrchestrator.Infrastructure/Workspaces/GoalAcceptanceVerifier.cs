@@ -45,7 +45,8 @@ public sealed partial record AcceptanceCheckResult(
     IReadOnlyList<AcceptanceTestFailureAttribution>? FailingTestAttributions = null,
     int? ChildProcessId = null,
     DateTimeOffset? ChildProcessStartedAt = null,
-    IReadOnlyList<string>? CoveredBy = null, [property: System.Text.Json.Serialization.JsonIgnore] LaneSchedulingSummary? LaneScheduling = null, [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] IReadOnlyList<string>? SkippedTestIdentities = null);
+    IReadOnlyList<string>? CoveredBy = null, [property: System.Text.Json.Serialization.JsonIgnore] LaneSchedulingSummary? LaneScheduling = null, [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] IReadOnlyList<string>? SkippedTestIdentities = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? ResolvedCommandPath = null);
 
 public enum AcceptanceTestFailureOrigin
 {
@@ -306,6 +307,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         TimeSpan? LaneStallLimit = null, LaneSchedulingSummary? LaneScheduling = null)
     {
         internal string? StandardOutput { get; init; }
+        internal string? ResolvedCommandPath { get; init; }
     }
 
     internal static readonly Encoding StrictUtf8 = new UTF8Encoding(false, true);
@@ -2481,7 +2483,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             worktreePath,
             EngineSettings.ResolveCheckTimeout(check.TimeoutMinutes),
             CreateGateHeartbeatContext(check, arguments, worktreePath, goalId, stableSlotIndex, null),
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken, timeoutSignal: default, resolveBareCommand: true).ConfigureAwait(false);
         if (IsInterrupted(result))
         {
             return (new AcceptanceCheckResult(
@@ -2490,7 +2492,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 result.ExitCode,
                 BuildInterruptedOutput(result),
                 ResultSummary: BuildGenericCommandResultSummary(result),
-                Advisory: check.Advisory), false);
+                Advisory: check.Advisory,
+                ResolvedCommandPath: result.ResolvedCommandPath), false);
         }
 
         return (GoTestJsonGateReceipt.Attach(check, arguments, result, worktreePath, _executionContext?.ResultsPrefix, TailOutput, new AcceptanceCheckResult(
@@ -2499,7 +2502,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             result.ExitCode,
             result.ExitCode == 0 && !GoPackageFocusedEvidence.IsEvidenceCheck(check) ? null : TailOutput(result.Output),
             ResultSummary: BuildGenericCommandResultSummary(result),
-            Advisory: check.Advisory)), false);
+            Advisory: check.Advisory,
+            ResolvedCommandPath: result.ResolvedCommandPath)), false);
     }
 
     private async Task<(AcceptanceCheckResult Result, bool Retried)> RunDotnetTestCheckAsync(
@@ -3485,6 +3489,11 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     private static string? BuildGenericCommandResultSummary(CommandResult result)
     {
         var summary = result.TimedOut ? BuildTimeoutSummary(result) : ExtractResultSummary(result.Output);
+        if (result.ResolvedCommandPath is { } resolvedPath)
+        {
+            var receipt = $"resolved_command={QuoteForDisplay(resolvedPath)}";
+            summary = string.IsNullOrWhiteSpace(summary) ? receipt : $"{summary}; {receipt}";
+        }
         return AppendResourceReceipt(summary, result.ResourceAccounting, result.ResourceAccountingExpected);
     }
 
@@ -4023,13 +4032,24 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             ? $"{timeout.TotalMinutes:0.#}m"
             : $"{timeout.TotalSeconds:0.#}s";
 
+    private Task<CommandResult> RunWithGateHeartbeatAsync(
+        string[] arguments,
+        string workingDirectory,
+        TimeSpan timeout,
+        GateHeartbeatContext heartbeatContext,
+        CancellationToken cancellationToken,
+        CancellationToken timeoutSignal = default) =>
+        RunWithGateHeartbeatAsync(arguments, workingDirectory, timeout, heartbeatContext,
+            cancellationToken, timeoutSignal, resolveBareCommand: false);
+
     private async Task<CommandResult> RunWithGateHeartbeatAsync(
         string[] arguments,
         string workingDirectory,
         TimeSpan timeout,
         GateHeartbeatContext heartbeatContext,
         CancellationToken cancellationToken,
-        CancellationToken timeoutSignal = default)
+        CancellationToken timeoutSignal,
+        bool resolveBareCommand)
     {
         return _requiresTestTelemetryReceipt
             ? await RunProcessAsync(
@@ -4047,7 +4067,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 apparatusReceiptPath: _executionContext?.ApparatusReceiptPath,
                 heartbeatInterval: _testOverrides.HeartbeatInterval, progressInterval: _testOverrides.ProgressInterval,
                 capturePublicationInterval: _testOverrides.CapturePublicationInterval,
-                stopOnCaptureLimit: StopsOnCaptureLimit(heartbeatContext)).ConfigureAwait(false)
+                stopOnCaptureLimit: StopsOnCaptureLimit(heartbeatContext),
+                resolveBareCommand: resolveBareCommand).ConfigureAwait(false)
             : await _runner(arguments, workingDirectory, timeout, cancellationToken).ConfigureAwait(false);
     }
     private GateHeartbeatContext CreateGateHeartbeatContext(

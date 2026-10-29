@@ -71,7 +71,20 @@ internal static class GoalAcceptanceVerifierCaptureCustody
         string workingDirectory,
         string? stdoutRedirectTarget = null,
         string? stderrRedirectTarget = null,
-        bool forceUtf8ConsoleOutput = false)
+        bool forceUtf8ConsoleOutput = false) =>
+        BuildAcceptanceProcessStartInfo(
+            arguments, workingDirectory, stdoutRedirectTarget, stderrRedirectTarget,
+            forceUtf8ConsoleOutput, null, false, out _);
+
+    internal static ProcessStartInfo BuildAcceptanceProcessStartInfo(
+        string[] arguments,
+        string workingDirectory,
+        string? stdoutRedirectTarget,
+        string? stderrRedirectTarget,
+        bool forceUtf8ConsoleOutput,
+        Action<IDictionary<string, string?>>? configureEnvironment,
+        bool resolveBareCommand,
+        out string? resolvedCommandPath)
     {
         var startInfo = new ProcessStartInfo
         {
@@ -79,6 +92,8 @@ internal static class GoalAcceptanceVerifierCaptureCustody
             CreateNoWindow = true,
             WorkingDirectory = workingDirectory
         };
+        configureEnvironment?.Invoke(startInfo.Environment);
+        resolvedCommandPath = null;
 
         if (OperatingSystem.IsWindows())
         {
@@ -88,6 +103,16 @@ internal static class GoalAcceptanceVerifierCaptureCustody
             }
 
             startInfo.FileName = "cmd.exe";
+            if (resolveBareCommand && arguments.Length > 0)
+            {
+                resolvedCommandPath = AcceptanceBareCommandResolver.Resolve(
+                    arguments[0], startInfo.Environment, workingDirectory);
+                if (resolvedCommandPath is not null)
+                {
+                    arguments = (string[])arguments.Clone();
+                    arguments[0] = resolvedCommandPath;
+                }
+            }
             var command = BuildShellCommand(AcceptanceMtpFilterResponseFile.Apply(arguments), QuoteForCmd);
             if (forceUtf8ConsoleOutput)
             {
