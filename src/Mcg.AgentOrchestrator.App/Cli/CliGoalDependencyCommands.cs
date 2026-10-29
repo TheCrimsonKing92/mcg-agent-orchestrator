@@ -52,9 +52,8 @@ internal static class CliGoalDependencyCommands
             return [];
         if (parts.Any(part => part.Equals("--simple", StringComparison.OrdinalIgnoreCase) ||
             part.Equals("--run", StringComparison.OrdinalIgnoreCase) ||
-            part.Equals("--from-backlog", StringComparison.OrdinalIgnoreCase) ||
-            part.Equals("--backlog-item", StringComparison.OrdinalIgnoreCase)))
-            throw new ArgumentException("--depends-on is supported only by goal <objective> --depends-on <goal-prefix> and goal --brief-file <path> --depends-on <goal-prefix>; it cannot be combined with --simple, --run, --from-backlog or --backlog-item.");
+            part.Equals("--from-backlog", StringComparison.OrdinalIgnoreCase)))
+            throw new ArgumentException("--depends-on is supported only by goal <objective> --depends-on <goal-prefix> and goal --brief-file <path> --depends-on <goal-prefix>; it cannot be combined with --simple, --run or --from-backlog.");
 
         var dependencies = new List<Goal>();
         var seen = new HashSet<GoalId>();

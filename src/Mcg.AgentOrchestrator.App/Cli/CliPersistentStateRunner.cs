@@ -2050,7 +2050,7 @@ internal static partial class CliPersistentStateRunner
         var deferredCollaborationWriter = new DeferredGoalCreationCollaborationWriter(
             CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory));
 
-        void FinalizeGoalCreation(Goal goal)
+        void FinalizeGoalCreation(Goal goal, IReadOnlyCollection<string>? preparedSourceBacklogDependencies)
         {
             GoalRefinementWorkCoordinator.RecordPending(kernel, goal.Id);
             var preparedSnapshot = kernel.ExportGoalSnapshot(goal.Id);
@@ -2063,7 +2063,9 @@ internal static partial class CliPersistentStateRunner
             CommitGoalCreationAsync(outboxRepository, workspace, preparedSnapshot,
                     (currentKernel, _) =>
                     {
-                        GoalCreationPreconditionValidator.Validate(currentKernel, preparedSnapshot, workspace);
+                        GoalCreationPreconditionValidator.Validate(
+                            currentKernel, preparedSnapshot, workspace,
+                            preparedSourceBacklogDependencies: preparedSourceBacklogDependencies);
                         currentKernel.ReplaceGoalWithSnapshot(preparedSnapshot);
                         if (request is not null)
                         {

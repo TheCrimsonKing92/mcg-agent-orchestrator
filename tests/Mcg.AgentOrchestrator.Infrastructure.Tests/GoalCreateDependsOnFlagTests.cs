@@ -64,7 +64,6 @@ public sealed class GoalCreateDependsOnFlagTests : CliCommandTestBase
     [InlineData("simple")]
     [InlineData("run")]
     [InlineData("from-backlog")]
-    [InlineData("backlog-item")]
     public async Task Refusal_CreatesNoStoredGoal(string scenario)
     {
         var workspace = CreateWorkspace();
@@ -95,10 +94,6 @@ public sealed class GoalCreateDependsOnFlagTests : CliCommandTestBase
             case "simple": parts.Add("--simple"); break;
             case "run": parts.AddRange(["--run", "--confirm-batch-start"]); break;
             case "from-backlog": parts.Add("--from-backlog"); break;
-            case "backlog-item":
-                var backlogItem = await new BacklogStore(workspace.BacklogStorePath).AddAsync("Fixture backlog item");
-                parts.AddRange(["--backlog-item", backlogItem.Id, "--backlog-coverage", "full"]);
-                break;
         }
 
         var exception = Record.Exception(() => ExecuteCommand(repository, workspace, parts));
@@ -129,6 +124,89 @@ public sealed class GoalCreateDependsOnFlagTests : CliCommandTestBase
                 break;
         }
         Assert.Equal(beforeCount, (await repository.LoadAsync()).Goals.Count);
+    }
+
+    [Theory]
+    [InlineData(false, "full")]
+    [InlineData(true, "full")]
+    [InlineData(false, "slice")]
+    public async Task BacklogItemCreation_PersistsUnionInInitialWrite(bool overlappingExplicit, string coverage)
+    {
+        var workspace = CreateWorkspace();
+        var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
+        var kernel = new AgentOrchestratorKernel();
+        var derived = CreatePrerequisite(kernel, "Derived prerequisite");
+        var explicitGoal = overlappingExplicit ? derived : CreatePrerequisite(kernel, "Explicit prerequisite");
+        await repository.SaveAsync(kernel);
+        var backlog = new BacklogStore(workspace.BacklogStorePath);
+        var source = await backlog.AddAsync("Fixture backlog item");
+        await backlog.AddDependencyAsync(source.Id,
+            new BacklogDependencyTarget(derived.Id.Value, BacklogDependencyTargetKind.Goal),
+            goalExists: id => id == derived.Id.Value);
+        var brief = WriteBrief();
+
+        var createdId = ExecuteGoal(repository, workspace,
+            ["goal", "--brief-file", brief, "--backlog-item", source.Id, "--backlog-coverage", coverage,
+                "--depends-on", explicitGoal.Id.Value[..8]]);
+        var siblingId = ExecuteGoal(repository, workspace, ["goal", "--brief-file", brief]);
+
+        var created = Assert.Single((await repository.LoadAsync()).Goals, goal => goal.Id == createdId);
+        Assert.Equal(source.Id, created.SourceBacklogItemId);
+        Assert.Equal(overlappingExplicit ? 1 : 2, created.DependsOn.Count);
+        Assert.Contains(derived.Id, created.DependsOn);
+        Assert.Contains(explicitGoal.Id, created.DependsOn);
+        Assert.Equal(ReadVersion(workspace, siblingId), ReadVersion(workspace, createdId));
+    }
+
+    [Theory]
+    [InlineData("remove", false)]
+    [InlineData("remove", true)]
+    [InlineData("add", false)]
+    [InlineData("add", true)]
+    [InlineData("retarget", false)]
+    [InlineData("retarget", true)]
+    public async Task BacklogDependencyChange_WithExplicitEdge_RefusesCommit(string change, bool overlappingExplicit)
+    {
+        var workspace = CreateWorkspace();
+        var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
+        var kernel = new AgentOrchestratorKernel();
+        var derived = CreatePrerequisite(kernel, "Derived prerequisite");
+        var other = CreatePrerequisite(kernel, "Other prerequisite");
+        var explicitGoal = overlappingExplicit ? derived : other;
+        await repository.SaveAsync(kernel);
+        var beforeCount = (await repository.LoadAsync()).Goals.Count;
+        var backlog = new BacklogStore(workspace.BacklogStorePath);
+        var source = await backlog.AddAsync("Fixture backlog item");
+        await backlog.AddDependencyAsync(source.Id,
+            new BacklogDependencyTarget(derived.Id.Value, BacklogDependencyTargetKind.Goal),
+            goalExists: id => id == derived.Id.Value);
+        var commitHookInvoked = false;
+        GoalCreationSideEffectDelivery.BeforeStateCommit = _ =>
+        {
+            commitHookInvoked = true;
+            if (change is "remove" or "retarget")
+                backlog.RemoveDependencyAsync(source.Id, derived.Id.Value).GetAwaiter().GetResult();
+            if (change is "add" or "retarget")
+                backlog.AddDependencyAsync(source.Id,
+                    new BacklogDependencyTarget(other.Id.Value, BacklogDependencyTargetKind.Goal),
+                    goalExists: id => id == other.Id.Value).GetAwaiter().GetResult();
+        };
+        InvalidOperationException error;
+        try
+        {
+            error = Assert.Throws<InvalidOperationException>(() => ExecuteCommand(repository, workspace,
+                ["goal", "--brief-file", WriteBrief(), "--backlog-item", source.Id, "--backlog-coverage", "full",
+                    "--depends-on", explicitGoal.Id.Value[..8]]));
+        }
+        finally
+        {
+            GoalCreationSideEffectDelivery.BeforeStateCommit = null;
+        }
+
+        Assert.True(commitHookInvoked);
+        Assert.Equal("source-backlog-dependencies-changed", GoalCreationPreconditionValidator.GetReason(error));
+        Assert.Equal(beforeCount, (await repository.LoadAsync()).Goals.Count);
+        Assert.Empty(await repository.ListOutboxMessagesAsync(GoalCreationSideEffectDelivery.OutboxKind));
     }
 
     [Fact]
