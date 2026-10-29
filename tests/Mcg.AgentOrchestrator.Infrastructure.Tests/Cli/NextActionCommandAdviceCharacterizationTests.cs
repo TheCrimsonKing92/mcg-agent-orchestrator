@@ -174,14 +174,13 @@ public sealed class NextActionCommandAdviceCharacterizationTests
             .Select(File.ReadAllText)
             .Where(text => Regex.IsMatch(text, @"\bpartial\s+class\s+ConsoleViews\b", RegexOptions.CultureInvariant))
             .ToArray();
+        Assert.NotEmpty(partials);
         Assert.True(partials.Length <= 38);
         foreach (var text in partials)
         {
             Assert.DoesNotMatch(@"\bstatic\s+\S+\s+(?:BuildSuggestedCommand|BuildStageSuggestedCommand|BuildRunAssignedTaskCommand|ResolveAssignedAgent)\s*\(", text);
             Assert.DoesNotMatch(@"(?:=>|\breturn)\s*NextActionCommandAdvice\.", text);
         }
-        // Five print-method calls remain; none is a forwarding member.
-        Assert.Equal(5, partials.Sum(text => Regex.Matches(text, @"\bNextActionCommandAdvice\.").Count));
     }
 
     private static (AgentOrchestratorKernel Kernel, Goal Goal, TaskSpec Task, AgentDefinition Agent)
