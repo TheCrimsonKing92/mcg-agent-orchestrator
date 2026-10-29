@@ -63,7 +63,7 @@ public static class IntegrationOnlyCandidateDrift
         return result.Succeeded && !result.DrainTimedOut && value.Length > 0 && !value.Contains('\uFFFD');
     }
 
-    private static bool CompareChanges(string[] oldLines, string[] newLines)
+    internal static bool CompareChanges(string[] oldLines, string[] newLines)
     {
         var oldSections = Sections(oldLines);
         var newSections = Sections(newLines);

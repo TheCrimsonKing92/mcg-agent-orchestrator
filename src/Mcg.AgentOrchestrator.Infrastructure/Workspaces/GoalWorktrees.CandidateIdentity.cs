@@ -39,17 +39,8 @@ public static partial class GoalWorktrees
             var changedFiles = changed.Output.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
             if (changedFiles.Length == 0)
                 return Fail("empty-change", out failureReason);
-            var diff = GitCli.Run(worktreePath, CandidateGitTimeoutMilliseconds,
-                "diff", "--binary", "--no-color", "--no-ext-diff", baseSha, "HEAD");
-            if (!IsUsable(diff) || string.IsNullOrEmpty(diff.Output))
-                return Fail("diff-unavailable", out failureReason);
-            var patch = GitCli.RunWithStandardInput(worktreePath, CandidateGitTimeoutMilliseconds,
-                diff.Output, "patch-id", "--stable");
-            if (!IsUsable(patch))
-                return Fail("patch-id-unavailable", out failureReason);
-            var patchId = patch.Output.Split([' ', '\t', '\r', '\n'], StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
-            if (patchId is null || patchId.Length != 40 || !patchId.All(Uri.IsHexDigit))
-                return Fail("patch-id-malformed", out failureReason);
+            if (!TryComputeStablePatchId(worktreePath, baseSha, "HEAD", out var patchId, out failureReason))
+                return false;
             if (!TryHashBaseClosure(worktreePath, baseSha, changedFiles, out var closureHash, out failureReason))
                 return false;
             var manifest = (manifestIdentity ?? ((path, files) =>
@@ -72,6 +63,24 @@ public static partial class GoalWorktrees
             "merge-base", $"refs/heads/{integrationBranch}", "HEAD");
         mergeBase = result.Output.Trim();
         return IsUsable(result) && !string.IsNullOrWhiteSpace(mergeBase);
+    }
+
+    internal static bool TryComputeStablePatchId(string directory, string baseSha, string revision,
+        out string patchId, out string failureReason, params string[] paths)
+    {
+        patchId = failureReason = string.Empty;
+        var diff = GitCli.Run(directory, CandidateGitTimeoutMilliseconds,
+            ["diff", "--binary", "--no-color", "--no-ext-diff", baseSha, revision, .. paths]);
+        if (!IsUsable(diff) || string.IsNullOrEmpty(diff.Output))
+            return Fail("diff-unavailable", out failureReason);
+        var patch = GitCli.RunWithStandardInput(directory, CandidateGitTimeoutMilliseconds,
+            diff.Output, "patch-id", "--stable");
+        if (!IsUsable(patch)) return Fail("patch-id-unavailable", out failureReason);
+        var value = patch.Output.Split([' ', '\t', '\r', '\n'], StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
+        if (value is null || value.Length != 40 || !value.All(Uri.IsHexDigit))
+            return Fail("patch-id-malformed", out failureReason);
+        patchId = value;
+        return true;
     }
 
     private static bool TryHashBaseClosure(
