@@ -12,7 +12,8 @@ internal static class GateTestObligationEvaluator
     internal sealed record Result(
         GateTestObligation Obligation, Outcome Outcome, IReadOnlyList<string> Selectors, string? SourceId,
         string? WaiverReason = null, IReadOnlyList<TestClassRenameEvidence.ClassRename>? RenameFollows = null,
-        IReadOnlyList<AnsweredSelectorRebinding.Rebind>? AnswerRebinds = null)
+        IReadOnlyList<AnsweredSelectorRebinding.Rebind>? AnswerRebinds = null,
+        IReadOnlyList<GoTestPackageResolution.Resolution>? PackageResolutions = null)
     {
         internal string RenameProvenance => string.Join("; ", (RenameFollows ?? []).Select(rename =>
             $"GATE_TEST_OBLIGATION_RENAME_FOLLOWED id={Obligation.Id[..Math.Min(8, Obligation.Id.Length)]} " +
@@ -23,6 +24,11 @@ internal static class GateTestObligationEvaluator
             $"GATE_TEST_OBLIGATION_ANSWER_REBOUND id={Obligation.Id[..Math.Min(8, Obligation.Id.Length)]} " +
             $"old={rebind.OldClass} new={rebind.NewClass} request={rebind.RequestId[..Math.Min(8, rebind.RequestId.Length)]} " +
             $"answer={rebind.AnswerId} source={SourceId}"));
+
+        internal IReadOnlyList<string> PackageResolutionProvenance => (PackageResolutions ?? []).Select(resolution =>
+            $"GATE_TEST_OBLIGATION_PACKAGE_RESOLVED id={Obligation.Id[..Math.Min(8, Obligation.Id.Length)]} " +
+            $"selector={resolution.Selector} package={resolution.Package} directory={resolution.Directory} source={SourceId}")
+            .ToArray();
     }
 
     internal static IReadOnlyList<Result> Evaluate(
@@ -43,6 +49,8 @@ internal static class GateTestObligationEvaluator
 
         var renames = new Lazy<IReadOnlyList<TestClassRenameEvidence.ClassRename>>(() =>
             TestClassRenameEvidence.Read(renameScope!.RepositoryDirectory, renameScope.IntegrationBranch, candidateSha!));
+        var packageResolution = renameScope is not null && !string.IsNullOrWhiteSpace(candidateSha)
+            ? new GoTestPackageResolution(renameScope.RepositoryDirectory, renameScope.IntegrationBranch, candidateSha) : null;
         return obligations.Select(obligation =>
         {
             if (GateTestObligationWaivers.FindWaiver(goal, obligation) is { } waiver)
@@ -51,6 +59,8 @@ internal static class GateTestObligationEvaluator
             var result = original.Outcome == Outcome.SelectorNotFound && renameScope is not null &&
                 !string.IsNullOrWhiteSpace(candidateSha)
                 ? FollowRenames(original, sources, orchestratorDirectory, renames.Value) : original;
+            if (result.Outcome is Outcome.SelectorNotFound or Outcome.Failed && packageResolution is not null)
+                result = packageResolution.Resolve(result, sources, orchestratorDirectory);
             return result.Outcome == Outcome.SelectorNotFound && answeredRequests is not null
                 ? FollowAnswerRebinds(result, sources, orchestratorDirectory,
                     AnsweredSelectorRebinding.For(goal, obligation, answeredRequests)) : result;
@@ -132,17 +142,25 @@ internal static class GateTestObligationEvaluator
                 return new(obligation, Outcome.Satisfied, obligation.Selectors, source.Id);
             if (newest is not null) continue;
 
-            var failed = evidence.Where(item => !item.Satisfied && item.Failed > 0)
+            newest = Grade(obligation, source.Id, evidence);
+        }
+        return newest ?? new(obligation, Outcome.Pending, obligation.Selectors, null);
+    }
+
+    internal static Result Grade(GateTestObligation obligation, string sourceId,
+        IReadOnlyList<GroupedGateReceiptTrxEvidence.SelectorEvidence> evidence)
+    {
+        if (evidence.All(item => item.Satisfied))
+            return new(obligation, Outcome.Satisfied, obligation.Selectors, sourceId);
+        var failed = evidence.Where(item => !item.Satisfied && item.Failed > 0)
                 .Select(item => item.Selector).ToArray();
-            newest = failed.Length > 0
-                ? new(obligation, Outcome.Failed, failed, source.Id)
+        return failed.Length > 0
+                ? new(obligation, Outcome.Failed, failed, sourceId)
                 : new(obligation, Outcome.SelectorNotFound,
                     evidence.Where(item => !item.Satisfied && item.Failed == 0 &&
                             (item.AmbiguousClassNames is not null || item.Passed + item.Failed + item.Superseded == 0))
                         .Select(item => item.AmbiguousClassNames is not null ? item.ReportedEntry : item.Selector)
-                        .ToArray(), source.Id);
-        }
-        return newest ?? new(obligation, Outcome.Pending, obligation.Selectors, null);
+                        .ToArray(), sourceId);
     }
 
     private static bool AllPathsExist(IReadOnlyList<string> paths, string orchestratorDirectory)
@@ -151,5 +169,5 @@ internal static class GateTestObligationEvaluator
         catch (Exception) { return false; }
     }
 
-    private sealed record Source(string Id, DateTimeOffset CompletedAt, IReadOnlyList<string> Paths, int? BriefVersion);
+    internal sealed record Source(string Id, DateTimeOffset CompletedAt, IReadOnlyList<string> Paths, int? BriefVersion);
 }

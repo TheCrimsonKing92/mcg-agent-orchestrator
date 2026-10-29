@@ -29,6 +29,8 @@ internal static partial class LandingExecutor
         foreach (var result in obligations.Where(result => result.Outcome == GateTestObligationEvaluator.Outcome.Satisfied &&
             result.AnswerRebindProvenance.Length > 0))
             Console.WriteLine(result.AnswerRebindProvenance);
+        foreach (var line in obligations.SelectMany(result => result.PackageResolutionProvenance))
+            Console.WriteLine(line);
         var obligationLines = obligations
             .Where(result => result.Outcome is not (GateTestObligationEvaluator.Outcome.Satisfied or GateTestObligationEvaluator.Outcome.Waived))
             .Select(result =>
