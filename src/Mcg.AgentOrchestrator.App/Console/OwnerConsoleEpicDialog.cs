@@ -1,4 +1,3 @@
-using System.Collections.ObjectModel;
 using Terminal.Gui.Input;
 using Terminal.Gui.ViewBase;
 using Terminal.Gui.Views;
@@ -14,6 +13,9 @@ internal sealed class OwnerConsoleEpicDialog : FrameView
     private readonly ListView _body = new() { Y = 1, Width = Dim.Fill(), Height = Dim.Fill(2) };
     private readonly Label _hint = new() { Y = Pos.AnchorEnd(2), Width = Dim.Fill(), Height = 2 };
     private OwnerConsoleEpicViewModel? _model;
+    private readonly OwnerConsoleListRenderer _source = new();
+    private readonly OwnerConsoleLastGood<(OwnerConsoleEpicWindow, string?), OwnerConsoleEpicViewModel> _lastGood = new();
+    private (OwnerConsoleEpicWindow, string?)? _subject;
     private string? _failure;
     private string? _loadingDetailTitle;
     private bool _refreshing;
@@ -122,7 +124,7 @@ internal sealed class OwnerConsoleEpicDialog : FrameView
                 key == Key.PageUp ? -Math.Max(1, _body.Viewport.Height) :
                 key == Key.PageDown ? Math.Max(1, _body.Viewport.Height) : 0;
             _scroll = Math.Clamp(_scroll + delta, 0, Math.Max(0, Lines.Count - 1));
-            Format();
+            Format(select: true);
         }
         else if (_model is { Epics.Count: > 0, SelectedDetail: null })
         {
@@ -130,7 +132,7 @@ internal sealed class OwnerConsoleEpicDialog : FrameView
             {
                 _selectedIndex = Math.Clamp(_selectedIndex + (key == Key.CursorUp ? -1 : 1), 0, _model.Epics.Count - 1);
                 SelectedEpicId = _model.Epics[_selectedIndex].Epic.Id;
-                Format();
+                Format(select: true);
             }
             else if (key == Key.Enter)
             {
@@ -148,11 +150,17 @@ internal sealed class OwnerConsoleEpicDialog : FrameView
 
     private void BeginLoading()
     {
-        _loads.Select(TimeWindow, ShowingDetail ? SelectedEpicId : null);
+        var subject = (TimeWindow, ShowingDetail ? SelectedEpicId : null);
+        _loads.Select(subject.TimeWindow, subject.Item2);
+        if (_subject != subject)
+        {
+            if (_lastGood.TryGet(subject, out var prior)) _model = prior;
+            _scroll = 0;
+            _subject = subject;
+        }
         LoadState = OwnerConsoleEpicLoadState.Loading;
         _failure = null;
         _refreshing = _model is not null;
-        _scroll = 0;
         Format();
     }
 
@@ -172,7 +180,11 @@ internal sealed class OwnerConsoleEpicDialog : FrameView
         _failure = result.Failure;
         _refreshing = result.Refreshing;
         LoadState = result.State;
-        if (result.State != OwnerConsoleEpicLoadState.Failed) _model = result.Model;
+        if (result.Model is { } loaded)
+        {
+            _model = loaded;
+            _lastGood.Remember((loaded.Window, loaded.SelectedDetail?.Epic.Id), loaded);
+        }
         if (result.Model is { } model)
         {
             var index = Array.FindIndex(model.Epics.ToArray(), row => row.Epic.Id == SelectedEpicId);
@@ -183,7 +195,7 @@ internal sealed class OwnerConsoleEpicDialog : FrameView
         Format();
     }
 
-    private void Format()
+    private void Format(bool select = false)
     {
         if (_disposed || !IsOpen || _formatting) return;
         _formatting = true;
@@ -213,18 +225,20 @@ internal sealed class OwnerConsoleEpicDialog : FrameView
                     ? OwnerConsoleEpicFormatter.DetailLines(detail, width)
                     : OwnerConsoleEpicFormatter.ListLines(_model!, width, SelectedEpicId)
             };
-            if (_model is not null && LoadState == OwnerConsoleEpicLoadState.Failed)
-                Lines = Lines.Concat(OwnerConsoleEpicFormatter.Wrap(OwnerConsoleEpicFormatter.FailedLine(_failure!), width)).ToArray();
             _scroll = Math.Clamp(_scroll, 0, Math.Max(0, Lines.Count - 1));
-            _body.SetSource(new ObservableCollection<string>(Lines));
+            var changed = _source.Apply(_body, Lines);
             var row = ShowingDetail ? _scroll : _model?.Epics.Take(_selectedIndex)
                 .Sum(epic => 2 + OwnerConsoleEpicFormatter.Wrap(OwnerConsoleEpicFormatter.Summary(epic), width).Count() +
                     (epic.Plan is null ? 0 : OwnerConsoleEpicFormatter.Wrap(epic.Outcome.Render(), width).Count())) ?? 0;
             if (!ShowingDetail && _model is { } model && OwnerConsoleEpicFormatter.HasNoActivity(model))
                 row += OwnerConsoleEpicFormatter.Wrap(OwnerConsoleEpicFormatter.NoActivityLine(TimeWindow), width).Count();
-            _body.SelectedItem = Lines.Count == 0 ? null : Math.Clamp(row, 0, Lines.Count - 1);
-            // Scrolling can raise ViewportChanged; suppress reentrant formatting here.
-            _body.EnsureSelectedItemVisible();
+            if (changed || select)
+            {
+                var selected = Lines.Count == 0 ? (int?)null : Math.Clamp(row, 0, Lines.Count - 1);
+                if (changed || _body.SelectedItem != selected) _body.SelectedItem = selected;
+                // Scrolling can raise ViewportChanged; suppress reentrant formatting here.
+                _body.EnsureSelectedItemVisible();
+            }
             RenderTitle();
         }
         finally { _formatting = false; }
@@ -232,7 +246,11 @@ internal sealed class OwnerConsoleEpicDialog : FrameView
 
     private void RenderTitle()
     {
-        var title = OwnerConsoleOverflow.Title("Epics",
+        var status = _model is null ? null : LoadState == OwnerConsoleEpicLoadState.Failed
+            ? "refresh failed: " + _failure : LoadState == OwnerConsoleEpicLoadState.Unavailable
+            ? "refresh failed: " + OwnerConsoleEpicFormatter.UnavailableText
+            : LoadState == OwnerConsoleEpicLoadState.Loading || _refreshing ? "refreshing" : null;
+        var title = OwnerConsoleOverflow.Title("Epics" + (status is null ? "" : $" ({status})"),
             OwnerConsoleOverflow.Of(Lines.Count, _body.Viewport.Y, _body.Viewport.Height),
             Frame.Width - OwnerConsoleOverflow.TitleChrome);
         if (Title != title) Title = title;
@@ -243,6 +261,7 @@ internal sealed class OwnerConsoleEpicDialog : FrameView
         _loads.Close();
         IsOpen = false;
         _model = null;
+        _subject = null;
         _failure = null;
         _refreshing = false;
         Visible = false;

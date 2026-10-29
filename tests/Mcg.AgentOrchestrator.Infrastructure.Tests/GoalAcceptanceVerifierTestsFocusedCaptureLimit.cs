@@ -19,7 +19,7 @@ public sealed class GoalAcceptanceVerifierTestsFocusedCaptureLimit : GoalAccepta
         var check = LoopingCheck(timeoutMinutes: 30, pidPath);
         try
         {
-            var verifier = new GoalAcceptanceVerifier();
+            var verifier = new GoalAcceptanceVerifier(new CrosswalkExecutableResolver());
             var run = verifier.RunInvocationForOwnerTestsAsync(
                 owner, owner.CreateInvocation(check.Name), check, Path.GetTempPath(), owner.CancellationToken);
             var result = await run.WaitAsync(TimeSpan.FromSeconds(20));
@@ -120,7 +120,7 @@ public sealed class GoalAcceptanceVerifierTestsFocusedCaptureLimit : GoalAccepta
         };
         try
         {
-            var verifier = new GoalAcceptanceVerifier();
+            var verifier = new GoalAcceptanceVerifier(new CrosswalkExecutableResolver());
             var run = await verifier.RunInvocationForOwnerTestsAsync(
                 owner, owner.CreateInvocation(check.Name), check, Path.GetTempPath(), owner.CancellationToken);
 

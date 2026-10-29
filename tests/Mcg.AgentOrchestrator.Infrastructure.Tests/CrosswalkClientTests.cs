@@ -283,6 +283,12 @@ public sealed class CrosswalkClientTests : IDisposable
         Assert.Empty(run.Result);
         Assert.Equal("", list.Detail);
         Assert.Equal("", run.Detail);
+        var diagnostic = Assert.Single(list.Diagnostics);
+        Assert.Equal(diagnostic, Assert.Single(run.Diagnostics));
+        if (configured == "missing.exe")
+            Assert.Contains(Path.Combine(_sandbox.FullName, configured), diagnostic.Detail);
+        else
+            Assert.Contains(Path.Combine(_sandbox.FullName, "tools", "crosswalk", "crosswalk.exe"), diagnostic.Detail);
         Assert.Equal(0, calls);
     }
 

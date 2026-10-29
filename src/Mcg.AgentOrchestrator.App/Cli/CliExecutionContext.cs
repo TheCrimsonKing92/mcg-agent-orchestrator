@@ -168,8 +168,7 @@ public TextReader StandardInput { get; } = standardInput ?? Console.In;
 
 public bool IsStandardInputRedirected { get; } = isStandardInputRedirected ?? Console.IsInputRedirected;
 
-public IGoalAcceptanceVerifier AcceptanceVerifier { get; init; } = new GoalAcceptanceVerifier
-    { CrosswalkExecutable = CrosswalkExecutableComposition.ForProcess };
+public IGoalAcceptanceVerifier AcceptanceVerifier { get; init; } = new GoalAcceptanceVerifier(CrosswalkExecutableComposition.ForProcess);
 
 public bool RunInjectedAcceptanceVerifierInCurrentProcess { get; init; }
 

@@ -28,6 +28,9 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
     private readonly Label _preview = new() { Width = Dim.Fill(), Height = 3 };
     private readonly OwnerConsoleSelectedGoalSummary _summary;
     private OwnerConsoleSelectedGoalPreview _selectedPreview = new(null, null);
+    private readonly OwnerConsoleLastGood<string, (OwnerConsoleSelectedGoalPreview Preview, OwnerConsoleBoardRow? Row)> _previewLastGood = new();
+    private OwnerConsoleBoardRow? _previewRow;
+    private string? _previewStatus;
     internal string PreviewText => _preview.Text;
     internal Task PreviewLoad => _summary.LastLoad;
     private readonly ListView _activity;
@@ -102,7 +105,25 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
             message => Invoke(() => { if (!_token.IsCancellationRequested) ShowNotice(message, OwnerConsoleNoticeSeverity.Failure, OwnerConsoleNoticeSource.Action); }), options,
             message => Invoke(() => { if (!_token.IsCancellationRequested) ShowNotice(message, OwnerConsoleNoticeSeverity.Success, OwnerConsoleNoticeSource.Action); }));
         _summary = new(controller.LoadGoalSummaryAsync, Invoke, preview =>
-        { _selectedPreview = preview; RenderPreview(); }, _token);
+        {
+            _previewStatus = null;
+            _previewRow = _controller.Model?.Board.FirstOrDefault(row =>
+                row.Project == SelectedProject && row.GoalId == preview.GoalId);
+            if (preview.GoalId is { } id)
+            {
+                if (preview.Unavailable is null && preview.Summary?.Preview is not null)
+                    _previewLastGood.Remember(id, (preview, _previewRow));
+                else if (_previewLastGood.TryGet(id, out var prior))
+                {
+                    _previewStatus = preview.Unavailable is { } error ? "refresh failed: " + error :
+                        preview.Summary is not null ? "refresh failed: could not load the goal" : "refreshing";
+                    preview = prior.Preview;
+                    _previewRow = prior.Row;
+                }
+            }
+            _selectedPreview = preview;
+            RenderPreview();
+        }, _token);
         _decisionsFrame = new FrameView { Title = "DECISIONS", Y = 1, Width = Dim.Fill(), Height = Dim.Percent(20) };
         _boardFrame = new FrameView { Title = "BOARD", Y = Pos.Bottom(_decisionsFrame), Width = Dim.Fill(), Height = Dim.Percent(33) };
         _previewFrame = new FrameView { Title = "SELECTED", Y = Pos.Bottom(_boardFrame), Width = Dim.Fill(), Height = 5 };
@@ -249,13 +270,14 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
     private void RenderOverflow()
     {
         var model = _controller.Model;
-        SetTitle(_decisionsFrame, "DECISIONS", OwnerConsoleOverflow.Of(
-            model?.Decisions.Length ?? 0, _decisions.Viewport.Y, _decisions.Viewport.Height));
+        SetTitle(_decisionsFrame, "DECISIONS" + (_decisionsPane.TitleStatus is { } status ? $" ({status})" : ""), OwnerConsoleOverflow.Of(
+            _decisions.Source?.Count ?? 0, _decisions.Viewport.Y, _decisions.Viewport.Height));
         SetTitle(_boardFrame, "BOARD", OwnerConsoleOverflow.Of(
             model?.Board.Length ?? 0, _board.RowOffset, BoardBodyRows()));
         var activityTitle = OwnerConsoleActivityTitle.Title(OwnerConsoleOverflow.Of(
             ActivityLines.Count, _activity.Viewport.Y, _activity.Viewport.Height),
-            _activityPane.Following, _activityFrame.Frame.Width - OwnerConsoleOverflow.TitleChrome, _activityPane.Filter);
+            _activityPane.Following, _activityFrame.Frame.Width - OwnerConsoleOverflow.TitleChrome,
+            _activityPane.Filter, _activityPane.TitleStatus);
         if (_activityFrame.Title != activityTitle) _activityFrame.Title = activityTitle;
 
         static void SetTitle(FrameView frame, string baseTitle, OwnerConsoleOverflow overflow)
@@ -685,15 +707,21 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
 
     private void RenderPreview()
     {
-        if (SelectedBoardRow is { } row && (row.IsForeign || row.IsDiagnostic))
+        if (SelectedBoardRow is { } selected && (selected.IsForeign || selected.IsDiagnostic))
         {
-            _previewFrame.Title = OwnerConsoleSelectedPreview.Title(row.IsDiagnostic ? null : row.GoalId);
-            _preview.Text = row.IsDiagnostic ? row.Title : OwnerConsoleBoardSource.ForeignRowMessage(row);
+            var foreignTitle = OwnerConsoleSelectedPreview.Title(selected.IsDiagnostic ? null : selected.GoalId);
+            if (_previewFrame.Title != foreignTitle) _previewFrame.Title = foreignTitle;
+            var foreignText = selected.IsDiagnostic ? selected.Title : OwnerConsoleBoardSource.ForeignRowMessage(selected);
+            if (_preview.Text != foreignText) _preview.Text = foreignText;
             return;
         }
-        _previewFrame.Title = OwnerConsoleSelectedPreview.Title(_selectedPreview.GoalId);
-        var stage = _controller.Model?.Board.FirstOrDefault(item => item.Project == SelectedProject && item.GoalId == _selectedPreview.GoalId)?.Stage;
-        _preview.Text = OwnerConsoleBoardRenderer.Preview(_selectedPreview, _preview.Viewport.Width, stage, _clock.LocalTimeZone);
+        var title = OwnerConsoleSelectedPreview.Title(_selectedPreview.GoalId) +
+            (_previewStatus is null ? "" : $" ({_previewStatus})");
+        if (_previewFrame.Title != title) _previewFrame.Title = title;
+        var row = _previewRow;
+        var text = string.Join('\n', OwnerConsoleSelectedPreview.Lines(_selectedPreview, row?.Stage,
+            _clock.LocalTimeZone, _preview.Viewport.Width, row));
+        if (_preview.Text != text) _preview.Text = text;
     }
 
     private bool RefuseSelectedBoardRow()

@@ -135,9 +135,11 @@ public sealed class OwnerConsoleEpicViewTests
     {
         using var fixture = new Fixture();
         await fixture.View.HandleKeyAsync(new Key('e'));
+        var prior = fixture.View.EpicView.Lines.ToArray();
         fixture.Source.PlanError = new InvalidOperationException("plan unavailable");
         await fixture.View.HandleKeyAsync(Key.Enter);
-        Assert.Contains("Could not load epics: plan unavailable. Press Ctrl+R to retry.", fixture.View.EpicView.Lines);
+        Assert.Equal(prior, fixture.View.EpicView.Lines);
+        Assert.Contains("refresh failed: plan unavailable", fixture.View.EpicView.Title.ToString());
         Assert.Contains("stale", fixture.View.EpicView.HeaderLine);
         Assert.DoesNotContain("(no plan)", fixture.View.EpicView.Lines);
         fixture.Source.PlanError = null;
@@ -387,27 +389,36 @@ public sealed class OwnerConsoleEpicViewTests
     public async Task Failure_Retry_ShowsReasonAndClearsFailureAndRetryHint(bool detail)
     {
         using var fixture = new Fixture();
+        string[]? priorLines = null;
         if (detail)
         {
             await fixture.View.HandleKeyAsync(new Key('e'));
             await fixture.View.HandleKeyAsync(Key.CursorDown);
+            priorLines = fixture.View.EpicView.Lines.ToArray();
         }
         fixture.Source.Error = new InvalidOperationException("portfolio unavailable.");
         await fixture.View.HandleKeyAsync(detail ? Key.Enter : new Key('e'));
         var dialog = fixture.View.EpicView;
-        Assert.Contains("Could not load epics: portfolio unavailable. Press Ctrl+R to retry.", dialog.Lines);
         if (detail)
         {
+            Assert.Equal(priorLines, dialog.Lines);
+            Assert.Contains("refresh failed: portfolio unavailable.", dialog.Title.ToString());
             Assert.Contains("> Beta epic", dialog.Lines);
             Assert.Contains("stale", dialog.HeaderLine);
         }
+        else Assert.Contains("Could not load epics: portfolio unavailable. Press Ctrl+R to retry.", dialog.Lines);
         Assert.Contains("failed", dialog.HeaderLine);
         Assert.Contains("Ctrl+R retry", dialog.HintText);
         fixture.Source.Error = null;
         var pending = fixture.Source.HoldNextLoad();
         var retrying = fixture.View.HandleKeyAsync(new Key('r').WithCtrl);
         await fixture.Source.LoadStarted.Task.WaitAsync(TestContext.Current.CancellationToken);
-        if (detail) Assert.Contains("> Beta epic", dialog.Lines);
+        if (detail)
+        {
+            Assert.Equal(priorLines, dialog.Lines);
+            Assert.Contains("(refreshing)", dialog.Title.ToString());
+            Assert.Contains("> Beta epic", dialog.Lines);
+        }
         else Assert.Equal(["Loading epics (last 24 hours)…"], dialog.Lines);
         Assert.DoesNotContain("Ctrl+R retry", dialog.HintText);
         fixture.Source.Release(pending, Now.AddHours(-24));
@@ -582,17 +593,18 @@ public sealed class OwnerConsoleEpicViewTests
     }
 
     [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
-    public async Task Reopen_HeldLoad_ClearsPreviousContent()
+    public async Task Reopen_HeldLoad_RetainsPreviousContent()
     {
         using var fixture = new Fixture();
         await fixture.View.HandleKeyAsync(new Key('e'));
         Assert.Contains("> Alpha epic", fixture.View.EpicView.Lines);
+        var prior = fixture.View.EpicView.Lines.ToArray();
         await fixture.View.HandleKeyAsync(Key.Esc);
         var pending = fixture.Source.HoldNextLoad();
         var opening = fixture.View.HandleKeyAsync(new Key('e'));
         await fixture.Source.LoadStarted.Task.WaitAsync(TestContext.Current.CancellationToken);
-        Assert.Equal(["Loading epics (last 24 hours)…"], fixture.View.EpicView.Lines);
-        Assert.Contains("loading…", fixture.View.EpicView.HeaderLine);
+        Assert.Equal(prior, fixture.View.EpicView.Lines);
+        Assert.Contains("(refreshing)", fixture.View.EpicView.Title.ToString());
         fixture.Source.Release(pending, Now.AddHours(-24));
         await opening.WaitAsync(TestContext.Current.CancellationToken);
         AssertSummaries(fixture, Now.AddHours(-24));
@@ -692,8 +704,8 @@ public sealed class OwnerConsoleEpicViewTests
         fixture.Source.Error = new InvalidOperationException("refresh unavailable");
         await fixture.View.EpicView.ReloadAsync();
         var dialog = fixture.View.EpicView;
-        Assert.Equal(prior, dialog.Lines.Take(prior.Length));
-        Assert.Contains("Could not load epics: refresh unavailable. Press Ctrl+R to retry.", dialog.Lines);
+        Assert.Equal(prior, dialog.Lines);
+        Assert.Contains("refresh failed: refresh unavailable", dialog.Title.ToString());
         Assert.Contains("stale", dialog.HeaderLine);
         var retainedHeader = dialog.HeaderLine.Replace("\n", " ");
         Assert.Contains("updated 01:00:00", retainedHeader);
