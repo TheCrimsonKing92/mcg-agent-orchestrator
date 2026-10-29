@@ -6,15 +6,17 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 internal static class PreReviewEvidenceContextBuilder
 {
     internal static PreReviewEvidenceContext Build(
-        string? candidateSha, RepositoryChangeSummary changeSummary, RepositoryTestImpactPlan plan) =>
-        BuildMappedPreReviewEvidenceContext(candidateSha, changeSummary, plan) with
+        string? candidateSha, RepositoryChangeSummary changeSummary, RepositoryTestImpactPlan plan,
+        Action<string>? log = null) =>
+        BuildMappedPreReviewEvidenceContext(candidateSha, changeSummary, plan, log ?? Console.WriteLine) with
         {
             TestImpactDegradation = plan.ReverseDependencyDegradation,
             TestImpactHeadroom = plan.ReverseDependencyHeadroom
         };
 
     private static PreReviewEvidenceContext BuildMappedPreReviewEvidenceContext(
-        string? candidateSha, RepositoryChangeSummary changeSummary, RepositoryTestImpactPlan plan)
+        string? candidateSha, RepositoryChangeSummary changeSummary, RepositoryTestImpactPlan plan,
+        Action<string> log)
     {
         // Manifest scoping can replace the plan's no-build check; candidate cleanup still takes priority.
         if (changeSummary.HasGeneratedArtifacts ||
@@ -52,6 +54,11 @@ internal static class PreReviewEvidenceContextBuilder
 
         var selected = focusedChecks.Select(check => check.CommandLine).ToArray();
         var requests = new List<string>();
+        var notApplicableChecks = new List<string>();
+        string WithNotApplicableChecks(string reason) => notApplicableChecks.Count == 0
+            ? reason
+            : $"{reason} {string.Join(" ", notApplicableChecks)}";
+
         foreach (var check in focusedChecks)
         {
             var filterIndex = FindArgument(check.Command, "--filter");
@@ -63,7 +70,7 @@ internal static class PreReviewEvidenceContextBuilder
                     candidateSha,
                     selected,
                     null,
-                    plan.Summary,
+                    WithNotApplicableChecks(plan.Summary),
                     NoApplicableTests: false,
                     MappingNeedsInput: true);
             }
@@ -74,7 +81,7 @@ internal static class PreReviewEvidenceContextBuilder
                     candidateSha,
                     selected,
                     null,
-                    $"Mapped project is not supported by the focused evidence broker: {project}",
+                    WithNotApplicableChecks($"Mapped project is not supported by the focused evidence broker: {project}"),
                     NoApplicableTests: false,
                     MappingNeedsInput: true);
             }
@@ -84,9 +91,17 @@ internal static class PreReviewEvidenceContextBuilder
                     candidateSha,
                     selected,
                     null,
-                    $"Mapped test command has an empty --filter argument: {check.CommandLine}",
+                    WithNotApplicableChecks($"Mapped test command has an empty --filter argument: {check.CommandLine}"),
                     NoApplicableTests: false,
                     MappingNeedsInput: true);
+            }
+
+            if (PreReviewExclusionOnlyFilter.IsExclusionOnly(check.Command[filterIndex + 1]))
+            {
+                var decision = $"check=\"{check.Name}\" reason=\"{PreReviewExclusionOnlyFilter.NotApplicableReason}\"";
+                notApplicableChecks.Add($"not-applicable {decision}");
+                log($"PRE_REVIEW_CHECK_NOT_APPLICABLE candidate={candidateSha} {decision}");
+                continue;
             }
 
             if (!PreReviewFocusedRequestSplitter.TrySplitRequestItems(
@@ -94,19 +109,20 @@ internal static class PreReviewEvidenceContextBuilder
             {
                 return new PreReviewEvidenceContext(
                     candidateSha, selected, null,
-                    "Mapped test filter cannot be split into broker-safe positive clauses.",
+                    WithNotApplicableChecks("Mapped test filter cannot be split into broker-safe positive clauses."),
                     NoApplicableTests: false, MappingNeedsInput: true);
             }
             requests.AddRange(requestItems);
         }
 
+        var noApplicableTests = requests.Count == 0 && notApplicableChecks.Count > 0;
         return new PreReviewEvidenceContext(
             candidateSha,
             requests,
-            string.Join("; ", requests),
-            plan.Summary,
-            NoApplicableTests: false,
-            MappingNeedsInput: requests.Count == 0);
+            noApplicableTests ? null : string.Join("; ", requests),
+            WithNotApplicableChecks(plan.Summary),
+            NoApplicableTests: noApplicableTests,
+            MappingNeedsInput: requests.Count == 0 && !noApplicableTests);
     }
 
     private static int FindArgument(IReadOnlyList<string> arguments, string value)
