@@ -127,6 +127,56 @@ public sealed class GoalCreateDependsOnFlagTests : CliCommandTestBase
     }
 
     [Theory]
+    [InlineData("unknown")]
+    [InlineData("ambiguous")]
+    [InlineData("cancelled")]
+    public async Task BacklogItemRefusal_InvalidPrerequisite_CreatesNoStoredGoal(string scenario)
+    {
+        var workspace = CreateWorkspace();
+        var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
+        var kernel = new AgentOrchestratorKernel();
+        var prerequisite = CreatePrerequisite(kernel, "Prerequisite A");
+        if (scenario == "ambiguous")
+        {
+            kernel.CreateGoal(new GoalId("abcdef01000000000000000000000001"), "Ambiguous A");
+            kernel.CreateGoal(new GoalId("abcdef02000000000000000000000002"), "Ambiguous B");
+        }
+        if (scenario == "cancelled")
+            kernel.CancelGoal(prerequisite.Id, "Fixture cancellation");
+        await repository.SaveAsync(kernel);
+        var beforeCount = (await repository.LoadAsync()).Goals.Count;
+        var source = await new BacklogStore(workspace.BacklogStorePath).AddAsync("Fixture backlog item");
+        var prefix = scenario switch
+        {
+            "unknown" => "zzzz9999",
+            "ambiguous" => "abcdef0",
+            _ => prerequisite.Id.Value[..8]
+        };
+
+        var exception = Record.Exception(() => ExecuteCommand(repository, workspace,
+            ["goal", "--brief-file", WriteBrief(), "--backlog-item", source.Id, "--backlog-coverage", "full",
+                "--depends-on", prefix]));
+
+        switch (scenario)
+        {
+            case "unknown":
+                Assert.Contains(prefix, Assert.IsType<KeyNotFoundException>(exception).Message);
+                break;
+            case "ambiguous":
+                Assert.Contains("ambiguous", Assert.IsType<InvalidOperationException>(exception).Message);
+                break;
+            case "cancelled":
+                var rejected = Assert.IsType<InvalidOperationException>(exception);
+                Assert.Contains("GOAL_DEPENDS_ON_REJECTED", rejected.Message);
+                Assert.Contains(prefix, rejected.Message);
+                Assert.Contains("Cancelled", rejected.Message);
+                break;
+        }
+        Assert.Equal(beforeCount, (await repository.LoadAsync()).Goals.Count);
+        Assert.Empty(await repository.ListOutboxMessagesAsync(GoalCreationSideEffectDelivery.OutboxKind));
+    }
+
+    [Theory]
     [InlineData(false, "full")]
     [InlineData(true, "full")]
     [InlineData(false, "slice")]
@@ -279,6 +329,20 @@ public sealed class GoalCreateDependsOnFlagTests : CliCommandTestBase
             Fingerprint("--depends-on", "DEF67890", "--depends-on", "ABC12345"));
         Assert.NotEqual(Fingerprint("--depends-on", "abc12345"),
             Fingerprint("--depends-on", "abc12345", "--depends-on", "abc12345"));
+    }
+
+    [Fact]
+    public void BacklogItemFingerprint_ExplicitSet_NormalizesOrderAndCase()
+    {
+        var workspace = CreateWorkspace();
+        var agents = AgentCatalog.Default().Agents;
+        string Fingerprint(params string[] dependencies) => GoalIntakeRequestMapper.Map(
+            ["goal", "Objective text", "--request-key", "k1", "--backlog-item", "backlog-fixture",
+                "--backlog-coverage", "full", ..dependencies], workspace, agents)!.Fingerprint;
+
+        Assert.NotEqual(Fingerprint("--depends-on", "abc12345"), Fingerprint("--depends-on", "def67890"));
+        Assert.Equal(Fingerprint("--depends-on", "abc12345", "--depends-on", "def67890"),
+            Fingerprint("--depends-on", "DEF67890", "--depends-on", "ABC12345"));
     }
 
     [Fact]
