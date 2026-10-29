@@ -9,7 +9,8 @@ public sealed class OwnerConsoleGateLayoutTests
         Assert.Equal(new[]
         {
             "GATE train | elapsed 29m | FAILING, confirming 1 failure(s)",
-            "ca798e7c First + 171a09ca Second",
+            "  ca798e7c  First",
+            "  171a09ca  Second",
             " x 1 failed   > 4 running   + 4 passed   = 1 cached   . 1 queued",
             "FAILED",
             " x Remainder                     1091s / 970s  local slot 0  failed",
@@ -57,7 +58,7 @@ public sealed class OwnerConsoleGateLayoutTests
         var gate = Model() with { Lanes = Model().Lanes.Where(row => row.Outcome != "failed").ToArray() };
         var lines = Render(gate);
         Assert.DoesNotContain("FAILED", lines);
-        Assert.Equal(OwnerConsoleGateFormatter.ProgressLine(gate), lines[3]);
+        Assert.Equal(OwnerConsoleGateFormatter.ProgressLine(gate), lines[4]);
         Assert.EndsWith("~9m", OwnerConsoleGateFormatter.StatusSegment(gate));
         Assert.EndsWith("FAILING", OwnerConsoleGateFormatter.StatusSegment(Model()));
     }
@@ -74,7 +75,7 @@ public sealed class OwnerConsoleGateLayoutTests
         var before = Render(gate, 120);
         var collapsed = Render(changed, 120);
         Assert.Equal(before[0], collapsed[0]);
-        Assert.Equal(before[2], collapsed[2]);
+        Assert.Equal(before[3], collapsed[3]);
         Assert.Contains("BASELINE  3 comparison runs: 1 failed, 1 running, 1 passed (Enter to expand)", collapsed);
         Assert.DoesNotContain(collapsed, line => line.Contains("core tests") || line.Contains("execution tests"));
         var expanded = Render(changed, 120, true);
@@ -96,7 +97,7 @@ public sealed class OwnerConsoleGateLayoutTests
             Lane("done lane", OwnerConsoleGateLaneState.Done, "passed")
         } };
         var lines = Render(gate, 120, true);
-        Assert.Equal(" x 0 failed   > 1 running   + 1 passed   = 0 cached   . 0 queued", lines[2]);
+        Assert.Equal(" x 0 failed   > 1 running   + 1 passed   = 0 cached   . 0 queued", lines[3]);
         Assert.Contains("  checks", lines);
         Assert.Contains("  confirming", lines);
         Assert.Contains(lines, line => line.StartsWith(" > confirming failure: Signal"));
@@ -110,10 +111,10 @@ public sealed class OwnerConsoleGateLayoutTests
     {
         var gate = Model() with { Lanes = [Lane("one lane", OwnerConsoleGateLaneState.Done, "passed")] };
         var lines = Render(gate);
-        Assert.Equal(new[] { "GATE train | elapsed 29m", "ca798e7c First + 171a09ca Second",
+        Assert.Equal(new[] { "GATE train | elapsed 29m", "  ca798e7c  First", "  171a09ca  Second",
             " x 0 failed   > 0 running   + 1 passed   = 0 cached   . 0 queued",
             "[######----] estimate 62%  ~9m left", "PASSED  1 lanes (Enter to expand)", "WHERE   local [##########]" }, lines);
-        Assert.DoesNotContain(Render(gate, 120, true), line => line.StartsWith("  "));
+        Assert.DoesNotContain(Render(gate, 120, true).Skip(1 + gate.Members.Count), line => line.StartsWith("  "));
     }
 
     [Theory]
