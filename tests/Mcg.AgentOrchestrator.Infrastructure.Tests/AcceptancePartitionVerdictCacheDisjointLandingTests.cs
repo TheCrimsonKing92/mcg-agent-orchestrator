@@ -217,6 +217,8 @@ public sealed class AcceptancePartitionVerdictCacheDisjointLandingTests
 
         internal Fixture(bool namesLandedType = false)
         {
+            Write("config/acceptance-manifest.json",
+                """{"engine":{"laneTestSourceRoots":["tests/Mcg.AgentOrchestrator.Infrastructure.Tests"]}}""");
             Write(Landed, "internal sealed class LandedWidget { }");
             Write(GoalPath, "internal sealed class GoalOwned { }");
             Write("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/LaneProbeTests.cs",

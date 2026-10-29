@@ -13,28 +13,22 @@ internal static class AcceptanceTestClassSourceScanner
     internal static IReadOnlyList<AcceptanceTestClassSource> ScanSources(string worktreePath,
         bool includeAncestorSources = true)
     {
-        var classes = Scan(worktreePath);
+        var sourceFiles = LaneTestSourceRootResolver.SourceFiles(worktreePath, LaneTestSourceRootResolver.Resolve(worktreePath));
+        var classes = Scan(worktreePath, sourceFiles);
         var declarations = new Dictionary<string, List<(string Path, string Text, string? BaseName)>>(StringComparer.Ordinal);
-        foreach (var project in new[] { "Mcg.AgentOrchestrator.Infrastructure.Tests", "Mcg.AgentOrchestrator.TestSupport" })
+        foreach (var path in sourceFiles)
         {
-            var root = Path.Combine(worktreePath, "tests", project);
-            if (!Directory.Exists(root)) continue;
-            foreach (var path in Directory.EnumerateFiles(root, "*.cs", SearchOption.AllDirectories)
-                         .Where(path => !path.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
-                             .Any(part => part is "bin" or "obj")))
+            var text = File.ReadAllText(path);
+            var syntax = CSharpSyntaxTree.ParseText(text).GetRoot();
+            if (syntax.ContainsDiagnostics && syntax.GetDiagnostics().Any(item => item.Severity == DiagnosticSeverity.Error))
+                throw new InvalidDataException($"Cannot parse test source '{path}'.");
+            foreach (var node in syntax.DescendantNodes().OfType<ClassDeclarationSyntax>())
             {
-                var text = File.ReadAllText(path);
-                var syntax = CSharpSyntaxTree.ParseText(text).GetRoot();
-                if (syntax.ContainsDiagnostics && syntax.GetDiagnostics().Any(item => item.Severity == DiagnosticSeverity.Error))
-                    throw new InvalidDataException($"Cannot parse test source '{path}'.");
-                foreach (var node in syntax.DescendantNodes().OfType<ClassDeclarationSyntax>())
-                {
-                    var name = NameOf(node);
-                    if (!declarations.TryGetValue(name, out var parts)) declarations[name] = parts = [];
-                    var baseType = node.BaseList?.Types.FirstOrDefault()?.Type;
-                    var baseName = BaseNameOf(baseType);
-                    parts.Add((Path.GetRelativePath(worktreePath, path).Replace('\\', '/'), text, baseName));
-                }
+                var name = NameOf(node);
+                if (!declarations.TryGetValue(name, out var parts)) declarations[name] = parts = [];
+                var baseType = node.BaseList?.Types.FirstOrDefault()?.Type;
+                var baseName = BaseNameOf(baseType);
+                parts.Add((Path.GetRelativePath(worktreePath, path).Replace('\\', '/'), text, baseName));
             }
         }
         var byShortName = declarations.Keys.GroupBy(name => name.Split('.', '+').Last(), StringComparer.Ordinal)
@@ -66,24 +60,17 @@ internal static class AcceptanceTestClassSourceScanner
         _ => null
     };
 
-    internal static IReadOnlyList<AcceptanceTestClassDescriptor> Scan(string worktreePath)
+    internal static IReadOnlyList<AcceptanceTestClassDescriptor> Scan(string worktreePath) =>
+        Scan(worktreePath, LaneTestSourceRootResolver.SourceFiles(worktreePath, LaneTestSourceRootResolver.Resolve(worktreePath)));
+
+    internal static IReadOnlyList<AcceptanceTestClassDescriptor> Scan(string worktreePath, string[] files)
     {
-        var testRoot = Path.Combine(worktreePath, "tests", "Mcg.AgentOrchestrator.Infrastructure.Tests");
-        if (!Directory.Exists(testRoot))
+        if (files.Length == 0)
         {
             AcceptanceTestClassSourceCache.Current.Forget(worktreePath);
             return [];
         }
 
-        var supportRoot = Path.Combine(worktreePath, "tests", "Mcg.AgentOrchestrator.TestSupport");
-        var files = Directory.EnumerateFiles(testRoot, "*.cs", SearchOption.AllDirectories)
-            .Concat(Directory.Exists(supportRoot)
-                ? Directory.EnumerateFiles(supportRoot, "*.cs", SearchOption.AllDirectories)
-                : [])
-            .Where(path => !path.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
-                .Any(part => part is "bin" or "obj"))
-            .Order(StringComparer.Ordinal)
-            .ToArray();
         var extracts = AcceptanceTestClassSourceCache.Current.Extract(worktreePath, files, ExtractFile);
         var constants = extracts.SelectMany(extract => extract.Constants)
             .GroupBy(item => item.Key, StringComparer.Ordinal)
