@@ -33,8 +33,7 @@ public sealed class CliCommandTestsRetryRoleTarget : CliCommandTestBase
             var providers = new InMemoryModelProviderRegistry([]);
             var profiles = WorkerProfileCatalog.Default();
             Goal? currentGoal = null;
-            var channel = new DiscordOperatorChannel(
-                CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory));
+            var channel = NullOperatorChannel.Instance;
 
             CaptureConsole(() =>
             {

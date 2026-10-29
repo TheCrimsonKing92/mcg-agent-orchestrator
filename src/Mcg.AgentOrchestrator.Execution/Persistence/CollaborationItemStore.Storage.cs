@@ -25,7 +25,7 @@ public sealed partial class CollaborationItemStore
     // Bounded retry on a transient SQLITE_BUSY/LOCKED: busy_timeout (30s) handles the simple lock-wait,
     // but the deadlock-avoidance path can still surface an immediate BUSY; this turns that into a brief
     // wait instead of a fatal throw. Mirrors SqliteOrchestratorStateRepository (matching the loop
-    // critical-path stores so a write concurrent with operator-listen never hard-fails).
+    // critical-path stores so a concurrent write never hard-fails).
     private const int MaxBusyRetries = 6;
 
     private static bool IsTransientLock(SqliteException ex) =>

@@ -228,11 +228,6 @@ public static IReadOnlyList<string> NormalizeArgs(string[] args)
         return args;
     }
 
-    if (command.Equals("operator-listen", StringComparison.OrdinalIgnoreCase))
-    {
-        return args;
-    }
-
     if (command.Equals("goal", StringComparison.OrdinalIgnoreCase))
     {
         return NormalizeObjectiveCommandWithFlags(args);

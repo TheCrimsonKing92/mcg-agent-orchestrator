@@ -19,8 +19,7 @@ public enum ControlPlaneDeliveryChannel
 
 public sealed record ControlPlaneAction(
     string Label,
-    string CustomId,
-    DiscordButtonStyle Style = DiscordButtonStyle.Primary);
+    string CustomId);
 
 public sealed record ControlPlaneDecisionCard(
     ControlPlaneCardSource Source,
@@ -50,14 +49,14 @@ public interface IControlPlaneMessageTransport
     Task<ulong> SendAsync(
         ControlPlaneDeliveryChannel channel,
         string content,
-        IReadOnlyList<DiscordButtonDefinition> buttons,
+        IReadOnlyList<ControlPlaneAction> buttons,
         CancellationToken cancellationToken = default);
 
     Task EditAsync(
         ControlPlaneDeliveryChannel channel,
         ulong messageId,
         string content,
-        IReadOnlyList<DiscordButtonDefinition> buttons,
+        IReadOnlyList<ControlPlaneAction> buttons,
         CancellationToken cancellationToken = default);
 }
 
@@ -65,14 +64,14 @@ public sealed class RecordingControlPlaneMessageTransport : IControlPlaneMessage
 {
     private ulong _nextMessageId = 1000;
 
-    public List<(ControlPlaneDeliveryChannel Channel, string Content, IReadOnlyList<DiscordButtonDefinition> Buttons)> Sent { get; } = [];
+    public List<(ControlPlaneDeliveryChannel Channel, string Content, IReadOnlyList<ControlPlaneAction> Buttons)> Sent { get; } = [];
 
-    public List<(ControlPlaneDeliveryChannel Channel, ulong MessageId, string Content, IReadOnlyList<DiscordButtonDefinition> Buttons)> Edited { get; } = [];
+    public List<(ControlPlaneDeliveryChannel Channel, ulong MessageId, string Content, IReadOnlyList<ControlPlaneAction> Buttons)> Edited { get; } = [];
 
     public Task<ulong> SendAsync(
         ControlPlaneDeliveryChannel channel,
         string content,
-        IReadOnlyList<DiscordButtonDefinition> buttons,
+        IReadOnlyList<ControlPlaneAction> buttons,
         CancellationToken cancellationToken = default)
     {
         Sent.Add((channel, content, buttons));
@@ -83,7 +82,7 @@ public sealed class RecordingControlPlaneMessageTransport : IControlPlaneMessage
         ControlPlaneDeliveryChannel channel,
         ulong messageId,
         string content,
-        IReadOnlyList<DiscordButtonDefinition> buttons,
+        IReadOnlyList<ControlPlaneAction> buttons,
         CancellationToken cancellationToken = default)
     {
         Edited.Add((channel, messageId, content, buttons));
