@@ -561,18 +561,16 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             if (GetFlagValue(parts, "--brief-file") is not null || GetFlagValue(parts, "--text-file") is not null)
                 PrintBriefLintAdvisory(newBrief);
 
+            var resetRefinement = SpecRefinementFailureResetEvaluation.Evaluate(context.Workspace, goal);
             var result = context.Kernel.ReviseGoalBrief(
                 goal.Id,
                 newBrief,
                 inlineReason ?? reasonFromFile,
-                answerSupersessions);
-            var refinedCriteriaReceipt = result.RefinedCriteriaReDerived
-                ? result.RefinedCriteriaCount!.Value.ToString(System.Globalization.CultureInfo.InvariantCulture)
-                : "unchanged";
-            Console.WriteLine(
-                $"Goal brief revised: goal={result.GoalId.Value} authoritative=v{result.AuthoritativeVersion.Version} " +
-                $"not-yet-started={result.NotYetStartedTaskIds.Count} in-flight={result.InFlightTaskIds.Count} " +
-                $"completed-unchanged={result.CompletedTaskIds.Count} refined-criteria={refinedCriteriaReceipt}");
+                answerSupersessions,
+                discardFailedRefinement: resetRefinement);
+            if (resetRefinement)
+                GoalRefinementWorkCoordinator.ResetAfterBriefRevision(context.Kernel, context.Workspace, goal.Id);
+            GoalBriefRevisionReceipt.WriteSummary(result, resetRefinement);
             Console.WriteLine($"  not-yet-started tasks: {FormatRevisionTaskIds(result.NotYetStartedTaskIds)}");
             Console.WriteLine($"  in-flight tasks (continue on prior dispatch snapshot): {FormatRevisionTaskIds(result.InFlightTaskIds)}");
             Console.WriteLine($"  completed tasks (unchanged): {FormatRevisionTaskIds(result.CompletedTaskIds)}");
@@ -1000,7 +998,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             context.CurrentGoal = context.Kernel.GetGoal(context.CurrentGoal.Id);
             ConsoleViews.PrintGoalRecoveryReport(GoalRecoveryPlanner.Build(
                 context.Kernel, context.CurrentGoal, context.Workspace.ExecutionDirectory, context.Workspace.IntegrationBranch,
-                cleanupHooks: context.CleanupContext.Hooks));
+                cleanupHooks: context.CleanupContext.Hooks, targetHome: context.TargetHome));
             return recoverySweep.Changed;
 
         case "dogfood-eval":
@@ -1144,7 +1142,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
 
         case "evidence":
             context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, parts.Count > 1 ? parts[1] : null);
-            ConsoleViews.PrintEvidenceSummary(context.CurrentGoal, context.Kernel.BuildGoalEvidenceSummary(context.CurrentGoal.Id));
+            ReadinessWorklistTextView.PrintEvidenceSummary(context.CurrentGoal, context.Kernel.BuildGoalEvidenceSummary(context.CurrentGoal.Id));
             return false;
 
         case "goal-changes":
@@ -1171,22 +1169,22 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
 
         case "stages":
             context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, parts.Count > 1 ? parts[1] : null);
-            ConsoleViews.PrintStageReadinessReport(context.CurrentGoal, context.Kernel.BuildStageReadinessReport(context.CurrentGoal.Id), context.Agents);
+            ReadinessWorklistTextView.PrintStageReadinessReport(context.CurrentGoal, context.Kernel.BuildStageReadinessReport(context.CurrentGoal.Id), context.Agents);
             return false;
 
         case "gates":
             context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, parts.Count > 1 ? parts[1] : null);
-            ConsoleViews.PrintVerificationGate(context.CurrentGoal, context.Kernel.BuildVerificationGate(context.CurrentGoal.Id));
+            ReadinessWorklistTextView.PrintVerificationGate(context.CurrentGoal, context.Kernel.BuildVerificationGate(context.CurrentGoal.Id));
             return false;
 
         case "verify-needed":
             context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, parts.Count > 1 ? parts[1] : null);
-            ConsoleViews.PrintVerificationWorklist(context.CurrentGoal, context.Kernel.BuildVerificationWorklist(context.CurrentGoal.Id));
+            ReadinessWorklistTextView.PrintVerificationWorklist(context.CurrentGoal, context.Kernel.BuildVerificationWorklist(context.CurrentGoal.Id));
             return false;
 
         case "input-needed":
             context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, parts.Count > 1 ? parts[1] : null);
-            ConsoleViews.PrintHumanInputWorklist(context.CurrentGoal, context.Kernel.BuildHumanInputWorklist(context.CurrentGoal.Id));
+            ReadinessWorklistTextView.PrintHumanInputWorklist(context.CurrentGoal, context.Kernel.BuildHumanInputWorklist(context.CurrentGoal.Id));
             return false;
 
         case "operator-inbox":

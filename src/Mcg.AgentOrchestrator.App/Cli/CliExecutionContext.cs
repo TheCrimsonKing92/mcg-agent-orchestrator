@@ -148,6 +148,8 @@ public void RunAfterCommit(Action action)
 
 public OrchestratorWorkspace Workspace { get; } = workspace;
 
+public WorkerTargetHome TargetHome => WorkerTargetHomeFactory.For(OrchestratorHome.ResolveForLaunch(Workspace.ExecutionDirectory), Workspace);
+
 internal BacklogQueryReadContext? BacklogReads { get; init; }
 
 public string AgentCatalogPath => Workspace.AgentCatalogPath;
@@ -179,7 +181,7 @@ public Action<BatchTickSummary>? ConductorTickObserver { get; init; }
 
     public ICliGoalWorktreeService Worktrees
     {
-        get => worktrees ?? new DefaultCliGoalWorktreeService(CleanupContext, Workspace.IntegrationBranch);
+        get => worktrees ?? new DefaultCliGoalWorktreeService(CleanupContext, Workspace.IntegrationBranch, TargetHome);
         init => worktrees = value;
     }
 
@@ -379,12 +381,14 @@ internal sealed class DefaultCliGoalWorktreeService : ICliGoalWorktreeService
 {
     private readonly string trunkBranch;
     private readonly GoalWorktreeCleanupHooks cleanupHooks;
+    private readonly WorkerTargetHome? targetHome;
 
-    public DefaultCliGoalWorktreeService(WorktreeCleanupContext cleanupContext, string? integrationBranch = null)
+    public DefaultCliGoalWorktreeService(WorktreeCleanupContext cleanupContext, string? integrationBranch = null, WorkerTargetHome? targetHome = null)
     {
         ArgumentNullException.ThrowIfNull(cleanupContext);
         cleanupHooks = cleanupContext.Hooks;
         trunkBranch = TrunkBranchName.Resolve(integrationBranch);
+        this.targetHome = targetHome;
     }
 
     public string BranchName(GoalId goalId) => GoalWorktrees.BranchName(goalId);
@@ -451,7 +455,7 @@ internal sealed class DefaultCliGoalWorktreeService : ICliGoalWorktreeService
         string? executionDirectory = null) =>
         GoalAcceptanceEvidenceBundleBuilder.Build(
             kernel, goal, worktreePath, verification, verificationSkipped,
-            cleanupHooks.BuildStorageRoot, trunkBranch, executionDirectory);
+            cleanupHooks.BuildStorageRoot, trunkBranch, executionDirectory, targetHome);
 }
 
 internal sealed record AcceptanceHostStopRequest(

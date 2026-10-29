@@ -98,11 +98,11 @@ private static void PrintNextFullDetail(CliExecutionContext context, AutonomyPol
         context.Worktrees.TryResolve,
         context.Kernel.Goals,
         projectHomeDirectory: context.Workspace.ProjectHomeDirectoryOrNull));
-    ConsoleViews.PrintEvidenceSummary(goal, context.Kernel.BuildGoalEvidenceSummary(goal.Id));
-    ConsoleViews.PrintStageReadinessReport(goal, context.Kernel.BuildStageReadinessReport(goal.Id), context.Agents);
-    ConsoleViews.PrintVerificationGate(goal, context.Kernel.BuildVerificationGate(goal.Id));
-    ConsoleViews.PrintVerificationWorklist(goal, context.Kernel.BuildVerificationWorklist(goal.Id));
-    ConsoleViews.PrintHumanInputWorklist(goal, context.Kernel.BuildHumanInputWorklist(goal.Id));
+    ReadinessWorklistTextView.PrintEvidenceSummary(goal, context.Kernel.BuildGoalEvidenceSummary(goal.Id));
+    ReadinessWorklistTextView.PrintStageReadinessReport(goal, context.Kernel.BuildStageReadinessReport(goal.Id), context.Agents);
+    ReadinessWorklistTextView.PrintVerificationGate(goal, context.Kernel.BuildVerificationGate(goal.Id));
+    ReadinessWorklistTextView.PrintVerificationWorklist(goal, context.Kernel.BuildVerificationWorklist(goal.Id));
+    ReadinessWorklistTextView.PrintHumanInputWorklist(goal, context.Kernel.BuildHumanInputWorklist(goal.Id));
     SubscriptionPlanTextView.Print(SubscriptionPlanBuilder.Build(
         goal,
         context.Agents,
@@ -113,7 +113,7 @@ private static void PrintNextFullDetail(CliExecutionContext context, AutonomyPol
     ConsoleViews.PrintLoopHealthReport(context.Kernel.BuildLoopHealthReport(null));
     FailureTriageTextView.PrintFailureTriageReport(FailureTriagePlanner.Build(context.Kernel, goal, context.Agents, context.Workspace.ExecutionDirectory, context.Workspace.IntegrationBranch, policy));
     ConsoleViews.PrintGoalRecoveryReport(GoalRecoveryPlanner.Build(
-        context.Kernel, goal, context.Workspace.ExecutionDirectory, context.Workspace.IntegrationBranch, cleanupHooks: context.CleanupContext.Hooks));
+        context.Kernel, goal, context.Workspace.ExecutionDirectory, context.Workspace.IntegrationBranch, cleanupHooks: context.CleanupContext.Hooks, targetHome: context.TargetHome));
     GoalSupervisorTextView.PrintGoalSupervisorPlan(GoalSupervisor.Build(context.Kernel, goal, context.Agents, context.Workspace.ExecutionDirectory, context.Workspace.IntegrationBranch, policy));
     ConsoleViews.PrintOperatorInbox(OperatorInbox.Build(context.Kernel, context.Agents, context.WorkerProfiles, context.Workspace, goal.Id.Value[..8], includeAcknowledged: false));
 }

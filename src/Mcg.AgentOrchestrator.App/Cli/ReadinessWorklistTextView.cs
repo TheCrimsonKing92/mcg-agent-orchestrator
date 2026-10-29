@@ -1,10 +1,11 @@
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.App.Rendering;
 using Mcg.AgentOrchestrator.Infrastructure;
+using static Mcg.AgentOrchestrator.App.Cli.ConsoleViews;
 
 namespace Mcg.AgentOrchestrator.App.Cli;
 
-internal static partial class ConsoleViews
+internal static class ReadinessWorklistTextView
 {
 public static void PrintEvidenceSummary(Goal goal, GoalEvidenceSummary summary)
 {

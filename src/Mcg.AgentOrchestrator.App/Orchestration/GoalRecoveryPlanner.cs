@@ -40,7 +40,8 @@ public static class GoalRecoveryPlanner
         string integrationBranch,
         bool includeCleanupBackoff = true,
         Func<ProcessCommandLineSnapshot>? processSnapshotFactory = null,
-        GoalWorktreeCleanupHooks? cleanupHooks = null)
+        GoalWorktreeCleanupHooks? cleanupHooks = null,
+        WorkerTargetHome? targetHome = null)
     {
         var worktree = GoalWorktrees.TryResolve(executionDirectory, goal.Id);
         GitCli.WorktreeStatusInspection? worktreeInspection = worktree is null
@@ -57,9 +58,7 @@ public static class GoalRecoveryPlanner
             : null;
         var hasDiff = GoalWorktrees.TryGetBranchDiff(executionDirectory, goal.Id, trunkBranch: integrationBranch) is not null;
         var changeSummary = RepositoryChangeClassifier.Classify(worktree is null ? Array.Empty<string>() : TryGetChangedFiles(worktree, integrationBranch));
-        var testImpactPlan = worktree is null
-            ? RepositoryTestImpactPlanner.Plan(changeSummary)
-            : RepositoryTestImpactPlanner.Plan(changeSummary, worktree);
+        var testImpactPlan = GoalTargetImpactPlanScope.Plan(changeSummary, worktree, targetHome);
         var operationJournal = GoalOperationJournal.Read(executionDirectory, goal.Id);
         var buildLease = DotnetBuildEnvironmentManager.InspectGoalLease(goal.Id, cleanupHooks?.BuildStorageRoot);
         var cleanupBackoff = includeCleanupBackoff
