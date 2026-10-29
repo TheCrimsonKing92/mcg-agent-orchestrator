@@ -103,40 +103,54 @@ FullyQualifiedName~OrchestratorTempRootSourceGuardTests|FullyQualifiedName~Order
 
 ## Timing interpretation
 
-The ten changed classes total **1,537.1 before seconds/gate versus 5,273.887 after
-test-seconds**. Seven have higher raw class sums; replay, bisect and receipt-hold
-results must also be read with their differing hosts/counts. This receipt does
-**not** demonstrate an aggregate speedup. It is a successful correctness run,
-not a controlled performance comparison: historical full-gate means and current
-focused-run counts differ, the baseline hosts/settings are unspecified, and the
-after run uses three hosts. No repeated run is requested for already covered
-correctness selections.
+The earlier **1,537.1 before seconds/gate versus 5,273.887 after test-seconds**
+are not comparable: the before figures are historical full-gate means, whereas
+the after figures are from a focused receipt with different selections and test
+counts, unspecified baseline hosts/settings, and three after-run hosts. Per-test
+TRX durations also include `HostCapacityBoundTestBase.InitializeAsync` slot waits.
+The before/after table and receipt R citations above remain historical context
+and correctness evidence.
 
-The per-class check below narrows the observed high-cost case. Whole-test
-durations contain no setup/store/production-git phase split, so they cannot
-confirm which step dominates any class. The source-supported hypotheses in the
-next section remain **unconfirmed for every class**. In particular, the slowest
-landing/receipt test below is store-only and never calls the new helper; candidate
-setup therefore cannot explain that entire class's measured cost. The mechanism
-behind the higher sums is undetermined. Neither overlap nor these totals prove
-contention. Establishing a causal speedup or dominant phase would require
-comparable baseline/candidate execution on an identified host with phase evidence,
-under operator/Acceptance ownership.
+The operator supplied the comparable measurement under the **2026-10-29 00:44Z
+owner decision** for `MERGE-TRAIN-TIMING-001`. These are operator measurements;
+no worker ran tests or a timing harness. `mcg-exec-2` was taken out of gate
+admission and was idle. Base `617daaddd` and candidate `4a445370` ran in separate
+worktrees as the executor's runner account, with the same selection each time:
+the ten changed classes, excluding the three added `CandidateCopy_` tests.
+All **156 tests passed in every run**. The six runs used ABBA order
+(base, candidate, candidate, base, base, candidate).
 
-| Class | Slowest measured test (parameters as in TRX) | Seconds | Hypothesis disposition |
-|---|---|---:|---|
-| MergeTrainRedAttributionReplayScenarioTests | `ReadOnlyChild_SharedReachDoesNotFailParentGoals(count: 3)` | 23.489 | Unconfirmed: whole-test timing only. |
-| AcceptanceCohortWorkflowTestsTrainRedAttribution | `OwnedTimeout_SavesFailedReceiptAndImplicatesItsMember(culprit: 0, mtp: False)` | 110.509 | Unconfirmed: whole-test timing only. |
-| PassedMergeTrainReceiptHoldTests | `BlockedReceipt_ReleasesAtTickTenAndReadmitsMembers` | 26.115 | Unconfirmed: whole-test timing only. |
-| AcceptanceCohortWorkflowTestsMergeTrain | `ExactTestedMergeTrainCommit_LandsThreeGoalsWithPerGoalCoverage(scenario: "late-legacy")` | 151.457 | Unconfirmed: whole-test timing only. |
-| MergeTrainDeferralFixtureEquivalenceTests | `Reset_FiveOrderedScenarios_RestoreStateWithoutRebuilding` | 43.655 | Unconfirmed: whole-test timing only. |
-| AcceptanceCohortWorkflowTestsLandingAndReceipts | `Store_InfrastructureCauseRoundTripsLegacyUnknown` | 144.688 | Unconfirmed: whole-test timing only; slowest case is store-only. |
-| AcceptanceCohortWorkflowTestsGroupedGateAttempts | `SuccessorAdoptsMatchingLiveAttemptAndReplaysPublishedReceipt(train: False)` | 144.197 | Unconfirmed: whole-test timing only. |
-| BackgroundMergeTrainGateTests | `CandidateCopy_RealConstruction_PreservesTopologyAndTrainOutcome` | 156.864 | Unconfirmed: whole-test timing only. |
-| AcceptanceCohortWorkflowTestsTrainImplicatedExclusion | `ApparatusRed_RecordsNeitherImplicationNorPairSuppression(memberCount: 3, remainderPasses: True)` | 148.416 | Unconfirmed: whole-test timing only. |
-| AcceptanceCohortWorkflowTestsFollowerGateStart | `ChildSavesVerdictBoundToRecordedIdentity(passed: False)` | 126.505 | Unconfirmed: whole-test timing only. |
-| MergeTrainBisectSlotLossTests | `FailedFirstGate_BusyBisectKeepsReceiptAndImplicatesBeforeLease(grouped: True)` | 33.685 | Unconfirmed: whole-test timing only. |
-| AcceptanceCohortWorkflowTestsWorkspacePreparation | `DisposableWorkspace_CleanupFailurePersistsTypedDebt_AndCanBeRetried` | 145.139 | Unconfirmed: whole-test timing only. |
+| Metric | Base runs | Candidate runs | Base median | Candidate median | Reduction |
+|---|---|---|---:|---:|---:|
+| Test wall-clock, TRX start to finish (s) | 647.2, 636.0, 653.9 | 554.4, 564.0, 555.0 | 647.2 | 555.0 | 14% |
+| Summed test-seconds | 4672, 4759, 4830 | 4086, 4333, 4273 | 4759 | 4273 | 10% |
+
+Every candidate run was faster than every base run, with about 2% spread within
+each arm. Within a class, tests ran serially: the class span equalled its summed
+test time, so run wall-clock was set by the largest class.
+
+| Changed class | Base median test-seconds | Candidate median test-seconds |
+|---|---:|---:|
+| AcceptanceCohortWorkflowTestsTrainRedAttribution | 644.6 | 552.1 |
+| AcceptanceCohortWorkflowTestsMergeTrain | 528.8 | 476.1 |
+| MergeTrainRedAttributionReplayScenarioTests | 472 | 426 |
+| AcceptanceCohortWorkflowTestsLandingAndReceipts | 467 | 417.5 |
+| AcceptanceCohortWorkflowTestsGroupedGateAttempts | 461.1 | 408.2 |
+| AcceptanceCohortWorkflowTestsFollowerGateStart | 431.6 | 377.1 |
+| AcceptanceCohortWorkflowTestsTrainImplicatedExclusion | 428.1 | 377 |
+| PassedMergeTrainReceiptHoldTests | 410.9 | 377.1 |
+| MergeTrainBisectSlotLossTests | 305.9 | 275.9 |
+| BackgroundMergeTrainGateTests | 247.2 | 235.1 |
+
+The operator's dominant-step disposition applies to all changed classes:
+"Repository and worktree construction is confirmed as a cost but not the dominant one: sharing it cut each class by 8-14%, so most per-test time is in the production merge-train work each test drives."
+This records the operator's interpretation, not a confirmed-dominant phase
+measurement. The per-class source-inspection table below retains the original
+suspected steps.
+
+Under the operator ruling on criterion 3, this comparison is the timing evidence;
+the historical after column may keep citing receipt R. The Reviewer judges the
+document against this ruling. The owner decision is to land the goal.
 
 ## Source inspection
 
@@ -244,5 +258,5 @@ deferral fixture/equivalence files remain unchanged. Criteria 2 and 4 now have
 matching candidate execution evidence; criterion 5's eleven Developer-deferred
 classes are all covered by R, so no duplicate evidence request is needed.
 Assertion preservation, notes acceptance, collection policy and shipping-source
-scope remain Reviewer-owned (criteria 1, 3 and 6). The timing limitation above
-remains open for that review; no dominant phase or causal speedup is attested.
+scope remain Reviewer-owned (criteria 1, 3 and 6). The operator comparison and
+criterion 3 ruling above supersede the earlier open timing limitation.
