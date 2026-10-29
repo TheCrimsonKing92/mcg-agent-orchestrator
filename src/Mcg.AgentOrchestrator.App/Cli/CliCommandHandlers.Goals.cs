@@ -570,13 +570,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 discardFailedRefinement: resetRefinement);
             if (resetRefinement)
                 GoalRefinementWorkCoordinator.ResetAfterBriefRevision(context.Kernel, context.Workspace, goal.Id);
-            var refinedCriteriaReceipt = resetRefinement ? "reset" : result.RefinedCriteriaReDerived
-                ? result.RefinedCriteriaCount!.Value.ToString(System.Globalization.CultureInfo.InvariantCulture)
-                : "unchanged";
-            Console.WriteLine(
-                $"Goal brief revised: goal={result.GoalId.Value} authoritative=v{result.AuthoritativeVersion.Version} " +
-                $"not-yet-started={result.NotYetStartedTaskIds.Count} in-flight={result.InFlightTaskIds.Count} " +
-                $"completed-unchanged={result.CompletedTaskIds.Count} refined-criteria={refinedCriteriaReceipt}");
+            GoalBriefRevisionReceipt.WriteSummary(result, resetRefinement);
             Console.WriteLine($"  not-yet-started tasks: {FormatRevisionTaskIds(result.NotYetStartedTaskIds)}");
             Console.WriteLine($"  in-flight tasks (continue on prior dispatch snapshot): {FormatRevisionTaskIds(result.InFlightTaskIds)}");
             Console.WriteLine($"  completed tasks (unchanged): {FormatRevisionTaskIds(result.CompletedTaskIds)}");

@@ -108,35 +108,7 @@ public sealed partial class AgentOrchestratorKernel
     {
         var goal = GetGoal(goalId);
         var supersessions = answerSupersessions ?? [];
-        var duplicateSupersession = supersessions
-            .GroupBy(supersession => supersession.RequestId)
-            .FirstOrDefault(group => group.Count() > 1);
-        if (duplicateSupersession is not null)
-        {
-            throw new ArgumentException(
-                $"Clarification '{duplicateSupersession.Key}' can be superseded only once per brief revision.",
-                nameof(answerSupersessions));
-        }
-
-        foreach (var supersession in supersessions)
-        {
-            if (!_humanInputRequests.TryGetValue(supersession.RequestId, out var request) || request.GoalId != goal.Id)
-            {
-                throw new KeyNotFoundException(
-                    $"Human input request '{supersession.RequestId}' was not found on goal '{goal.Id.Value}'.");
-            }
-
-            if (!request.IsCompleted || request.WasDismissed || request.AuthoritativeAnswer is null)
-            {
-                throw new InvalidOperationException(
-                    $"Human input request '{supersession.RequestId}' has no answered clarification to supersede.");
-            }
-
-            if (string.IsNullOrWhiteSpace(supersession.ReplacementAnswer))
-            {
-                throw new ArgumentException("Replacement clarification answer cannot be empty.", nameof(answerSupersessions));
-            }
-        }
+        GoalBriefAnswerSupersessionValidation.Validate(goal.Id, supersessions, _humanInputRequests);
 
         var recordedAt = _clock.UtcNow;
         if (discardFailedRefinement)
