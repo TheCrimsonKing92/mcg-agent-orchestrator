@@ -728,6 +728,13 @@ internal sealed partial class ConductorDriver
         return selections;
     }
 
+    internal AcceptanceCohortReceipt? ReadCurrentPassedCohortReceipt(ConductorAcceptanceCohortSelection selection) =>
+        _cohortAcceptanceStore?.ReadPassedReceiptsForGoal(selection.Members[0].GoalId)
+            .FirstOrDefault(receipt => HasCurrentPassedCohortIdentity(selection, receipt));
+
+    internal bool HasFinalizedCohortLanding(GoalId goalId) =>
+        _cohortAcceptanceStore?.ReadFinalizedLandingsForGoal(goalId).Count > 0;
+
     private bool HasCurrentPassedCohortIdentity(
         ConductorAcceptanceCohortSelection selection,
         AcceptanceCohortReceipt receipt) =>

@@ -1252,6 +1252,16 @@ internal sealed partial class ConductorBatchLoop
                     continue;
                 }
 
+                if (parallelLandingResults.TryGetValue(goal.Id.Value, out var approvalReservation) &&
+                    PassedCohortReceiptApprovalHold.IsReadOnlyReservation(approvalReservation.Result))
+                {
+                    // Admission already emitted the reason. Preserve all persisted member state,
+                    // including policy events, LandingBlocker and CurrentHold, on a held tick.
+                    tickHeld++;
+                    FinishGoalWalk("cohort-approval-held");
+                    continue;
+                }
+
                 var beforeAdvance = GoalKernelChange.Capture(goal);
                 ConductorAdvanceResult result;
                 ParallelLandingOutcome? parallelLandingOutcome = null;
