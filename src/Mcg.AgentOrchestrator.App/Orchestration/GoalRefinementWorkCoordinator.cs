@@ -184,19 +184,22 @@ internal static partial class GoalRefinementWorkCoordinator
                     }
 
                     var refinedSnapshot = refinementKernel.ExportGoalSnapshot(goalId);
+                    // Snapshot records contain fresh lists, so record equality does not compare their contents.
+                    var changed = !string.Equals(
+                            JsonSerializer.Serialize(baselineSnapshot.RefinedSpec, JsonOptions),
+                            JsonSerializer.Serialize(refinedSnapshot.RefinedSpec, JsonOptions),
+                            StringComparison.Ordinal) ||
+                        baselineSnapshot.RefinedSpecVersions.Count != refinedSnapshot.RefinedSpecVersions.Count ||
+                        baselineSnapshot.Timeline.Count != refinedSnapshot.Timeline.Count;
+                    if (!changed)
+                        return OrchestratorStateOutboxProcessingResult.Completed;
+
                     if (refinedSnapshot.RefinedSpec?.OpenQuestions.Any(question =>
                             string.Equals(question.Status, "Open", StringComparison.OrdinalIgnoreCase)) == true)
                     {
                         phase = "emit-clarification-event";
                         eventWriter.AppendClarificationNeeded(goalId, "spec");
-                        refinedSnapshot = refinementKernel.ExportGoalSnapshot(goalId);
                     }
-
-                    var changed = !Equals(baselineSnapshot.RefinedSpec, refinedSnapshot.RefinedSpec) ||
-                        baselineSnapshot.RefinedSpecVersions.Count != refinedSnapshot.RefinedSpecVersions.Count ||
-                        baselineSnapshot.Timeline.Count != refinedSnapshot.Timeline.Count;
-                    if (!changed)
-                        return OrchestratorStateOutboxProcessingResult.Completed;
 
                     phase = "attach-snapshot";
                     attached = await repository.TransactGoalAsync(
