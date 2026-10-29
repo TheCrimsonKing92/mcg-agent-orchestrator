@@ -1,4 +1,8 @@
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Infrastructure;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
@@ -10,9 +14,11 @@ internal static partial class LandingExecutor
         var orchestratorDirectory = workspace.OrchestratorDirectory;
         // Resolve candidate-bound gate and role reports before projecting pending input.
         var resolution = ProspectiveEvidenceGateResolver.Resolve(kernel, goal, orchestratorDirectory, candidateRevision);
+        IReadOnlyDictionary<HumanInputRequestId, string> skipReasons = new Dictionary<HumanInputRequestId, string>();
         if (!string.IsNullOrWhiteSpace(candidateRevision))
-            kernel.CloseRoleReportEvidence(goal.Id, candidateRevision,
-                RoleReportGateClassEvidence.For(orchestratorDirectory, goal.Id, candidateRevision));
+            skipReasons = kernel.CloseRoleReportEvidence(goal.Id, candidateRevision,
+                RoleReportGateClassEvidence.For(orchestratorDirectory, goal.Id, candidateRevision),
+                RemovedTestClassSource(workspace, goal.Id, candidateRevision));
         var obligations = GateTestObligationEvaluator.Evaluate(goal, orchestratorDirectory, candidateRevision,
             new(workspace.ExecutionDirectory, workspace.IntegrationBranch), kernel.HumanInputRequests.ToArray());
         foreach (var result in obligations.Where(result => result.Outcome == GateTestObligationEvaluator.Outcome.Satisfied &&
@@ -47,7 +53,9 @@ internal static partial class LandingExecutor
                 ? $"; submission failed: {failure}"
                 : unresolved is not null
                     ? $"; missing: {string.Join(", ", unresolved.MissingOrFailedTestNames)}"
-                    : "; answer required through SubmitHumanInput";
+                    : skipReasons.TryGetValue(wait.Id, out var reason)
+                        ? $"; owner round not accepted as evidence: {reason}"
+                        : "; answer required through SubmitHumanInput";
             return $"request {wait.Id.Value} ({wait.Kind}, owner {wait.EvidenceOwner ?? "unspecified"}){detail}";
         });
         var hold = $"goal {goal.Id.Value} has pending human input: {string.Join("; ", requests)}";
@@ -55,7 +63,7 @@ internal static partial class LandingExecutor
         return (resolution, hold, obligationLines);
     }
 
-    private static string? DescribeGroupedPendingHumanInput(
+    internal static string? DescribeGroupedPendingHumanInput(
         AgentOrchestratorKernel kernel, IReadOnlyList<Goal> goals, OrchestratorWorkspace workspace,
         Func<GoalId, string> candidateRevision)
     {
@@ -63,5 +71,51 @@ internal static partial class LandingExecutor
                 kernel, goal, workspace, candidateRevision(goal.Id)).HoldDescription)
             .Where(description => description is not null).ToArray();
         return holds.Length == 0 ? null : string.Join("; ", holds);
+    }
+
+    private static Func<string, string?> RemovedTestClassSource(
+        OrchestratorWorkspace workspace, GoalId goalId, string candidate)
+    {
+        var root = workspace.ResolveExecutionDirectory(goalId);
+        var baseRevision = new Lazy<GitCli.GitResult>(() =>
+            GitCli.Run(root, "merge-base", workspace.IntegrationBranch, candidate));
+        return name =>
+        {
+            if (!SyntaxFacts.IsValidIdentifier(name)) return null;
+            var mergeBase = baseRevision.Value;
+            if (!mergeBase.Succeeded || mergeBase.DrainTimedOut) return null;
+            var revision = mergeBase.Output.Trim();
+            if (revision.Length == 0) return null;
+            var matches = GitCli.Run(root, "grep", "-l", "-w", "-F", "-e", name, revision, "--", "*.cs");
+            if (!matches.Succeeded || matches.DrainTimedOut) return null;
+            var paths = new List<string>();
+            var classNames = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var line in matches.Output.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries))
+            {
+                if (!line.StartsWith(revision + ":", StringComparison.Ordinal)) return null;
+                var path = line[(revision.Length + 1)..];
+                var source = GitCli.Run(root, "show", $"{revision}:{path}");
+                if (!source.Succeeded || source.DrainTimedOut) return null;
+                var syntax = CSharpSyntaxTree.ParseText(source.Output).GetRoot();
+                if (syntax.GetDiagnostics().Any(item => item.Severity == DiagnosticSeverity.Error)) return null;
+                var declarations = syntax.DescendantNodes().OfType<ClassDeclarationSyntax>()
+                    .Where(node => node.Identifier.ValueText == name).ToArray();
+                if (declarations.Length == 0) continue;
+                foreach (var node in declarations)
+                {
+                    var namespaces = node.Ancestors().OfType<BaseNamespaceDeclarationSyntax>()
+                        .Reverse().Select(item => item.Name.ToString());
+                    var containing = node.Ancestors().OfType<ClassDeclarationSyntax>()
+                        .Reverse().Select(item => item.Identifier.ValueText);
+                    classNames.Add(string.Join(".", namespaces.Append(string.Join("+", containing.Append(name)))));
+                }
+                paths.Add(path);
+                // Successful tree inspection proves absence; a failed Git command proves nothing.
+                var remaining = GitCli.Run(root, "ls-tree", "--name-only", candidate, "--", ":(literal)" + path);
+                if (!remaining.Succeeded || remaining.DrainTimedOut || !string.IsNullOrWhiteSpace(remaining.Output)) return null;
+            }
+            return paths.Count > 0 && classNames.Count == 1
+                ? $"base {revision} paths {string.Join(",", paths)}" : null;
+        };
     }
 }
