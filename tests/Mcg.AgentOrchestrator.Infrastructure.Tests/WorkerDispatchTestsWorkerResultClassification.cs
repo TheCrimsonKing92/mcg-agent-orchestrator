@@ -13,6 +13,101 @@ using System.Text.Json;
 [Xunit.Collection("EnvMutation")]
 public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispatchTestSupport
 {
+    [Xunit.Fact]
+    public void PreparedCommit_ReusedWithoutGitLaunches_PreservesClassificationAndIsolation()
+    {
+        var clock = new TestClock(DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
+        var first = CreateCompletedGoalWorktreeDispatch(
+            CreateSeededDispatchRepository(), AgentRole.Developer, string.Empty, string.Empty, clock,
+            worktree => CopyPreparedDispatchCommit(worktree, "feature.txt", "feature"));
+        var root = CreateSeededDispatchRepository();
+        var worktree = GoalWorktrees.Ensure(root, GoalId.New());
+        using (var launches = InfrastructureTestSupport.CountGitProbeLaunches())
+        {
+            CopyPreparedDispatchCommit(worktree, "feature.txt", "feature");
+            Assert.Equal(0, launches.Count);
+        }
+
+        Assert.Equal(ReadGit(first.Process.WorkingDirectory, ["rev-parse", "HEAD"]),
+            ReadGit(worktree, ["rev-parse", "HEAD"]));
+        Assert.Equal(string.Empty, ReadGit(worktree, ["status", "--short"]));
+        File.AppendAllText(Path.Combine(worktree, "feature.txt"), "private edit");
+        Assert.Equal("feature", File.ReadAllText(Path.Combine(first.Process.WorkingDirectory, "feature.txt")));
+        Assert.Equal(string.Empty, ReadGit(first.Process.WorkingDirectory, ["status", "--short"]));
+
+        new BackgroundDispatchRunner(clock).RefreshLatestProcess(first.Kernel, first.Goal.Id, first.Task.Id);
+
+        Assert.Equal(WorkTaskStatus.Completed, first.Task.Status);
+        Assert.Equal(0, first.Task.LastVerification!.ExitCode);
+        Assert.True(first.Task.LastVerification.HasCommittedChanges);
+        Assert.Equal(0, first.Task.EmptyOutputRetryCount);
+        Assert.False(DispatchFailureClassifier.IsTransientEmptyOutputDispatchFlake(first.Task.LastVerification));
+        AssertExitCode(first.Process.ExitCodePath, 0);
+    }
+
+    [Xunit.Fact]
+    public void CompletedGoalWorktreeDispatch_NoCommitToken_LaunchesNoHeadProbe()
+    {
+        var root = CreateSeededDispatchRepository();
+        var clock = new TestClock(DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
+        using var launches = InfrastructureTestSupport.CountGitProbeLaunches();
+
+        var (_, _, _, process) = CreateCompletedGoalWorktreeDispatch(
+            root, AgentRole.Developer, string.Empty, string.Empty, clock);
+
+        Assert.Equal(0, launches.Count);
+        Assert.Equal(string.Empty, File.ReadAllText(process.StandardOutputPath));
+        Assert.Equal(string.Empty, File.ReadAllText(process.StandardErrorPath));
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public void CompletedGoalWorktreeDispatch_RealGitCommit_PreservesClassification(bool includeCommitToken)
+    {
+        var root = CreateSeededDispatchRepository();
+        Assert.True(Directory.Exists(Path.Combine(root, ".git")));
+        var clock = new TestClock(DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
+        (AgentOrchestratorKernel Kernel, Goal Goal, TaskSpec Task, TaskProcessRecord Process) dispatch;
+        using (var launches = InfrastructureTestSupport.CountGitProbeLaunches())
+        {
+            dispatch = CreateCompletedGoalWorktreeDispatch(
+                root,
+                AgentRole.Developer,
+                includeCommitToken ? WorkerResultBlock("feature.txt", "implemented feature", "Passed: 1") : string.Empty,
+                includeCommitToken ? "Committed {commit}" : string.Empty,
+                clock,
+                worktree =>
+                {
+                    File.WriteAllText(Path.Combine(worktree, "feature.txt"), "feature");
+                    RunGit(worktree, ["add", "-A"], clock.UtcNow.AddMinutes(1));
+                    RunGit(worktree, ["commit", "-m", "Feature"], clock.UtcNow.AddMinutes(1));
+                });
+            // Only the real add and commit launch; populating the commit token adds no probe.
+            Assert.Equal(2, launches.Count);
+        }
+
+        var (kernel, goal, task, process) = dispatch;
+        Assert.True(InfrastructureTestSupport.TryReadGitHeadInProcess(process.WorkingDirectory, out var fullHead));
+        Assert.NotNull(fullHead);
+        var shortHead = ReadGit(process.WorkingDirectory, ["rev-parse", "--short", "HEAD"]);
+        Assert.Equal(shortHead, fullHead[..7]);
+        if (includeCommitToken)
+        {
+            Assert.Contains($"commit: {shortHead}", File.ReadAllText(process.StandardOutputPath), StringComparison.Ordinal);
+            Assert.Equal($"Committed {shortHead}", File.ReadAllText(process.StandardErrorPath));
+        }
+
+        new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+        Assert.Equal(WorkTaskStatus.Completed, task.Status);
+        Assert.Equal(0, task.LastVerification!.ExitCode);
+        Assert.True(task.LastVerification.HasCommittedChanges);
+        Assert.Equal(0, task.EmptyOutputRetryCount);
+        Assert.False(DispatchFailureClassifier.IsTransientEmptyOutputDispatchFlake(task.LastVerification));
+        AssertExitCode(process.ExitCodePath, 0);
+    }
+
     [Xunit.Fact(DisplayName = "DispatchFailureClassifier_classifies_claude_401_as_provider_authentication_failure")]
     public void DispatchFailureClassifierClassifiesClaude401AsProviderAuthenticationFailure()
 {
@@ -4718,85 +4813,5 @@ private static void WriteIsolationLeaseArtifacts(string worktree)
     File.WriteAllText(Path.Combine(slot, "lease.execution.lock"), "locked");
 }
 
-private static FixtureIsolatedDotnetRootScope UseFixtureIsolatedDotnetRoot()
-{
-    return new FixtureIsolatedDotnetRootScope(
-        Path.Combine(
-            Path.GetTempPath(),
-            $"{DotnetBuildEnvironmentManager.RootDirectoryName}-commit-on-behalf-{Guid.NewGuid():N}"));
-}
-
-private static TaskProcessRecord RecordStaleDeveloperDispatch(
-    AgentOrchestratorKernel kernel,
-    Goal goal,
-    TaskSpec task,
-    string worktree,
-    string root,
-    DateTimeOffset dispatchedAt,
-    string suffix,
-    string standardOutput = "",
-    string standardError = "",
-    int? childExitCode = null)
-{
-    var logs = Path.Combine(root, "logs");
-    Directory.CreateDirectory(logs);
-    var stdout = Path.Combine(logs, $"{suffix}.out.log");
-    var stderr = Path.Combine(logs, $"{suffix}.err.log");
-    var exit = Path.Combine(logs, $"{suffix}.exit.txt");
-    var childExit = childExitCode is null ? null : Path.Combine(logs, $"{suffix}.child-exit.json");
-    File.WriteAllText(stdout, standardOutput);
-    File.WriteAllText(stderr, standardError);
-    if (childExit is not null)
-    {
-        File.WriteAllText(
-            childExit,
-            JsonSerializer.Serialize(
-                new DispatchProcessHost.DispatchChildExitRecord(888888, childExitCode!.Value, dispatchedAt.AddMinutes(1)),
-                new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase }));
-    }
-    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("claude-cli", $"claude prompt {suffix}", worktree, dispatchedAt));
-    var process = new TaskProcessRecord(
-        999999,
-        $"claude prompt {suffix}",
-        worktree,
-        stdout,
-        stderr,
-        exit,
-        dispatchedAt,
-        null,
-        null,
-        ChildExitRecordPath: childExit);
-    kernel.RecordTaskProcessStarted(goal.Id, task.Id, process);
-    return process;
-}
-
-private sealed class FixtureIsolatedDotnetRootScope : IDisposable
-{
-    private readonly string? _previousValue;
-    private readonly string _root;
-
-    public FixtureIsolatedDotnetRootScope(string root)
-    {
-        _root = root;
-        _previousValue = Environment.GetEnvironmentVariable(DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable);
-        Environment.SetEnvironmentVariable(DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable, _root);
-    }
-
-    public void Dispose()
-    {
-        Environment.SetEnvironmentVariable(DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable, _previousValue);
-        try
-        {
-            if (Directory.Exists(_root))
-            {
-                Directory.Delete(_root, recursive: true);
-            }
-        }
-        catch
-        {
-            // Best effort; failed tests may leave files open for inspection.
-        }
-    }
-}
 
 }

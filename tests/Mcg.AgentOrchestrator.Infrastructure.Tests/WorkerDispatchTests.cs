@@ -2001,6 +2001,87 @@ protected static void WriteSkill(string workingDirectory, string skillName, stri
         public void WriteRecord(DispatchDiagnosticRecord record) =>
             throw new InvalidOperationException("Diagnostic writer failure (test-injected).");
     }
+protected static FixtureIsolatedDotnetRootScope UseFixtureIsolatedDotnetRoot()
+{
+    return new FixtureIsolatedDotnetRootScope(
+        Path.Combine(
+            Path.GetTempPath(),
+            $"{DotnetBuildEnvironmentManager.RootDirectoryName}-commit-on-behalf-{Guid.NewGuid():N}"));
+}
+
+protected static TaskProcessRecord RecordStaleDeveloperDispatch(
+    AgentOrchestratorKernel kernel,
+    Goal goal,
+    TaskSpec task,
+    string worktree,
+    string root,
+    DateTimeOffset dispatchedAt,
+    string suffix,
+    string standardOutput = "",
+    string standardError = "",
+    int? childExitCode = null)
+{
+    var logs = Path.Combine(root, "logs");
+    Directory.CreateDirectory(logs);
+    var stdout = Path.Combine(logs, $"{suffix}.out.log");
+    var stderr = Path.Combine(logs, $"{suffix}.err.log");
+    var exit = Path.Combine(logs, $"{suffix}.exit.txt");
+    var childExit = childExitCode is null ? null : Path.Combine(logs, $"{suffix}.child-exit.json");
+    File.WriteAllText(stdout, standardOutput);
+    File.WriteAllText(stderr, standardError);
+    if (childExit is not null)
+    {
+        File.WriteAllText(
+            childExit,
+            JsonSerializer.Serialize(
+                new DispatchProcessHost.DispatchChildExitRecord(888888, childExitCode!.Value, dispatchedAt.AddMinutes(1)),
+                new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase }));
+    }
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("claude-cli", $"claude prompt {suffix}", worktree, dispatchedAt));
+    var process = new TaskProcessRecord(
+        999999,
+        $"claude prompt {suffix}",
+        worktree,
+        stdout,
+        stderr,
+        exit,
+        dispatchedAt,
+        null,
+        null,
+        ChildExitRecordPath: childExit);
+    kernel.RecordTaskProcessStarted(goal.Id, task.Id, process);
+    return process;
+}
+
+protected sealed class FixtureIsolatedDotnetRootScope : IDisposable
+{
+    private readonly string? _previousValue;
+    private readonly string _root;
+
+    public FixtureIsolatedDotnetRootScope(string root)
+    {
+        _root = root;
+        _previousValue = Environment.GetEnvironmentVariable(DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable);
+        Environment.SetEnvironmentVariable(DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable, _root);
+    }
+
+    public void Dispose()
+    {
+        Environment.SetEnvironmentVariable(DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable, _previousValue);
+        try
+        {
+            if (Directory.Exists(_root))
+            {
+                Directory.Delete(_root, recursive: true);
+            }
+        }
+        catch
+        {
+            // Best effort; failed tests may leave files open for inspection.
+        }
+    }
+}
+
 }
 
 public sealed class WorkerDispatchSpecClarificationTests : WorkerDispatchTestSupport
@@ -2576,4 +2657,5 @@ public sealed class WorkerDispatchAcceptanceAdmissionTests : WorkerDispatchTestS
             }
         }
     }
+
 }
