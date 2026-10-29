@@ -393,7 +393,6 @@ protected static void CompleteResearcherAndPlannerArtifacts(
 
     var worktree = GoalWorktrees.Ensure(root, goal.Id);
     mutateWorktree?.Invoke(worktree);
-    var head = ReadGit(worktree, ["rev-parse", "--short", "HEAD"]);
     if (role == AgentRole.Planner &&
         includePlannerContract &&
         !PlannerOutputContract.TryValidate(standardOutput, out _, out _))
@@ -401,8 +400,16 @@ protected static void CompleteResearcherAndPlannerArtifacts(
         standardOutput = PlannerContractPlanFixture() + Environment.NewLine + standardOutput;
     }
 
-    standardOutput = standardOutput.Replace("{commit}", head, StringComparison.Ordinal);
-    standardError = standardError.Replace("{commit}", head, StringComparison.Ordinal);
+    if (standardOutput.Contains("{commit}", StringComparison.Ordinal) ||
+        standardError.Contains("{commit}", StringComparison.Ordinal))
+    {
+        // These tiny fixture repositories use git's default seven-character abbreviation.
+        var head = InfrastructureTestSupport.TryReadGitHeadInProcess(worktree, out var fullHead) && fullHead is not null
+            ? fullHead[..7]
+            : ReadGit(worktree, ["rev-parse", "--short", "HEAD"]);
+        standardOutput = standardOutput.Replace("{commit}", head, StringComparison.Ordinal);
+        standardError = standardError.Replace("{commit}", head, StringComparison.Ordinal);
+    }
 
     var logs = Path.Combine(root, "logs");
     Directory.CreateDirectory(logs);
@@ -551,6 +558,64 @@ protected static void CompleteResearcherAndPlannerArtifacts(
 
     protected static string CreateSeededDispatchRepository() =>
         SeededDispatchRepositories.Create().PublishedIdentity.RepositoryPath;
+
+    private sealed record PreparedDispatchCommit(string Root, string BaseCommit, string Head);
+
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<
+        (string Path, string Content, string Message), Lazy<PreparedDispatchCommit>> PreparedDispatchCommits = new();
+
+    // Only for setup on a fresh seeded worktree. Live commit-sequence tests keep RunGit.
+    protected static void CopyPreparedDispatchCommit(
+        string worktree, string relativePath, string content, string message = "Feature")
+    {
+        var template = PreparedDispatchCommits.GetOrAdd((relativePath, content, message), key => new(() =>
+        {
+            var root = CreateSeededDispatchRepository();
+            if (!InfrastructureTestSupport.TryReadGitHeadInProcess(root, out var baseCommit) || baseCommit is null)
+                throw new InvalidOperationException("Prepared dispatch repository has no seed commit.");
+            var file = Path.Combine(root, key.Path);
+            Directory.CreateDirectory(Path.GetDirectoryName(file)!);
+            File.WriteAllText(file, key.Content);
+            var commitTime = DateTimeOffset.Parse("2026-06-02T12:01:00Z");
+            RunGit(root, ["add", "-A"], commitTime);
+            RunGit(root, ["commit", "-m", key.Message], commitTime);
+            if (!InfrastructureTestSupport.TryReadGitHeadInProcess(root, out var head) || head is null)
+                throw new InvalidOperationException("Prepared dispatch repository has no committed change.");
+            return new PreparedDispatchCommit(root, baseCommit, head);
+        })).Value;
+
+        if (!InfrastructureTestSupport.TryReadGitHeadInProcess(worktree, out var startingHead) ||
+            startingHead != template.BaseCommit)
+            throw new InvalidOperationException("Prepared dispatch change requires the original seed commit.");
+
+        var pointer = File.ReadAllText(Path.Combine(worktree, ".git")).Trim();
+        if (!pointer.StartsWith("gitdir: ", StringComparison.Ordinal))
+            throw new InvalidOperationException("Prepared dispatch change requires a linked goal worktree.");
+        var gitDirectory = Path.GetFullPath(pointer[8..], worktree);
+        var commonDirectory = Path.GetFullPath(
+            File.ReadAllText(Path.Combine(gitDirectory, "commondir")).Trim(), gitDirectory);
+        var headReference = File.ReadAllText(Path.Combine(gitDirectory, "HEAD")).Trim();
+        if (!headReference.StartsWith("ref: refs/heads/goal/", StringComparison.Ordinal))
+            throw new InvalidOperationException("Prepared dispatch change requires a goal branch.");
+
+        // Import the real, once-created commit without replacing the worktree's git pointer
+        // or the common repository's configuration, branch identities, hooks, or other refs.
+        var objects = Path.Combine(template.Root, ".git", "objects");
+        foreach (var source in Directory.EnumerateFiles(objects, "*", SearchOption.AllDirectories))
+        {
+            var destination = Path.Combine(commonDirectory, "objects", Path.GetRelativePath(objects, source));
+            Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+            if (!File.Exists(destination))
+                File.Copy(source, destination);
+        }
+        var destinationFile = Path.Combine(worktree, relativePath);
+        Directory.CreateDirectory(Path.GetDirectoryName(destinationFile)!);
+        File.Copy(Path.Combine(template.Root, relativePath), destinationFile);
+        File.Copy(Path.Combine(template.Root, ".git", "index"), Path.Combine(gitDirectory, "index"), overwrite: true);
+        var branch = Path.Combine(commonDirectory, headReference[5..]);
+        Directory.CreateDirectory(Path.GetDirectoryName(branch)!);
+        File.WriteAllText(branch, template.Head + "\n");
+    }
 
 private static void SeedDispatchRepositoryTemplate(string root)
 {
@@ -1936,6 +2001,87 @@ protected static void WriteSkill(string workingDirectory, string skillName, stri
         public void WriteRecord(DispatchDiagnosticRecord record) =>
             throw new InvalidOperationException("Diagnostic writer failure (test-injected).");
     }
+protected static FixtureIsolatedDotnetRootScope UseFixtureIsolatedDotnetRoot()
+{
+    return new FixtureIsolatedDotnetRootScope(
+        Path.Combine(
+            Path.GetTempPath(),
+            $"{DotnetBuildEnvironmentManager.RootDirectoryName}-commit-on-behalf-{Guid.NewGuid():N}"));
+}
+
+protected static TaskProcessRecord RecordStaleDeveloperDispatch(
+    AgentOrchestratorKernel kernel,
+    Goal goal,
+    TaskSpec task,
+    string worktree,
+    string root,
+    DateTimeOffset dispatchedAt,
+    string suffix,
+    string standardOutput = "",
+    string standardError = "",
+    int? childExitCode = null)
+{
+    var logs = Path.Combine(root, "logs");
+    Directory.CreateDirectory(logs);
+    var stdout = Path.Combine(logs, $"{suffix}.out.log");
+    var stderr = Path.Combine(logs, $"{suffix}.err.log");
+    var exit = Path.Combine(logs, $"{suffix}.exit.txt");
+    var childExit = childExitCode is null ? null : Path.Combine(logs, $"{suffix}.child-exit.json");
+    File.WriteAllText(stdout, standardOutput);
+    File.WriteAllText(stderr, standardError);
+    if (childExit is not null)
+    {
+        File.WriteAllText(
+            childExit,
+            JsonSerializer.Serialize(
+                new DispatchProcessHost.DispatchChildExitRecord(888888, childExitCode!.Value, dispatchedAt.AddMinutes(1)),
+                new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase }));
+    }
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("claude-cli", $"claude prompt {suffix}", worktree, dispatchedAt));
+    var process = new TaskProcessRecord(
+        999999,
+        $"claude prompt {suffix}",
+        worktree,
+        stdout,
+        stderr,
+        exit,
+        dispatchedAt,
+        null,
+        null,
+        ChildExitRecordPath: childExit);
+    kernel.RecordTaskProcessStarted(goal.Id, task.Id, process);
+    return process;
+}
+
+protected sealed class FixtureIsolatedDotnetRootScope : IDisposable
+{
+    private readonly string? _previousValue;
+    private readonly string _root;
+
+    public FixtureIsolatedDotnetRootScope(string root)
+    {
+        _root = root;
+        _previousValue = Environment.GetEnvironmentVariable(DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable);
+        Environment.SetEnvironmentVariable(DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable, _root);
+    }
+
+    public void Dispose()
+    {
+        Environment.SetEnvironmentVariable(DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable, _previousValue);
+        try
+        {
+            if (Directory.Exists(_root))
+            {
+                Directory.Delete(_root, recursive: true);
+            }
+        }
+        catch
+        {
+            // Best effort; failed tests may leave files open for inspection.
+        }
+    }
+}
+
 }
 
 public sealed class WorkerDispatchSpecClarificationTests : WorkerDispatchTestSupport
@@ -2511,4 +2657,5 @@ public sealed class WorkerDispatchAcceptanceAdmissionTests : WorkerDispatchTestS
             }
         }
     }
+
 }
