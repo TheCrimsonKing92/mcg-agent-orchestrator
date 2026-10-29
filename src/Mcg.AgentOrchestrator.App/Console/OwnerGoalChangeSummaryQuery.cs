@@ -15,12 +15,14 @@ internal sealed class OwnerGoalChangeSummaryQuery(
     Func<string, CancellationToken, Task<GoalPromotionFact?>>? promotion = null,
     Func<string, string, CancellationToken, Task<CommittedGoalChanges>>? changes = null,
     Func<TaskVerificationRecord, CancellationToken, Task<string?>>? artifact = null,
-    Func<GoalId, string, GoalPromotionFact?, CancellationToken, Task<OwnerGoalAcceptanceEvidence>>? acceptance = null)
+    Func<GoalId, string, GoalPromotionFact?, CancellationToken, Task<OwnerGoalAcceptanceEvidence>>? acceptance = null,
+    Func<string, CancellationToken, Task<string?>>? mergeBase = null)
 {
     internal const int MaxArtifactBytes = 1_056_000;
     private readonly object _cacheGate = new();
     private readonly SemaphoreSlim _diffRead = new(1, 1);
     private (string Base, string Candidate, Task<CommittedGoalChanges> Read)? _committed;
+    private (string Base, string Candidate, Task<CommittedGoalChanges> Read)? _whole;
 
     internal static OwnerGoalChangeSummaryQuery ForWorkspace(OrchestratorWorkspace workspace) => new(
         async (id, token) =>
@@ -47,7 +49,9 @@ internal sealed class OwnerGoalChangeSummaryQuery(
             if (!FullRevision(main)) throw new InvalidDataException("Integration revision unavailable.");
             return new OwnerGoalAcceptanceEvidence(main, await GoalOperationJournal.ReadNewestAcceptanceOutcomeAsync(
                 workspace.RunEventStorePath, id, candidate, main, token));
-        }, token));
+        }, token),
+        mergeBase: (candidate, token) => Task.Run(() => GoalChangesReader.ReadMergeBase(
+            workspace.RootDirectory, workspace.IntegrationBranch, candidate), token));
 
     internal async Task<OwnerGoalChangeSummary> LoadAsync(Goal goal, CancellationToken token)
     {
@@ -75,7 +79,6 @@ internal sealed class OwnerGoalChangeSummaryQuery(
         var basis = promotionRange ? landed!.PriorMainRevision : contributing?.BaseCommit ?? dispatch?.BaseCommit;
         var planned = await PlannedAsync(goal, token);
         var observed = new OwnerGoalSummarySection("unavailable — no committed comparison", [], "recorded dispatch/promotion identities");
-        var previewChanges = new OwnerGoalPreviewChanges(OwnerGoalPreviewChangeKind.None, [], 0);
         if (candidate is not null && FullRevision(basis) && changes is not null)
         {
             try
@@ -89,9 +92,6 @@ internal sealed class OwnerGoalChangeSummaryQuery(
                     read = _committed.Value.Read;
                 }
                 var facts = await read.WaitAsync(token);
-                previewChanges = new(!facts.Available ? OwnerGoalPreviewChangeKind.Unavailable :
-                    facts.TotalFiles == 0 ? OwnerGoalPreviewChangeKind.None : OwnerGoalPreviewChangeKind.Listed,
-                    facts.Files, facts.TotalFiles);
                 observed = facts.Available
                     ? new(facts.TotalFiles == 0 ? "observed empty committed range" : $"observed {facts.TotalFiles} files (file scope: {FileAreas(facts.Files)})",
                         facts.Files.Take(20).Select(BoundItem).ToArray(),
@@ -103,11 +103,11 @@ internal sealed class OwnerGoalChangeSummaryQuery(
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                previewChanges = new(OwnerGoalPreviewChangeKind.Unavailable, [], 0);
                 observed = new("unavailable — " + ex.GetType().Name, [], $"Git {basis}..{candidate}");
                 lock (_cacheGate) _committed = null;
             }
         }
+        var previewChanges = await WholeGoalChangesAsync(candidate, landed, promotionRange, promotionFailure, token);
         var reported = await ReportedAsync(goal, candidate, token);
         var landing = landed is null
             ? promotionFailure is null ? "landing not recorded" : "landing unavailable — " + promotionFailure
@@ -118,6 +118,46 @@ internal sealed class OwnerGoalChangeSummaryQuery(
         {
             Preview = new(OwnerGoalTitle.Full(goal.Objective), previewChanges, previewEvidence)
         };
+    }
+
+    private async Task<OwnerGoalPreviewChanges> WholeGoalChangesAsync(string? candidate, GoalPromotionFact? landed,
+        bool promotionRange, string? promotionFailure, CancellationToken token)
+    {
+        if (candidate is null || changes is null) return new(OwnerGoalPreviewChangeKind.None, [], 0);
+        var unavailable = new OwnerGoalPreviewChanges(OwnerGoalPreviewChangeKind.Unavailable, [], 0);
+        try
+        {
+            // Promotion failures cannot safely be treated as unlanded goals: main may already contain the candidate.
+            if ((landed is not null && !promotionRange) || (promotion is not null && promotionFailure is not null))
+                return unavailable;
+            var basis = landed is not null ? landed.PriorMainRevision :
+                mergeBase is not null ? await mergeBase(candidate, token).WaitAsync(token) : null;
+            if (!FullRevision(basis)) return unavailable;
+
+            Task<CommittedGoalChanges> read;
+            lock (_cacheGate)
+            {
+                // Separate from detail even when the endpoints match. Resolve the base on every refresh
+                // so a moved integration ref cannot reuse a diff for a different whole-goal range.
+                if (_whole is not { } cached || cached.Base != basis || cached.Candidate != candidate ||
+                    cached.Read.IsCanceled || cached.Read.IsFaulted)
+                    _whole = (basis!, candidate, ReadChangesAsync(basis!, candidate, token));
+                read = _whole.Value.Read;
+            }
+            var facts = await read.WaitAsync(token);
+            if (!facts.Available)
+            {
+                lock (_cacheGate) { if (_whole?.Read == read) _whole = null; }
+                return unavailable;
+            }
+            return new(facts.TotalFiles == 0 ? OwnerGoalPreviewChangeKind.None : OwnerGoalPreviewChangeKind.Listed,
+                facts.Files, facts.TotalFiles);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            lock (_cacheGate) _whole = null;
+            return unavailable;
+        }
     }
 
     private async Task<CommittedGoalChanges> ReadChangesAsync(string basis, string candidate, CancellationToken token)

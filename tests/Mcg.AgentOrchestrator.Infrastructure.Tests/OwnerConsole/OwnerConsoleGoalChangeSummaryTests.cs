@@ -91,7 +91,8 @@ public sealed class OwnerConsoleGoalChangeSummaryTests
         {
             Assert.Equal(Basis, basis); Assert.Equal(Candidate, candidate); diffReads++;
             return Task.FromResult(new CommittedGoalChanges(true, ["M src/Feature.cs", "A tests/FeatureTests.cs"], 2));
-        }, (record, token) => { artifactReads++; return Task.FromResult(record.AuthoritativeStandardOutput); });
+        }, (record, token) => { artifactReads++; return Task.FromResult(record.AuthoritativeStandardOutput); },
+            mergeBase: (_, _) => Task.FromResult<string?>(Basis));
         var detailQuery = new OwnerGoalDetailQuery(queries, new EmptyTail(), summary: summary);
         var harness = new OwnerConsoleHarness();
         var dialogs = new Dialogs();
@@ -116,7 +117,7 @@ public sealed class OwnerConsoleGoalChangeSummaryTests
         Assert.Equal(string.Join('\n', "Readable goal", changed
             ? "Changes 2 files in 2 areas: Feature.cs and 1 more" : "No committed changes yet", "Developer"), view.PreviewText);
         Assert.Equal(phase == "pending" ? 0 : changed ? 2 : 1, artifactReads);
-        Assert.Equal(changed ? 1 : 0, diffReads);
+        Assert.Equal(changed ? 2 : 0, diffReads);
         Assert.Equal(1, promotionReads);
         Assert.Equal(new[] { goal.Id.Value }, queries.ReadIds);
         Assert.Equal(0, queries.MetadataReads);
@@ -129,7 +130,7 @@ public sealed class OwnerConsoleGoalChangeSummaryTests
         Assert.Contains("Planned: " + planned, text);
         Assert.Contains("Changed:", text); Assert.Contains("Reported:", text); Assert.Contains("Verified: " + verified, text);
         Assert.Contains("brief v1", text);
-        Assert.Equal(changed ? 1 : 0, diffReads); // Immutable-range cache across preview/detail.
+        Assert.Equal(changed ? 2 : 0, diffReads); // Separate immutable-range caches survive preview/detail refresh.
         if (changed)
         {
             Assert.Contains("M src/Feature.cs", text);
@@ -336,13 +337,13 @@ public sealed class OwnerConsoleGoalChangeSummaryTests
             // Model the real empty result for HEAD..HEAD; the pre-fix selection loses the file.
             return Task.FromResult(basis == head ? new CommittedGoalChanges(true, [], 0) :
                 new CommittedGoalChanges(true, ["M src/Feature.cs"], 1));
-        });
+        }, mergeBase: (_, _) => Task.FromResult<string?>(Basis));
         var (preview, detail) = await RenderSelectedGoalAsync(goal, query);
-        Assert.Equal(new[] { (advanced ? Next : Basis, candidate) }, reads);
+        Assert.Equal(new[] { (advanced ? Next : Basis, candidate), (Basis, candidate) }, reads);
         Assert.Contains("Candidate: " + candidate, detail);
         Assert.Contains("Git " + (advanced ? Next : Basis) + ".." + candidate, detail);
         var expected = advanced ? "Changed: observed empty committed range" : "Changed: observed 1 files";
-        Assert.Contains(advanced ? "No committed changes yet" : "Changes 1 file in src: Feature.cs", preview);
+        Assert.Contains("Changes 1 file in src: Feature.cs", preview);
         Assert.Contains(expected, detail);
         if (advanced) Assert.DoesNotContain("M src/Feature.cs", detail);
         else
@@ -511,7 +512,7 @@ public sealed class OwnerConsoleGoalChangeSummaryTests
         {
             comparisons.Add(candidate);
             return Task.FromResult(new CommittedGoalChanges(true, [], 0));
-        });
+        }, mergeBase: (_, _) => Task.FromResult<string?>(Basis));
         var query = new OwnerGoalDetailQuery(queries, new EmptyTail(), summary: summary);
         Assert.StartsWith("passed", (await query.LoadSummaryAsync(goal.Id.Value, Token))!.Verified.State);
         var snapshot = goal.ToSnapshot();
@@ -521,11 +522,11 @@ public sealed class OwnerConsoleGoalChangeSummaryTests
         Assert.Equal(Next, updated.Candidate);
         Assert.StartsWith("pending", updated.Verified.State);
         Assert.StartsWith("unavailable", updated.Reported.State);
-        Assert.Equal(new[] { Candidate, Next }, comparisons);
+        Assert.Equal(new[] { Candidate, Candidate, Next, Next }, comparisons);
         snapshot = queries.Goal.ToSnapshot();
         queries.Goal = new TestGoal(snapshot with { CriterionEvidenceObligations = [Obligation(Next, true)] });
         Assert.StartsWith("passed", (await query.LoadSummaryAsync(goal.Id.Value, Token))!.Verified.State);
-        Assert.Equal(2, comparisons.Count); // A receipt-only update doesn't re-run Git.
+        Assert.Equal(4, comparisons.Count); // A receipt-only update doesn't re-run either diff.
     }
 
     [Theory]
@@ -728,7 +729,8 @@ public sealed class OwnerConsoleGoalChangeSummaryTests
         var queries = new Queries(goal);
         var longPath = "M src/" + string.Concat(Enumerable.Repeat("長い😀/", 150)) + "Feature.cs";
         var query = new OwnerGoalDetailQuery(queries, new EmptyTail(), summary: new(changes: (_, _, _) =>
-            Task.FromResult(new CommittedGoalChanges(true, [longPath], 1))));
+            Task.FromResult(new CommittedGoalChanges(true, [longPath], 1)),
+            mergeBase: (_, _) => Task.FromResult<string?>(Basis)));
         var harness = new OwnerConsoleHarness();
         var dialogs = new Dialogs();
         using var controller = Controller(harness, dialogs, query);
