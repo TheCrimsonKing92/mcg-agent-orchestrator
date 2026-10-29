@@ -8,7 +8,7 @@ internal sealed class RoleReportEvidenceClosure(
 {
     internal IReadOnlyDictionary<HumanInputRequestId, string> Close(Goal goal,
         IEnumerable<HumanInputRequest> requests, string landingCandidateSha,
-        Func<string, string?> passedGateSourceForClass)
+        Func<string, string?> passedGateSourceForClass, Func<string, string?>? removedTestClassSource = null)
     {
         lock (requestLock)
         {
@@ -34,7 +34,7 @@ internal sealed class RoleReportEvidenceClosure(
                 var reason = request.PlannerIdentity?.BriefVersion != goal.AuthoritativeBrief.Version
                     ? "brief-version-differs"
                     : owner == "developer"
-                        ? DeveloperSkipReason(goal, request, task, passedGateSourceForClass, out tests, out gate)
+                        ? DeveloperSkipReason(goal, request, task, passedGateSourceForClass, removedTestClassSource, out tests, out gate)
                         : RoundSkipReason(goal, task, role);
                 if (reason is not null)
                 {
@@ -66,7 +66,8 @@ internal sealed class RoleReportEvidenceClosure(
     }
 
     private static string? DeveloperSkipReason(Goal goal, HumanInputRequest request, TaskSpec? developer,
-        Func<string, string?> passedGateSourceForClass, out string? tests, out string? gate)
+        Func<string, string?> passedGateSourceForClass, Func<string, string?>? removedTestClassSource,
+        out string? tests, out string? gate)
     {
         tests = gate = null;
         var criterion = ReportCriterionLookup.Find(goal, request.PlannerIdentity);
@@ -79,13 +80,28 @@ internal sealed class RoleReportEvidenceClosure(
         var required = DeveloperDeferredTestClassNames.Parse(requiredField);
         if (required.Count > 0 && !new HashSet<string>(required, StringComparer.Ordinal).SetEquals(names))
             return "developer-report-differs";
-        var sources = names.Select(name => (Name: name, Source: passedGateSourceForClass(name))).ToArray();
+        var sources = names.Select(name =>
+        {
+            var source = passedGateSourceForClass(name);
+            if (source is null && DeclaresTestRemoval(goal, name) && removedTestClassSource?.Invoke(name) is { } removal)
+                source = $"removed-by-goal {removal}";
+            return (Name: name, Source: source);
+        }).ToArray();
         var missing = sources.Where(item => item.Source is null).Select(item => item.Name).ToArray();
         if (missing.Length > 0) return $"class-not-in-passed-gate:{string.Join(",", missing)}";
         tests = report;
         gate = string.Join(",", sources.Select(item => $"{item.Name}@{item.Source}"));
         return null;
     }
+
+    private static bool DeclaresTestRemoval(Goal goal, string name) => AcceptanceCriteriaParser.Parse(goal.Objective)
+        .Any(criterion =>
+        {
+            if (criterion.Type != "test-removal" || criterion.TestIdentity is not { } identity) return false;
+            var segments = identity.Split('(')[0].Split('.');
+            // Removal identities name a class or a method in that class, never a substring.
+            return identity == name || segments.Length >= 2 && segments[^2] == name;
+        });
 
     private static string? RoundSkipReason(Goal goal, TaskSpec? task, AgentRole role)
     {
