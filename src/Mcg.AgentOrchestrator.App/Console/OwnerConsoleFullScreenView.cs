@@ -1,4 +1,3 @@
-using System.Collections.ObjectModel;
 using System.Data;
 using Terminal.Gui.App;
 using Terminal.Gui.Input;
@@ -21,15 +20,16 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
     private readonly OwnerStatusPresenter _statusPresenter = new();
     private readonly Label _status = new() { Width = Dim.Fill(), Height = 1 };
     private readonly Label _notice = new() { Y = Pos.AnchorEnd(3), Width = Dim.Fill(), Height = 1 };
-    private readonly ListView _decisions = new() { Width = Dim.Fill(), Height = Dim.Fill() };
-    private readonly Label _emptyDecisions = new() { Text = "Nothing needs you right now.", Width = Dim.Fill(), Height = 1, Visible = false };
+    private readonly OwnerConsoleDecisionsPane _decisionsPane = new();
+    private readonly OwnerConsoleActivityPane _activityPane = new();
+    private readonly ListView _decisions;
     private readonly TableView _board = new() { Width = Dim.Fill(), Height = Dim.Fill() };
     private readonly Label _preview = new() { Width = Dim.Fill(), Height = 3 };
     private readonly OwnerConsoleSelectedGoalSummary _summary;
     private OwnerConsoleSelectedGoalPreview _selectedPreview = new(null, null);
     internal string PreviewText => _preview.Text;
     internal Task PreviewLoad => _summary.LastLoad;
-    private readonly ListView _activity = new() { Width = Dim.Fill(), Height = Dim.Fill() };
+    private readonly ListView _activity;
     private readonly FrameView _decisionsFrame;
     private readonly FrameView _boardFrame;
     private readonly FrameView _previewFrame;
@@ -53,12 +53,8 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
     private int _selectedBoardIndex = -1;
     private int _activityWidth;
     private int _boardTitleWidth;
-    private IReadOnlyList<OwnerConsoleActivityRow> _activityRows = [];
-    private readonly OwnerConsoleActivityFollow _follow = new();
-    private IReadOnlyList<OwnerConsoleActivityKey> _activityKeys = [];
-    internal bool ActivityFollowing => _follow.Following;
-    private string? _activityFilter;
-    internal string? ActivityFilter => _activityFilter;
+    internal bool ActivityFollowing => _activityPane.Following;
+    internal string? ActivityFilter => _activityPane.Filter;
     private View? _commandReturnFocus;
     private bool ActionRunning => _acting || _operation.IsRunning;
 
@@ -72,8 +68,8 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
     internal ListView DecisionsPane => _decisions;
     internal ListView ActivityPane => _activity;
     internal string HintText => _hints.Text;
-    internal IReadOnlyList<string> DecisionLines { get; private set; } = [];
-    internal IReadOnlyList<string> ActivityLines { get; private set; } = [];
+    internal IReadOnlyList<string> DecisionLines => _decisionsPane.Lines;
+    internal IReadOnlyList<string> ActivityLines => _activityPane.Lines;
     internal string? SelectedGoalId { get; private set; }
     internal OwnerConsolePane FocusedPane => _decisions.HasFocus ? OwnerConsolePane.Decisions :
         _board.HasFocus ? OwnerConsolePane.Board : _activity.HasFocus ? OwnerConsolePane.Activity : _focusedPane;
@@ -82,6 +78,8 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
         Func<Task> refresh, CancellationToken token = default, TimeProvider? clock = null,
         OwnerConsoleLoopOptions? options = null, OwnerConsoleInputDiagnostics? diagnostics = null, string? projectLabel = null)
     {
+        _decisions = _decisionsPane.List;
+        _activity = _activityPane.List;
         if (projectLabel is not null) Window.Title = $"Owner console - {projectLabel}";
         _app = app;
         _diagnostics = diagnostics;
@@ -103,7 +101,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
         _boardFrame = new FrameView { Title = "BOARD", Y = Pos.Bottom(_decisionsFrame), Width = Dim.Fill(), Height = Dim.Percent(33) };
         _previewFrame = new FrameView { Title = "SELECTED", Y = Pos.Bottom(_boardFrame), Width = Dim.Fill(), Height = 5 };
         _activityFrame = new FrameView { Title = "ACTIVITY", Y = Pos.Bottom(_previewFrame), Width = Dim.Fill(), Height = Dim.Fill(3) };
-        _decisionsFrame.Add(_decisions, _emptyDecisions);
+        _decisionsFrame.Add(_decisions, _decisionsPane.EmptyLabel);
         _boardFrame.Add(_board);
         _previewFrame.Add(_preview);
         _activityFrame.Add(_activity);
@@ -132,14 +130,14 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
         };
         _activity.ValueChanged += (_, _) =>
         {
-            if (!_rendering && ActivityRow() is { } row) { _follow.Inspect(_activityKeys[row]); RenderHints(); RenderOverflow(); }
+            if (!_rendering && ActivityRow() is { } row) { _activityPane.Inspect(row); RenderHints(); RenderOverflow(); }
             _diagnostics?.Mark("activity-selection", TraceState);
         };
         _activity.ViewportChanged += (_, args) =>
         {
             var viewport = _activity.Viewport; // NewViewport is empty before Terminal.Gui initialization.
             if (!_rendering && args.OldViewport.Size == viewport.Size && args.OldViewport.X == viewport.X && args.OldViewport.Y != viewport.Y && ActivityRow() is { } row)
-            { _follow.Scrolled(_activityKeys[row], row, viewport.Y, viewport.Height); RenderHints(); RenderOverflow(); }
+            { _activityPane.Scrolled(row); RenderHints(); RenderOverflow(); }
         };
         _decisions.HasFocusChanged += (_, _) => PaneFocusChanged(_decisions, OwnerConsolePane.Decisions);
         _board.HasFocusChanged += (_, _) => PaneFocusChanged(_board, OwnerConsolePane.Board);
@@ -232,14 +230,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
     {
         using var trace = _diagnostics?.Begin("decisions-source-replacement", TraceState);
         if (_controller.Model is not { } model) return;
-        var rows = model.Decisions.Select(item => OwnerConsoleLineFitter.Fit(
-            $"[{item.Number}] {item.GoalPrefix} {item.Kind}: {item.Summary}", OwnerConsoleLineSpans.None, _decisions.Viewport.Width)).ToArray();
-        _emptyDecisions.Text = model.DecisionsState is { Loading: true } ? "loading..." :
-            model.DecisionsState?.Error is { } error ? "DECISIONS unavailable: " + error : "Nothing needs you right now.";
-        _emptyDecisions.Visible = rows.Length == 0;
-        DecisionLines = _emptyDecisions.Visible ? [_emptyDecisions.Text] : rows;
-        _decisions.SetSource(new ObservableCollection<string>(rows));
-        _decisions.SelectedItem = _controller.SelectedIndex < 0 ? null : _controller.SelectedIndex;
+        _decisionsPane.Render(model, _controller.SelectedIndex, _decisions.Viewport.Width);
         RenderOverflow();
     }
 
@@ -256,7 +247,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
             model?.Board.Length ?? 0, _board.RowOffset, BoardBodyRows()));
         var activityTitle = OwnerConsoleActivityTitle.Title(OwnerConsoleOverflow.Of(
             ActivityLines.Count, _activity.Viewport.Y, _activity.Viewport.Height),
-            _follow.Following, _activityFrame.Frame.Width - OwnerConsoleOverflow.TitleChrome, _activityFilter);
+            _activityPane.Following, _activityFrame.Frame.Width - OwnerConsoleOverflow.TitleChrome, _activityPane.Filter);
         if (_activityFrame.Title != activityTitle) _activityFrame.Title = activityTitle;
 
         static void SetTitle(FrameView frame, string baseTitle, OwnerConsoleOverflow overflow)
@@ -321,32 +312,21 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
     // Host ticks repaint freshness even when the state refresh is blocked or has failed.
     internal void RefreshStatus() { RenderStatus(); RenderNotices(); }
 
-    private void RenderActivity(bool refilter = false)
+    private void RenderActivity()
     {
         using var trace = _diagnostics?.Begin("activity-source-replacement", TraceState);
-        var selected = refilter ? null : _activity.SelectedItem;
-        var top = _activity.Viewport.Y;
-        var state = _controller.Model?.ActivityState;
-        var items = _controller.Model?.Activity.Take(OwnerConsoleViewModelBuilder.MaxActivityItems).ToArray() ?? [];
-        _activityRows = state is null ? OwnerConsoleActivityRows.Build(items, _activityFilter) : [];
-        _activityKeys = state is null ? _activityRows.Select(row => row.Key).ToArray() : OwnerConsoleActivityFollow.Keys(items);
-        IEnumerable<string> pane = state is { Loading: true } ? ["loading..."] : state?.Error is { } error
-            ? ["ACTIVITY unavailable: " + error] : _activityRows.Select(row => row.Text);
-        ActivityLines = pane.Select((line, row) => OwnerConsoleLineFitter.Fit(line,
-            state is not { Loading: true } && state?.Error is null &&
-                _controller.Model is { } model && row < _activityRows.Count && _activityRows[row].ItemIndex is { } itemIndex
-                ? OwnerActivityNarrator.LineSpans(model.Activity[itemIndex]) : OwnerConsoleLineSpans.None, _activityWidth)).ToArray();
-        _activity.SetSource(new ObservableCollection<string>(ActivityLines));
-        var placement = state is null ? _follow.Place(_activityKeys, selected, top, _activity.Viewport.Height) : ((int?)0, 0);
-        _activity.SelectedItem = placement.Item1;
-        _activity.Viewport = _activity.Viewport with { Y = placement.Item2 };
+        _activityPane.Render(_controller.Model, _activityWidth);
     }
-    private int? ActivityRow() => _controller.Model?.ActivityState is null && _activity.SelectedItem is { } row && row >= 0 && row < _activityKeys.Count ? row : null;
+    private int? ActivityRow() => _activityPane.SelectedRow(_controller.Model);
     private void FollowLatest()
     {
-        _follow.Follow();
         _rendering = true;
-        try { RenderActivity(); } finally { _rendering = false; }
+        try
+        {
+            using var trace = _diagnostics?.Begin("activity-source-replacement", TraceState);
+            _activityPane.FollowLatest(_controller.Model, _activityWidth);
+        }
+        finally { _rendering = false; }
         RenderHints();
         RenderOverflow();
     }
@@ -518,14 +498,14 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
                 await ActAsync(ct => _controller.HandleKeyAsync(ConsoleKey.Enter, operation: _operation, cancellationToken: ct));
             else if (pane == OwnerConsolePane.Activity && _controller.Model?.ActivityState is null &&
                 _activity.SelectedItem is { } selected && selected >= 0 &&
-                selected < _activityRows.Count)
+                selected < _activityPane.Rows.Count)
             {
-                if (_activityRows[selected].ItemIndex is { } itemIndex)
+                if (_activityPane.Rows[selected].ItemIndex is { } itemIndex)
                     await ActAsync(ct => _controller.ShowActivityMeaningAsync(_controller.Model!.Activity[itemIndex], _operation, ct));
-                else if (_activityRows[selected].Key.Kind == OwnerConsoleActivityFilter.EmptyKind)
+                else if (_activityPane.Rows[selected].Key.Kind == OwnerConsoleActivityFilter.EmptyKind)
                 {
                     StartAction();
-                    ShowNotice(OwnerConsoleActivityFilter.EmptyEnterNotice(_activityFilter!), OwnerConsoleNoticeSeverity.Failure, OwnerConsoleNoticeSource.Action);
+                    ShowNotice(OwnerConsoleActivityFilter.EmptyEnterNotice(_activityPane.Filter!), OwnerConsoleNoticeSeverity.Failure, OwnerConsoleNoticeSource.Action);
                 }
                 else
                 {
@@ -577,21 +557,25 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
             {
                 _commandReturnFocus = _activity;
                 _editingCommand = true;
-                _command.Text = OwnerConsoleActivityFilter.CommandText(_activityFilter);
+                _command.Text = OwnerConsoleActivityFilter.CommandText(_activityPane.Filter);
                 _command.InsertionPoint = _command.Text.Length;
                 _command.SetFocus();
                 RenderHints();
                 return;
             }
             StartAction();
-            _activityFilter = OwnerConsoleActivityFilter.Normalize(argument);
             FocusPane(OwnerConsolePane.Activity);
             _rendering = true;
-            try { RenderActivity(refilter: true); } finally { _rendering = false; }
+            try
+            {
+                using var trace = _diagnostics?.Begin("activity-source-replacement", TraceState);
+                _activityPane.Refilter(_controller.Model, argument, _activityWidth);
+            }
+            finally { _rendering = false; }
             RenderHints();
             RenderOverflow();
-            ShowNotice(_activityFilter is { } filter ? OwnerConsoleActivityFilter.AppliedNotice(filter,
-                _activityRows.Count(row => row.ItemIndex is not null),
+            ShowNotice(_activityPane.Filter is { } filter ? OwnerConsoleActivityFilter.AppliedNotice(filter,
+                _activityPane.Rows.Count(row => row.ItemIndex is not null),
                 Math.Min(_controller.Model?.Activity.Length ?? 0, OwnerConsoleViewModelBuilder.MaxActivityItems))
                 : OwnerConsoleActivityFilter.ClearedNotice, OwnerConsoleNoticeSeverity.Success, OwnerConsoleNoticeSource.Action);
         }
@@ -660,7 +644,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
     private void RenderHints() => _hints.Text = _editingCommand || _command.HasFocus
         ? _completionHint ?? OwnerConsoleKeyHints.CommandLineHint
         : OwnerConsoleKeyHints.Hint(FocusedPane,
-            _controller.SelectedDecision is { } decision && OwnerConsoleScreenController.AnswersInConsole(decision), _follow.Following);
+            _controller.SelectedDecision is { } decision && OwnerConsoleScreenController.AnswersInConsole(decision), _activityPane.Following);
 
     private void SelectBoard(int index, bool refresh = false)
     {
