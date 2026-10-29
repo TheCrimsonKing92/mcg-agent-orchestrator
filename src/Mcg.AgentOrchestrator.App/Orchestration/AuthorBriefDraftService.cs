@@ -33,6 +33,9 @@ internal static class AuthorBriefDraftService
         int? rawOutputBytes = null;
         IReadOnlyList<string> evidenceReferences = [];
         IReadOnlyList<AuthorBriefDraftCheck> checks = [];
+        var rounds = new List<AuthorBriefDraftRoundRecord>();
+        var roundCount = 0;
+        string? backlogCoverage = null;
         try
         {
             var item = AuthorBriefDraftBacklog.Read(workspace.BacklogStorePath, prefix);
@@ -57,12 +60,34 @@ internal static class AuthorBriefDraftService
             var stack = GoalIntakeTargetStack.For(workspace);
             var lessons = new ConductorLessonSelector(workspace.OperatorLessonsStorePath)
                 .Select(ConductorLessonSelector.AuthorTags("brief"));
-            var round = AuthorBriefDraftRound.DispatchAsync(AuthorBriefDraftPrompt.Render(item, lessons, mainHead, stack),
-                workspace.ExecutionDirectory, (request, token) =>
+            var initialPrompt = AuthorBriefDraftPrompt.Render(item, lessons, mainHead, stack);
+            var round = Dispatch(initialPrompt);
+
+            WorkerProcessRunResult Dispatch(string prompt)
+            {
+                return AuthorBriefDraftRound.DispatchAsync(prompt, workspace.ExecutionDirectory, (request, token) =>
                 {
+                    roundCount++;
                     processSeamEntered = true;
                     return seams.RunProcessAsync(request, token);
                 }, resolvedModel, cancellationToken).GetAwaiter().GetResult();
+            }
+
+            void VerifyMainHead()
+            {
+                if (seams.Repository.ResolveMainHead() != mainHead)
+                    throw new InvalidOperationException("Main HEAD changed during the drafting round; rerun against current main.");
+            }
+
+            AuthorBriefDraftEvaluation Evaluate(string markdown)
+            {
+                var draftChecks = AuthorBriefDraftChecks.Run(markdown, mainHead, seams.Repository, stack);
+                var findings = BriefLint.Lint(markdown);
+                return new(markdown, [.. draftChecks, .. findings
+                    .Where(finding => finding.Severity is BriefLintSeverity.BlocksDispatch or BriefLintSeverity.BlocksCliStart)
+                    .Select(finding => new AuthorBriefDraftCheck($"brief-lint:{finding.Kind}", false, LintDetail(finding)))], findings);
+            }
+
             exitCode = round.ExitCode;
             if (exitCode != 0) throw new InvalidOperationException($"Author model exited {exitCode}: {round.StandardError}");
             var result = AuthorBriefDraftResultParser.Parse(round.StandardOutput);
@@ -84,31 +109,32 @@ internal static class AuthorBriefDraftService
                 }
                 throw new InvalidOperationException("Author did not return one valid draft or stale JSON object.");
             }
-            if (seams.Repository.ResolveMainHead() != mainHead)
-                throw new InvalidOperationException("Main HEAD changed during the drafting round; rerun against current main.");
+            VerifyMainHead();
             kind = result.Kind;
             staleReason = result.Reason;
             evidenceReferences = result.EvidenceReferences;
             if (kind == "stale")
             {
+                rounds.Add(new(1, false, null, "stale", staleReason));
                 WriteReceipt(null);
                 output.WriteLine(staleReason);
                 return Outcome(2);
             }
+            var retained = Evaluate(result.Markdown!);
+            rounds.Add(new(1, true, retained.Checks.Where(check => !check.Passed).Select(check => check.Name).ToArray()));
+            retained = AuthorBriefDraftRevisionLoop.Run(initialPrompt, retained, Dispatch, Evaluate,
+                VerifyMainHead, rounds, cancellationToken);
             draftPath = Path.Combine(directory, stem + ".md");
-            File.WriteAllText(draftPath, result.Markdown!);
-            checks = AuthorBriefDraftChecks.Run(result.Markdown!, mainHead, seams.Repository, stack);
-            var findings = BriefLint.Lint(result.Markdown!);
-            checks = [.. checks, .. findings
-                .Where(finding => finding.Severity is BriefLintSeverity.BlocksDispatch or BriefLintSeverity.BlocksCliStart)
-                .Select(finding => new AuthorBriefDraftCheck($"brief-lint:{finding.Kind}", false, LintDetail(finding)))];
+            File.WriteAllText(draftPath, retained.Markdown);
+            checks = retained.Checks;
+            backlogCoverage = BacklogCoverage(retained.Markdown);
             WriteReceipt(null);
             output.WriteLine($"Draft: {draftPath}");
             foreach (var check in checks.Where(check => !check.Passed))
                 output.WriteLine($"Failed {check.Name}: {check.Detail}");
-            foreach (var finding in findings.Where(finding => finding.Severity == BriefLintSeverity.Advisory))
+            foreach (var finding in retained.Findings.Where(finding => finding.Severity == BriefLintSeverity.Advisory))
                 output.WriteLine($"BRIEF-LINT {finding.SeverityToken} {finding.Kind}: {LintDetail(finding)}");
-            output.WriteLine($"goal --brief-file \"{draftPath}\" --backlog-item {item.Id} --backlog-coverage full");
+            output.WriteLine($"goal --brief-file \"{draftPath}\" --backlog-item {item.Id} --backlog-coverage {backlogCoverage}");
             return Outcome(checks.All(check => check.Passed) ? 0 : 1);
         }
         catch (Exception ex)
@@ -139,24 +165,32 @@ internal static class AuthorBriefDraftService
             {
                 backlogItemId, mainHead, exitCode, kind, checks, staleReason, evidenceReferences, failure, model,
                 failureKind, holdReason = trackedEdits is null ? null : AuthorDraftTrackedEdits.Reason,
-                heldPaths = trackedEdits?.Paths
+                heldPaths = trackedEdits?.Paths,
+                rounds, roundCount, backlogCoverage
             } : new
             {
                 backlogItemId, mainHead, exitCode, kind, checks, staleReason, evidenceReferences, failure, model,
                 rawOutputPath, rawOutputBytes, failureKind,
-                holdReason = trackedEdits is null ? null : AuthorDraftTrackedEdits.Reason, heldPaths = trackedEdits?.Paths
+                holdReason = trackedEdits is null ? null : AuthorDraftTrackedEdits.Reason, heldPaths = trackedEdits?.Paths,
+                rounds, roundCount, backlogCoverage
             } : rawOutputPath is null ? new
             {
-                backlogItemId, mainHead, exitCode, kind, checks, staleReason, evidenceReferences, failure, model
+                backlogItemId, mainHead, exitCode, kind, checks, staleReason, evidenceReferences, failure, model,
+                rounds, roundCount, backlogCoverage
             } : new
             {
                 backlogItemId, mainHead, exitCode, kind, checks, staleReason, evidenceReferences, failure, model,
-                rawOutputPath, rawOutputBytes
+                rawOutputPath, rawOutputBytes,
+                rounds, roundCount, backlogCoverage
             };
             File.WriteAllText(receiptPath!, JsonSerializer.Serialize(receipt,
                 new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase, WriteIndented = true }));
         }
     }
+
+    internal static string BacklogCoverage(string markdown) => markdown.Split('\n').Any(line =>
+        line.StartsWith("Follow-up slices", StringComparison.Ordinal) ||
+        line.StartsWith("## Follow-up slices", StringComparison.Ordinal)) ? "slice" : "full";
 
     private static string LintDetail(BriefLintFinding finding) => string.IsNullOrEmpty(finding.Remedy)
         ? finding.Message
