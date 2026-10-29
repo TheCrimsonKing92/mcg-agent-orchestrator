@@ -34,8 +34,7 @@ internal static class PostLandingCanaryCommand
         PostLandingCanaryProbeResult probe;
         try
         {
-            var verifier = acceptanceVerifier ?? new GoalAcceptanceVerifier
-                { CrosswalkExecutable = CrosswalkExecutableComposition.ForProcess };
+            var verifier = acceptanceVerifier ?? new GoalAcceptanceVerifier(CrosswalkExecutableComposition.ForProcess);
             var inheritedResultsPrefix = Environment.GetEnvironmentVariable(
                 GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable);
             var executionOptions = new AcceptanceRunExecutionOptions(

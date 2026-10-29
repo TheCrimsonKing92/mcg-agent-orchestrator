@@ -103,8 +103,8 @@ internal static class ConductorGroupedGateAttemptHost
         var agents = AgentCatalogStore.Load(workspace.AgentCatalogPath, agentFallback).Agents;
         var profiles = WorkerProfileStore.Load(workspace.WorkerProfilePath);
         var driver = new ConductorDriver(kernel, workspace,
-            new GoalAcceptanceVerifier(DotnetBuildEnvironmentManager.CaptureStorageRoot(),
-                workspace.OrchestratorDirectory) { CrosswalkExecutable = CrosswalkExecutableComposition.ForProcess }, agents, profiles,
+            new GoalAcceptanceVerifier(CrosswalkExecutableComposition.ForProcess, DotnetBuildEnvironmentManager.CaptureStorageRoot(),
+                workspace.OrchestratorDirectory), agents, profiles,
             NullOperatorChannel.Instance, providers,
             cleanupHooks: WorktreeCleanupContext.Load(
                 attentionStoreDirectory: workspace.OrchestratorDirectory).Hooks);

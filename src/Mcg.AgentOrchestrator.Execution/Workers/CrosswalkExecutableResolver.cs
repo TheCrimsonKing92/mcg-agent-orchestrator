@@ -24,12 +24,15 @@ public sealed class CrosswalkExecutableResolver
         {
             var configured = !string.IsNullOrWhiteSpace(explicitPath);
             if (!configured && string.IsNullOrWhiteSpace(dataRoot))
-                return new(CrosswalkDetectOutcome.NotConfigured, null, CrosswalkDiagnosticCategory.NotConfigured);
+                return new(CrosswalkDetectOutcome.NotConfigured, null, CrosswalkDiagnosticCategory.NotConfigured)
+                { ConfigurationDetail = "No data root or explicit crosswalk executable path was configured; no path was attempted." };
             var path = Path.GetFullPath(configured ? explicitPath! : Path.Combine(dataRoot!, "tools", "crosswalk", "crosswalk.exe"));
             if (!File.Exists(path))
                 return configured
                     ? new(CrosswalkDetectOutcome.Missing, null, CrosswalkDiagnosticCategory.MissingBinary)
-                    : new(CrosswalkDetectOutcome.NotConfigured, null, CrosswalkDiagnosticCategory.NotConfigured);
+                        { ConfigurationDetail = $"Crosswalk executable is missing at explicit path '{path}'." }
+                    : new(CrosswalkDetectOutcome.NotConfigured, null, CrosswalkDiagnosticCategory.NotConfigured)
+                        { ConfigurationDetail = $"Crosswalk executable is missing at '{path}' under orchestrator data root '{Path.GetFullPath(dataRoot!)}'." };
 
             string hash;
             using (var stream = File.OpenRead(path))
@@ -55,4 +58,8 @@ public sealed class CrosswalkExecutableResolver
 }
 
 public sealed record CrosswalkExecutableResolution(string Status, CrosswalkExecutableIdentity? Identity,
-    CrosswalkDiagnosticCategory? DiagnosticCategory, string Detail = "");
+    CrosswalkDiagnosticCategory? DiagnosticCategory, string Detail = "")
+{
+    // Keep legacy Detail text stable; structured check diagnostics carry configuration failures.
+    public string? ConfigurationDetail { get; init; }
+}
