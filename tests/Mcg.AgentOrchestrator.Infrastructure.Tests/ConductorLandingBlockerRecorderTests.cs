@@ -8,6 +8,57 @@ public sealed class ConductorLandingBlockerRecorderTests
     private static readonly DateTimeOffset Start = DateTimeOffset.UnixEpoch;
 
     [Fact]
+    public void Observe_EscalatedPostPassLanding_PreservesFullReasonAndSinceUntilExecution()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("post-pass landing blocker");
+        HashSet<GoalId> changed = [];
+        const string reason = "acceptance passed at 62f41de0; landing held\r\ngate test obligation: selector-not-found";
+        var outcome = new ConductorAdvanceOutcome.Escalated(GoalLifecycleState.Verified, reason)
+        {
+            Decision = new PolicyDecisionRecord("landing", "escalate", 2, "acceptance-not-accepted", reason, [])
+        };
+
+        ConductorLandingBlockerRecorder.Observe(kernel, goal, outcome, Start, changed);
+
+        Assert.Equal(new GoalLandingBlocker("landing/landing-held-after-pass", reason,
+            "landing/landing-held-after-pass:62f41de0", Start, "unmapped", "unmapped"), goal.LandingBlocker);
+        Assert.Equal(goal.Id, Assert.Single(changed));
+        changed.Clear();
+        ConductorLandingBlockerRecorder.Observe(kernel, goal, outcome, Start.AddMinutes(10), changed);
+        Assert.Empty(changed);
+        Assert.Equal(Start, goal.LandingBlocker!.Since);
+
+        ConductorLandingBlockerRecorder.Observe(kernel, goal,
+            new ConductorAdvanceOutcome.Executed(GoalLifecycleState.Verified, "landed"), Start.AddMinutes(20), changed);
+        Assert.Null(goal.LandingBlocker);
+        Assert.Equal(goal.Id, Assert.Single(changed));
+    }
+
+    [Theory]
+    [InlineData("no passed acceptance outcome for candidate 62f41de0", "landing", "acceptance-not-accepted", GoalLifecycleState.Verified)]
+    [InlineData("acceptance passed at 62f41de0", "other", "acceptance-not-accepted", GoalLifecycleState.Verified)]
+    [InlineData("acceptance passed at 62f41de0", "landing", "other", GoalLifecycleState.Verified)]
+    [InlineData("acceptance passed at 62f41de0", "landing", "acceptance-not-accepted", GoalLifecycleState.WorkspaceReady)]
+    public void Observe_UnrelatedEscalation_ClearsBlocker(string reason, string stage, string evidence, GoalLifecycleState state)
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("unrelated escalation");
+        ConductorLandingBlockerRecorder.Observe(kernel, goal, TypedHold("criterion-evidence-hold"), Start, []);
+        Assert.NotNull(goal.LandingBlocker);
+        HashSet<GoalId> changed = [];
+
+        ConductorLandingBlockerRecorder.Observe(kernel, goal,
+            new ConductorAdvanceOutcome.Escalated(state, reason)
+            {
+                Decision = new PolicyDecisionRecord(stage, "escalate", 2, evidence, reason, [])
+            }, Start.AddMinutes(1), changed);
+
+        Assert.Null(goal.LandingBlocker);
+        Assert.Equal(goal.Id, Assert.Single(changed));
+    }
+
+    [Fact]
     public void Observe_TypedHold_PreservesSinceWithoutRepeatedWritesAndClearsOnExecution()
     {
         var kernel = new AgentOrchestratorKernel();

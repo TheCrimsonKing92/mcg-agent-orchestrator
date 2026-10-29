@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.App.OwnerConsole;
@@ -8,14 +9,27 @@ internal static class OwnerConsoleStageDescriber
     internal const string OwnerQuestion = "question for you";
 
     internal static string Describe(Goal goal, OwnerConsoleBoardSortKey key, int? queuePosition, DateTimeOffset now,
-        OwnerConsoleGateProgress? gate = null)
+        OwnerConsoleGateProgress? gate = null,
+        Func<Goal, (string? Candidate, IReadOnlyList<GoalOperationJournalEntry> Attempts)?>? candidateGate = null)
     {
         if (key.Rank is OwnerConsoleAttention.GateRunning or OwnerConsoleAttention.WaitingForGate &&
             gate?.ForMember(goal.Id.Value) is { } live)
             return live.TotalCount > 0 ? $"in gate: {live.DoneCount}/{live.TotalCount}, {OwnerConsoleGateFormatter.Remaining(live.RemainingSeconds)} left" :
                 $"gate running {(int)live.Elapsed.TotalMinutes}m";
-        if (gate?.ForMember(goal.Id.Value) is null && !(goal.Status == GoalStatus.Verifying && gate is null) &&
-            OwnerConsoleLandingBlockerText.Board(goal, now, queuePosition) is { } held) return held;
+        if (gate?.ForMember(goal.Id.Value) is null && !(goal.Status == GoalStatus.Verifying && gate is null))
+        {
+            if (goal.Status == GoalStatus.Verified && goal.LandingBlocker is not null)
+            {
+                try
+                {
+                    if (candidateGate?.Invoke(goal) is { } evidence &&
+                        OwnerConsolePassedGateHold.Board(goal, now, evidence.Candidate, evidence.Attempts) is { } passed)
+                        return passed;
+                }
+                catch { /* Unavailable acceptance evidence keeps the existing blocker phrase. */ }
+            }
+            if (OwnerConsoleLandingBlockerText.Board(goal, now, queuePosition) is { } held) return held;
+        }
         switch (key.Rank)
         {
             case OwnerConsoleAttention.NeedsYou: return OwnerQuestion;
