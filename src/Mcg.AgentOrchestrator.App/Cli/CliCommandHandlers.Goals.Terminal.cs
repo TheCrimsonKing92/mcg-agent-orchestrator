@@ -83,7 +83,7 @@ private static bool HandleGoalsPrune(CliExecutionContext context, IReadOnlyList<
         ? GoalsPrunePlanner.Apply(context.Kernel, context.Workspace.ExecutionDirectory, context.CleanupContext.Hooks)
         : GoalsPrunePlanner.Build(context.Kernel, context.Workspace.ExecutionDirectory);
 
-    ConsoleViews.PrintGoalsPrunePlan(plan);
+    GoalsPruneTextView.PrintGoalsPrunePlan(plan);
     return plan.PrunedCount > 0;
 }
 }
