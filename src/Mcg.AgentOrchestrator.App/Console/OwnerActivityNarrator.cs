@@ -55,8 +55,7 @@ internal static class OwnerActivityNarrator
         var landed = new HashSet<OwnerConductEvent>();
         string[] mostRecentLanding = [];
         string[] mostRecentLandingPrefixes = [];
-        var restarting = false;
-        var stopped = false;
+        var lifecycle = new OwnerConductorLifecycleNarration();
         for (var index = 0; index < ordered.Length; index++)
         {
             var item = ordered[index];
@@ -151,48 +150,12 @@ internal static class OwnerActivityNarrator
                     if (OwnerAcceptanceNarration.TryNarrate(ordered, index, Name, evidence, attention, out var accepted))
                         Add(item, accepted.Sentence, accepted.Why, accepted.Next, accepted.Act, accepted.Spans, accepted.GoalPrefixes);
                     break;
-                case "canary-gate":
-                    if (Field(item, "result") == "failed")
-                    {
-                        var checks = evidence?.Invoke(item)?.Checks;
-                        var check = Words(Field(item, "tests") ?? checks?.FirstOrDefault(), "the full test run on main");
-                        var landingNames = GoalList("Main broke after landing ", mostRecentLanding);
-                        Add(item, landingNames.Text + (mostRecentLanding.Length == 0 ? "recent work" : "") + $": {check}",
-                            "A check of main failed after the work landed.", "Further landings wait while the failure is investigated.",
-                            "Yes. Review the failure and decide how to repair main.", spans: landingNames.Spans,
-                            goalPrefixes: mostRecentLandingPrefixes.Length > 1 ? mostRecentLandingPrefixes : null);
-                    }
-                    break;
-                case "loop-handoff":
-                    if (head is "ACTIVATION_REVERTED" or "ACTIVATION_FAILED_BOTH" or "LOOP_HANDOFF_FAILED")
-                    {
-                        var reason = RestartReason(item);
-                        // FAILED_BOTH supplies no evidence that the old process remains usable.
-                        if (head == "ACTIVATION_FAILED_BOTH" || head == "LOOP_HANDOFF_FAILED" &&
-                            (Field(item, "continuing") != "true" || stopped))
-                            Add(item, "Conductor stopped", "The conductor could not start the new version (" + reason + ").",
-                                "Work waits for the conductor to be started.", "Yes. Check conductor status and restart it after addressing the failure.");
-                        else Add(item, "Conductor could not switch to the new code; still running the previous version (" + reason + ")",
-                            "The new version could not be activated.", "The previous version continues running.",
-                            "Yes. Review conductor status and address the startup failure.");
-                    }
-                    break;
-                case "loop-stop":
-                    stopped = true;
-                    restarting = Field(item, "reason") == "self-relaunch-handoff" ||
-                        Field(item, "reason") == "max-duration" && ordered.Skip(index + 1).Any(value =>
-                            value.EventKind == "loop-start" || value.EventKind == "loop-handoff" && Head(value) == "ACTIVATION_ADOPTED");
-                    if (!restarting) Add(item, "Conductor stopped", "The conductor finished or was stopped.", "Work waits until the conductor starts.");
-                    break;
-                case "loop-start":
-                    if (!restarting && Field(item, "selfCheck") != "true")
-                        Add(item, "Conductor started", "The conductor was started.", "It will continue the queued work.");
-                    restarting = false;
-                    stopped = false;
-                    break;
-                case "state-log-divergence":
-                    Add(item, prefix + " history needs review: " + name, "Some recorded progress is missing or repeated.",
-                        "The operator can check the goal's history.", spans: SingleTitle(name, prefix.Length + " history needs review: ".Length));
+                default:
+                    if (lifecycle.TryNarrate(ordered, index, out var sentence, out var why, out var nextStep, out var act))
+                        Add(item, sentence, why, nextStep, act);
+                    else if (OwnerMainHealthNarration.TryNarrate(item, Name, evidence,
+                        mostRecentLanding, mostRecentLandingPrefixes, out var health))
+                        Add(item, health.Sentence, health.Why, health.Next, health.Act, health.Spans, health.GoalPrefixes);
                     break;
             }
         }
