@@ -30,7 +30,8 @@ public sealed class ConductorSupervisorBuildIdentityTests
                 return Task.CompletedTask;
             },
             supervisorHandoff: new ConductorSupervisorHandoffOptions(seam, own,
-                TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(1)));
+                TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(1)),
+                verifyRunClosure: (folder, _, _) => new(true, folder, 0, 0, "none", "fixture"));
 
         var exit = await supervisor.RunAsync(["conduct", "--loop"], "C:\\repo",
             Path.Combine(Path.GetTempPath(), $"mcg-handoff-inbound-{Guid.NewGuid():N}"),

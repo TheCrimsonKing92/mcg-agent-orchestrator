@@ -100,7 +100,8 @@ public sealed class ConductorBatchLoopTestsActivationHeartbeatBeforeSleep(ITestO
             {
                 deadlineCreated.TrySetResult();
                 return releaseDeadline.Task;
-            });
+            },
+            verifyRunClosure: (folder, _, _) => new(true, folder, 0, 0, "none", "fixture"));
 
         var run = supervisor.RunAsync(["conduct", "--loop"], "C:\\repo",
             Path.Combine(Path.GetTempPath(), $"mcg-activation-watch-{Guid.NewGuid():N}"),
@@ -179,7 +180,8 @@ public sealed class ConductorBatchLoopTestsActivationHeartbeatBeforeSleep(ITestO
             {
                 deadlineCreated.TrySetResult();
                 return releaseDeadline.Task;
-            });
+            },
+            verifyRunClosure: (folder, _, _) => new(true, folder, 0, 0, "none", "fixture"));
 
         var run = supervisor.RunAsync(["conduct", "--loop"], "C:\\repo",
             Path.Combine(Path.GetTempPath(), $"mcg-activation-stall-{Guid.NewGuid():N}"),

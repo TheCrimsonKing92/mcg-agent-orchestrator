@@ -132,7 +132,8 @@ public sealed class ConductorContinuitySupervisorTickStallTests
             {
                 captures++;
                 return Task.FromResult(ConductorDumpCaptureResult.NotCaptured("unused"));
-            }));
+            }),
+            verifyRunClosure: (folder, _, _) => new(true, folder, 0, 0, "none", "fixture"));
 
         var exitCode = await supervisor.RunAsync(["conduct", "--loop"], "C:\\repo", ArtifactDirectory(),
             "default", "default").WaitAsync(TestContext.Current.CancellationToken);
@@ -252,7 +253,8 @@ public sealed class ConductorContinuitySupervisorTickStallTests
                 delays.Add(duration);
                 return Task.CompletedTask;
             },
-            dumpCapture: dump);
+            dumpCapture: dump,
+            verifyRunClosure: (folder, _, _) => new(true, folder, 0, 0, "none", "fixture"));
         var exit = await supervisor.RunAsync(["conduct", "--loop"], "C:\\repo", ArtifactDirectory(),
             "default", "default").WaitAsync(TestContext.Current.CancellationToken);
         return new(exit, host, events, actions, delays);

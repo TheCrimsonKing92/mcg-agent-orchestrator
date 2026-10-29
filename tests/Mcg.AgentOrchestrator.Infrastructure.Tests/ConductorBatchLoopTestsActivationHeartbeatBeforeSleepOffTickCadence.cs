@@ -105,7 +105,8 @@ public sealed class ConductorBatchLoopTestsActivationHeartbeatBeforeSleepOffTick
             {
                 deadlineCreated.TrySetResult();
                 return releaseDeadline.Task;
-            });
+            },
+            verifyRunClosure: (folder, _, _) => new(true, folder, 0, 0, "none", "fixture"));
         var run = supervisor.RunAsync(["conduct", "--loop"], "C:\\repo", root,
             "default", "default", cancellationToken: supervisorCancellation.Token);
         try

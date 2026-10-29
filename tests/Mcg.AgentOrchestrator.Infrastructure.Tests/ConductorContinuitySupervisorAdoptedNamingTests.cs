@@ -50,7 +50,8 @@ public sealed class ConductorContinuitySupervisorAdoptedNamingTests
         var supervisor = new ConductorContinuitySupervisor(host, events,
             inspectStores: () => [new("fixture-store", "fixture.db", 1, 1)], stageSuccessor: _ => stages.Dequeue(), activationHealthyTicks: 3,
             activationDelay: (_, _) => throw new InvalidOperationException("No deadline should be needed"),
-            appendConductEvent: (_, _, line) => conductLines.Add(line));
+            appendConductEvent: (_, _, line) => conductLines.Add(line),
+            verifyRunClosure: (folder, _, _) => new(true, folder, 0, 0, "none", "fixture"));
 
         var result = await supervisor.RunAsync(["conduct", "--loop"], "C:\\repo",
             Path.Combine(Path.GetTempPath(), $"mcg-adopted-naming-{Guid.NewGuid():N}"),
@@ -101,7 +102,8 @@ public sealed class ConductorContinuitySupervisorAdoptedNamingTests
         });
         var supervisor = new ConductorContinuitySupervisor(host, events,
             inspectStores: () => [new("fixture-store", "fixture.db", 1, 1)], stageSuccessor: _ => stages.Dequeue(), activationHealthyTicks: 3,
-            activationDelay: (_, _) => throw new InvalidOperationException("No deadline should be needed"));
+            activationDelay: (_, _) => throw new InvalidOperationException("No deadline should be needed"),
+            verifyRunClosure: (folder, _, _) => new(true, folder, 0, 0, "none", "fixture"));
 
         var result = await supervisor.RunAsync(["conduct", "--loop"], "C:\\repo",
             Path.Combine(Path.GetTempPath(), $"mcg-suppressed-naming-{Guid.NewGuid():N}"),

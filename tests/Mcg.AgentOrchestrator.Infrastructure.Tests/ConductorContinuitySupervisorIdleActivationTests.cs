@@ -112,7 +112,8 @@ public sealed class ConductorContinuitySupervisorIdleActivationTests
             var supervisor = new ConductorContinuitySupervisor(Host, Events,
                 timeProvider: Deadlines, inspectStores: () => [new("fixture-store", "fixture.db", 1, 1)], stageSuccessor: _ => successor,
                 activationHealthyTicks: 3, activationDelay: Deadlines.Delay,
-                activationStallTimeout: TimeSpan.FromMinutes(2));
+                activationStallTimeout: TimeSpan.FromMinutes(2),
+                verifyRunClosure: (folder, _, _) => new(true, folder, 0, 0, "none", "fixture"));
             return supervisor.RunAsync(["conduct", "--loop", "--daemon", "--poll-seconds", "120"],
                 "C:\\repo", Path.Combine(Path.GetTempPath(), $"mcg-idle-activation-{Guid.NewGuid():N}"),
                 "default", "default");

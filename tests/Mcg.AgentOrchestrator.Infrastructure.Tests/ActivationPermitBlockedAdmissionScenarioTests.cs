@@ -156,7 +156,8 @@ public sealed class ActivationPermitBlockedAdmissionScenarioTests
                     return _seam == "unrelated"
                         ? ["src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs", "docs/operator-runbook.md"]
                         : ["src/Mcg.AgentOrchestrator.App/Orchestration/AcceptanceHolderLease.cs"];
-                });
+                },
+                verifyRunClosure: (folder, _, _) => new(true, folder, 0, 0, "none", "fixture"));
             _run = supervisor.RunAsync(["conduct", "--loop", "--daemon", "--poll-seconds", _shortTickGap ? "120" : "4000"],
                 "C:\\fake-repo", _root, "default", "default", cancellationToken: _stop.Token);
             await Clock.WaitForCountAsync(1);

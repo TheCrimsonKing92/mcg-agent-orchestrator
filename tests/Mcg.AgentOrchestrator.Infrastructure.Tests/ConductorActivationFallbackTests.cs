@@ -36,7 +36,8 @@ public sealed class ConductorActivationFallbackTests
             });
             var supervisor = new ConductorContinuitySupervisor(host, events,
                 stageSuccessor: _ => Build("future", "future", new MemoryStream()), activationHealthyTicks: 3,
-                inspectStores: () => StoreSetupRunner.Plan(storeDirectory));
+                inspectStores: () => StoreSetupRunner.Plan(storeDirectory),
+                verifyRunClosure: (folder, _, _) => new(true, folder, 0, 0, "none", "fixture"));
             Assert.Equal(1, await supervisor.RunAsync(["conduct", "--loop"], root, Path.Combine(root, "continuity"), "default", "default"));
             Assert.Equal(2, host.Requests.Count);
             Assert.DoesNotContain(events.Events, evt => evt.Operation == "activation" && evt.Status == "reverted");
@@ -76,7 +77,8 @@ public sealed class ConductorActivationFallbackTests
                     inspections++;
                     if (failure == 1) throw new IOException("fixture inspection unavailable");
                     throw new InvalidOperationException("fixture inspection invalid");
-                });
+                },
+                verifyRunClosure: (folder, _, _) => new(true, folder, 0, 0, "none", "fixture"));
 
             Assert.Equal(0, await supervisor.RunAsync(["conduct", "--loop"], root,
                 Path.Combine(root, "continuity"), "default", "default"));
@@ -129,7 +131,8 @@ public sealed class ConductorActivationFallbackTests
         });
         var supervisor = new ConductorContinuitySupervisor(host, events,
             inspectStores: () => [new("fixture-store", "fixture.db", 1, 1)], stageSuccessor: _ => stages.Dequeue(), activationHealthyTicks: 3,
-            activationDelay: (_, _) => throw new InvalidOperationException("No deadline should be needed"));
+            activationDelay: (_, _) => throw new InvalidOperationException("No deadline should be needed"),
+            verifyRunClosure: (folder, _, _) => new(true, folder, 0, 0, "none", "fixture"));
 
         var result = await supervisor.RunAsync(["conduct", "--loop"], "C:\\repo",
             Path.Combine(Path.GetTempPath(), $"mcg-activation-{Guid.NewGuid():N}"), "default", "default");
@@ -176,7 +179,8 @@ public sealed class ConductorActivationFallbackTests
         var supervisor = new ConductorContinuitySupervisor(host, events,
             inspectStores: () => [new("fixture-store", "fixture.db", 1, 1)], stageSuccessor: _ => prepared, activationHealthyTicks: 3,
             activationDelay: (_, _) => throw new InvalidOperationException("No deadline should be needed"),
-            raiseActivationAttention: attention.Add);
+            raiseActivationAttention: attention.Add,
+            verifyRunClosure: (folder, _, _) => new(true, folder, 0, 0, "none", "fixture"));
 
         var result = await supervisor.RunAsync(["conduct", "--loop"], "C:\\repo",
             Path.Combine(Path.GetTempPath(), $"mcg-activation-both-{Guid.NewGuid():N}"), "default", "default");
@@ -234,7 +238,8 @@ public sealed class ConductorActivationFallbackTests
             {
                 deadlineCreated.TrySetResult();
                 return releaseDeadline.Task;
-            });
+            },
+            verifyRunClosure: (folder, _, _) => new(true, folder, 0, 0, "none", "fixture"));
 
         var run = supervisor.RunAsync(["conduct", "--loop"], "C:\\repo",
             Path.Combine(Path.GetTempPath(), $"mcg-activation-deadline-{Guid.NewGuid():N}"),
@@ -288,7 +293,8 @@ public sealed class ConductorActivationFallbackTests
         });
         var supervisor = new ConductorContinuitySupervisor(host, events,
             inspectStores: () => [new("fixture-store", "fixture.db", 1, 1)], stageSuccessor: _ => successor, activationHealthyTicks: 3,
-            activationDelay: (_, _) => throw new InvalidOperationException("No deadline should be needed"));
+            activationDelay: (_, _) => throw new InvalidOperationException("No deadline should be needed"),
+            verifyRunClosure: (folder, _, _) => new(true, folder, 0, 0, "none", "fixture"));
 
         var result = await supervisor.RunAsync(["conduct", "--loop"], "C:\\repo",
             Path.Combine(Path.GetTempPath(), $"mcg-activation-clean-{Guid.NewGuid():N}"),
@@ -346,7 +352,8 @@ public sealed class ConductorActivationFallbackTests
                 ? successor
                 : throw new InvalidOperationException("No newer HEAD"),
             activationHealthyTicks: 3,
-            activationDelay: (_, _) => throw new InvalidOperationException("No deadline should be needed"));
+            activationDelay: (_, _) => throw new InvalidOperationException("No deadline should be needed"),
+            verifyRunClosure: (folder, _, _) => new(true, folder, 0, 0, "none", "fixture"));
 
         var result = await supervisor.RunAsync(["conduct", "--loop"], "C:\\repo",
             Path.Combine(Path.GetTempPath(), $"mcg-activation-stop-{Guid.NewGuid():N}"),
@@ -406,7 +413,8 @@ public sealed class ConductorActivationFallbackTests
                     3 => SignalDeadline(thirdDeadlineCreated, thirdDeadline),
                     _ => throw new InvalidOperationException("Unexpected activation deadline")
                 };
-            });
+            },
+            verifyRunClosure: (folder, _, _) => new(true, folder, 0, 0, "none", "fixture"));
 
         var run = supervisor.RunAsync(["conduct", "--loop"], "C:\\repo",
             Path.Combine(Path.GetTempPath(), $"mcg-activation-idle-{Guid.NewGuid():N}"),
