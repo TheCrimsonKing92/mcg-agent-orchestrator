@@ -119,12 +119,14 @@ internal sealed class OwnerConsoleViewModelBuilder(IOrchestratorStateQueries sta
         ImmutableArray<OwnerConsoleDecision> decisions, int hidden)
     {
         var questionGoals = decisions.Select(item => item.GoalId).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var rows = model.Board.Select(row => row with
+        var rows = model.Board.Select(row => row.IsForeign || row.IsDiagnostic ? row : row with
         {
             StageWithoutQuestion = row.StageWithoutQuestion ?? row.Stage,
             Stage = !row.Dimmed && questionGoals.Contains(row.GoalId) ? OwnerConsoleStageDescriber.OwnerQuestion :
                 row.StageWithoutQuestion ?? row.Stage
-        }).OrderBy(row => row.SortKey.WithOwnerQuestion(questionGoals.Contains(row.GoalId))).ToImmutableArray();
+        }).OrderBy(row => row.IsDiagnostic)
+            .ThenBy(row => row.SortKey.WithOwnerQuestion(!row.IsForeign && questionGoals.Contains(row.GoalId)))
+            .ThenBy(row => row.Project, StringComparer.OrdinalIgnoreCase).ThenBy(row => row.GoalId, StringComparer.Ordinal).ToImmutableArray();
         return model with { Board = rows, Decisions = decisions,
             Status = model.Status with { LiveDecisions = decisions.Length, HiddenQuestions = hidden } };
     }
@@ -143,7 +145,7 @@ internal sealed class OwnerConsoleViewModelBuilder(IOrchestratorStateQueries sta
                 return matches.Length == 1 ? OwnerConsoleGoalDetailFormatter.Finding(matches[0], item) : null;
             }).ToImmutableArray();
         return model with { Activity = activity,
-            Board = model.Board.Select(row => _goals.TryGetValue(row.GoalId, out var goal)
+            Board = model.Board.Select(row => !row.IsForeign && !row.IsDiagnostic && _goals.TryGetValue(row.GoalId, out var goal)
                 ? row with { Priority = OwnerConsolePriorityText.Column(goal),
                     PriorityWarning = OwnerConsolePriorityText.Warning(goal, inputs.RecentEvents) } : row).ToImmutableArray(),
             Status = model.Status with

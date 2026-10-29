@@ -9,7 +9,8 @@ internal static class OwnerConsoleVerb
         args.Count > 0 && args[0].Equals("console", StringComparison.OrdinalIgnoreCase);
 
     internal static Task<int> RunAsync(IReadOnlyList<string> args, OrchestratorWorkspace workspace,
-        CancellationToken cancellationToken = default, OwnerConsoleHostRowOwner? owners = null)
+        CancellationToken cancellationToken = default, OwnerConsoleHostRowOwner? owners = null,
+        OrchestratorProjectRegistry? registry = null, string? repositoryRoot = null)
     {
         string? inputTracePath;
         try
@@ -23,7 +24,8 @@ internal static class OwnerConsoleVerb
             return Task.FromResult(1);
         }
         return OwnerConsoleModeSelector.RunAsync(args, System.Console.IsInputRedirected, System.Console.IsOutputRedirected,
-            new(token => RunPlainAsync(workspace, token, owners), token => OwnerConsoleFullScreenHost.RunAsync(workspace, token, inputTracePath, owners)), cancellationToken);
+            new(token => RunPlainAsync(workspace, token, owners), token => OwnerConsoleFullScreenHost.RunAsync(workspace, token, inputTracePath, owners,
+                registry is null ? null : OwnerConsoleBoardSource.FromRegistry(workspace, repositoryRoot ?? workspace.RootDirectory, registry, TimeProvider.System))), cancellationToken);
     }
 
     private static async Task<int> RunPlainAsync(OrchestratorWorkspace workspace, CancellationToken cancellationToken,
