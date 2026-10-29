@@ -1,3 +1,4 @@
+using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Terminal.Gui.App;
 
@@ -83,7 +84,14 @@ internal static class OwnerConsoleFullScreenHost
                 item => item.EventKind == "acceptance-cohort" ? jointEvidence.Read(item, cohortEvidence.Read(item)) :
                     gateEvidence.Read(item) ?? jointEvidence.Read(item), id => timings.Time("gate-motion", () => gateMotion.Describe(id)),
                 latestTick: () => timings.Time("latest-tick", latestTick.Read),
-                gateProgress: titles => timings.Time("gate-progress", () => gateProgress.Load(titles)), snapshots: snapshots);
+                gateProgress: titles => timings.Time("gate-progress", () => gateProgress.Load(titles)), snapshots: snapshots,
+                candidateGate: goal =>
+                {
+                    var head = GitCli.Run(workspace.ExecutionDirectory, "rev-parse", "--verify",
+                        $"refs/heads/{GoalWorktrees.BranchName(goal.Id)}");
+                    return (Candidate: head.ExitCode == 0 ? head.Output.Trim() : null,
+                        Attempts: GoalOperationJournal.Read(workspace.ExecutionDirectory, goal.Id).Entries);
+                });
             var opened = clock.GetUtcNow();
             DateTimeOffset? last = null;
             var landings = 0;

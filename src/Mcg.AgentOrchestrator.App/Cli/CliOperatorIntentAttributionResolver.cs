@@ -14,12 +14,6 @@ internal static class CliOperatorIntentAttributionResolver
             "cli",
             "local-process",
             actorKind),
-        CliPersistentStateRunner.OperatorIntentSubmissionSource.Discord => new(
-            actor ?? throw new ArgumentException(
-                "Discord operator intent submissions require an authenticated --operator-actor."),
-            "discord",
-            "discord-operator-allowlist",
-            actorKind),
         _ => throw new ArgumentOutOfRangeException(
             nameof(submissionSource),
             submissionSource,

@@ -467,11 +467,9 @@ When the goal reaches `Verified`, the conductor runs three gates before promotin
 
 When all three gates pass the goal moves to `Merged`, then to `Recorded` (written to `.orchestrator/dogfood-log.db`), then to `CleanedUp` (worktree removed).
 
-### Operator pager (Discord)
+### Operator notifications
 
-Escalations are routed through the configured `IOperatorChannel`. The built-in Discord channel (`DiscordOperatorChannel`) creates one forum thread per goal the first time an escalation fires for that goal, titled `[<goal-prefix>] Orchestrator Escalations`. Subsequent escalations for the same goal are posted as messages in the existing thread. Thread IDs are persisted in `.orchestrator/discord-threads.json` so they survive process restarts. Buttons attached to each message let the operator acknowledge or act without leaving Discord.
-
-Enable the Discord pager by providing a forum channel ID and bot token; the local operator inbox (`operator-inbox`) remains the fallback when Discord is not configured.
+Escalations use `IOperatorChannel`, which currently composes `NullOperatorChannel` for every catalog. Notifications remain available in the local operator inbox: run `operator-inbox` to inspect items and `operator-inbox-ack` to acknowledge them.
 
 ## Next Slices
 

@@ -970,6 +970,57 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
     }
 
 
+    // Parallel-safe: the child uses a private root and an explicit environment.
+    [Xunit.Theory]
+    [Xunit.InlineData("operator-listen")]
+    [Xunit.InlineData("operator-channel")]
+    public void CliRemovedOperatorTransportVerbsReportUnknownCommandAndAreAbsentFromHelp(
+        string verb)
+    {
+        var root = CreateTempDirectory();
+        string[] args = [verb];
+        Xunit.Assert.False(CliHandledVerbRegistry.IsHandled(verb));
+        Xunit.Assert.DoesNotContain(verb, CliArgumentParser.RecognizedCommands,
+            StringComparer.OrdinalIgnoreCase);
+
+        var startInfo = new ProcessStartInfo("dotnet")
+        {
+            WorkingDirectory = root,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
+        };
+        startInfo.Environment.Clear();
+        foreach (var name in new[] { "PATH", "SystemRoot", "TEMP", "TMP", "DOTNET_ROOT" })
+        {
+            if (Environment.GetEnvironmentVariable(name) is { } value)
+                startInfo.Environment[name] = value;
+        }
+        startInfo.Environment[OrchestratorWorkspace.RepoRootEnvironmentVariable] = root;
+        startInfo.Environment[DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable] =
+            Path.Combine(root, ".orchestrator", "test-dotnet");
+        startInfo.Environment["OLLAMA_BASE_URL"] = "http://127.0.0.1:1";
+        startInfo.ArgumentList.Add("exec");
+        startInfo.ArgumentList.Add(Path.Combine(AppContext.BaseDirectory, "Mcg.AgentOrchestrator.App.dll"));
+        startInfo.ArgumentList.Add(verb);
+        var result = CliChildProcessRunner.Run(startInfo);
+        Xunit.Assert.Equal(1, result.ExitCode);
+        Xunit.Assert.Empty(result.StandardOutput);
+        Xunit.Assert.Equal(
+            $"Error: {CliArgumentParser.FormatUnknownCommandMessage(args)}{Environment.NewLine}",
+            result.StandardError);
+
+        var help = CaptureConsole(() => Xunit.Assert.True(
+            CliCommandHelp.TryPrintStartupHelp(["--help"])));
+        Xunit.Assert.Contains("Usage: mcg-orchestrator", help, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("operator-listen", help, StringComparison.OrdinalIgnoreCase);
+        Xunit.Assert.DoesNotContain("operator-channel", help, StringComparison.OrdinalIgnoreCase);
+        var error = Xunit.Assert.Throws<ArgumentException>(() =>
+            CliCommandHelp.TryPrintStartupHelp(["help", verb]));
+        Xunit.Assert.Equal(CliArgumentParser.FormatUnknownCommandMessage([verb]), error.Message);
+    }
+
     [Xunit.Fact(DisplayName = "Cli_removed_autonomy_verb_reports_unknown_command_and_config_policy_lists_named_modes")]
     public void CliRemovedAutonomyVerbReportsUnknownCommandAndConfigPolicyListsNamedModes()
     {

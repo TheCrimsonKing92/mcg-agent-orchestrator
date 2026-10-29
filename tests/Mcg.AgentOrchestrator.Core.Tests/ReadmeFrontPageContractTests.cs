@@ -112,7 +112,7 @@ public sealed class ReadmeFrontPageContractTests
             "### Lifecycle states",
             "### Autonomy policy presets",
             "### Integration-branch landing",
-            "### Operator pager (Discord)",
+            "### Operator notifications",
             "## Next Slices"
         ];
         var referenceLines = ReadLines("docs/cli-reference.md");

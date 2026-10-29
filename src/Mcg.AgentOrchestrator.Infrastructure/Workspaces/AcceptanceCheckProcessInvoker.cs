@@ -21,6 +21,8 @@ internal sealed record AcceptanceProcessRequest
     public bool StopOnCaptureLimit { get; init; } = false;
     public bool? KeepCaptureFiles { get; init; } = null;
     public Action<int>? ResumeObserver { get; init; } = null;
+    public bool ResolveBareCommand { get; init; }
+    internal IReadOnlyDictionary<string, string?>? ChildEnvironmentOverrides { get; init; }
 }
 
 internal static class AcceptanceCheckProcessInvoker
@@ -65,12 +67,14 @@ internal static class AcceptanceCheckProcessInvoker
         var keepOutputFiles = false;
         var stdoutPipeName = OperatingSystem.IsWindows() ? $"mcg-acc-{Guid.NewGuid():N}-out" : null;
         var stderrPipeName = OperatingSystem.IsWindows() ? $"mcg-acc-{Guid.NewGuid():N}-err" : null;
-        var startInfo = BuildAcceptanceProcessStartInfo(
+        var startInfo = AcceptanceShellProcessStartInfo.ForCheck(
             arguments,
             workingDirectory,
             stdoutPipeName is null ? null : $@"\\.\pipe\{stdoutPipeName}",
             stderrPipeName is null ? null : $@"\\.\pipe\{stderrPipeName}",
-            forceUtf8ConsoleOutput);
+            forceUtf8ConsoleOutput,
+            request,
+            out var resolvedCommandPath);
         CancellationTokenSource? captureDrainCts = null;
         Task<CaptureLimitResult>[]? captureDrains = null;
         Stream[]? captureSources = null;
@@ -79,16 +83,6 @@ internal static class AcceptanceCheckProcessInvoker
         var heartbeatFinalized = false;
         var registrationReleased = false;
         var processDisposed = false;
-
-        AcceptanceHermeticEnvironment.ConfigureHermeticVerificationEnvironment(
-            startInfo.Environment,
-            workingDirectory,
-            heartbeatContext?.BuildEnvironmentRoot);
-        if (string.IsNullOrWhiteSpace(gateInvocationId))
-            TempRootApparatusLossReceiptStore.ApplyCurrentScope(startInfo.Environment);
-        else
-            TempRootApparatusLossReceiptStore.ApplyScope(
-                startInfo.Environment, gateInvocationId, apparatusReceiptPath);
 
         var directSdk = OperatingSystem.IsWindows() && !forceUtf8ConsoleOutput &&
             stdoutPipeName is not null && stderrPipeName is not null &&
@@ -395,7 +389,7 @@ internal static class AcceptanceCheckProcessInvoker
                 captureLimited ? engineSettings.OutputCaptureLimitBytes : null,
                 LaneStallSilence: timedOut && laneStall is { Stopped: true } ? laneStall.Silent : null,
                 LaneStallLimit: timedOut && laneStall is { Stopped: true } ? laneStall.Limit : null, LaneScheduling: sampler?.Summary())
-            { StandardOutput = stdout };
+            { StandardOutput = stdout, ResolvedCommandPath = resolvedCommandPath };
         }
         finally
         {
