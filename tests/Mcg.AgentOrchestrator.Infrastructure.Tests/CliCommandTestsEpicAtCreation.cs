@@ -287,7 +287,7 @@ public sealed class CliCommandTestsEpicAtCreation : CliCommandTestBase
         var finalized = false;
         var output = CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(parts, kernel, workspace,
             ref agents, providers, ref profiles, ref current,
-            finalizeGoalCreation: goal =>
+            finalizeGoalCreation: (goal, _) =>
             {
                 if (File.Exists(workspace.PortfolioStorePath))
                     Assert.Null(new PortfolioStore(workspace.PortfolioStorePath)

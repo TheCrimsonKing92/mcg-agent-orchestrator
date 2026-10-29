@@ -191,7 +191,8 @@ internal static class RunGoalService
             if (current.Goals.Any(existing => existing.Id == goal.Id))
                 return Task.FromResult((false, false, (IReadOnlyList<OrchestratorStateOutboxMessage>)[]));
 
-            GoalCreationPreconditionValidator.Validate(current, snapshot, workspace);
+            GoalCreationPreconditionValidator.Validate(
+                current, snapshot, workspace, preparedSourceBacklogDependencies: snapshot.DependsOn ?? []);
             current.ReplaceGoalStateWithSnapshot(snapshot, humans);
             return Task.FromResult((true, true, (IReadOnlyList<OrchestratorStateOutboxMessage>)[]));
         }).ConfigureAwait(false);

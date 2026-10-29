@@ -304,7 +304,8 @@ internal static class CliGoalReplacementExecution
                                 currentKernel,
                                 preparedSnapshot,
                                 workspace,
-                                predecessor.Id.Value);
+                                predecessor.Id.Value,
+                                preparedSourceBacklogDependencies: preparedSnapshot.DependsOn ?? []);
 
                             if (!GoalReplacementEvidence.MatchesStateFacts(predecessor, validatedFacts))
                             {
