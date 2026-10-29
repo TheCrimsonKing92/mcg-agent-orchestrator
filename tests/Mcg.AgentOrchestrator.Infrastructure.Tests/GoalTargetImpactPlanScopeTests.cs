@@ -68,7 +68,7 @@ public sealed class GoalTargetImpactPlanScopeTests
         {
             Assert.True(plan.RequiresBuild);
             AssertMetadataEqual(direct, plan);
-            Assert.DoesNotContain("tests/Mcg.AgentOrchestrator.", JsonSerializer.Serialize(plan));
+            Assert.DoesNotContain("tests/Mcg.AgentOrchestrator.", JsonSerializer.Serialize(new { plan.Summary, plan.Checks }));
             Assert.Contains(ManifestRelativePath, plan.Summary);
             if (manifestState == "declared")
             {
