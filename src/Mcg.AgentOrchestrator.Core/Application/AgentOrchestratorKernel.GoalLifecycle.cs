@@ -90,11 +90,12 @@ public sealed partial class AgentOrchestratorKernel
         GoalId goalId,
         string newBrief,
         string? reason = null,
-        IReadOnlyList<GoalBriefAnswerSupersession>? answerSupersessions = null)
+        IReadOnlyList<GoalBriefAnswerSupersession>? answerSupersessions = null,
+        bool discardFailedRefinement = false)
     {
         lock (_humanInputRequestLock)
         {
-            return ReviseGoalBriefCore(goalId, newBrief, reason, answerSupersessions);
+            return ReviseGoalBriefCore(goalId, newBrief, reason, answerSupersessions, discardFailedRefinement);
         }
     }
 
@@ -102,47 +103,26 @@ public sealed partial class AgentOrchestratorKernel
         GoalId goalId,
         string newBrief,
         string? reason,
-        IReadOnlyList<GoalBriefAnswerSupersession>? answerSupersessions)
+        IReadOnlyList<GoalBriefAnswerSupersession>? answerSupersessions,
+        bool discardFailedRefinement)
     {
         var goal = GetGoal(goalId);
         var supersessions = answerSupersessions ?? [];
-        var duplicateSupersession = supersessions
-            .GroupBy(supersession => supersession.RequestId)
-            .FirstOrDefault(group => group.Count() > 1);
-        if (duplicateSupersession is not null)
-        {
-            throw new ArgumentException(
-                $"Clarification '{duplicateSupersession.Key}' can be superseded only once per brief revision.",
-                nameof(answerSupersessions));
-        }
-
-        foreach (var supersession in supersessions)
-        {
-            if (!_humanInputRequests.TryGetValue(supersession.RequestId, out var request) || request.GoalId != goal.Id)
-            {
-                throw new KeyNotFoundException(
-                    $"Human input request '{supersession.RequestId}' was not found on goal '{goal.Id.Value}'.");
-            }
-
-            if (!request.IsCompleted || request.WasDismissed || request.AuthoritativeAnswer is null)
-            {
-                throw new InvalidOperationException(
-                    $"Human input request '{supersession.RequestId}' has no answered clarification to supersede.");
-            }
-
-            if (string.IsNullOrWhiteSpace(supersession.ReplacementAnswer))
-            {
-                throw new ArgumentException("Replacement clarification answer cannot be empty.", nameof(answerSupersessions));
-            }
-        }
+        GoalBriefAnswerSupersessionValidation.Validate(goal.Id, supersessions, _humanInputRequests);
 
         var recordedAt = _clock.UtcNow;
+        if (discardFailedRefinement)
+            goal.EnsureFailedRefinementCanBeDiscarded();
         var version = goal.ReviseBrief(newBrief, reason, recordedAt);
         var refinedCriteriaCount = default(int?);
         var refinedCriteriaReDerived = false;
         IReadOnlyList<HumanInputRequestId> closedPlannerEvidenceRequestIds = [];
         var declaredCriteria = AcceptanceCriteriaParser.ParseDeclared(newBrief);
-        if (declaredCriteria.Count > 0 &&
+        if (discardFailedRefinement)
+        {
+            goal.DiscardRefinedSpecForFailedRefinement();
+        }
+        else if (declaredCriteria.Count > 0 &&
             goal.RefinedSpec is { } currentSpec &&
             !currentSpec.AcceptanceCriteria.SequenceEqual(declaredCriteria, StringComparer.Ordinal))
         {

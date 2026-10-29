@@ -1,9 +1,68 @@
 using Mcg.AgentOrchestrator.App.Cli;
+using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed class CliCommandTestsGoalRevision : CliCommandTestBase
 {
+    [Xunit.Theory]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public void CliReviseReportsResetOnlyForFailedRefinement(bool escalated)
+    {
+        var workspace = CreateRefinedWorkspace(CreateTempDirectory());
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Original brief");
+        var store = SpecRefinementLaunchAttemptStore.ForWorkspace(workspace);
+        if (escalated)
+        {
+            store.Save(goal.Id, new SpecRefinementLaunchAttempt(DateTimeOffset.UtcNow, 3, DateTimeOffset.UtcNow,
+                GoalRefinementWorkCoordinator.MessageId(goal.Id), workspace.SqliteStatePath));
+        }
+
+        var output = ExecuteCliAndCapture(["revise", goal.Id.Value, "Revised brief"], kernel, workspace);
+
+        Xunit.Assert.Contains(escalated ? "refined-criteria=reset" : "refined-criteria=unchanged",
+            output, StringComparison.Ordinal);
+        Xunit.Assert.Equal("Revised brief", goal.Objective);
+        Xunit.Assert.Null(store.Get(goal.Id));
+        Xunit.Assert.Equal(escalated, GoalRefinementWorkCoordinator.HasPendingWork(goal));
+        if (escalated)
+        {
+            var state = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath)
+                .GetOutboxStateAsync(GoalRefinementWorkCoordinator.MessageId(goal.Id)).GetAwaiter().GetResult();
+            Xunit.Assert.Equal(OrchestratorStateOutboxStatus.Pending, state!.Status);
+        }
+    }
+
+    [Xunit.Fact]
+    public void CliReviseResetsStoredLifecycleRepairWithUnchangedCriteria()
+    {
+        var workspace = CreateRefinedWorkspace(CreateTempDirectory());
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Original prose\n\n## Acceptance criteria\n\n1. Observe service.");
+        kernel.ReplaceGoalWithSnapshot(kernel.ExportGoalSnapshot(goal.Id) with
+        {
+            RefinedSpec = new RefinedSpecSnapshot("Legacy contract", ["Observe service."], "TestVerifiable", [], [],
+                CriterionEvidenceDeclarations: [new("Observe service.", CriterionEvidencePhase.PostLanding,
+                    new(CriterionObservationKind.Runtime, "healthy", "service"), Atomic: true)])
+        });
+        goal = kernel.GetGoal(goal.Id);
+        var repair = Xunit.Assert.Single(goal.CriterionEvidenceObligations);
+        Xunit.Assert.Equal("lifecycle declaration repair required", repair.RequiredScope);
+        Xunit.Assert.StartsWith(CriterionEvidenceLifecycle.AtomicDeclarationRequired, repair.Provenance, StringComparison.Ordinal);
+        Xunit.Assert.Contains("Offending criterion: 'Observe service.'; failed rule: owner.", repair.Provenance, StringComparison.Ordinal);
+
+        var output = ExecuteCliAndCapture(["revise", goal.Id.Value,
+            "Revised prose\n\n## Acceptance criteria\n\n1. Observe service."], kernel, workspace);
+
+        Xunit.Assert.Contains("refined-criteria=reset", output, StringComparison.Ordinal);
+        Xunit.Assert.Null(goal.RefinedSpec);
+        Xunit.Assert.Empty(goal.RefinedSpecVersions);
+        Xunit.Assert.Empty(goal.CriterionEvidenceObligations);
+        Xunit.Assert.True(GoalRefinementWorkCoordinator.HasPendingWork(goal));
+    }
+
     // Parallel-safe: every test owns a unique temp root and SQLite database; no process or global state is used.
     [Xunit.Fact]
     public async Task SqliteGoalBriefVersionsRoundTripWithoutLosingSupersededText()
