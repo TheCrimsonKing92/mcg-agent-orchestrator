@@ -89,7 +89,7 @@ public static partial class GoalWorktrees
         string executionDirectory,
         string observedMainRevision,
         AcceptanceCohortMemberBinding member,
-        string integrationBranch, GoalWorktreeCleanupHooks? cleanupHooks = null)
+        string integrationBranch, GoalWorktreeCleanupHooks? cleanupHooks = null, bool requireCurrentMain = true)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(executionDirectory);
         ArgumentNullException.ThrowIfNull(member);
@@ -99,7 +99,7 @@ public static partial class GoalWorktrees
             observedMainRevision,
             nameof(observedMainRevision));
         var liveMain = ResolveRequiredRef(root, $"refs/heads/{integrationBranch}");
-        if (!liveMain.Equals(normalizedMain, StringComparison.Ordinal))
+        if (requireCurrentMain && !liveMain.Equals(normalizedMain, StringComparison.Ordinal))
         {
             throw new InvalidOperationException("Attribution main revision changed before partition materialization.");
         }

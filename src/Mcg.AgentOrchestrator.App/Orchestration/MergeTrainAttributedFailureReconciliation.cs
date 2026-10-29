@@ -17,7 +17,7 @@ internal static class MergeTrainAttributedFailureReconciliation
     {
         var changed = new HashSet<GoalId>();
         if (workspace is null || kernel is null || store is null) return changed;
-        Dictionary<string, List<(string TrainId, string Revision)>> evidenceByGoal;
+        Dictionary<string, List<(string TrainId, string Revision, string Detail)>> evidenceByGoal;
         try { evidenceByGoal = ReadEvidence(workspace); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or SqliteException)
         {
@@ -32,7 +32,7 @@ internal static class MergeTrainAttributedFailureReconciliation
             {
                 if (!evidenceByGoal.TryGetValue(goal.Id.Value, out var evidence) ||
                     project(goal) is not GateReadyCandidateProjectionResult.Ready ready) continue;
-                foreach (var (trainId, revision) in evidence)
+                foreach (var (trainId, revision, detail) in evidence)
                 {
                     if (revision != ready.Projection.CandidateRevision) continue;
                     var receipt = store.TryReadReceipt(trainId);
@@ -42,12 +42,14 @@ internal static class MergeTrainAttributedFailureReconciliation
                     var member = receipt.Identity.Members.SingleOrDefault(member =>
                         member.GoalId == goal.Id && member.CandidateRevision == revision);
                     if (member is null) continue;
+                    var reproduced = MergeTrainReproductionAttribution.ReadEjectionFailures(receipt, detail);
+                    if (reproduced is null && detail != $"Dropped after RED receipt {receipt.ReceiptId}.") continue;
                     // Routing writes the receipt identity into the goal's durable timeline.
                     // That event survives failure clearing by an operator re-gate or restore.
                     applying = true;
-                    MergeTrainAttributedFailure.Apply(receipt, member, goal, "recorded", 3, [],
+                    MergeTrainAttributedFailure.Apply(receipt, member, goal, reproduced is null ? "recorded" : "reproduction", 3, [],
                         _ => throw new InvalidOperationException("Parent reconciliation cannot record another ejection."),
-                        recordFailure, kernel.RouteRecordedAcceptanceFailure);
+                        recordFailure, kernel.RouteRecordedAcceptanceFailure, reproduced);
                     break;
                 }
             }
@@ -75,7 +77,7 @@ internal static class MergeTrainAttributedFailureReconciliation
         return changed;
     }
 
-    private static Dictionary<string, List<(string TrainId, string Revision)>> ReadEvidence(OrchestratorWorkspace workspace)
+    private static Dictionary<string, List<(string TrainId, string Revision, string Detail)>> ReadEvidence(OrchestratorWorkspace workspace)
     {
         using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
         {
@@ -87,20 +89,21 @@ internal static class MergeTrainAttributedFailureReconciliation
         // Ejections have no typed read API or receipt foreign key. Bind the existing
         // receipt detail to the implicated identity rather than inferring from exclusion alone.
         command.CommandText = """
-            SELECT DISTINCT i.goal_id, i.train_id, i.candidate_revision
+            SELECT DISTINCT i.goal_id, i.train_id, i.candidate_revision, e.detail
             FROM merge_train_implicated_candidates i
             JOIN merge_train_receipts r ON r.train_id = i.train_id
             JOIN merge_train_ejections e ON e.goal_id = i.goal_id
-                AND e.detail = 'Dropped after RED receipt ' || r.receipt_id || '.'
+                AND (e.detail = 'Dropped after RED receipt ' || r.receipt_id || '.'
+                    OR instr(e.detail, 'Dropped after RED receipt ' || r.receipt_id || '.' || char(10) || 'reproduction=') = 1)
             WHERE e.reason = 'RedAttributedMember';
             """;
-        var evidenceByGoal = new Dictionary<string, List<(string, string)>>(StringComparer.Ordinal);
+        var evidenceByGoal = new Dictionary<string, List<(string, string, string)>>(StringComparer.Ordinal);
         using var reader = command.ExecuteReader();
         while (reader.Read())
         {
             var goalId = reader.GetString(0);
             if (!evidenceByGoal.TryGetValue(goalId, out var evidence)) evidenceByGoal.Add(goalId, evidence = []);
-            evidence.Add((reader.GetString(1), reader.GetString(2)));
+            evidence.Add((reader.GetString(1), reader.GetString(2), reader.GetString(3)));
         }
         return evidenceByGoal;
     }

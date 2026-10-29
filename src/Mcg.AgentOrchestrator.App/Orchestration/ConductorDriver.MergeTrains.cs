@@ -7,6 +7,13 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal sealed partial class ConductorDriver
 {
+    internal MergeTrainReproductionAttribution.Runner? MergeTrainReproductionRunner { get; set; }
+
+    internal MergeTrainReproductionAttribution.Runner CreateMergeTrainReproductionRunner() =>
+        MergeTrainReproductionAttribution.CreateLiveRunner(_cohortWorkspace!, _cohortAcceptanceVerifier!, _cohortCleanupHooks,
+            (identity, token) => CohortPartitionStableSlotLeaseSource is { } source ? source(identity, token) :
+                _parallelAcceptanceAttemptCoordinator.AcquireCohortStableSlotLease(identity, token));
+
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, ConductorAcceptanceCohortGateFault>
         _trainGateFaults = new(StringComparer.Ordinal);
 
@@ -353,6 +360,33 @@ internal sealed partial class ConductorDriver
             }
             var messageSubjectFailure = MergeTrainRedAttribution.ReadFatalFailures(receipt.GateTestResultPaths)
                 .Any(MergeTrainRedAttribution.IsMessageSubjectGuard);
+            var reproduced = attributed is null && !messageSubjectFailure && MergeTrainRedAttribution.IsGenuineTrainRed(receipt)
+                ? MergeTrainReproductionAttribution.TryAttribute(receipt, members, MergeTrainReproductionRunner, cancellationToken) : null;
+            if (reproduced is not null)
+            {
+                var completions = new List<Action>();
+                foreach (var item in reproduced)
+                {
+                    RecordTrainImplicatedMember(item.Member, receipt, item.Failures.Select(failure => failure.TestName!).ToArray(), "reproduction");
+                    completions.Add(() => MergeTrainAttributedFailure.Apply(receipt, item.Member,
+                        GetCurrentGoal(goalsById[item.Member.GoalId]), "reproduction", members.Count, allEjections,
+                        ejection => _mergeTrainAcceptanceStore.RecordEjections(attemptId, [ejection]),
+                        _recordAcceptanceFailure, _cohortKernel.RouteRecordedAcceptanceFailure, item.Failures));
+                    var reproductionEjection = MergeTrainReproductionAttribution.CreateEjection(receipt, item);
+                    allEjections.Add(reproductionEjection);
+                    _mergeTrainAcceptanceStore.RecordEjections(attemptId, [reproductionEjection]);
+                }
+                completeAttributedFailure = () => { foreach (var complete in completions) complete(); };
+                var removed = reproduced.Select(item => item.Member.GoalId).ToHashSet();
+                composition = members.Where(member => !removed.Contains(member.GoalId)).ToArray();
+                redDropped = null;
+                if (composition.Count < 2 || attempt == 1)
+                {
+                    completeAttributedFailure();
+                    return Fallback($"outcome={receipt.Outcome} attempts={attempt + 1} fallback=ordinary");
+                }
+                continue;
+            }
             // Record positively attributed RED before the bisect can lose its build slot;
             // the existing sink keeps repeat implication records idempotent.
             if (attributed is not null && (messageSubjectFailure || MergeTrainBisectRedRetention.RecordsBeforeBisect(receipt, members.Count, attempt, attributed)))
