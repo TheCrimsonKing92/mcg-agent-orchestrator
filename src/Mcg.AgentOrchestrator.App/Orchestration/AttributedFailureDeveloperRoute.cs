@@ -16,11 +16,12 @@ internal static class AttributedFailureDeveloperRoute
         if (evidence.Length != 1 || evidence[0] is not { } detail) return null;
 
         var cohort = Regex.Match(detail,
-            @"\Acohort-attribution=\S+ cohort-partition=(?<receipt>\S+) reproduced=(?<tests>[^\r\n]*)\z");
+            @"\Acohort-attribution=\S+ cohort-partition=(?<receipt>\S+) reproduced=(?<tests>[^\r\n]*)(?:\r?\n(?<detail>reproduced [\s\S]+))?\z");
         if (cohort.Success)
             return new("cohort", cohort.Groups["receipt"].Value, summary.BranchHeadSha,
                 cohort.Groups["tests"].Value.Split(',', StringSplitOptions.RemoveEmptyEntries)
-                    .Select(test => test.Trim()).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray());
+                    .Select(test => test.Trim()).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray(),
+                cohort.Groups["detail"].Success ? cohort.Groups["detail"].Value : null);
 
         var reproduction = Regex.Match(detail,
             @"\Amerge train RED attributed \(reproduction\) receipt (?<receipt>\S+): (?<tests>[^\r\n]+)\r?\n(?<detail>reproduced [\s\S]+)\z");
@@ -70,8 +71,7 @@ internal static class AttributedFailureDeveloperRoute
         if (failure is null) return AttributedFailureRouteDecision.Decline("no-attributed-failure");
         var tests = failure.FailingTests.Select(test => test.Trim()).Distinct(StringComparer.Ordinal)
             .Order(StringComparer.Ordinal).ToArray();
-        if (tests.Length == 0 || tests.Any(test => test.Length == 0 ||
-                test.Any(character => char.IsWhiteSpace(character) || character is ',' or ';')))
+        if (tests.Length == 0 || tests.Any(test => !AttributedCohortFailureDetail.IsRepresentableTestName(test)))
             return AttributedFailureRouteDecision.Decline("unrepresentable-failing-tests");
         if (string.IsNullOrWhiteSpace(currentCandidate) ||
             !string.Equals(failure.CandidateSha, currentCandidate, StringComparison.Ordinal))
