@@ -7,11 +7,11 @@ public sealed class OwnerConsoleDecisionsActivityPaneTests
     private static readonly DateTimeOffset Now = new(2026, 1, 1, 12, 0, 30, TimeSpan.Zero);
 
     [Theory]
-    [InlineData(true, null, "loading...")]
-    [InlineData(false, "offline", "DECISIONS unavailable: offline")]
+    [InlineData(true, null, "[1] 11111111 HumanInput: Ship?")]
+    [InlineData(false, "offline", "[1] 11111111 HumanInput: Ship?")]
     [InlineData(false, null, "Nothing needs you right now.")]
-    [InlineData(true, "offline", "loading...")]
-    public void DecisionsRender_NoRows_ReplacesPreviousRowsWithStateText(bool loading, string? error, string expected)
+    [InlineData(true, "offline", "[1] 11111111 HumanInput: Ship?")]
+    public void DecisionsRender_NoRows_RetainsPreviousRowsWhileLoadingOrFailed(bool loading, string? error, string expected)
     {
         var pane = new OwnerConsoleDecisionsPane();
         using var list = pane.List;
@@ -22,10 +22,12 @@ public sealed class OwnerConsoleDecisionsActivityPaneTests
         pane.Render(Model() with { DecisionsState = new(loading, error) }, -1, 80);
 
         Assert.Equal(expected, Assert.Single(pane.Lines));
-        Assert.Equal(expected, label.Text);
-        Assert.True(label.Visible);
-        Assert.Equal(0, list.Source!.Count);
-        Assert.Null(list.SelectedItem);
+        Assert.Equal("Nothing needs you right now.", label.Text);
+        var retained = loading || error is not null;
+        Assert.Equal(!retained, label.Visible);
+        Assert.Equal(retained ? 1 : 0, list.Source!.Count);
+        Assert.Equal(retained ? (int?)0 : null, list.SelectedItem);
+        Assert.Equal(loading ? "refreshing" : error is null ? null : "refresh failed: offline", pane.TitleStatus);
     }
 
     [Theory]
@@ -53,10 +55,10 @@ public sealed class OwnerConsoleDecisionsActivityPaneTests
     }
 
     [Theory]
-    [InlineData(true, null, "loading...")]
-    [InlineData(false, "offline", "ACTIVITY unavailable: offline")]
-    [InlineData(true, "offline", "loading...")]
-    public void ActivityRender_LoadingOrError_ReplacesPreviousRowsWithStateText(bool loading, string? error, string expected)
+    [InlineData(true, null)]
+    [InlineData(false, "offline")]
+    [InlineData(true, "offline")]
+    public void ActivityRender_LoadingOrError_RetainsPreviousRows(bool loading, string? error)
     {
         var pane = new OwnerConsoleActivityPane();
         using var list = pane.List;
@@ -64,15 +66,18 @@ public sealed class OwnerConsoleDecisionsActivityPaneTests
         pane.Render(model, 80);
         Assert.Equal(2, list.Source!.Count);
         list.SelectedItem = 1;
+        var lines = pane.Lines.ToArray();
+        var top = list.Viewport.Y;
 
         pane.Render(model with { ActivityState = new(loading, error) }, 80);
 
-        Assert.Equal(expected, Assert.Single(pane.Lines));
-        Assert.Equal(1, list.Source!.Count);
-        Assert.Equal(expected, list.Source.ToList()![0]);
-        Assert.Empty(pane.Rows);
-        Assert.Equal(0, list.SelectedItem);
-        Assert.Equal(0, list.Viewport.Y);
+        Assert.Equal(lines, pane.Lines);
+        Assert.Equal(2, list.Source!.Count);
+        Assert.Equal(lines, list.Source.ToList()!.Cast<string>());
+        Assert.Equal(2, pane.Rows.Count);
+        Assert.Equal(1, list.SelectedItem);
+        Assert.Equal(top, list.Viewport.Y);
+        Assert.Equal(loading ? "refreshing" : "refresh failed: offline", pane.TitleStatus);
         Assert.Null(pane.SelectedRow(model with { ActivityState = new(loading, error) }));
     }
 

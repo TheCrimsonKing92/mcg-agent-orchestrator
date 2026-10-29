@@ -110,14 +110,14 @@ public sealed class OwnerConsolePaneOverflowScenarioTests
         using var baseline = new Scene();
         await Arrange(scene, state);
         await Arrange(baseline, state);
-        AssertBareTitles(scene);
+        AssertBareTitles(scene, state);
         AssertContent(baseline, scene);
         for (var pane = 0; pane < 3; pane++)
         {
             foreach (var key in new[] { Key.PageDown, Key.End, Key.Home })
             {
                 await scene.View.HandleKeyAsync(new Key(key));
-                AssertBareTitles(scene);
+                AssertBareTitles(scene, state);
                 AssertContent(baseline, scene);
             }
             await scene.View.HandleKeyAsync(Key.Tab);
@@ -138,8 +138,8 @@ public sealed class OwnerConsolePaneOverflowScenarioTests
                 DecisionsState = new(Loading: loading, Error: loading ? null : "questions unavailable"),
                 ActivityState = new(Loading: loading, Error: loading ? null : "log unavailable")
             });
-            Assert.Equal(loading ? "loading..." : "ACTIVITY unavailable: log unavailable", Assert.Single(scene.View.ActivityLines));
-            Assert.Equal(loading ? "loading..." : "DECISIONS unavailable: questions unavailable", Assert.Single(scene.View.DecisionLines));
+            Assert.Empty(scene.View.ActivityLines);
+            Assert.Equal("Nothing needs you right now.", Assert.Single(scene.View.DecisionLines));
         }
     }
 
@@ -154,11 +154,16 @@ public sealed class OwnerConsolePaneOverflowScenarioTests
             actual.View.BoardTable.Rows.Cast<DataRow>().SelectMany(row => row.ItemArray));
     }
 
-    private static void AssertBareTitles(Scene scene)
+    private static void AssertBareTitles(Scene scene, string? state = null)
     {
-        Assert.Equal("DECISIONS", scene.View.PaneTitle(OwnerConsolePane.Decisions));
+        var decisionsStatus = state == "loading" ? " (refreshing)" :
+            state == "unavailable" ? " (refresh failed: questions unavailable)" : "";
+        var activityStatus = state == "loading" ? " (refreshing)" :
+            state == "unavailable" ? " (refresh failed: log unavailable)" : "";
+        Assert.Equal("DECISIONS" + decisionsStatus, scene.View.PaneTitle(OwnerConsolePane.Decisions));
         Assert.Equal("BOARD", scene.View.PaneTitle(OwnerConsolePane.Board));
-        Assert.Equal(scene.View.ActivityFollowing ? "ACTIVITY · following" : "ACTIVITY · inspecting", scene.View.PaneTitle(OwnerConsolePane.Activity));
+        Assert.Equal("ACTIVITY" + activityStatus + (scene.View.ActivityFollowing ? " · following" : " · inspecting"),
+            scene.View.PaneTitle(OwnerConsolePane.Activity));
     }
 
     private static string BaseTitle(OwnerConsolePane pane) => pane.ToString().ToUpperInvariant();

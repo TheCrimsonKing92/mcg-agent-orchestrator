@@ -54,8 +54,10 @@ public sealed class OwnerConsoleActivityDaySeparatorScenarioTests
 
         Assert.StartsWith("What happened: " + OwnerActivityNarrator.Line(model.Activity[0]) + "\n",
             Assert.Single(scene.Dialogs.Messages).Text);
+        var lines = scene.View.ActivityLines.ToArray();
         scene.View.Render(model with { ActivityState = new(Loading: true) });
-        Assert.Equal(new[] { "loading..." }, scene.View.ActivityLines);
+        Assert.Equal(lines, scene.View.ActivityLines);
+        Assert.Contains("(refreshing)", scene.View.PaneTitle(OwnerConsolePane.Activity));
     }
 
     private static async Task FocusActivity(Scene scene)

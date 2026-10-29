@@ -88,6 +88,7 @@ internal sealed class TerminalGuiOwnerConsoleDialogs(IApplication app, Cancellat
         void Refresh()
         {
             foreach (var button in buttons.Values) button.Visible = goal.Actions.Contains(button.Text.ToString());
+            dialog.TitleStatus = goal.TitleStatus;
             dialog.Render();
         }
         void Close() => app.RequestStop(dialog);

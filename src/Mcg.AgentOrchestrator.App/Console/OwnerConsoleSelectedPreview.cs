@@ -10,12 +10,13 @@ internal static class OwnerConsoleSelectedPreview
 
     // Width is the panel's interior width, after the frame has taken its border cells.
     internal static IReadOnlyList<string> Lines(OwnerConsoleSelectedGoalPreview preview, string? stage,
-        TimeZoneInfo zone, int width)
+        TimeZoneInfo zone, int width, OwnerConsoleBoardRow? row = null)
     {
         if (preview.GoalId is null) return [Fit("Select a goal", width)];
         if (preview.Unavailable is { } error)
             return [Fit("Details unavailable: " + (error == "goal unavailable" ? "the goal was not found" : "could not load the goal"), width)];
-        if (preview.Summary is null) return [Fit("Loading…", width)];
+        if (preview.Summary is null) return row is null ? [Fit("Loading…", width)] :
+            new[] { Fit(row.Title, width), Fit(row.Stage, width) };
         if (preview.Summary.Preview is not { } facts)
             return [Fit("Details unavailable: could not load the goal", width)];
 
