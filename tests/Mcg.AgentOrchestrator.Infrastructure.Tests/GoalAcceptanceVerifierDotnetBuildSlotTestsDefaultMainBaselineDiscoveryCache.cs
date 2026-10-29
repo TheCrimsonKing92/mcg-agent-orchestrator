@@ -12,7 +12,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsDefaultMainBaselin
     public void ConductorConstructorPersistsDiscoveryUnderExplicitStorageRoot()
     {
         using var fixture = new Fixture();
-        var first = new GoalAcceptanceVerifier(fixture.Storage, Path.Combine(fixture.CandidateRoot, ".orchestrator"));
+        var first = new GoalAcceptanceVerifier(new CrosswalkExecutableResolver(), fixture.Storage, Path.Combine(fixture.CandidateRoot, ".orchestrator"));
         var cache = Assert.IsType<MainBaselineDiscoveryCache>(first.ResolvedMainBaselineDiscoveryCache);
         var key = Assert.IsType<MainBaselineDiscoveryCacheKey>(MainBaselineDiscoveryCache.TryCreateKey(
             fixture.MainRoot, "tests/Sample.Tests/Sample.Tests.csproj", "Debug", ["--list-tests"], fixture.Storage.RootPath));
@@ -20,7 +20,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsDefaultMainBaselin
         cache.TryWrite(key, discovery);
         Assert.Single(Directory.GetFiles(fixture.CacheRoot, "*.json"));
 
-        var second = new GoalAcceptanceVerifier(fixture.Storage, Path.Combine(fixture.CandidateRoot, ".orchestrator"));
+        var second = new GoalAcceptanceVerifier(new CrosswalkExecutableResolver(), fixture.Storage, Path.Combine(fixture.CandidateRoot, ".orchestrator"));
         var secondCache = Assert.IsType<MainBaselineDiscoveryCache>(second.ResolvedMainBaselineDiscoveryCache);
         Assert.NotSame(cache, secondCache);
         Assert.Equal(discovery, secondCache.TryRead(key));

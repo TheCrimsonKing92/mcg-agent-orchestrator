@@ -31,6 +31,7 @@ public sealed class OwnerProtectedPolicyDecisionTests : IDisposable
         new OperatorIntentCoordinator(intentStore, decisions: decisions, goalStateVersionResolver: _ => 0)
             .ExecutePending(kernel, goal);
         var verifier = new GoalAcceptanceVerifier(
+            new CrosswalkExecutableResolver(),
             DotnetBuildEnvironmentManager.CaptureStorageRoot(), _root);
         Assert.Equal(sameCandidate && actorKind == OperatorActorKind.Human,
             verifier.HasOwnerPolicyApprovalForCandidateTests(goal.Id, candidateSha));
