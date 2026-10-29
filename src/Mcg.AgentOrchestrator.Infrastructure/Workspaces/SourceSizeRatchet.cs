@@ -527,7 +527,7 @@ internal static class SourceSizeRatchet
             // b596bd5a: fault-recorded route arm/executor and typed outcome evidence add 20 lines; no new partial or headroom.
             // Goal a5412d04: bound deferred no-change interruptions and retain their durable escalation (+15 lines).
             // Goal 7139117b: the focused runner binds the attribution occupancy heartbeat (+2 lines).
-            new SourceClassCeiling("ConductorDriver", 14559, 70),
+            new SourceClassCeiling("ConductorDriver", 14555, 70),
             // Goal b7c2f833: epic-at-creation validation and post-commit inheritance call sites
             // require handler glue; resolution/assignment remain in the separate EpicAtCreation type.
             // Measured 12223 total lines across the existing 30 partial files after integrating main; no extra headroom.
