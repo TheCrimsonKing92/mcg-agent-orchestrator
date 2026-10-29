@@ -95,6 +95,43 @@ public sealed class GoalTargetImpactPlanScopeTests
     }
 
     [Theory]
+    [InlineData("missing")]
+    [InlineData("unreadable")]
+    [InlineData("declared")]
+    [InlineData("empty")]
+    [InlineData("home")]
+    public void PreReview_GeneratedArtifacts_RequireCleanupAcrossManifestStates(string manifestState)
+    {
+        using var fixture = new ManifestFixture(manifestState switch
+        {
+            "missing" => null,
+            "unreadable" => "{ broken json",
+            "empty" => "{}",
+            _ => DeclaredManifest
+        });
+        const string generatedPath = "src/Mcg.AgentOrchestrator.Core/bin/Debug/generated.dll";
+        string[] changedFiles = [ChangedSource, generatedPath];
+        var summary = RepositoryChangeClassifier.Classify(changedFiles);
+        Assert.True(summary.HasGeneratedArtifacts);
+        var target = new WorkerTargetHome(manifestState == "home", _ => fixture.Manifest);
+
+        var context = ConductorDriver.BuildPreReviewEvidenceContext(
+            "generated-sha", changedFiles, fixture.Worktree, target);
+
+        Assert.Equal("generated-sha", context.CandidateSha);
+        Assert.False(context.NoApplicableTests);
+        Assert.True(context.MappingNeedsInput);
+        Assert.True(context.RequiresSourceCleanup);
+        Assert.Equal(new[] { generatedPath }, context.SourceCleanupPaths);
+        Assert.Empty(context.SelectedFocusedTests);
+        Assert.Null(context.FocusedRequest);
+        if (manifestState == "home")
+            Assert.Equal(RepositoryTestImpactPlanner.Plan(summary, fixture.Worktree).Summary, context.MappingReason);
+        else
+            Assert.DoesNotContain("tests/Mcg.AgentOrchestrator.", context.MappingReason);
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public void Scope_UnavailableManifest_ForcesBuildEvenForNoBuildInput(bool unreadable)
