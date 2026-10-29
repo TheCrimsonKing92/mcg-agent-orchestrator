@@ -61,7 +61,8 @@ internal static class GoalAcceptanceEvidenceBundleBuilder
         bool verificationSkipped,
         DotnetBuildStorageRoot? buildStorageRoot,
         string integrationBranch,
-        string? executionDirectory = null)
+        string? executionDirectory = null,
+        WorkerTargetHome? targetHome = null)
     {
         var blockers = new List<GoalAcceptanceEvidenceBlocker>();
         var nextCommands = new List<string>();
@@ -151,9 +152,7 @@ internal static class GoalAcceptanceEvidenceBundleBuilder
             .Select((task, index) => BuildTaskEvidence(task, index + 1))
             .ToArray();
 
-        var testImpactPlan = worktreePath is null
-            ? RepositoryTestImpactPlanner.Plan(changeSummary)
-            : RepositoryTestImpactPlanner.Plan(changeSummary, worktreePath);
+        var testImpactPlan = GoalTargetImpactPlanScope.Plan(changeSummary, worktreePath, targetHome);
         var verificationPolicy = VerificationPolicyCompiler.Compile(
             AgentRole.Reviewer,
             goal.Objective,

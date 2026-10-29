@@ -819,7 +819,7 @@ public sealed class ConductorDriverTestsPreReviewEvidence
         Assert.False(context.MappingNeedsInput);
         Assert.False(context.RequiresSourceCleanup);
         Assert.Empty(context.SourceCleanupPaths ?? []);
-        Assert.Contains("No changed files detected", context.MappingReason, StringComparison.Ordinal);
+        Assert.Contains("acceptance manifest is missing", context.MappingReason, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "ConductorDriver_pre_review_mapper_routes_project_and_exclusion_checks_to_bounded_evidence")]
