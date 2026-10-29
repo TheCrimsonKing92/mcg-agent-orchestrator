@@ -36,6 +36,12 @@ public sealed class WorkerTargetHomeBrokerContextTests
             const string missingManifest = "; acceptance manifest is missing at config/acceptance-manifest.json; no project checks derived";
             expected = expected.Replace(recommendation + Environment.NewLine,
                 recommendation + missingManifest + Environment.NewLine, StringComparison.Ordinal);
+            // Removing the unavailable plan's checks also removes their compiled policy requirements.
+            var policyLabel = role == AgentRole.Developer ? "check" : "requirement";
+            var noBuildPolicy = $"  Policy {policyLabel}: test impact: no build required; kind=no-op; required=False; reason=No changed files detected; inspect the branch diff before running tests.";
+            Assert.Contains(noBuildPolicy + Environment.NewLine, home, StringComparison.Ordinal);
+            Assert.DoesNotContain(noBuildPolicy, nonHome, StringComparison.Ordinal);
+            expected = expected.Replace(noBuildPolicy + Environment.NewLine, string.Empty, StringComparison.Ordinal);
             Assert.Equal(expected, nonHome);
 
             byte[] WriteBrokers(WorkerTargetHome? targetHome)
