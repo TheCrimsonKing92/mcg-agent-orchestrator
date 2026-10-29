@@ -27,7 +27,7 @@ public sealed class WorkerTestImpactPlanSelectionTests
     }
 
     [Fact]
-    public void NonHomeTarget_MissingManifest_HasNoChecksAndReportsMissing()
+    public void NonHomeTarget_MissingManifest_HasNoProjectChecksAndReportsMissing()
     {
         var root = SharedTestSupport.CreateTempDirectory();
         try
@@ -37,7 +37,7 @@ public sealed class WorkerTestImpactPlanSelectionTests
 
             var actual = WorkerTestImpactPlanSelection.For(paths, root, WorkerTargetHome.NotHome);
 
-            Assert.Empty(actual.Checks);
+            Assert.All(actual.Checks, check => Assert.Empty(check.Command));
             Assert.Contains("manifest is missing at config/acceptance-manifest.json", actual.Summary);
             Assert.DoesNotContain("tests/Mcg.AgentOrchestrator.", actual.Summary);
         }
@@ -88,7 +88,8 @@ public sealed class WorkerTestImpactPlanSelectionTests
             var rawPlan = ForeignTargetTestImpactPlanner.Plan(paths, root);
             Assert.NotEmpty(rawPlan.Checks);
             Assert.All(rawPlan.Checks, check => Assert.Empty(check.Command));
-            Assert.Empty(actual.Checks);
+            Assert.False(rawPlan.RequiresBuild);
+            AssertPlansEqual(rawPlan with { Summary = actual.Summary }, actual);
             Assert.Contains($"checks scoped to dotnet-test projects declared by {displayPath}", actual.Summary);
 
             var task = new TaskSpec(TaskId.New(), "Verify the target manifest.", AgentRole.Tester);
@@ -100,8 +101,37 @@ public sealed class WorkerTestImpactPlanSelectionTests
             Assert.Contains(actual.Summary, checklist);
             var impactSection = checklist.Split("## Test Impact Plan", StringSplitOptions.None)[1]
                 .Split("## Required Verification Policy", StringSplitOptions.None)[0];
-            Assert.Equal(actual.Summary, impactSection.Trim());
+            var expectedImpact = string.Join(Environment.NewLine, new[] { actual.Summary }
+                .Concat(actual.Checks.SelectMany(check => new[]
+                {
+                    $"- {check.Name}: `{check.CommandLine}`", $"  Reason: {check.Reason}"
+                })));
+            Assert.Equal(expectedImpact, impactSection.Trim());
             Assert.DoesNotContain("tests/Mcg.AgentOrchestrator.", impactSection);
+        }
+        finally { SharedTestSupport.RemoveTempDirectory(root); }
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("{ not json")]
+    [InlineData("{\"checks\":[]}")]
+    public void ScopeToManifest_NoBuild_PreservesNonExecutableEvidence(string? json)
+    {
+        var root = SharedTestSupport.CreateTempDirectory();
+        try
+        {
+            var manifestPath = Path.Combine(root, "acceptance-manifest.json");
+            if (json is not null)
+                WriteManifest(manifestPath, json);
+            var plan = ForeignTargetTestImpactPlanner.Plan([], root);
+            Assert.False(plan.RequiresBuild);
+            Assert.NotEmpty(plan.Checks);
+            Assert.All(plan.Checks, check => Assert.Empty(check.Command));
+
+            var actual = WorkerTestImpactPlanSelection.ScopeToManifest(plan, root, manifestPath);
+
+            AssertPlansEqual(plan with { Summary = actual.Summary }, actual);
         }
         finally { SharedTestSupport.RemoveTempDirectory(root); }
     }

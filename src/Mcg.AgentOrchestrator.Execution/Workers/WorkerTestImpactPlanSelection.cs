@@ -29,7 +29,8 @@ internal static class WorkerTestImpactPlanSelection
             : WorkerAcceptanceManifestDisplayPath.Render(workingDirectory, manifestPath);
         if (declared is not null)
         {
-            return declared.Filter(plan) with
+            // No-build plans carry non-executable evidence rather than project checks.
+            return (plan.RequiresBuild ? declared.Filter(plan) : plan) with
             {
                 Summary = $"{plan.Summary}; checks scoped to dotnet-test projects declared by {displayPath}"
             };
@@ -38,7 +39,7 @@ internal static class WorkerTestImpactPlanSelection
         var availability = File.Exists(manifestPath) ? "unreadable" : "missing";
         return plan with
         {
-            Checks = [],
+            Checks = plan.RequiresBuild ? [] : plan.Checks,
             Summary = $"{plan.Summary}; acceptance manifest is {availability} at {displayPath}; no project checks derived"
         };
     }
