@@ -90,11 +90,12 @@ public sealed partial class AgentOrchestratorKernel
         GoalId goalId,
         string newBrief,
         string? reason = null,
-        IReadOnlyList<GoalBriefAnswerSupersession>? answerSupersessions = null)
+        IReadOnlyList<GoalBriefAnswerSupersession>? answerSupersessions = null,
+        bool discardFailedRefinement = false)
     {
         lock (_humanInputRequestLock)
         {
-            return ReviseGoalBriefCore(goalId, newBrief, reason, answerSupersessions);
+            return ReviseGoalBriefCore(goalId, newBrief, reason, answerSupersessions, discardFailedRefinement);
         }
     }
 
@@ -102,7 +103,8 @@ public sealed partial class AgentOrchestratorKernel
         GoalId goalId,
         string newBrief,
         string? reason,
-        IReadOnlyList<GoalBriefAnswerSupersession>? answerSupersessions)
+        IReadOnlyList<GoalBriefAnswerSupersession>? answerSupersessions,
+        bool discardFailedRefinement)
     {
         var goal = GetGoal(goalId);
         var supersessions = answerSupersessions ?? [];
@@ -137,12 +139,18 @@ public sealed partial class AgentOrchestratorKernel
         }
 
         var recordedAt = _clock.UtcNow;
+        if (discardFailedRefinement)
+            goal.EnsureFailedRefinementCanBeDiscarded();
         var version = goal.ReviseBrief(newBrief, reason, recordedAt);
         var refinedCriteriaCount = default(int?);
         var refinedCriteriaReDerived = false;
         IReadOnlyList<HumanInputRequestId> closedPlannerEvidenceRequestIds = [];
         var declaredCriteria = AcceptanceCriteriaParser.ParseDeclared(newBrief);
-        if (declaredCriteria.Count > 0 &&
+        if (discardFailedRefinement)
+        {
+            goal.DiscardRefinedSpecForFailedRefinement();
+        }
+        else if (declaredCriteria.Count > 0 &&
             goal.RefinedSpec is { } currentSpec &&
             !currentSpec.AcceptanceCriteria.SequenceEqual(declaredCriteria, StringComparer.Ordinal))
         {

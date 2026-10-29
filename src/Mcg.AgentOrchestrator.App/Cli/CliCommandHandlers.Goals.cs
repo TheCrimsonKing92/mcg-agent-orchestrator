@@ -561,12 +561,16 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             if (GetFlagValue(parts, "--brief-file") is not null || GetFlagValue(parts, "--text-file") is not null)
                 PrintBriefLintAdvisory(newBrief);
 
+            var resetRefinement = SpecRefinementFailureResetEvaluation.Evaluate(context.Workspace, goal);
             var result = context.Kernel.ReviseGoalBrief(
                 goal.Id,
                 newBrief,
                 inlineReason ?? reasonFromFile,
-                answerSupersessions);
-            var refinedCriteriaReceipt = result.RefinedCriteriaReDerived
+                answerSupersessions,
+                discardFailedRefinement: resetRefinement);
+            if (resetRefinement)
+                GoalRefinementWorkCoordinator.ResetAfterBriefRevision(context.Kernel, context.Workspace, goal.Id);
+            var refinedCriteriaReceipt = resetRefinement ? "reset" : result.RefinedCriteriaReDerived
                 ? result.RefinedCriteriaCount!.Value.ToString(System.Globalization.CultureInfo.InvariantCulture)
                 : "unchanged";
             Console.WriteLine(

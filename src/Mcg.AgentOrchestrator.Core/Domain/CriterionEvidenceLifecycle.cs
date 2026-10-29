@@ -49,21 +49,44 @@ public static class CriterionEvidenceLifecycle
     {
         foreach (var declaration in spec.CriterionEvidenceDeclarations)
         {
-            if (!IsValidDeclaration(spec, declaration))
-                throw new ArgumentException(AtomicDeclarationRequired);
+            if (EvaluateDeclaration(spec, declaration) is { } rule)
+                throw new ArgumentException(DescribeDeclarationFailure(declaration.Criterion, rule));
         }
     }
 
-    internal static bool IsValidDeclaration(RefinedSpec spec, CriterionEvidenceDeclaration declaration)
+    public static string DescribeDeclarationFailure(string criterion, CriterionEvidenceDeclarationRule rule)
+    {
+        var name = rule switch
+        {
+            CriterionEvidenceDeclarationRule.CriterionCount => "criterion count",
+            CriterionEvidenceDeclarationRule.DeclarationCount => "declaration count",
+            CriterionEvidenceDeclarationRule.Owner => "owner",
+            CriterionEvidenceDeclarationRule.PhaseAndScope => "phase and scope",
+            _ => throw new ArgumentOutOfRangeException(nameof(rule))
+        };
+        return $"{AtomicDeclarationRequired} Offending criterion: '{criterion}'; failed rule: {name}.";
+    }
+
+    internal static bool IsValidDeclaration(RefinedSpec spec, CriterionEvidenceDeclaration declaration) =>
+        EvaluateDeclaration(spec, declaration) is null;
+
+    internal static CriterionEvidenceDeclarationRule? EvaluateDeclaration(
+        RefinedSpec spec, CriterionEvidenceDeclaration declaration)
     {
         var criterion = declaration.Criterion;
         var owner = spec.OperatorOwnedAcceptanceCriteria.Count(item => item == criterion) == 1 &&
             !spec.AcceptanceGateOwnedAcceptanceCriteria.Contains(criterion)
             ? CriterionEvidenceOwner.Operator : CriterionEvidenceOwner.Unknown;
-        return spec.AcceptanceCriteria.Count(item => item == criterion) == 1 &&
-            spec.CriterionEvidenceDeclarations.Count(item => item.Criterion == criterion) == 1 &&
-            IsValid(declaration.Phase, owner, declaration.ObservationScope) &&
-            (declaration.Phase != CriterionEvidencePhase.PostLanding || declaration.Atomic);
+        if (spec.AcceptanceCriteria.Count(item => item == criterion) != 1)
+            return CriterionEvidenceDeclarationRule.CriterionCount;
+        if (spec.CriterionEvidenceDeclarations.Count(item => item.Criterion == criterion) != 1)
+            return CriterionEvidenceDeclarationRule.DeclarationCount;
+        if (declaration.Phase == CriterionEvidencePhase.PostLanding && owner != CriterionEvidenceOwner.Operator)
+            return CriterionEvidenceDeclarationRule.Owner;
+        if (!IsValid(declaration.Phase, owner, declaration.ObservationScope) ||
+            declaration.Phase == CriterionEvidencePhase.PostLanding && !declaration.Atomic)
+            return CriterionEvidenceDeclarationRule.PhaseAndScope;
+        return null;
     }
 
     public static bool MatchesObservation(CriterionEvidenceObligation duty,

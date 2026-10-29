@@ -328,20 +328,23 @@ internal static class SpecRefinerPlanner
         foreach (var item in array.EnumerateArray())
         {
             if (item.ValueKind != JsonValueKind.Object || !item.TryGetProperty("phase", out var phaseElement)) continue;
+            var criterion = FirstNonEmpty(ReadString(item, "text"), ReadString(item, "criterion")).Trim();
             if (phaseElement.ValueKind != JsonValueKind.String ||
                 phaseElement.GetString() is not ("PreLanding" or "PostLanding"))
-                throw new ArgumentException(CriterionEvidenceLifecycle.AtomicDeclarationRequired);
+                throw new ArgumentException(CriterionEvidenceLifecycle.DescribeDeclarationFailure(
+                    criterion, CriterionEvidenceDeclarationRule.PhaseAndScope));
             var phase = Enum.Parse<CriterionEvidencePhase>(phaseElement.GetString()!);
             CriterionObservationScope? scope = null;
             if (item.TryGetProperty("observation_scope", out var value))
             {
                 if (value.ValueKind != JsonValueKind.Object ||
                     ReadString(value, "kind") is not ("Runtime" or "RepositoryState"))
-                    throw new ArgumentException(CriterionEvidenceLifecycle.AtomicDeclarationRequired);
+                    throw new ArgumentException(CriterionEvidenceLifecycle.DescribeDeclarationFailure(
+                        criterion, CriterionEvidenceDeclarationRule.PhaseAndScope));
                 scope = new(Enum.Parse<CriterionObservationKind>(ReadString(value, "kind")),
                     ReadString(value, "condition"), ReadString(value, "target"));
             }
-            result.Add(new(FirstNonEmpty(ReadString(item, "text"), ReadString(item, "criterion")).Trim(), phase, scope,
+            result.Add(new(criterion, phase, scope,
                 item.TryGetProperty("atomic", out var atomic) && atomic.ValueKind == JsonValueKind.True));
         }
         return result;
