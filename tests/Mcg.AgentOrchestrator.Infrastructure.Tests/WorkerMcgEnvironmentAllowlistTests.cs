@@ -44,7 +44,7 @@ public sealed class WorkerMcgEnvironmentAllowlistTests
     [Fact]
     public void RemoveDisallowed_SettingsAndIdentity_RemovesOnlyDisallowedNames()
     {
-        var startInfo = new ProcessStartInfo();
+        var startInfo = new ProcessStartInfo { CreateNoWindow = true };
         startInfo.Environment.Clear();
         var expected = new Dictionary<string, string?>
         {
