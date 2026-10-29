@@ -73,6 +73,9 @@ public sealed class AttributedCohortFailureDetailTests
             AttributedFailureDeveloperRoute.ReadAcceptanceFailure(second.LatestAcceptanceFailure));
         Assert.Equal(new[] { name }, failure.FailingTests);
         Assert.Equal(expectedLine, failure.ReproductionDetail);
+        // Recording a verdict retains the failure; lifecycle admission routes the Verified member separately.
+        Assert.True(kernel.RouteRecordedAcceptanceFailure(second.Id, "Attributed cohort failure recorded."));
+        Assert.Equal(GoalStatus.AcceptanceFailed, second.Status);
         var harness = new RouteHarness(kernel);
         var driver = harness.Configure();
         driver.BeginTick(kernel, 1);
