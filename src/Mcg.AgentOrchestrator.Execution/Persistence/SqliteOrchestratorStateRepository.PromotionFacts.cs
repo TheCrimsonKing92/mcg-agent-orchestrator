@@ -40,46 +40,14 @@ public sealed partial class SqliteOrchestratorStateRepository
             fact.Provenance != first.Provenance))
             throw new ArgumentException("Grouped attributions must describe one promotion.", nameof(facts));
 
+        cancellationToken.ThrowIfCancellationRequested();
+        if (StateDbWriteSession.TryExecute(_dbPath, connection => WritePromotionFacts(connection, facts))) return;
+
         var write = await BeginWriteAsync(nameof(RecordPromotionFactsAsync), cancellationToken).ConfigureAwait(false);
         await using var connection = write.Connection;
         try
         {
-            foreach (var fact in facts)
-            {
-                using var read = connection.CreateCommand();
-                read.CommandText = """
-                    SELECT goal_id, candidate_revision, prior_main_revision, promoted_main_revision, promoted_at, provenance
-                    FROM goal_promotion_facts WHERE goal_id = $goal
-                    """;
-                read.Parameters.AddWithValue("$goal", fact.GoalId);
-                using (var reader = read.ExecuteReader())
-                {
-                    if (reader.Read())
-                    {
-                        var original = ReadPromotionFact(reader, 0);
-                        if (original is null || original.CandidateRevision != fact.CandidateRevision ||
-                            original.PriorMainRevision != fact.PriorMainRevision ||
-                            original.PromotedMainRevision != fact.PromotedMainRevision || original.Provenance != fact.Provenance)
-                            throw new InvalidOperationException($"Original promotion identity conflicts for goal {fact.GoalId}.");
-                        // Re-observation can never retime the original success.
-                        continue;
-                    }
-                }
-                using var insert = connection.CreateCommand();
-                insert.CommandText = """
-                    INSERT INTO goal_promotion_facts
-                        (goal_id, candidate_revision, prior_main_revision, promoted_main_revision, promoted_at, provenance)
-                    VALUES ($goal, $candidate, $prior, $main, $at, $provenance)
-                    """;
-                insert.Parameters.AddWithValue("$goal", fact.GoalId);
-                insert.Parameters.AddWithValue("$candidate", fact.CandidateRevision);
-                insert.Parameters.AddWithValue("$prior", fact.PriorMainRevision);
-                insert.Parameters.AddWithValue("$main", fact.PromotedMainRevision);
-                insert.Parameters.AddWithValue("$at", fact.PromotedAt.ToString("O", CultureInfo.InvariantCulture));
-                insert.Parameters.AddWithValue("$provenance", fact.Provenance);
-                _statementObserver?.Invoke(insert.CommandText);
-                insert.ExecuteNonQuery();
-            }
+            WritePromotionFacts(connection, facts);
             await RunNonQueryAsync(connection, "COMMIT", cancellationToken).ConfigureAwait(false);
             write.Telemetry.Emit("commit");
         }
@@ -89,6 +57,71 @@ public sealed partial class SqliteOrchestratorStateRepository
             write.Telemetry.Emit("rollback", exception);
             throw;
         }
+    }
+
+    private void WritePromotionFacts(SqliteConnection connection, IReadOnlyList<GoalPromotionFact> facts)
+    {
+        foreach (var fact in facts)
+        {
+            using var read = connection.CreateCommand();
+            read.CommandText = """
+                SELECT goal_id, candidate_revision, prior_main_revision, promoted_main_revision, promoted_at, provenance
+                FROM goal_promotion_facts WHERE goal_id = $goal
+                """;
+            read.Parameters.AddWithValue("$goal", fact.GoalId);
+            using (var reader = read.ExecuteReader())
+            {
+                if (reader.Read())
+                {
+                    var original = ReadPromotionFact(reader, 0);
+                    if (original is null || original.CandidateRevision != fact.CandidateRevision ||
+                        original.PriorMainRevision != fact.PriorMainRevision ||
+                        original.PromotedMainRevision != fact.PromotedMainRevision || original.Provenance != fact.Provenance)
+                        throw new InvalidOperationException($"Original promotion identity conflicts for goal {fact.GoalId}.");
+                    // Re-observation can never retime the original success.
+                    continue;
+                }
+            }
+            using var insert = connection.CreateCommand();
+            insert.CommandText = """
+                INSERT INTO goal_promotion_facts
+                    (goal_id, candidate_revision, prior_main_revision, promoted_main_revision, promoted_at, provenance)
+                VALUES ($goal, $candidate, $prior, $main, $at, $provenance)
+                """;
+            insert.Parameters.AddWithValue("$goal", fact.GoalId);
+            insert.Parameters.AddWithValue("$candidate", fact.CandidateRevision);
+            insert.Parameters.AddWithValue("$prior", fact.PriorMainRevision);
+            insert.Parameters.AddWithValue("$main", fact.PromotedMainRevision);
+            insert.Parameters.AddWithValue("$at", fact.PromotedAt.ToString("O", CultureInfo.InvariantCulture));
+            insert.Parameters.AddWithValue("$provenance", fact.Provenance);
+            _statementObserver?.Invoke(insert.CommandText);
+            insert.ExecuteNonQuery();
+        }
+    }
+
+    public async Task<GoalPromotionFact?> ReadPromotionFactAsync(GoalId goalId, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        GoalPromotionFact? fact = null;
+        if (StateDbWriteSession.TryExecute(_dbPath, connection => fact = ReadPromotionFact(connection, goalId)))
+            return fact;
+        await using var connection = OpenConnection();
+        if (!HasPromotionFactsTable(connection)) return null;
+        await using var read = connection.CreateCommand();
+        read.CommandText = "SELECT goal_id, candidate_revision, prior_main_revision, promoted_main_revision, promoted_at, provenance FROM goal_promotion_facts WHERE goal_id = $goal";
+        read.Parameters.AddWithValue("$goal", goalId.Value);
+        await using var reader = await read.ExecuteReaderAsync(cancellationToken);
+        return await reader.ReadAsync(cancellationToken) ? ReadPromotionFact(reader, 0) : null;
+    }
+
+    private static GoalPromotionFact? ReadPromotionFact(SqliteConnection connection, GoalId goalId)
+    {
+        if (!HasPromotionFactsTable(connection)) return null;
+        using var read = connection.CreateCommand();
+        read.CommandText = "SELECT goal_id, candidate_revision, prior_main_revision, promoted_main_revision, promoted_at, provenance FROM goal_promotion_facts WHERE goal_id = $goal";
+        read.Parameters.AddWithValue("$goal", goalId.Value);
+        using var reader = read.ExecuteReader();
+        return reader.Read() ? ReadPromotionFact(reader, 0) : null;
     }
 
     private static bool HasPromotionFactsTable(SqliteConnection connection)

@@ -9,7 +9,7 @@ public sealed class WorkerBuildRequestRecoveryTests(ITestOutputHelper output)
     [Fact]
     public async Task ManagedHostDeathAfterCompilerStart_ReloadRetainsTerminalObligationWithoutRelaunch()
     {
-        using var fixture = new WorkerBuildRequestFixture(managedHost: true);
+        using var fixture = new WorkerBuildRequestFixture(managedHost: true, compilerMode: WorkerBuildRequestFixture.CompilerMode.Real);
         var suffix = Guid.NewGuid().ToString("N");
         using var ready = new EventWaitHandle(false, EventResetMode.ManualReset, "Local\\mcg-build-ready-" + suffix);
         using var release = new EventWaitHandle(false, EventResetMode.ManualReset, "Local\\mcg-build-release-" + suffix);
@@ -104,7 +104,7 @@ public sealed class WorkerBuildRequestRecoveryTests(ITestOutputHelper output)
     [InlineData(WorkerBuildPhase.CompilerStarted, true)]
     public async Task OperatorIntentCancellationBeforeAndAfterStartIsAttributable(WorkerBuildPhase cancelAt, bool started)
     {
-        using var fixture = new WorkerBuildRequestFixture();
+        using var fixture = new WorkerBuildRequestFixture(compilerMode: WorkerBuildRequestFixture.CompilerMode.FakeUntilStopped);
         Task? intake = null;
         var invocation = await fixture.RunHelper(i =>
         {
@@ -131,7 +131,7 @@ public sealed class WorkerBuildRequestRecoveryTests(ITestOutputHelper output)
     [InlineData(WorkerBuildPhase.CompilerStarted, true)]
     public async Task WorkerExitCancelsOutstandingInvocationAndConfirmsOwnedTermination(WorkerBuildPhase exitAt, bool compilerStarted)
     {
-        using var fixture = new WorkerBuildRequestFixture();
+        using var fixture = new WorkerBuildRequestFixture(compilerMode: WorkerBuildRequestFixture.CompilerMode.FakeUntilStopped);
         var exitRequested = false;
         var invocation = await fixture.RunHelper(i =>
         {
@@ -152,7 +152,7 @@ public sealed class WorkerBuildRequestRecoveryTests(ITestOutputHelper output)
     [Fact]
     public async Task ReloadAndDuplicateSubmissionDoNotLaunchOrConsumeTwice()
     {
-        using var fixture = new WorkerBuildRequestFixture();
+        using var fixture = new WorkerBuildRequestFixture(compilerMode: WorkerBuildRequestFixture.CompilerMode.Fake);
         var invocation = await fixture.RunHelper();
         Assert.Equal(WorkerBuildOutcome.Success, invocation.Outcome);
         var reopened = fixture.Host();
@@ -171,7 +171,7 @@ public sealed class WorkerBuildRequestRecoveryTests(ITestOutputHelper output)
     [Fact]
     public async Task DuplicateKeyWithChangedPayloadCannotLaunchAnAdditionalChild()
     {
-        using var fixture = new WorkerBuildRequestFixture();
+        using var fixture = new WorkerBuildRequestFixture(compilerMode: WorkerBuildRequestFixture.CompilerMode.Fake);
         var invocation = await fixture.RunHelper();
         await Assert.ThrowsAsync<UnauthorizedAccessException>(() => fixture.Host().ExecuteAsync(
             new WorkerBuildRequest(1, invocation.RequestKey, invocation.Projects.ToArray(), "Release"),
@@ -182,7 +182,7 @@ public sealed class WorkerBuildRequestRecoveryTests(ITestOutputHelper output)
     [Fact]
     public async Task StaleSnapshotCannotDropTerminalOutcomeOrConsumedState()
     {
-        using var fixture = new WorkerBuildRequestFixture();
+        using var fixture = new WorkerBuildRequestFixture(compilerMode: WorkerBuildRequestFixture.CompilerMode.Fake);
         var repository = new SqliteOrchestratorStateRepository(fixture.StatePath);
         var stale = await repository.LoadGoalsAsync([fixture.GoalId]);
         var before = stale.ExportGoalSnapshot(fixture.GoalId);

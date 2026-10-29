@@ -290,8 +290,8 @@ internal static class CliCommandHelp
 
     private static readonly CommandHelpEntry CriterionEvidenceRecord = new(
         CriterionEvidenceRecordUsage,
-        "Queue operator evidence for a mapped criterion. Acceptance evidence comes from the acceptance executor.",
-        ["--goal", "--idempotency-key", "--operator-actor", "--help", "-h", "--json"]);
+        "Queue operator evidence for a mapped criterion. Acceptance evidence comes from the acceptance executor. For a post-landing duty add --observation-json with GoalId, ObligationId, PromotedMainRevision, Scope (Kind, Condition, Target), ActivationIdentity, ActivationEvidence, ActivatedAt, ObservedAt and ActivationAttested. Runtime activation requires the human operator's explicit ActivationAttested=true attestation of verified activation; a timestamp or path alone is insufficient.",
+        ["--goal", "--idempotency-key", "--operator-actor", "--actor-kind", "--observation-json", "--help", "-h", "--json"]);
 
     private static readonly CommandHelpEntry CriterionEvidenceRepair = new(
         CriterionEvidenceRepairUsage,

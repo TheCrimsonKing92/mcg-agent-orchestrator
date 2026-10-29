@@ -49,7 +49,7 @@ public sealed partial class SqliteOrchestratorStateRepository
             try
             {
                 using var stream = reader.GetStream(1);
-                fields = ReadGoalSimilarityFields(stream, () => reader.GetStream(1));
+                fields = ReadGoalSimilarityFields(id, stream, () => reader.GetStream(1));
             }
             catch (Exception ex) when (IsSnapshotDeserializeException(ex))
             {
@@ -75,7 +75,7 @@ public sealed partial class SqliteOrchestratorStateRepository
                 if (stream is not null)
                 {
                     reopenStream = () => GoalSnapshotArchiveCodec.OpenDecodedStream(value)!;
-                    fields = ReadGoalSimilarityFields(stream, reopenStream);
+                    fields = ReadGoalSimilarityFields(id, stream, reopenStream);
                 }
             }
             // Match selected loading: validate hot serialization first, then hydrate before
@@ -102,10 +102,12 @@ public sealed partial class SqliteOrchestratorStateRepository
         return documents;
     }
 
-    private static GoalSimilarityFields? ReadGoalSimilarityFields(Stream stream, Func<Stream> reopenStream)
+    private GoalSimilarityFields? ReadGoalSimilarityFields(string id, Stream stream, Func<Stream> reopenStream)
     {
         try
         {
+            if (SimilarityProjectionRejection.Value is { } rejection && rejection.GoalId == id)
+                throw new InvalidSimilarityShapeException(rejection.Member);
             return JsonSerializer.Deserialize<GoalSimilarityFields>(stream, SimilarityJson.Options);
         }
         catch (Exception ex) when (ex is InvalidSimilarityShapeException || IsSnapshotDeserializeException(ex))
@@ -114,8 +116,25 @@ public sealed partial class SqliteOrchestratorStateRepository
             // with the original contract, preserving its type names, member paths and
             // byte locations in diagnostics before hot quarantine or archive propagation.
             using var diagnosticStream = reopenStream();
-            _ = JsonSerializer.Deserialize<GoalSnapshot>(diagnosticStream, SerializerOptions);
-            throw new InvalidOperationException("Malformed snapshot unexpectedly passed standard deserialization.");
+            var snapshot = JsonSerializer.Deserialize<GoalSnapshot>(diagnosticStream, SerializerOptions);
+            if (snapshot is null) return null;
+
+            var line = $"SIMILARITY_PROJECTION_FALLBACK goal={id} member={SimilarityRejectedMember(ex)}";
+            _readObserver?.Invoke(new(line, id));
+            Console.Error.WriteLine(line);
+            DateTimeOffset? latest = null;
+            var hasNullEntry = false;
+            foreach (var entry in snapshot.Timeline ?? [])
+            {
+                if (entry is null) { hasNullEntry = true; continue; }
+                if (latest is null || entry.OccurredAt >= latest) latest = entry.OccurredAt;
+            }
+            // Full deserialization is authoritative for shape; Core still owns reconstruction
+            // and effective status, including version-chain and explicit-disposition rules.
+            return new(snapshot.Id, snapshot.Objective, snapshot.Status, snapshot.IsMetadataOnly,
+                snapshot.CreatedAt, snapshot.TerminatedAt,
+                snapshot.Tasks is null ? null : new(snapshot.Tasks.Count, true),
+                new(latest, hasNullEntry));
         }
     }
 
@@ -137,7 +156,45 @@ public sealed partial class SqliteOrchestratorStateRepository
         return AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot([snapshot!], [])).Goals.Single().Status;
     }
 
-    private sealed class InvalidSimilarityShapeException : Exception { }
+    private sealed class InvalidSimilarityShapeException(string member, Exception? innerException = null)
+        : Exception(null, innerException)
+    {
+        internal string Member { get; } = member;
+    }
+
+    private static string SimilarityRejectedMember(Exception exception, string parent = "$")
+    {
+        var path = exception is InvalidSimilarityShapeException shape ? shape.Member
+            : (exception as JsonException)?.Path;
+        if (string.IsNullOrEmpty(path) || path == "$") return parent;
+        if (path.StartsWith("$.", StringComparison.Ordinal)) path = path[2..];
+        else if (path.StartsWith('$')) path = path[1..];
+        return parent == "$" ? path : parent + (path.StartsWith('[') ? "" : ".") + path;
+    }
+
+    private static readonly AsyncLocal<SimilarityProjectionRejectionScope?> SimilarityProjectionRejection = new();
+
+    internal static IDisposable ForceSimilarityProjectionRejectionForTesting(string goalId, string member)
+    {
+        var scope = new SimilarityProjectionRejectionScope(goalId, member, SimilarityProjectionRejection.Value);
+        SimilarityProjectionRejection.Value = scope;
+        return scope;
+    }
+
+    private sealed class SimilarityProjectionRejectionScope(
+        string goalId, string member, SimilarityProjectionRejectionScope? previous) : IDisposable
+    {
+        internal string GoalId { get; } = goalId;
+        internal string Member { get; } = member;
+        public void Dispose() => SimilarityProjectionRejection.Value = previous;
+    }
+
+    private static void SkipSimilarityValue(ref Utf8JsonReader reader)
+    {
+        // Custom converters can see a non-final stream buffer even when their value is
+        // fully buffered. TrySkip handles that case; Skip rejects every non-final buffer.
+        if (!reader.TrySkip()) throw new JsonException("Incomplete similarity projection value.");
+    }
 
     private static class SimilarityJson
     {
@@ -171,28 +228,31 @@ public sealed partial class SqliteOrchestratorStateRepository
         public override object? Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
         {
             var projection = reader;
-            try { SimilarityTaskShapeConverter.ValidateTaskValue(ref reader, valueType, options); }
-            catch (Exception ex) when (IsSnapshotDeserializeException(ex))
+            try
             {
-                throw new InvalidSimilarityShapeException();
+                SimilarityTaskShapeConverter.ValidateTaskValue(ref reader, valueType, options);
+                return memberName switch
+                {
+                    nameof(GoalSnapshot.SourceBacklogItemId) => projection.TokenType == JsonTokenType.Null
+                        ? (bool?)null : IsBlankSimilarityText(ref projection),
+                    nameof(GoalSnapshot.SourceBacklogCoverage) => projection.TokenType != JsonTokenType.Null,
+                    nameof(GoalSnapshot.ExplicitDisposition) => JsonSerializer.Deserialize<GoalExplicitDisposition>(ref projection, options),
+                    nameof(GoalSnapshot.ParkedLifecycleStatus) => JsonSerializer.Deserialize<GoalStatus?>(ref projection, options),
+                    nameof(GoalSnapshot.BriefVersions) => ReadSimilarityVersionChain(ref projection, options, brief: true),
+                    nameof(GoalSnapshot.RefinedSpecVersions) => ReadSimilarityVersionChain(ref projection, options, brief: false),
+                    nameof(GoalSnapshot.RefinedSpec) => projection.TokenType != JsonTokenType.Null &&
+                        HasInvalidSimilaritySpec(ref projection),
+                    nameof(GoalSnapshot.EffectiveAcceptanceCriteriaCorrections) => HasInvalidSimilarityCorrections(ref projection),
+                    nameof(GoalSnapshot.LatestAcceptanceFailure) => projection.TokenType != JsonTokenType.Null &&
+                        HasInvalidSimilarityFailure(ref projection),
+                    nameof(GoalSnapshot.GateTestObligations) => HasInvalidSimilarityObligations(ref projection, options),
+                    _ => null
+                };
             }
-            return memberName switch
+            catch (Exception ex) when (ex is InvalidSimilarityShapeException || IsSnapshotDeserializeException(ex))
             {
-                nameof(GoalSnapshot.SourceBacklogItemId) => projection.TokenType == JsonTokenType.Null
-                    ? (bool?)null : IsBlankSimilarityText(ref projection),
-                nameof(GoalSnapshot.SourceBacklogCoverage) => projection.TokenType != JsonTokenType.Null,
-                nameof(GoalSnapshot.ExplicitDisposition) => JsonSerializer.Deserialize<GoalExplicitDisposition>(ref projection, options),
-                nameof(GoalSnapshot.ParkedLifecycleStatus) => JsonSerializer.Deserialize<GoalStatus?>(ref projection, options),
-                nameof(GoalSnapshot.BriefVersions) => ReadSimilarityVersionChain(ref projection, options, brief: true),
-                nameof(GoalSnapshot.RefinedSpecVersions) => ReadSimilarityVersionChain(ref projection, options, brief: false),
-                nameof(GoalSnapshot.RefinedSpec) => projection.TokenType != JsonTokenType.Null &&
-                    HasInvalidSimilaritySpec(ref projection),
-                nameof(GoalSnapshot.EffectiveAcceptanceCriteriaCorrections) => HasInvalidSimilarityCorrections(ref projection),
-                nameof(GoalSnapshot.LatestAcceptanceFailure) => projection.TokenType != JsonTokenType.Null &&
-                    HasInvalidSimilarityFailure(ref projection),
-                nameof(GoalSnapshot.GateTestObligations) => HasInvalidSimilarityObligations(ref projection, options),
-                _ => null
-            };
+                throw new InvalidSimilarityShapeException(SimilarityRejectedMember(ex, memberName), ex);
+            }
         }
 
         public override void Write(Utf8JsonWriter writer, object value, JsonSerializerOptions options) =>
@@ -285,7 +345,7 @@ public sealed partial class SqliteOrchestratorStateRepository
                         hasSpec = true;
                         invalid |= HasInvalidSimilaritySpec(ref contents);
                     }
-                    contents.Skip();
+                    SkipSimilarityValue(ref contents);
                 }
                 invalid |= !hasSpec;
             }
@@ -302,7 +362,7 @@ public sealed partial class SqliteOrchestratorStateRepository
                 var text = latestContents.ValueTextEquals("Text"u8);
                 latestContents.Read();
                 if (text) latestText = latestContents.GetString();
-                latestContents.Skip();
+                SkipSimilarityValue(ref latestContents);
             }
         return new(links.Count, invalid, latestText);
     }
@@ -316,7 +376,7 @@ public sealed partial class SqliteOrchestratorStateRepository
         while (reader.Read() && reader.TokenType != JsonTokenType.EndArray)
         {
             hasNull |= reader.TokenType == JsonTokenType.Null;
-            reader.Skip();
+            SkipSimilarityValue(ref reader);
         }
         return hasNull;
     }
@@ -340,7 +400,7 @@ public sealed partial class SqliteOrchestratorStateRepository
                     ? IsBlankSimilarityText(ref reader)
                     : reader.TokenType == JsonTokenType.Null || HasNullSimilarityEntry(ref reader);
             }
-            reader.Skip();
+            SkipSimilarityValue(ref reader);
         }
         return invalid || missing.Count > 0;
     }
@@ -361,7 +421,7 @@ public sealed partial class SqliteOrchestratorStateRepository
                 if (dispositions && reader.TokenType == JsonTokenType.StartArray)
                     while (reader.Read() && reader.TokenType != JsonTokenType.EndArray)
                         invalid |= HasInvalidSimilarityMembers(ref reader, ["Criterion", "Disposition"], []);
-                reader.Skip();
+                SkipSimilarityValue(ref reader);
             }
         }
         return invalid;
@@ -382,7 +442,7 @@ public sealed partial class SqliteOrchestratorStateRepository
                 while (reader.Read() && reader.TokenType != JsonTokenType.EndArray)
                     invalid |= IsBlankSimilarityText(ref reader);
             else if (ownership) invalid |= HasNullSimilarityEntry(ref reader);
-            reader.Skip();
+            SkipSimilarityValue(ref reader);
         }
         return invalid;
     }
@@ -402,7 +462,7 @@ public sealed partial class SqliteOrchestratorStateRepository
                 while (reader.Read() && reader.TokenType != JsonTokenType.EndArray)
                     hasCheck |= !IsBlankSimilarityText(ref reader);
             else if (attribution) pending = reader.TokenType != JsonTokenType.Null;
-            reader.Skip();
+            SkipSimilarityValue(ref reader);
         }
         return invalid || pending && !hasCheck;
     }
@@ -430,7 +490,7 @@ public sealed partial class SqliteOrchestratorStateRepository
     private static bool HasInvalidSimilarityVerification(ref Utf8JsonReader reader)
     {
         if (reader.TokenType == JsonTokenType.Null) return true;
-        if (reader.TokenType != JsonTokenType.StartObject) { reader.Skip(); return false; }
+        if (reader.TokenType != JsonTokenType.StartObject) { SkipSimilarityValue(ref reader); return false; }
         var invalid = false;
         while (reader.Read() && reader.TokenType != JsonTokenType.EndObject)
         {
@@ -440,7 +500,7 @@ public sealed partial class SqliteOrchestratorStateRepository
             reader.Read();
             if (enrichment && reader.TokenType == JsonTokenType.StartArray)
                 invalid |= HasNullSimilarityEntry(ref reader);
-            reader.Skip();
+            SkipSimilarityValue(ref reader);
         }
         return invalid;
     }
@@ -468,14 +528,14 @@ public sealed partial class SqliteOrchestratorStateRepository
             ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
         {
             if (reader.TokenType != JsonTokenType.StartArray)
-                throw new InvalidSimilarityShapeException();
+                throw new InvalidSimilarityShapeException("Tasks");
             var count = 0;
             var requiresReconstruction = false;
             while (reader.Read() && reader.TokenType != JsonTokenType.EndArray)
             {
                 count++;
                 if (reader.TokenType is not (JsonTokenType.StartObject or JsonTokenType.Null))
-                    throw new InvalidSimilarityShapeException();
+                    throw new InvalidSimilarityShapeException($"Tasks[{count - 1}]");
                 try
                 {
                     var task = reader;
@@ -498,16 +558,16 @@ public sealed partial class SqliteOrchestratorStateRepository
                                     requiresReconstruction |= HasInvalidSimilarityVerification(ref task);
                             if (lastVerification && task.TokenType != JsonTokenType.Null)
                                 requiresReconstruction |= HasInvalidSimilarityVerification(ref task);
-                            task.Skip();
+                            SkipSimilarityValue(ref task);
                         }
                     requiresReconstruction |= blankDescription;
                     ValidateTaskValue(ref reader, typeof(TaskSnapshot), options);
                 }
-                catch (Exception ex) when (IsSnapshotDeserializeException(ex))
+                catch (Exception ex) when (ex is InvalidSimilarityShapeException || IsSnapshotDeserializeException(ex))
                 {
                     // Replay the original document to retain the standard member path,
                     // exception type and byte position, including nested task members.
-                    throw new InvalidSimilarityShapeException();
+                    throw new InvalidSimilarityShapeException(SimilarityRejectedMember(ex, $"Tasks[{count - 1}]"), ex);
                 }
             }
             return new(count, requiresReconstruction);
@@ -534,15 +594,30 @@ public sealed partial class SqliteOrchestratorStateRepository
                         }
                     reader.Read();
                     if (member is null || (member.Set is null &&
-                        (member.Get is null || member.AssociatedParameter is null))) reader.Skip();
-                    else ValidateTaskValue(ref reader, member.PropertyType, options);
+                        (member.Get is null || member.AssociatedParameter is null))) SkipSimilarityValue(ref reader);
+                    else
+                    {
+                        try { ValidateTaskValue(ref reader, member.PropertyType, options); }
+                        catch (Exception ex) when (ex is InvalidSimilarityShapeException || IsSnapshotDeserializeException(ex))
+                        {
+                            throw new InvalidSimilarityShapeException(SimilarityRejectedMember(ex, member.Name), ex);
+                        }
+                    }
                 }
                 return;
             }
             if (contract.Kind == JsonTypeInfoKind.Enumerable && reader.TokenType == JsonTokenType.StartArray)
             {
+                var index = 0;
                 while (reader.Read() && reader.TokenType != JsonTokenType.EndArray)
-                    ValidateTaskValue(ref reader, contract.ElementType!, options);
+                {
+                    try { ValidateTaskValue(ref reader, contract.ElementType!, options); }
+                    catch (Exception ex) when (ex is InvalidSimilarityShapeException || IsSnapshotDeserializeException(ex))
+                    {
+                        throw new InvalidSimilarityShapeException(SimilarityRejectedMember(ex, $"[{index}]"), ex);
+                    }
+                    index++;
+                }
                 return;
             }
             // Scalars, nulls and custom converters use the real serializer's validation.
@@ -562,25 +637,29 @@ public sealed partial class SqliteOrchestratorStateRepository
 
         public override TimelineLatest Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
         {
-            if (reader.TokenType != JsonTokenType.StartArray) throw new InvalidSimilarityShapeException();
+            if (reader.TokenType != JsonTokenType.StartArray) throw new InvalidSimilarityShapeException("Timeline");
             DateTimeOffset? latest = null;
             var hasNullEntry = false;
+            var index = -1;
             while (reader.Read() && reader.TokenType != JsonTokenType.EndArray)
             {
+                index++;
                 if (reader.TokenType == JsonTokenType.Null)
                 {
                     hasNullEntry = true;
                     continue;
                 }
-                if (reader.TokenType != JsonTokenType.StartObject) throw new InvalidSimilarityShapeException();
+                if (reader.TokenType != JsonTokenType.StartObject)
+                    throw new InvalidSimilarityShapeException($"Timeline[{index}]");
                 var validationReader = reader;
                 try
                 {
-                    SimilarityTaskShapeConverter.ValidateTaskValue(ref validationReader, typeof(ProgressEventSnapshot), options);
+                    SimilarityTaskShapeConverter.ValidateTaskValue(ref validationReader, typeof(ProgressEventSnapshot),
+                        options);
                 }
-                catch (Exception ex) when (IsSnapshotDeserializeException(ex))
+                catch (Exception ex) when (ex is InvalidSimilarityShapeException || IsSnapshotDeserializeException(ex))
                 {
-                    throw new InvalidSimilarityShapeException();
+                    throw new InvalidSimilarityShapeException(SimilarityRejectedMember(ex, $"Timeline[{index}]"), ex);
                 }
                 var occurredAt = DateTimeOffset.MinValue;
                 while (reader.Read() && reader.TokenType != JsonTokenType.EndObject)
@@ -588,7 +667,7 @@ public sealed partial class SqliteOrchestratorStateRepository
                     var isTime = reader.ValueTextEquals("OccurredAt"u8);
                     reader.Read();
                     if (isTime) occurredAt = reader.GetDateTimeOffset();
-                    else reader.Skip();
+                    else SkipSimilarityValue(ref reader);
                 }
                 // Stable OrderBy(...).LastOrDefault() keeps the last equal instant,
                 // including its original offset (which affects the rendered date).

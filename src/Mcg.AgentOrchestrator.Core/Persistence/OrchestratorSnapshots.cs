@@ -88,7 +88,8 @@ public sealed record RefinedSpecSnapshot(
     IReadOnlyList<RefinedSpecOpenQuestionSnapshot> OpenQuestions,
     IReadOnlyList<string>? OperatorOwnedAcceptanceCriteria = null,
     IReadOnlyList<HumanInputAnswerRecord>? ClarificationAnswerHistory = null,
-    IReadOnlyList<string>? AcceptanceGateOwnedAcceptanceCriteria = null);
+    IReadOnlyList<string>? AcceptanceGateOwnedAcceptanceCriteria = null,
+    IReadOnlyList<CriterionEvidenceDeclaration>? CriterionEvidenceDeclarations = null);
 
 public sealed record RefinedSpecVersionSnapshot(
     int Version,

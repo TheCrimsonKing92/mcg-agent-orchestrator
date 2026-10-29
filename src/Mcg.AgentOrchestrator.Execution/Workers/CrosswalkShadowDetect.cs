@@ -5,7 +5,10 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 
 internal sealed class CrosswalkShadowDetect
 {
-    internal static CrosswalkShadowDetect Shared { get; } = new(new CrosswalkClient());
+    private static CrosswalkShadowDetect? _shared;
+    internal static CrosswalkShadowDetect? Shared => Volatile.Read(ref _shared);
+    // App installs the service for its one process data root before dispatch begins.
+    internal static void Install(CrosswalkShadowDetect shadow) => Interlocked.CompareExchange(ref _shared, shadow, null);
     internal const string DisagreementEventKind = "crosswalk-shadow-disagreement";
     internal const string UnavailableEventKind = "crosswalk-shadow-unavailable";
 
@@ -69,6 +72,9 @@ internal sealed class CrosswalkShadowDetect
         }
         else
             return;
+
+        detail += $" executablePath={JsonSerializer.Serialize(outcome.Executable?.Path)} " +
+            $"executableSha256={JsonSerializer.Serialize(outcome.Executable?.Sha256)}";
 
         lock (_appendLock)
         {

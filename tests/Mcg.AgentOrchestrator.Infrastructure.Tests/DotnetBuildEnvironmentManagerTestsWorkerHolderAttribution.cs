@@ -7,7 +7,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsWorkerHolderAttribution
     [Fact]
     public async Task HostBuildHolderIdentifiesGoalRoleAndTask()
     {
-        using var fixture = new WorkerBuildRequestFixture();
+        using var fixture = new WorkerBuildRequestFixture(compilerMode: WorkerBuildRequestFixture.CompilerMode.Fake);
         using var incumbent = Assert.IsType<DotnetBuildLeaseAcquisition.Acquired>(
             DotnetBuildEnvironmentManager.TryAcquireLeaseExecutionLock(
                 DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0, storageRoot: fixture.Storage), TimeSpan.Zero)).Lease;

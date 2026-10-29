@@ -5,7 +5,7 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal static partial class LandingExecutor
 {
-    private static void RecordSuccessfulPromotion(OrchestratorWorkspace workspace,
+    private static void RecordSuccessfulPromotion(OrchestratorWorkspace workspace, AgentOrchestratorKernel kernel,
         IReadOnlyList<(GoalId GoalId, string CandidateRevision)> members,
         string priorMainRevision, string promotedMainRevision, string provenance, IClock? clock)
     {
@@ -19,6 +19,12 @@ internal static partial class LandingExecutor
         // No schema bootstrap here: the conductor owns numbered migrations. On
         // failure recovery anchors remain; recovery retains known facts and leaves
         // an unrecorded crash-gap time unknown rather than resampling its clock.
-        new SqliteOrchestratorStateRepository(workspace.SqliteStatePath).RecordPromotionFacts(facts);
+        var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+        repository.RecordPromotionFacts(facts);
+        foreach (var member in members)
+        {
+            var original = repository.ReadPromotionFactAsync(member.GoalId).GetAwaiter().GetResult();
+            if (original is not null) kernel.BindPostLandingPublication(member.GoalId, original);
+        }
     }
 }

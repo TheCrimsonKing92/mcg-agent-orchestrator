@@ -6,7 +6,8 @@ namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 
 internal sealed class OwnerConsoleGateProgressLoader(string logPath, string manifestPath, string durationPath, TimeProvider clock,
     string? executorConfigPath = null, int? coreBudget = null,
-    OwnerConsoleJsonlTail? conductTail = null, OwnerConsoleJsonlTail? durationTail = null)
+    OwnerConsoleJsonlTail? conductTail = null, OwnerConsoleJsonlTail? durationTail = null,
+    OwnerConsoleHostRowOwner? owners = null)
 {
     private static readonly OwnerConsoleGateFailureNames FailureNames = new();
     private readonly OwnerConsoleJsonlTail _conductTail = conductTail ?? new(logPath);
@@ -32,16 +33,17 @@ internal sealed class OwnerConsoleGateProgressLoader(string logPath, string mani
                 ? _durationTail.Select("lane-duration", ParseDuration, long.MaxValue).OfType<OwnerConsoleGateDuration>().ToArray()
                 : [];
             var capacity = new OwnerConsoleGateCapacity(executors,
-                Math.Min(maxConcurrentShards, coreBudget ?? Math.Max(1, Environment.ProcessorCount / 2)));
+                Math.Min(maxConcurrentShards, coreBudget ?? Math.Max(1, Environment.ProcessorCount / 2)), owners);
             var gate = OwnerConsoleGateProgress.Build(now, events, lanes, history,
                 id => titles.FirstOrDefault(pair => pair.Key.StartsWith(id, StringComparison.Ordinal)).Value,
                 capacity: capacity.LocalBudget);
+            var evidence = _conductTail.Select("host-evidence", OwnerConsoleHostEvidenceRuns.Parse, 1_048_576).ToArray();
             return gate with
             {
                 Ended = OwnerConsoleGateEnd.Read(events),
                 Capacity = capacity,
-                HostActivity = OwnerConsoleHostEvidenceRuns.Fold(
-                    _conductTail.Select("host-evidence", OwnerConsoleHostEvidenceRuns.Parse, 1_048_576), now),
+                HostActivity = OwnerConsoleHostEvidenceRuns.Fold(evidence, now),
+                EvidenceEnded = evidence.Select(entry => entry?.End).OfType<OwnerConsoleEvidenceAttemptEnd>().ToArray(),
                 Lanes = gate.Lanes.Select(row => row.State == OwnerConsoleGateLaneState.Done && row.Outcome == "failed" && !row.IsAttribution
                     ? row with { FailingTestNames = FailureNames.Read(row) } : row).ToArray()
             };

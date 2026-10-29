@@ -116,7 +116,8 @@ public sealed record CriterionEvidenceReceiptOperatorIntentPayload(
     string ReceiptId,
     string Scope,
     bool Passed,
-    string Detail);
+    string Detail,
+    CriterionPostLandingObservation? Observation = null);
 
 public sealed record CriterionEvidenceRepairOperatorIntentPayload(
     string MalformedObligationId,

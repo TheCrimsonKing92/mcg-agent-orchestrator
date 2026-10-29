@@ -11,7 +11,7 @@ public sealed class WorkerBuildRequestScopeBindingTests
     [Fact]
     public async Task InvalidRetainedAuthority_CannotConsumeNativePass()
     {
-        using var fixture = new WorkerBuildRequestFixture(goalBranch: true);
+        using var fixture = new WorkerBuildRequestFixture(compilerMode: WorkerBuildRequestFixture.CompilerMode.Fake, goalBranch: true);
         var original = await fixture.RunHelper();
         Assert.Equal(WorkerBuildOutcome.Success, original.Outcome);
         WorkerBuildRequestScopeSupport.PrepareSuccessor(fixture, false);
@@ -59,7 +59,7 @@ public sealed class WorkerBuildRequestScopeBindingTests
     [InlineData("untracked")]
     public async Task ChangedRequiredInputs_CannotBorrowNativePass(string change)
     {
-        using var fixture = new WorkerBuildRequestFixture(goalBranch: true);
+        using var fixture = new WorkerBuildRequestFixture(compilerMode: WorkerBuildRequestFixture.CompilerMode.Fake, goalBranch: true);
         var original = await fixture.RunHelper();
         Assert.Equal(WorkerBuildOutcome.Success, original.Outcome);
         WorkerBuildRequestScopeSupport.PrepareSuccessor(fixture, false);
@@ -78,7 +78,7 @@ public sealed class WorkerBuildRequestScopeBindingTests
     [Fact]
     public async Task IncompleteProjectCoverage_CannotBorrowNativePass()
     {
-        using var fixture = new WorkerBuildRequestFixture(goalBranch: true, extraProject: true);
+        using var fixture = new WorkerBuildRequestFixture(compilerMode: WorkerBuildRequestFixture.CompilerMode.Fake, goalBranch: true, extraProject: true);
         var original = await fixture.RunHelper();
         Assert.Equal(WorkerBuildOutcome.Success, original.Outcome);
         WorkerBuildRequestScopeSupport.PrepareSuccessor(fixture, false);
@@ -95,7 +95,7 @@ public sealed class WorkerBuildRequestScopeBindingTests
     [Fact]
     public async Task PreLaunchSuccessorOverwrite_CannotStartCompiler()
     {
-        using var fixture = new WorkerBuildRequestFixture(goalBranch: true);
+        using var fixture = new WorkerBuildRequestFixture(compilerMode: WorkerBuildRequestFixture.CompilerMode.Fake, goalBranch: true);
         var host = fixture.Host();
         WorkerBuildRequestScopeSupport.PrepareSuccessor(fixture, true);
         using var process = Process.GetCurrentProcess();
@@ -112,7 +112,7 @@ public sealed class WorkerBuildRequestScopeBindingTests
     [Fact]
     public async Task ConsumedPass_StillRequiresValidScopeAuthority()
     {
-        using var fixture = new WorkerBuildRequestFixture(goalBranch: true);
+        using var fixture = new WorkerBuildRequestFixture(compilerMode: WorkerBuildRequestFixture.CompilerMode.Fake, goalBranch: true);
         Assert.Equal(WorkerBuildOutcome.Success, (await fixture.RunHelper()).Outcome);
         Assert.False(fixture.Consume().MissingEvidence);
         var consumed = WorkerBuildRequestScopeSupport.Invocation(fixture);
@@ -132,7 +132,7 @@ public sealed class WorkerBuildRequestScopeBindingTests
     [Fact]
     public async Task ScopeOverwriteAtRegistration_PreventsResumeAndReleasesCustody()
     {
-        using var fixture = new WorkerBuildRequestFixture(goalBranch: true);
+        using var fixture = new WorkerBuildRequestFixture(compilerMode: WorkerBuildRequestFixture.CompilerMode.Fake, goalBranch: true);
         var changed = false;
         var invocation = await fixture.RunHelper(current =>
         {
@@ -153,7 +153,7 @@ public sealed class WorkerBuildRequestScopeBindingTests
     [Fact]
     public async Task RetiredSameTaskDispatch_CannotResurrectNativePass()
     {
-        using var fixture = new WorkerBuildRequestFixture(goalBranch: true);
+        using var fixture = new WorkerBuildRequestFixture(compilerMode: WorkerBuildRequestFixture.CompilerMode.Fake, goalBranch: true);
         var original = await fixture.RunHelper();
         Assert.Equal(WorkerBuildOutcome.Success, original.Outcome);
         var snapshot = WorkerBuildRequestScopeSupport.Load(fixture).ExportSnapshot();

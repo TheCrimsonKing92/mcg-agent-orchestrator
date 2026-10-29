@@ -389,7 +389,7 @@ internal static partial class LandingExecutor
                 false, $"Parked on {IntegrationBranchName}: {reason}");
         }
 
-        RecordSuccessfulPromotion(workspace, [(goal.Id, evidenceCandidateSha!)], boundMainRevision!,
+        RecordSuccessfulPromotion(workspace, kernel, [(goal.Id, evidenceCandidateSha!)], boundMainRevision!,
             candidateRevision!, GoalPromotionFact.SoloProvenance, promotionClock);
         DeleteLandingAnchor(executionDirectory, goal, candidateRevision!);
 
@@ -938,7 +938,7 @@ internal static partial class LandingExecutor
                     : AcceptanceCohortLandingOutcome.RetryableHold,
                 $"Cohort receipt invalidated because main changed at the compare-and-swap boundary: {advanceMain.Error}; {rollbackDetail}.");
         }
-        RecordSuccessfulPromotion(workspace,
+        RecordSuccessfulPromotion(workspace, kernel,
             receipt.Identity.Members.Select(member => (member.GoalId, member.CandidateRevision)).ToArray(),
             receipt.Identity.ObservedMainRevision, commit, GoalPromotionFact.CohortProvenance, promotionClock);
         if (checkoutInspection.Outcome == RootCheckoutLandingGuard.Outcome.FastForward &&

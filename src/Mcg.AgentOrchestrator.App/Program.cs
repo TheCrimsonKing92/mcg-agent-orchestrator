@@ -214,6 +214,7 @@ if (startupArgs.Count > 0 && startupArgs[0] == AcceptanceJobCustodianHost.Subcom
 }
 OrchestratorHome.ExportForDescendants(OrchestratorHome.ResolveForLaunch(repoRoot));
 OrchestratorDataRoot.ExportForDescendants();
+CrosswalkExecutableComposition.Install();
 try
 {
     if (CliCommandHelp.TryPrintStartupHelp(startupArgs))
@@ -289,7 +290,8 @@ if (CliExecutorScreenCommand.IsCommand(startupArgs))
 }
 
 if (Mcg.AgentOrchestrator.App.OwnerConsole.OwnerConsoleVerb.IsCommand(startupArgs))
-    return ExitCompletedStartupCommand(await Mcg.AgentOrchestrator.App.OwnerConsole.OwnerConsoleVerb.RunAsync(startupArgs, workspace));
+    return ExitCompletedStartupCommand(await Mcg.AgentOrchestrator.App.OwnerConsole.OwnerConsoleVerb.RunAsync(startupArgs, workspace,
+        owners: Mcg.AgentOrchestrator.App.OwnerConsole.OwnerConsoleHostRowOwner.FromRegistry(repoRoot, projectRegistry)));
 if (CliOperatorIntentRoute.IsServed(startupArgs))
     return ExitCompletedStartupCommand(CliOperatorIntentRoute.Run(startupArgs, workspace));
 

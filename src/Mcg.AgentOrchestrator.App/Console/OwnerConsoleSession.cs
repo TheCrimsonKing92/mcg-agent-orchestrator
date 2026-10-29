@@ -18,7 +18,8 @@ internal sealed class OwnerConsoleSession(
     ChangeStreamFileReader? changes = null,
     AnswerIntentStatusTracker? answerTracking = null,
     Func<OwnerFleetViewModel>? fleet = null,
-    Func<int?>? terminalWidth = null) : IDisposable
+    Func<int?>? terminalWidth = null,
+    string? projectLabel = null) : IDisposable
 {
     private readonly AnswerIntentStatusTracker _answerTracking = answerTracking ?? new(answers.ReadStatusAsync, clock);
     public void Dispose() => _answerTracking.Dispose();
@@ -249,7 +250,8 @@ internal sealed class OwnerConsoleSession(
         var goals = await LoadActiveAsync(metadata, cancellationToken);
         var age = _lastConductEvent is null ? "unknown" : Age(_lastConductEvent.Value);
         var hidden = _hiddenCount > 0 ? $" | hidden: {_hiddenCount}" : string.Empty;
-        Announce($"conductor: {(liveness.IsRunning() ? "running" : "stopped")} | active goals: {goals.Count} | owner questions: {_open.Count}{hidden} | last event: {age}");
+        Announce((projectLabel is null ? "" : $"project: {projectLabel} | ") +
+            $"conductor: {(liveness.IsRunning() ? "running" : "stopped")} | active goals: {goals.Count} | owner questions: {_open.Count}{hidden} | last event: {age}");
     }
 
     private async Task PrintBoardAsync(IReadOnlyList<GoalSummary>? metadata, CancellationToken cancellationToken)

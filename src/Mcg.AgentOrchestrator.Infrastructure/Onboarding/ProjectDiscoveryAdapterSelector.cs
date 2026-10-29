@@ -22,6 +22,12 @@ public static class ProjectDiscoveryAdapterSelector
         var hasGoMod = File.Exists(goMod) && (File.GetAttributes(goMod) & FileAttributes.ReparsePoint) == 0;
         if (hasGoMod && solution is not null)
             return new(null, null, $"Ambiguous stack markers: go.mod and {solution}.");
+        var packageJson = Path.Combine(root, "package.json");
+        var hasPackageJson = File.Exists(packageJson) && (File.GetAttributes(packageJson) & FileAttributes.ReparsePoint) == 0;
+        if (hasPackageJson && hasGoMod)
+            return new(null, null, "Ambiguous stack markers: go.mod and package.json.");
+        if (hasPackageJson && solution is not null)
+            return new(null, null, $"Ambiguous stack markers: package.json and {solution}.");
         if (hasGoMod)
             return new(ProjectStack.Go, "go.mod", null);
         if (solution is not null)
@@ -30,8 +36,11 @@ public static class ProjectDiscoveryAdapterSelector
         var exclusions = new HashSet<string>(excludedDirectoryNames ?? [], StringComparer.OrdinalIgnoreCase);
         exclusions.UnionWith(["bin", "obj", ".git"]);
         var marker = ProjectMarkers(root, exclusions).Order(StringComparer.Ordinal).FirstOrDefault();
+        if (hasPackageJson)
+            return marker is null ? new(ProjectStack.Node, "package.json", null)
+                : new(null, null, $"Ambiguous stack markers: package.json and {marker}.");
         return marker is not null ? new(ProjectStack.Dotnet, marker, null)
-            : new(null, null, "No stack marker found; looked for root go.mod, *.sln, *.slnx, and *.csproj, *.fsproj, *.vbproj below the root.");
+            : new(null, null, "No stack marker found; looked for root go.mod, package.json, *.sln, *.slnx, and *.csproj, *.fsproj, *.vbproj below the root.");
     }
 
     public static IProjectDiscoveryAdapter Select(string repositoryRoot, IReadOnlyCollection<string>? excludedDirectoryNames = null)
@@ -40,6 +49,7 @@ public static class ProjectDiscoveryAdapterSelector
         return detection.Stack switch
         {
             ProjectStack.Dotnet => new DotnetProjectDiscoveryAdapter(),
+            ProjectStack.Node => new NodeProjectDiscoveryAdapter(),
             ProjectStack.Go when GoModReader.Read(Path.Combine(repositoryRoot, "go.mod")).Path is not null => new GoProjectDiscoveryAdapter(),
             ProjectStack.Go => throw new InvalidOperationException(
                 $"No discovery adapter is available for stack 'go' (marker {detection.Marker})."),

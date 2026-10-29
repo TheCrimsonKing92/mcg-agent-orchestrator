@@ -189,7 +189,7 @@ internal static class GoalAcceptanceVerifierBuildArtifactLock
         var holders = attribution.Holders.ToList();
         var consumedGateContext = false;
         if (HasNoActionableHolder(attribution) &&
-            DotnetBuildEnvironmentManager.TryFindActiveSlotArtifactConsumer(environment) is { } activeConsumer)
+            DotnetBuildLockAttribution.TryFindActiveSlotArtifactConsumer(environment) is { } activeConsumer)
         {
             consumedGateContext = true;
             holders.Add(activeConsumer);

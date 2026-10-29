@@ -8,7 +8,7 @@ public sealed class WorkerBuildRequestIntegrationTests(ITestOutputHelper output)
     [Fact]
     public async Task OrdinaryHelperLowIntegrityPeerAndCompilerRetainSandbox()
     {
-        using var fixture = new WorkerBuildRequestFixture(lowIntegrity: true);
+        using var fixture = new WorkerBuildRequestFixture(lowIntegrity: true, compilerMode: WorkerBuildRequestFixture.CompilerMode.Real);
         var lowCompilerObserved = false;
         var invocation = await fixture.RunHelper(i =>
         {
@@ -28,7 +28,7 @@ public sealed class WorkerBuildRequestIntegrationTests(ITestOutputHelper output)
     [InlineData(true, WorkerBuildOutcome.CompilerFailure)]
     public async Task OrdinaryHelper_ProducesHostOwnedCompilationAndTypedConsumption(bool invalidSource, WorkerBuildOutcome outcome)
     {
-        using var fixture = new WorkerBuildRequestFixture(invalidSource);
+        using var fixture = new WorkerBuildRequestFixture(invalidSource, compilerMode: WorkerBuildRequestFixture.CompilerMode.Real);
         fixture.Kernel.AddTask(fixture.GoalId, AgentRole.Tester, "Legacy sibling");
         fixture.Save();
         var pendingObserved = false;
@@ -101,7 +101,7 @@ public sealed class WorkerBuildRequestIntegrationTests(ITestOutputHelper output)
     [Fact]
     public async Task CapacityAcquisitionEndingBeforeStart_HasNoOwnedCompiler()
     {
-        using var fixture = new WorkerBuildRequestFixture();
+        using var fixture = new WorkerBuildRequestFixture(compilerMode: WorkerBuildRequestFixture.CompilerMode.Fake);
         var slots = Path.Combine(fixture.Storage.RootPath, "build-slots");
         Directory.CreateDirectory(slots);
         using var first = new FileStream(Path.Combine(slots, "build-0.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.ReadWrite);
@@ -129,7 +129,7 @@ public sealed class WorkerBuildRequestIntegrationTests(ITestOutputHelper output)
     [Fact]
     public async Task DeadlineAfterSlotAcquiredBeforeLaunch_IsInterrupted()
     {
-        using var fixture = new WorkerBuildRequestFixture();
+        using var fixture = new WorkerBuildRequestFixture(compilerMode: WorkerBuildRequestFixture.CompilerMode.Fake);
         var acquired = false;
         var invocation = await fixture.RunHelper(i =>
         {
@@ -157,7 +157,7 @@ public sealed class WorkerBuildRequestIntegrationTests(ITestOutputHelper output)
     [InlineData(false)]
     public async Task SessionLearnedAfterEnrollment_PreservesLaunchAndConsumption(bool beforeRequest)
     {
-        using var fixture = new WorkerBuildRequestFixture();
+        using var fixture = new WorkerBuildRequestFixture(compilerMode: WorkerBuildRequestFixture.CompilerMode.Fake);
         Assert.Null(fixture.Kernel.GetTask(fixture.GoalId, fixture.TaskId).LastDispatch!.ProviderSessionId);
         var recorded = false;
         if (beforeRequest) RecordSession("learned-session");
@@ -197,7 +197,7 @@ public sealed class WorkerBuildRequestIntegrationTests(ITestOutputHelper output)
     [Fact]
     public async Task HostDeadlineAfterObservedCompilerStart_IsDistinctFromCapacityAndCompilerExit()
     {
-        using var fixture = new WorkerBuildRequestFixture();
+        using var fixture = new WorkerBuildRequestFixture(compilerMode: WorkerBuildRequestFixture.CompilerMode.FakeUntilStopped);
         var startObserved = false;
         var invocation = await fixture.RunHelper(i =>
         {
@@ -218,7 +218,7 @@ public sealed class WorkerBuildRequestIntegrationTests(ITestOutputHelper output)
     [Fact]
     public async Task QueueWaitBeforeSlotDoesNotShortenCompileBudget()
     {
-        using var fixture = new WorkerBuildRequestFixture();
+        using var fixture = new WorkerBuildRequestFixture(compilerMode: WorkerBuildRequestFixture.CompilerMode.Fake);
         var waited = false;
         var started = false;
         var invocation = await fixture.RunHelper(i =>
@@ -246,7 +246,7 @@ public sealed class WorkerBuildRequestIntegrationTests(ITestOutputHelper output)
     [Fact]
     public async Task CompileOverrunAfterSlotFailsWithSpecificReason()
     {
-        using var fixture = new WorkerBuildRequestFixture();
+        using var fixture = new WorkerBuildRequestFixture(compilerMode: WorkerBuildRequestFixture.CompilerMode.FakeUntilStopped);
         var started = false;
         var invocation = await fixture.RunHelper(i =>
         {

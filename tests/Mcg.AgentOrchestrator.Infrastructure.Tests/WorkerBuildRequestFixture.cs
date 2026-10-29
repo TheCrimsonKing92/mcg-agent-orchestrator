@@ -9,6 +9,8 @@ using Microsoft.Win32.SafeHandles;
 // Parallel-safe: isolated repository, canonical stores, slot grid, pipe and native child handles.
 internal sealed class WorkerBuildRequestFixture : IDisposable
 {
+    internal enum CompilerMode { Real, Fake, FakeUntilStopped }
+
     internal readonly string Root = Path.Combine(Path.GetTempPath(), "mcg-worker-build-request-" + Guid.NewGuid().ToString("N"));
     internal readonly string RepositoryRoot;
     internal readonly string StatePath;
@@ -22,6 +24,8 @@ internal sealed class WorkerBuildRequestFixture : IDisposable
     internal readonly List<WorkerBuildInvocation> Observed = [];
     internal readonly CancellationTokenSource Lifetime = new();
     private readonly bool _lowIntegrity;
+    private readonly bool _compilerFailure;
+    private readonly CompilerMode _compilerMode;
     private SafeFileHandle? _workerGroupObserver;
     internal WorkerBuildRequestChannel? Channel;
     internal OwnedProcessGroup.SuspendedProcessStart? Worker;
@@ -32,9 +36,12 @@ internal sealed class WorkerBuildRequestFixture : IDisposable
     internal const string OtherSource = "src/Other/Other.cs";
 
     internal WorkerBuildRequestFixture(bool compilerFailure = false, bool lowIntegrity = false, bool managedHost = false,
-        bool goalBranch = false, bool extraProject = false, bool reportWorkerResult = false)
+        bool goalBranch = false, bool extraProject = false, bool reportWorkerResult = false,
+        CompilerMode compilerMode = CompilerMode.Real)
     {
         _lowIntegrity = lowIntegrity;
+        _compilerFailure = compilerFailure;
+        _compilerMode = compilerMode;
         RepositoryRoot = Path.Combine(Root, "repository");
         try
         {
@@ -117,7 +124,38 @@ internal sealed class WorkerBuildRequestFixture : IDisposable
     }
 
     internal WorkerBuildRequestHost Host(Action<WorkerBuildInvocation>? observe = null) => new(Reference, Time,
-        TimeSpan.FromMinutes(5), invocation => { lock (Observed) Observed.Add(invocation); observe?.Invoke(invocation); }, Storage);
+        TimeSpan.FromMinutes(5), invocation => { lock (Observed) Observed.Add(invocation); observe?.Invoke(invocation); }, Storage,
+        launchOverride: LaunchOverride);
+
+    internal Func<string, ProcessStartInfo, ProcessStartInfo>? LaunchOverride =>
+        _compilerMode == CompilerMode.Real ? null : FakeCompilerStartInfo;
+
+    private ProcessStartInfo FakeCompilerStartInfo(string project, ProcessStartInfo compiler)
+    {
+        Assert.Equal(Project, project);
+        var info = new ProcessStartInfo(WorkerShell.Executable)
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            WorkingDirectory = compiler.WorkingDirectory
+        };
+        info.Environment.Clear();
+        foreach (var variable in compiler.Environment) info.Environment[variable.Key] = variable.Value;
+        var command = _compilerMode == CompilerMode.FakeUntilStopped
+            // Never complete on a timer: only the host's owned-group stop ends this child.
+            ? "$gate = [Threading.ManualResetEvent]::new($false); $null = $gate.WaitOne()"
+            : _compilerFailure
+                ? "[Console]::WriteLine('Feature.cs(2,1): error CS1002: ; expected'); exit 1"
+                : "[Console]::WriteLine('Feature -> bin/Debug/net10.0/Feature.dll'); [Console]::WriteLine('Build succeeded.'); exit 0";
+        foreach (var arg in new[] { "-NoProfile", "-NonInteractive", "-EncodedCommand",
+            Convert.ToBase64String(Encoding.Unicode.GetBytes(command)) }) info.ArgumentList.Add(arg);
+        return info;
+    }
+
+    internal void AssertCompilerImages(WorkerBuildInvocation invocation) =>
+        Assert.All(invocation.Children ?? [], child => Assert.Equal(
+            _compilerMode == CompilerMode.Real ? "dotnet" : Path.GetFileNameWithoutExtension(WorkerShell.Executable),
+            Path.GetFileNameWithoutExtension(child.ImagePath), ignoreCase: true));
 
     internal async Task<WorkerBuildInvocation> RunHelper(Action<WorkerBuildInvocation>? observe = null, bool assertAdapterExit = true)
     {
@@ -142,6 +180,7 @@ internal sealed class WorkerBuildRequestFixture : IDisposable
         Channel = null;
         var invocation = Assert.Single(Operations.Load(GoalId.Value).GetTask(GoalId, TaskId).WorkerBuildInvocations);
         if (assertAdapterExit) Assert.Equal(invocation.Outcome == WorkerBuildOutcome.Success ? 0 : 1, Worker.TryReadOwnedExitCode());
+        AssertCompilerImages(invocation);
         return invocation;
     }
 

@@ -11,10 +11,10 @@ internal static class AttentionShowAgentReadView
         IReadOnlyList<CollaborationItem> items, Func<CollaborationItem, string?> clarificationId,
         TimeProvider? time = null, IReadOnlyCollection<Goal>? goals = null) =>
         AgentReadEnvelope.Serialize(AgentReadEnvelope.AttentionShowSchema, AgentReadEnvelope.AttentionShowSchemaVersion,
-            new
+            AttentionAgentReadView.WithPostLandingDuties(new Dictionary<string, object?>
             {
-                goalId,
-                waits = waits.Select(wait => new
+                ["goalId"] = goalId,
+                ["waits"] = waits.Select(wait => new
                 {
                     id = wait.Id.Value,
                     goalId = wait.GoalId.Value,
@@ -33,12 +33,12 @@ internal static class AttentionShowAgentReadView
                     isExternallyBlocked = wait.IsExternallyBlocked,
                     resumeCommand = wait.ResumeCommand
                 }).ToArray(),
-                gateEvidence = (goals ?? []).Where(goal => goalId is null || goal.Id.Value == goalId)
+                ["gateEvidence"] = (goals ?? []).Where(goal => goalId is null || goal.Id.Value == goalId)
                     .SelectMany(goal => goal.GateTestObligations.Where(item => item.BriefVersion == goal.AuthoritativeBrief.Version)
                         .Select(item => new { goalId = goal.Id.Value, identity = item.PlannerIdentity,
                             owner = "acceptance-gate", availability = "post-implementation", item.Selectors,
                             payload = item.PlannerEvidence, nextAction = "Acceptance executes exact-candidate selectors" })).ToArray(),
-                items = items.Select(item => new
+                ["items"] = items.Select(item => new
                 {
                     id = item.Id,
                     clarificationId = clarificationId(item),
@@ -50,7 +50,7 @@ internal static class AttentionShowAgentReadView
                     correlationKey = item.CorrelationKey,
                     raisedAt = item.RaisedAt.UtcDateTime.ToString("O", CultureInfo.InvariantCulture)
                 }).ToArray(),
-                ownerQuestionHolds = (goals ?? []).Where(goal => goalId is null || goal.Id.Value == goalId)
+                ["ownerQuestionHolds"] = (goals ?? []).Where(goal => goalId is null || goal.Id.Value == goalId)
                     .Where(goal => goal.Status is not (GoalStatus.Completed or GoalStatus.Cancelled or GoalStatus.Superseded))
                     .Select(OwnerQuestionHoldBlocker.TryRead).OfType<OwnerQuestionHoldBlocker>()
                     .Select(hold => new
@@ -65,5 +65,7 @@ internal static class AttentionShowAgentReadView
                         resolvingVerb = hold.ResolvingVerb,
                         nextAction = hold.NextAction
                     }).ToArray()
-            }, new JsonSerializerOptions(JsonSerializerDefaults.Web), time);
+            }, AttentionAgentReadView.DutyRows(null,
+                (goals ?? []).Where(goal => goalId is null || goal.Id.Value == goalId).ToArray())),
+            new JsonSerializerOptions(JsonSerializerDefaults.Web), time);
 }

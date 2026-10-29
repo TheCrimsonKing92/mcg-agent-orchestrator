@@ -9,7 +9,7 @@ internal static class OwnerConsoleVerb
         args.Count > 0 && args[0].Equals("console", StringComparison.OrdinalIgnoreCase);
 
     internal static Task<int> RunAsync(IReadOnlyList<string> args, OrchestratorWorkspace workspace,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default, OwnerConsoleHostRowOwner? owners = null)
     {
         string? inputTracePath;
         try
@@ -23,10 +23,11 @@ internal static class OwnerConsoleVerb
             return Task.FromResult(1);
         }
         return OwnerConsoleModeSelector.RunAsync(args, System.Console.IsInputRedirected, System.Console.IsOutputRedirected,
-            new(token => RunPlainAsync(workspace, token), token => OwnerConsoleFullScreenHost.RunAsync(workspace, token, inputTracePath)), cancellationToken);
+            new(token => RunPlainAsync(workspace, token, owners), token => OwnerConsoleFullScreenHost.RunAsync(workspace, token, inputTracePath, owners)), cancellationToken);
     }
 
-    private static async Task<int> RunPlainAsync(OrchestratorWorkspace workspace, CancellationToken cancellationToken)
+    private static async Task<int> RunPlainAsync(OrchestratorWorkspace workspace, CancellationToken cancellationToken,
+        OwnerConsoleHostRowOwner? owners)
     {
         try
         {
@@ -48,8 +49,9 @@ internal static class OwnerConsoleVerb
                 new SystemConsoleOutput(), clock,
                 new CliConductorConsoleAdapter(workspace),
                 new CliOwnerDigestConsoleAdapter(workspace), changes,
-                fleet: () => OwnerFleetViewModelBuilder.Load(workspace, liveness),
-                terminalWidth: () => TerminalWidth(() => System.Console.WindowWidth));
+                fleet: () => OwnerFleetViewModelBuilder.Load(workspace, liveness, owners: owners),
+                terminalWidth: () => TerminalWidth(() => System.Console.WindowWidth),
+                projectLabel: OwnerConsoleProjectLabel.ForWorkspace(workspace));
             await new OwnerConsoleLoop(session, new SystemConsoleInput(), source, clock)
                 .RunAsync(cancellationToken);
             return 0;

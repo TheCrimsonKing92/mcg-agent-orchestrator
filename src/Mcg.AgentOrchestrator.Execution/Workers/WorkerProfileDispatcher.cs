@@ -191,7 +191,7 @@ public static partial class WorkerProfileDispatcher
             ref reviewerMergeTreeConflictPaths,
             ref reviewerMergeTreeTotalConflictPathCount);
 
-        WorkerCommandTemplate.WriteHandoffFile(goal.Tasks, task.Id, workingDirectory);
+        var generatedHandoff = WorkerCommandTemplate.WriteHandoffFile(goal.Tasks, task.Id, workingDirectory);
         var contextDirectory = WriteDispatchContextArtifacts(kernel, goal, task, workingDirectory,
             preflightFindings, providerName, modelName, citedPriorEvidenceResolver, dispatchedAt, orchestratorSkillDirectory, targetHome);
         var targetContext = TryReadCurrentTargetContext(workingDirectory);
@@ -263,7 +263,8 @@ public static partial class WorkerProfileDispatcher
                 typedSource: briefSource,
                 legacyIngressProgressRecorder: message => kernel.RecordTaskNote(goal.Id, task.Id, message, CriteriaCorrectionSource.WorkerResult),
                 deferredEvidence: task.RequiredRole is AgentRole.Tester or AgentRole.Reviewer
-                    ? deferredEvidenceResolver?.Invoke(goal, targetContext?.HeadCommit) : null);
+                    ? deferredEvidenceResolver?.Invoke(goal, targetContext?.HeadCommit) : null,
+                generatedHandoff: generatedHandoff);
             var deliveryPolicy = contextPackage.ReviewFindingProjection?.Mode ==
                 ReviewFindingHistoryProjectionMode.ContractRepair
                 ? WorkerContextDeliveryPolicy.CompactRepair
@@ -1856,7 +1857,8 @@ public static partial class WorkerProfileDispatcher
         WorkerContextPackageReceipt? priorContextPackageReceipt = null,
         TaskBriefSource? typedSource = null,
         Action<string>? legacyIngressProgressRecorder = null,
-        DeferredNoChangeEvidenceContext? deferredEvidence = null)
+        DeferredNoChangeEvidenceContext? deferredEvidence = null,
+        string? generatedHandoff = null)
     {
         var targetRole = task.RequiredRole;
         var registryPath = Path.Combine(contextDirectory, "artifact-registry.json");
@@ -2147,45 +2149,24 @@ public static partial class WorkerProfileDispatcher
                     : source.DeliveryModeOverride);
         }
 
-        var handoffPath = Path.Combine(workingDirectory, ".orchestrator-handoff.md");
-        if (File.Exists(handoffPath))
+        foreach (var recovered in WorkerCompatibilityHandoffSource.ResolveArtifacts(goal, task, workingDirectory, generatedHandoff))
         {
-            var authoritativeByIdentity = goal.Tasks
-                .TakeWhile(candidate => candidate.Id != task.Id)
-                .Where(candidate => candidate.LastVerification is not null)
-                .ToDictionary(
-                    candidate => $"prior/{candidate.Id.Value}/verification-output",
-                    candidate =>
-                    {
-                        var output = WorkerVerificationEvidence.ProjectPriorTaskOutputForContext(candidate);
-                        return Encoding.UTF8.GetBytes(output);
-                    },
-                    StringComparer.Ordinal);
-            var selfVerificationIdentity = $"prior/{task.Id.Value}/verification-output";
-            var resolver = new LegacyHandoffCompatibilityResolver(
-                identity => authoritativeByIdentity.TryGetValue(identity, out var bytes) ? bytes : null,
-                workingDirectory,
-                selfVerificationIdentity,
-                File.ReadAllBytes);
-            foreach (var recovered in resolver.ResolveArtifactsFromMarkdown(File.ReadAllText(handoffPath)))
+            var existing = artifacts.FirstOrDefault(artifact =>
+                artifact.Identity.Value.Equals(recovered.LogicalIdentity, StringComparison.Ordinal));
+            if (existing is not null)
             {
-                var existing = artifacts.FirstOrDefault(artifact =>
-                    artifact.Identity.Value.Equals(recovered.LogicalIdentity, StringComparison.Ordinal));
-                if (existing is not null)
+                if (!existing.ContentHash.Equals(WorkerContextArtifact.Hash(recovered.Bytes), StringComparison.Ordinal))
                 {
-                    if (!existing.ContentHash.Equals(WorkerContextArtifact.Hash(recovered.Bytes), StringComparison.Ordinal))
-                    {
-                        throw new WorkerContextPreparationException(
-                            existing.Identity,
-                            "legacy-alias-hash-mismatch",
-                            "The compatibility representation does not match the typed authoritative artifact.");
-                    }
-
-                    continue;
+                    throw new WorkerContextPreparationException(
+                        existing.Identity,
+                        "legacy-alias-hash-mismatch",
+                        "The compatibility representation does not match the typed authoritative artifact.");
                 }
 
-                AddSource(WorkerContextSemanticSource.LegacyHandoffArtifact, recovered.LogicalIdentity, ContextArtifactKind.PriorTaskEvidence, recovered.Bytes);
+                continue;
             }
+
+            AddSource(WorkerContextSemanticSource.LegacyHandoffArtifact, recovered.LogicalIdentity, ContextArtifactKind.PriorTaskEvidence, recovered.Bytes);
         }
 
         var legacyProjection = typedSource is null
@@ -2225,6 +2206,7 @@ public static partial class WorkerProfileDispatcher
         };
         return FinalizeContextPackageWithManifest(builder, preparedWithoutManifest, observedSources);
     }
+
     private static void AddCompleteReviewerScopeArtifactWhenPreviewIsCapped(
         WorkerContextSemanticSource source,
         string logicalIdentity,

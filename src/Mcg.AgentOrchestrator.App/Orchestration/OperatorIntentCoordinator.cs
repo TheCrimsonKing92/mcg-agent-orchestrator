@@ -259,6 +259,7 @@ internal sealed partial class OperatorIntentCoordinator
 
             try
             {
+                ValidateCompletedDutyIntent(goal, intent);
                 var retryClarification = HandleRetryClarification(kernel, goal, intent);
                 if (retryClarification is RetryClarificationHandling.AwaitingExistingAnswer or
                     RetryClarificationHandling.AwaitingNewAnswer or RetryClarificationHandling.AwaitingOtherHumanInput)
@@ -425,11 +426,21 @@ internal sealed partial class OperatorIntentCoordinator
         }
     }
 
+    private static void ValidateCompletedDutyIntent(Goal goal, OperatorIntentRecord intent)
+    {
+        if (goal.Status == GoalStatus.Completed &&
+            (intent.Verb != OperatorIntentVerbs.CriterionEvidenceRecord ||
+             !goal.CriterionEvidenceObligations.Any(item => item.Id ==
+                 Deserialize<CriterionEvidenceReceiptOperatorIntentPayload>(intent).ObligationId && item.IsValidatedPostLanding)))
+            throw new InvalidOperationException("Completed goals accept only evidence for their declared post-landing duties.");
+    }
+
     private void Apply(
         AgentOrchestratorKernel kernel,
         Goal goal,
         OperatorIntentRecord intent)
     {
+        ValidateCompletedDutyIntent(goal, intent);
         switch (intent.Verb)
         {
             case OperatorIntentVerbs.TaskGraphRepair:
@@ -485,6 +496,9 @@ internal sealed partial class OperatorIntentCoordinator
                 return;
             case OperatorIntentVerbs.CriterionEvidenceRecord:
                 var receipt = Deserialize<CriterionEvidenceReceiptOperatorIntentPayload>(intent);
+                var duty = goal.CriterionEvidenceObligations.SingleOrDefault(item => item.Id == receipt.ObligationId);
+                if (duty?.Phase == CriterionEvidencePhase.PostLanding && intent.ActorKind != OperatorActorKind.Human)
+                    throw new InvalidOperationException("Post-landing observations require attributed human operator authority.");
                 if (receipt.Owner != CriterionEvidenceOwner.Operator)
                 {
                     throw new InvalidOperationException(
@@ -498,7 +512,9 @@ internal sealed partial class OperatorIntentCoordinator
                     receipt.ReceiptId,
                     receipt.Scope,
                     receipt.Passed,
-                    receipt.Detail);
+                    receipt.Detail,
+                    receipt.Observation,
+                    duty?.Phase == CriterionEvidencePhase.PostLanding ? intent.Actor : null);
                 return;
             case OperatorIntentVerbs.CriterionEvidenceRepair:
                 var repair = Deserialize<CriterionEvidenceRepairOperatorIntentPayload>(intent);

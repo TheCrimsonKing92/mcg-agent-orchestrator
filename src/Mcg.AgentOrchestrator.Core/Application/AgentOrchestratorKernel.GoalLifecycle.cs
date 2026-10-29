@@ -1360,13 +1360,9 @@ public sealed partial class AgentOrchestratorKernel
             throw new InvalidOperationException($"Goal '{goalId}' is {goal.Status}; only Verifying or Verified goals can be completed.");
         }
 
-        var outstandingObligations = goal.OutstandingCriterionEvidenceObligations;
-        if (outstandingObligations.Count > 0)
+        if (CriterionEvidenceLifecycle.DescribeCompletionRefusal(goal) is { } evidenceRefusal)
         {
-            var detail = string.Join(", ", outstandingObligations.Select(item =>
-                $"{item.DisplayLabel}:{item.Owner}:{item.State}"));
-            throw new InvalidOperationException(
-                $"Goal '{goalId}' cannot complete while criterion evidence obligations remain outstanding: {detail}.");
+            throw new InvalidOperationException(evidenceRefusal);
         }
 
         if (goal.LifecycleStatus == GoalStatus.Verifying &&
@@ -1455,12 +1451,9 @@ public sealed partial class AgentOrchestratorKernel
             return $"Goal '{goal.Id}' is already terminal as {goal.Status}; merge evidence cannot rewrite that terminal outcome.";
         }
 
-        var outstandingObligations = goal.OutstandingCriterionEvidenceObligations;
-        if (outstandingObligations.Count > 0)
+        if (CriterionEvidenceLifecycle.DescribeCompletionRefusal(goal, fromMergeEvidence: true) is { } evidenceRefusal)
         {
-            var detail = string.Join(", ", outstandingObligations.Select(item =>
-                $"{item.DisplayLabel}:{item.Owner}:{item.State}"));
-            return $"Goal '{goal.Id}' cannot complete from merge evidence while criterion evidence obligations remain outstanding: {detail}.";
+            return evidenceRefusal;
         }
 
         if (goal.Tasks.Any(task =>
@@ -2602,9 +2595,14 @@ public sealed partial class AgentOrchestratorKernel
         string receiptId,
         string scope,
         bool passed,
-        string detail) =>
+        string detail,
+        CriterionPostLandingObservation? observation = null,
+        string? actor = null) =>
         GetGoal(goalId).RecordCriterionEvidence(
-            obligationId, owner, candidateSha, receiptId, scope, passed, detail, _clock.UtcNow);
+            obligationId, owner, candidateSha, receiptId, scope, passed, detail, _clock.UtcNow, observation, actor);
+
+    public void BindPostLandingPublication(GoalId goalId, GoalPromotionFact publication) =>
+        GetGoal(goalId).BindPostLandingPublication(publication);
 
     public CriterionEvidenceObligation RepairMalformedCriterionEvidenceObligation(
         GoalId goalId,

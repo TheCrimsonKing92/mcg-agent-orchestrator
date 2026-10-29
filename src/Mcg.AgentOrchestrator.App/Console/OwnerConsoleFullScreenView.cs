@@ -78,8 +78,9 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
 
     internal OwnerConsoleFullScreenView(IApplication app, OwnerConsoleScreenController controller,
         Func<Task> refresh, CancellationToken token = default, TimeProvider? clock = null,
-        OwnerConsoleLoopOptions? options = null, OwnerConsoleInputDiagnostics? diagnostics = null)
+        OwnerConsoleLoopOptions? options = null, OwnerConsoleInputDiagnostics? diagnostics = null, string? projectLabel = null)
     {
+        if (projectLabel is not null) Window.Title = $"Owner console - {projectLabel}";
         _app = app;
         _diagnostics = diagnostics;
         _controller = controller;

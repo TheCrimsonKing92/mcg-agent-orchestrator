@@ -241,7 +241,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsStableSlotArtifacts : Dotn
                     ProcessInspectionStatus.AccessDenied)
             });
 
-        var holder = DotnetBuildEnvironmentManager.TryFindActiveSlotArtifactConsumer(slot, snapshot);
+        var holder = DotnetBuildLockAttribution.TryFindActiveSlotArtifactConsumer(slot, snapshot);
 
         Assert.Null(holder);
     }
@@ -276,7 +276,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsStableSlotArtifacts : Dotn
         try
         {
             var holder = Assert.IsType<BuildLockHolder>(
-                DotnetBuildEnvironmentManager.TryFindActiveSlotArtifactConsumer(slot, snapshot));
+                DotnetBuildLockAttribution.TryFindActiveSlotArtifactConsumer(slot, snapshot));
 
             Assert.Equal(sleeper.Id, holder.ProcessId);
         }
@@ -298,7 +298,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsStableSlotArtifacts : Dotn
                 [candidateProcessId] = "dotnet build unrelated.csproj"
             });
 
-        var holder = DotnetBuildEnvironmentManager.TryFindActiveSlotArtifactConsumer(
+        var holder = DotnetBuildLockAttribution.TryFindActiveSlotArtifactConsumer(
             slot,
             snapshot,
             _ =>
@@ -320,7 +320,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsStableSlotArtifacts : Dotn
         var snapshot = CreateMatchingSlotCandidateSnapshot(slot, candidateProcessId);
 
         var holder = Assert.IsType<BuildLockHolder>(
-            DotnetBuildEnvironmentManager.TryFindActiveSlotArtifactConsumer(
+            DotnetBuildLockAttribution.TryFindActiveSlotArtifactConsumer(
                 slot,
                 snapshot,
                 processId =>
@@ -342,7 +342,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsStableSlotArtifacts : Dotn
         var livenessQueries = 0;
         var snapshot = CreateMatchingSlotCandidateSnapshot(slot, candidateProcessId);
 
-        var holder = DotnetBuildEnvironmentManager.TryFindActiveSlotArtifactConsumer(
+        var holder = DotnetBuildLockAttribution.TryFindActiveSlotArtifactConsumer(
             slot,
             snapshot,
             _ =>
@@ -364,7 +364,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsStableSlotArtifacts : Dotn
         var snapshot = CreateMatchingSlotCandidateSnapshot(slot, candidateProcessId);
 
         var holder = Assert.IsType<BuildLockHolder>(
-            DotnetBuildEnvironmentManager.TryFindActiveSlotArtifactConsumer(
+            DotnetBuildLockAttribution.TryFindActiveSlotArtifactConsumer(
                 slot,
                 snapshot,
                 _ =>
@@ -622,7 +622,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsStableSlotArtifacts : Dotn
 
         try
         {
-            Assert.Null(DotnetBuildEnvironmentManager.TryFindActiveSlotArtifactConsumer(slot));
+            Assert.Null(DotnetBuildLockAttribution.TryFindActiveSlotArtifactConsumer(slot));
             Assert.Equal(1, snapshotCalls);
         }
         finally
