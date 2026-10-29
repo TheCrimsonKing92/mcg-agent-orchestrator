@@ -5,6 +5,8 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 // The one place worker context files choose per-stack build and test text.
 internal static class WorkerStackVerificationGuidance
 {
+    private const string BuildCheckLastInstruction = "Run the build check last, after your final edit, and make no edits after it (notes, docs, tests); any later edit needs a fresh build check.";
+
     internal static IReadOnlyList<string> CurrentTaskSection(ProjectStack? stack)
     {
         if (stack == ProjectStack.Go)
@@ -31,7 +33,7 @@ internal static class WorkerStackVerificationGuidance
                 string.Empty,
                 "## Build/Test Verification",
                 $"- Run `{buildInvocation} <project.csproj> [project.csproj...]` from your worktree root before writing WORKER_RESULT for every project whose sources you changed; this is the only sanctioned worker-side .NET build check.",
-                "- Report the build result in WORKER_RESULT `tests`, for example `tests: pass - build: 0 errors (Invoke-WorkerBuildCheck)` or `tests: fail - <build error>`.",
+                "- Report the build result in WORKER_RESULT `tests`, for example `tests: pass - build: 0 errors (Invoke-WorkerBuildCheck)` or `tests: fail - <build error>`. " + BuildCheckLastInstruction,
                 $"- Compiling every changed project is required through `{buildInvocation}`. Do not run raw `dotnet test`, `.\\scripts\\Invoke-IsolatedDotnet.ps1`, or any other worker-side test execution because tests belong to the acceptance gate.",
                 "- If no .NET project sources changed, report the non-.NET verification you ran or `tests: not-run - no .NET project sources changed; orchestrator acceptance gate verifies via stable slots`."
             ];
@@ -49,7 +51,7 @@ internal static class WorkerStackVerificationGuidance
             lines.Add($"- The helper performs build-only verification through isolated artifacts under `{DotnetBuildStorageLayout.GoalArtifactsPath(goalId)}`; it does not run tests or spawn testhost.");
             lines.Add("- Routine builds resolve completion-required owning projects from the pinned goal baseline plus current dirty source, union them with requested roots, and explicitly build the full displayed scope in one invocation. A later tests-only request replaces the receipt with fresh complete coverage; previous receipts supply no coverage.");
             lines.Add($"- Compiling every changed project is required through `{buildInvocation}`; subscription workers must not run raw `dotnet test`, `.\\scripts\\Invoke-IsolatedDotnet.ps1`, or any other worker-side test execution because tests belong to the acceptance gate.");
-            lines.Add("- In WORKER_RESULT, report build evidence such as `tests: pass - build: 0 errors (Invoke-WorkerBuildCheck)` or `tests: fail - <build error>`.");
+            lines.Add("- In WORKER_RESULT, report build evidence such as `tests: pass - build: 0 errors (Invoke-WorkerBuildCheck)` or `tests: fail - <build error>`. " + BuildCheckLastInstruction);
         }
         else if (toolchain == Toolchain.Go)
         {

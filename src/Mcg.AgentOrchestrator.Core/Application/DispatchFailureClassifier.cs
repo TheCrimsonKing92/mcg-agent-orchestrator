@@ -126,6 +126,9 @@ public static class DispatchFailureDiagnosticMarker
     public const string PlannerPlanPersistenceFailed = "planner-plan-persistence-failed";
     public const string WorkerBuildCheckFailed = "worker-build-check-failed";
     public const string WorkerBuildEvidenceMissing = "worker-build-evidence-missing";
+    public const string WorkerBuildReceiptStale = "worker-build-receipt-stale";
+    public const string WorkerBuildReceiptTreeChanged = "the build receipt does not match the final tree; files changed after build: ";
+    public const string WorkerBuildReceiptUncoveredProject = "receipt does not cover project ";
     public const string WrapperProcessExitFailure = "wrapper-process-exit-failure";
     public const string RequiredFileChangeEvidenceMissing = "required-file-change-evidence-missing";
     public const string InScopeFileIgnored = "in-scope-file-ignored";
@@ -133,6 +136,24 @@ public static class DispatchFailureDiagnosticMarker
     public const string ConductorGenerationInterrupted = "conductor-generation-interrupted";
 
     public static string Format(string code) => $"{Prefix} {code}";
+
+    public static bool SharesMissingEvidenceRecovery(string? rule) =>
+        rule is WorkerBuildEvidenceMissing or WorkerBuildReceiptStale;
+
+    public static string FormatWorkerBuildReceiptStale(
+        bool treeChanged, IReadOnlyList<string> dirtyPaths, IReadOnlyList<string> uncoveredProjects)
+    {
+        var diagnostics = new List<string>();
+        if (treeChanged)
+        {
+            var paths = dirtyPaths.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
+            diagnostics.Add(WorkerBuildReceiptTreeChanged +
+                (paths.Length == 0 ? "(no dirty paths recorded)" : string.Join(", ", paths)));
+        }
+        diagnostics.AddRange(uncoveredProjects.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)
+            .Select(project => WorkerBuildReceiptUncoveredProject + project));
+        return string.Join("; ", diagnostics) + Environment.NewLine + Format(WorkerBuildReceiptStale);
+    }
 }
 
 public static class DispatchRejectionDiagnosticMarker
@@ -253,6 +274,9 @@ public static partial class DispatchFailureClassifier
             [DispatchFailureDiagnosticMarker.WorkerBuildEvidenceMissing] = new(
                 TaskOutcomeRules.WorkerBuildEvidenceMissing,
                 "Required worker build evidence was not reported."),
+            [DispatchFailureDiagnosticMarker.WorkerBuildReceiptStale] = new(
+                TaskOutcomeRules.WorkerBuildReceiptStale,
+                "Worker build receipt does not match the final tree."),
             [DispatchFailureDiagnosticMarker.WrapperProcessExitFailure] = new(
                 TaskOutcomeRules.WrapperProcessExitFailure,
                 "Wrapper process exited nonzero after the selected child succeeded, without usable completion evidence."),
@@ -1231,7 +1255,7 @@ public static partial class DispatchFailureClassifier
                 verifiedNoChange ? RecoveryRecommendation.None : authoredFailure.Recommendation,
                 verifiedNoChange
                     ? BuildVerifiedNoChangeRoundEvidenceSummary(task, verification)
-                    : BuildOrchestratorAuthoredFailureEvidenceSummary(authoredFailure.Description, verification)));
+                    : BuildOrchestratorAuthoredFailureEvidenceSummary(authoredFailure, verification)));
         }
 
         if (verification.ExitCode != 0 && HasScriptingFailureEvidence(verification))
@@ -1296,9 +1320,17 @@ public static partial class DispatchFailureClassifier
     }
 
     private static string BuildOrchestratorAuthoredFailureEvidenceSummary(
-        string description,
+        OrchestratorAuthoredFailure failure,
         TaskVerificationRecord verification)
     {
+        var description = failure.Description;
+        if (failure.Rule == TaskOutcomeRules.WorkerBuildReceiptStale)
+        {
+            var diagnostic = GetSubstantiveStandardErrorLines(verification).LastOrDefault(line =>
+                line.StartsWith(DispatchFailureDiagnosticMarker.WorkerBuildReceiptTreeChanged, StringComparison.Ordinal) ||
+                line.StartsWith(DispatchFailureDiagnosticMarker.WorkerBuildReceiptUncoveredProject, StringComparison.Ordinal));
+            return diagnostic is null ? description : $"{description} {TruncateEvidence(diagnostic)}";
+        }
         var substantiveLines = GetSubstantiveStandardErrorLines(verification)
             .TakeLast(3)
             .ToArray();

@@ -1572,9 +1572,9 @@ public sealed partial class BackgroundDispatchRunner
             if (buildEvidence.Operation is { Phase: CompletionBuildEvidencePhase.Success } built)
             {
                 var currentReceipt = _completionClassifier.EvaluateWorkerBuildReceipt(processRecord.WorkingDirectory, goal.Id, task);
-                if (!WorktreeTreeDigest.TryCompute(processRecord.WorkingDirectory, out var currentDigest, out _) ||
-                    currentDigest != built.TreeDigest || !currentReceipt.Matches ||
-                    WorkerBuildReceiptCoverage.FindMissingProjects(built.Projects, currentReceipt.Projects).Count != 0)
+                var treeChanged = !WorktreeTreeDigest.TryCompute(processRecord.WorkingDirectory, out var currentDigest, out _) || currentDigest != built.TreeDigest || !currentReceipt.Matches;
+                IReadOnlyList<string> uncovered = currentReceipt.Matches ? WorkerBuildReceiptCoverage.FindMissingProjects(built.Projects, currentReceipt.Projects) : [];
+                if (treeChanged || uncovered.Count != 0)
                 {
                     shouldCommitDirtyWorktree = false;
                     missingWorkerBuildEvidence = true;
@@ -1583,7 +1583,7 @@ public sealed partial class BackgroundDispatchRunner
                     kernel.RecordCompletionBuildEvidence(goalId, taskId, built with
                     { Phase = CompletionBuildEvidencePhase.StaleCandidate, Diagnostic = "Build candidate evidence changed before commit authorization." });
                     standardErrorDiagnostic = AppendDiagnostic(standardErrorDiagnostic ?? string.Empty,
-                        DispatchFailureDiagnosticMarker.Format(DispatchFailureDiagnosticMarker.WorkerBuildEvidenceMissing));
+                        DispatchFailureDiagnosticMarker.FormatWorkerBuildReceiptStale(treeChanged, worktreeEvidence.DirtyPaths, uncovered));
                 }
             }
 
