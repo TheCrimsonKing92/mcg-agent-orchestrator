@@ -13,7 +13,7 @@ internal sealed class OwnerJointGateFailureEvidence(string orchestratorDirectory
     {
         if (item.EventKind != "acceptance-cohort" || !string.IsNullOrWhiteSpace(recorded?.FirstFailure)) return recorded;
         var sources = new Sources();
-        var kind = OwnerActivityNarrator.Field(item, "kind");
+        var kind = OwnerEventFields.Field(item, "kind");
         if (kind != "train") ReadCohort(item, sources);
         if (kind != "cohort") ReadTrain(item, sources);
         ReadAttempt(item, sources);
@@ -57,8 +57,8 @@ internal sealed class OwnerJointGateFailureEvidence(string orchestratorDirectory
 
     private void ReadCohort(OwnerConductEvent item, Sources sources)
     {
-        var receipt = OwnerActivityNarrator.Field(item, "receipt");
-        var identity = OwnerActivityNarrator.Field(item, "identity");
+        var receipt = OwnerEventFields.Field(item, "receipt");
+        var identity = OwnerEventFields.Field(item, "identity");
         if (receipt is null && identity is null) return;
         var rows = Rows("cohort-acceptance.db", receipt is not null ?
             "SELECT * FROM cohort_receipts WHERE receipt_id=$id;" :
@@ -84,8 +84,8 @@ internal sealed class OwnerJointGateFailureEvidence(string orchestratorDirectory
 
     private void ReadTrain(OwnerConductEvent item, Sources sources)
     {
-        var receipt = OwnerActivityNarrator.Field(item, "receipt");
-        var identity = OwnerActivityNarrator.Field(item, "identity");
+        var receipt = OwnerEventFields.Field(item, "receipt");
+        var identity = OwnerEventFields.Field(item, "identity");
         if (receipt is not null || identity is not null)
             foreach (var row in Rows("merge-train-acceptance.db", receipt is not null ?
                 "SELECT * FROM merge_train_receipts WHERE receipt_id=$id;" :
@@ -114,7 +114,7 @@ internal sealed class OwnerJointGateFailureEvidence(string orchestratorDirectory
 
     private void ReadAttempt(OwnerConductEvent item, Sources sources)
     {
-        var attempt = OwnerActivityNarrator.Field(item, "attempt");
+        var attempt = OwnerEventFields.Field(item, "attempt");
         if (!SafeSegment(attempt)) return;
         var directory = Path.Combine(orchestratorDirectory, "grouped-gate-attempts", attempt!);
         var metadata = Path.Combine(directory, attempt + ".attempt.json");

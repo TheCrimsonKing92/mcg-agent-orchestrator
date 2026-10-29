@@ -64,7 +64,7 @@ public sealed class OwnerActivityNarratorTests
     [InlineData("The cohort receipt is missing for Search.\nDiagnostic details", "The cohort receipt is missing for Search.")]
     public void WaitingOnTranslatesCategoryTokensAndPreservesRecordedReasonSentences(string blocker, string expected)
     {
-        Assert.Equal(expected, OwnerActivityNarrator.WaitingOn(blocker));
+        Assert.Equal(expected, OwnerActivityText.WaitingOn(blocker));
     }
 
     [Fact]

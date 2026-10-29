@@ -9,13 +9,13 @@ internal static class OwnerProviderHoldNarration
         var binding = Binding(evt);
         if (string.IsNullOrWhiteSpace(binding)) return false;
         var name = DisplayName(binding);
-        var attempt = OwnerActivityNarrator.Field(evt, "attempt");
+        var attempt = OwnerEventFields.Field(evt, "attempt");
         ownerAction = "No. You can let the conductor continue.";
         switch (evt.EventKind)
         {
             case "provider-hold-placed":
                 sentence = $"Provider paused: {name} has no usage balance left";
-                var next = OwnerActivityNarrator.Field(evt, "next_probe");
+                var next = OwnerEventFields.Field(evt, "next_probe");
                 reason = next is not (null or "unavailable")
                     ? $"The provider reported that its usage balance is exhausted; next check {next} (attempt {attempt})."
                     : "The provider reported that its usage balance is exhausted; the next check time is unavailable.";

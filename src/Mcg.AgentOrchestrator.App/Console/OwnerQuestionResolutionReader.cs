@@ -73,7 +73,7 @@ internal sealed class OwnerQuestionResolutionReader(IOrchestratorStateQueries st
             var next = events.Where(item => item.Timestamp > at && item.Detail.StartsWith("TaskDispatched", StringComparison.Ordinal))
                 .OrderBy(item => item.Timestamp).FirstOrDefault();
             var nextText = next is null ? "not yet resumed" :
-                $"{OwnerActivityNarrator.Field(next, "role") ?? "Worker"} started at {Local(next.Timestamp)}";
+                $"{OwnerEventFields.Field(next, "role") ?? "Worker"} started at {Local(next.Timestamp)}";
             return new OwnerQuestionResolution(candidate.Id, goalId, OwnerGoalTitle.Full(goal.Objective), candidate.Stage,
                 candidate.Question, answered ? "Answered" : candidate.Outcome,
                 answered ? Actor(answer.Intent) : "resolving actor not recorded", at,
