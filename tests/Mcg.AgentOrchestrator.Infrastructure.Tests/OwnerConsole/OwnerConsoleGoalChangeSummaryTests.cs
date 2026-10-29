@@ -645,11 +645,12 @@ public sealed class OwnerConsoleGoalChangeSummaryTests
         using var dialog = new OwnerConsoleGoalDialog(controller, new(output.Text, [], [], null, null, null),
             _ => Task.FromException<OwnerConsoleGoalDialog.Content?>(new IOException("offline")),
             _ => Task.CompletedTask, (_, _) => Task.CompletedTask, Token);
+        var priorLines = dialog.Page.Lines.ToArray();
         dialog.Start(action => action());
         controller.Apply(Model(goal));
         await dialog.LastLoad.WaitAsync(Token);
-        Assert.Contains(dialog.Page.Lines, line => line.Contains("Verified: [stale", StringComparison.Ordinal));
-        Assert.Contains(dialog.Page.Lines, line => line.Contains("Changed: [stale", StringComparison.Ordinal));
+        Assert.Equal(priorLines, dialog.Page.Lines);
+        Assert.Equal("refresh failed: offline", dialog.TitleStatus);
     }
 
     [Fact]

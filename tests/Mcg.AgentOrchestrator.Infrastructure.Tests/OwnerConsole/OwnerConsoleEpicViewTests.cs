@@ -387,27 +387,36 @@ public sealed class OwnerConsoleEpicViewTests
     public async Task Failure_Retry_ShowsReasonAndClearsFailureAndRetryHint(bool detail)
     {
         using var fixture = new Fixture();
+        string[]? priorLines = null;
         if (detail)
         {
             await fixture.View.HandleKeyAsync(new Key('e'));
             await fixture.View.HandleKeyAsync(Key.CursorDown);
+            priorLines = fixture.View.EpicView.Lines.ToArray();
         }
         fixture.Source.Error = new InvalidOperationException("portfolio unavailable.");
         await fixture.View.HandleKeyAsync(detail ? Key.Enter : new Key('e'));
         var dialog = fixture.View.EpicView;
-        Assert.Contains("Could not load epics: portfolio unavailable. Press Ctrl+R to retry.", dialog.Lines);
         if (detail)
         {
+            Assert.Equal(priorLines, dialog.Lines);
+            Assert.Contains("refresh failed: portfolio unavailable.", dialog.Title.ToString());
             Assert.Contains("> Beta epic", dialog.Lines);
             Assert.Contains("stale", dialog.HeaderLine);
         }
+        else Assert.Contains("Could not load epics: portfolio unavailable. Press Ctrl+R to retry.", dialog.Lines);
         Assert.Contains("failed", dialog.HeaderLine);
         Assert.Contains("Ctrl+R retry", dialog.HintText);
         fixture.Source.Error = null;
         var pending = fixture.Source.HoldNextLoad();
         var retrying = fixture.View.HandleKeyAsync(new Key('r').WithCtrl);
         await fixture.Source.LoadStarted.Task.WaitAsync(TestContext.Current.CancellationToken);
-        if (detail) Assert.Contains("> Beta epic", dialog.Lines);
+        if (detail)
+        {
+            Assert.Equal(priorLines, dialog.Lines);
+            Assert.Contains("(refreshing)", dialog.Title.ToString());
+            Assert.Contains("> Beta epic", dialog.Lines);
+        }
         else Assert.Equal(["Loading epics (last 24 hours)…"], dialog.Lines);
         Assert.DoesNotContain("Ctrl+R retry", dialog.HintText);
         fixture.Source.Release(pending, Now.AddHours(-24));
