@@ -819,10 +819,9 @@ public sealed class CliCommandTestsBacklogIntakeCommands : CliCommandTestBase
     [Xunit.Fact(DisplayName = "CliPersistentStateRunner_skips_kernel_state_for_operator_and_backlog_store_only_commands")]
     public void RunnerSkipsKernelStateForOperatorAndBacklogStoreOnlyCommands()
     {
-        Xunit.Assert.True(CliPersistentStateRunner.SkipsKernelState(["operator-listen"]));
-        Xunit.Assert.True(CliPersistentStateRunner.SkipsKernelState(["OPERATOR-LISTEN"]));
-        Xunit.Assert.True(CliPersistentStateRunner.SkipsKernelState(["operator-channel"]));
-        Xunit.Assert.True(CliPersistentStateRunner.SkipsKernelState(["operator-channel", "test", "--spine"]));
+        // Removed transport verbs follow the default kernel-state path for unknown commands.
+        Xunit.Assert.False(CliPersistentStateRunner.SkipsKernelState(["OPERATOR-LISTEN"]));
+        Xunit.Assert.False(CliPersistentStateRunner.SkipsKernelState(["OPERATOR-CHANNEL"]));
 
         // Backlog commands that inspect neither dependencies nor similarity skip state and stay concurrent.
         Xunit.Assert.False(CliPersistentStateRunner.SkipsKernelState(["backlog-add", "title"]));

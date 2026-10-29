@@ -4,11 +4,6 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed record OperatorChannelCatalog(
     string ChannelType,
-    string? ForumChannelId = null,
-    IReadOnlyList<string>? OperatorUserIds = null,
-    string? ProgressThreadId = null,
-    string? ProgressStatusMessageId = null,
-    string? ProgressStatusContentHash = null,
     bool DeadManHeartbeatEnabled = false,
     string? DeadManHeartbeatUrl = null)
 {

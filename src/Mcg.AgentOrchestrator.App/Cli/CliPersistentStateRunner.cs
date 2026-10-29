@@ -10,8 +10,7 @@ internal static partial class CliPersistentStateRunner
 {
     internal enum OperatorIntentSubmissionSource
     {
-        Cli,
-        Discord
+        Cli
     }
 
     internal readonly record struct OperatorIntentAttribution(
@@ -562,7 +561,7 @@ internal static partial class CliPersistentStateRunner
         {
             _ when CliExperimentCommands.IsCommand(args[0]) || CliCommandHelp.IsCommandSpecificHelp(args) => true,
             "help" or "model-functions" or "model-function-add" => true,
-            "operator-listen" or "operator-channel" or "goal-intake-status" => true,
+            "goal-intake-status" => true,
             // Portfolio views and writes use their own stores; goals read only metadata.
             "epic-add" or "epic-assign" or "epic-assign-many" or "epic-list" or "epic-show" or "epic-outcome-proposals" => true, _ when EpicProgressReadModel.IsEpicGoalsListing(args) => true,
             // These backlog commands operate solely on the independent BacklogStore, never the
@@ -599,7 +598,6 @@ internal static partial class CliPersistentStateRunner
         {
             "repo-process-info" or
             "repo-process-stop" or
-            "operator-channel" => false,
             _ => true
         };
     }

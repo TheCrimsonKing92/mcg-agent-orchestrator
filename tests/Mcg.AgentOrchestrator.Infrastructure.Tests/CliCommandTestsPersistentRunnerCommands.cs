@@ -265,22 +265,6 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         Assert.Contains("disposition=recovered", recoveryLine, StringComparison.Ordinal);
     }
 
-    [Xunit.Fact]
-    public async Task OperatorDecisionRepositoryBootstrapsFreshStateStoreBeforeUse()
-    {
-        var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
-        Xunit.Assert.False(StateDbMigrations.IsUpToDate(workspace.SqliteStatePath));
-
-        var repository = CliCommandHandlers.CreateOperatorDecisionStateRepository(
-            ["answer", "request-id", "answer"],
-            workspace);
-
-        Xunit.Assert.True(StateDbMigrations.IsUpToDate(workspace.SqliteStatePath));
-        var restored = await repository.LoadAsync();
-        Xunit.Assert.Empty(restored.Goals);
-    }
-
     [Xunit.Fact(DisplayName = "CliPersistentStateRunner_backlog_show_loads_kernel_state_for_linked_goals")]
     public async Task PersistentRunnerBacklogShowLoadsKernelStateForLinkedGoals()
     {
@@ -486,14 +470,13 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
 
     [Xunit.Theory(DisplayName = "CliPersistentStateRunner_operator_intent_attribution_enumerates_every_submission_source")]
     [Xunit.InlineData("Cli", "local:operator", "cli", "local-process")]
-    [Xunit.InlineData("Discord", "discord:user1", "discord", "discord-operator-allowlist")]
     public void PersistentRunnerOperatorIntentAttributionEnumeratesEverySubmissionSource(
         string sourceName,
         string actor,
         string expectedChannel,
         string expectedAuthenticationAssurance)
     {
-        Xunit.Assert.Equal(2, Enum.GetValues<CliPersistentStateRunner.OperatorIntentSubmissionSource>().Length);
+        Xunit.Assert.Single(Enum.GetValues<CliPersistentStateRunner.OperatorIntentSubmissionSource>());
         var source = Enum.Parse<CliPersistentStateRunner.OperatorIntentSubmissionSource>(sourceName);
 
         var attribution = CliPersistentStateRunner.ResolveOperatorIntentAttribution(
@@ -522,8 +505,7 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         var providers = new InMemoryModelProviderRegistry([]);
         var profiles = WorkerProfileCatalog.Default();
         Goal? currentGoal = goal;
-        var configuredChannel = new DiscordOperatorChannel(
-            CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory));
+        var configuredChannel = NullOperatorChannel.Instance;
         using var conductorLease = conductorActive
             ? ConductorLoopLease.Acquire(workspace.OrchestratorDirectory)
             : null;

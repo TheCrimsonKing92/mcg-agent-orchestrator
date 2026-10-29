@@ -794,8 +794,6 @@ internal static class CliCommandHelp
                 "--confirm-large-paid-subscription-start", "--confirm-readiness-risk"),
             ["operator-inbox"] = Flags("--show-acknowledged"),
             ["operator-inbox-ack"] = Flags("--goal"),
-            ["operator-channel"] = Flags(
-                "--forum-channel-id", "--operator-user-id", "--operator-user-ids", "--spine"),
             ["next"] = Flags("--autonomy", "--autonomy-policy", "--full"),
             ["advance-subscription"] = Flags(
                 "--autonomy", "--autonomy-policy", "--confirm-large-paid-subscription-start",

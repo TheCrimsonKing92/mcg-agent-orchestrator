@@ -405,9 +405,8 @@ var (providers, agentFallback) = StartupProviderComposition.Create(commandCapabi
 var agents = AgentCatalogStore.Load(workspace.AgentCatalogPath, agentFallback).Agents;
 var workerProfiles = WorkerProfileStore.Load(workspace.WorkerProfilePath);
 var operatorCatalog = OperatorChannelStore.Load(workspace.OperatorChannelPath);
-var operatorBotToken = OperatorChannelFactory.ResolveBotToken();
 IOperatorChannel operatorChannel;
-if (commandCapability != CliCommandCapability.Execution || SkipsStartupOperatorChannel(startupArgs))
+if (commandCapability != CliCommandCapability.Execution)
 {
     operatorChannel = NullOperatorChannel.Instance;
 }
@@ -415,7 +414,7 @@ else
 {
     try
     {
-        operatorChannel = OperatorChannelComposition.Create(operatorCatalog, operatorBotToken, workspace.OrchestratorDirectory);
+        operatorChannel = OperatorChannelComposition.Create(operatorCatalog, workspace.OrchestratorDirectory);
     }
     catch
     {
@@ -623,7 +622,6 @@ Console.WriteLine("  readiness-repair [goal-id]: apply the terminal-goal sweep r
 Console.WriteLine("  doctor, architecture, tenant, project");
 Console.WriteLine("  provider-smoke [openai|anthropic|ollama] [--confirm-paid-smoke] [task-number], provider-smoke all --confirm-all");
 Console.WriteLine("  prototype [objective]");
-Console.WriteLine("  operator-listen");
 Console.WriteLine("  simple-goal <objective>, goal-plan [heading-filter] [--create-goals|--create-simple-goals] [--backlog-coverage full|slice]");
 Console.WriteLine("  backlog-intake [heading-filter] [--create-goal [--pipeline auto|scout|developer-reviewer|developer-only]|--create-simple-goal] [--backlog-coverage full|slice] [--force-reclaim]");
 Console.WriteLine("  intent-template [template request] [--create-goal|--create-simple-goal]");
@@ -701,15 +699,6 @@ while (true)
     {
         Console.WriteLine($"Error: {ex.Message}");
     }
-}
-
-static bool SkipsStartupOperatorChannel(IReadOnlyList<string> startupArgs)
-{
-    if (startupArgs.Count == 0)
-        return false;
-
-    var command = startupArgs[0];
-    return command.Equals("operator-listen", StringComparison.OrdinalIgnoreCase);
 }
 
 // Worktree cleanup remains lifecycle-owning. Worker registry setup and orphan classification are safe for

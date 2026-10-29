@@ -57,8 +57,8 @@ public sealed partial class CollaborationItemStore
                 // Idempotent on correlation key: if an OPEN (non-terminal) item already exists for this key,
                 // refresh its subject/body and return it rather than inserting a duplicate. Without this, a
                 // conductor that re-escalates the same goal+reason each tick piles up identical items
-                // (observed: 12 copies of one landing escalation), which also collide as duplicate Discord
-                // button customIds. Raising "another one" while one is pending is the bug — not the rendering.
+                // (observed: 12 copies of one landing escalation). Raising another while one is pending
+                // duplicates the same unresolved decision.
                 if (!string.IsNullOrWhiteSpace(correlationKey))
                 {
                     var existing = await TryReadOpenItemByCorrelationKeyAsync(conn, correlationKey!, cancellationToken);
