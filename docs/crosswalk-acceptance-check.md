@@ -2,11 +2,13 @@
 
 Declare `{"name":"vitest selection","type":"crosswalk-test","project":"web","arguments":["adapter-owned-id"],"timeoutMinutes":2}` in the acceptance manifest. Omit `project` or use an empty string for the candidate worktree root. The directory must exist and remain inside that worktree after resolving links. Crosswalk is never selected implicitly by this check implementation.
 
-`arguments` is an array of exact, ordinal, opaque IDs; an empty array selects all discovered IDs. Acceptance always lists before running. Blank, duplicate, unknown or ambiguous discovered IDs fail before test execution. IDs are passed unchanged using repeated `--id` arguments. Set `MCG_ORCHESTRATOR_CROSSWALK_PATH` to the executable file.
+`arguments` is an array of exact, ordinal, opaque IDs; an empty array selects all discovered IDs. Acceptance always lists before running. Blank, duplicate, unknown or ambiguous discovered IDs fail before test execution. IDs are passed unchanged using repeated `--id` arguments. Install the executable at `<data root>/tools/crosswalk/crosswalk.exe`. The App supplies its configured data root; the probe accepts `--data-root <path>` and otherwise uses `MCG_ORCHESTRATOR_DATA` or `%LOCALAPPDATA%/Mcg.AgentOrchestrator` (the user-profile `.mcg-agent-orchestrator` directory when LocalApplicationData is unavailable).
+
+The resolver caches an absolute path, raw-file SHA-256 (64 lowercase hexadecimal characters), and trimmed `--version` output once per instance. Version failure stores `unknown`; an absent default is NotConfigured, while an explicit missing path is Missing with no fallback. A new resolver observes installation or binary replacement. Crosswalk configuration no longer reads `MCG_ORCHESTRATOR_CROSSWALK_PATH`.
 
 One timeout budget covers listing, running and receipt publication. Processes use the acceptance owner and its capture/drain lifecycle. Results use the existing `mcg-test-result/1` reader/writer. Passing requires exit zero, readable results, positive execution, executed coverage for every selection, and no failed/error records. Additional passing IDs are permitted; additional failures fail the check. Skipped tests cannot satisfy selected coverage.
 
-Check receipts carry normalized paths, attempt ID, invocation ordinal, counts, failing IDs, stderr, exit status and typed `crosswalkDiagnostics` (the first is primary). Usable returned evidence survives a nonzero exit. Paths are allocated by the attempt, never accepted from external JSON. No TRX is created. The current TRX-required cohort consumer explicitly reports incompatibility; use standalone owned acceptance for this slice. Default .NET/Go routing and stack detection are unchanged.
+Check receipts carry normalized paths, attempt ID, invocation ordinal, counts, failing IDs, stderr, exit status and typed `crosswalkDiagnostics` (the first is primary). `crosswalkExecutablePath` and `crosswalkExecutableSha256` copy the resolved identity, including after invocation failure; both members are present and null when no identity resolved. Shadow disagreement and unavailable event details append the same pair as `executablePath` and `executableSha256`. Usable returned evidence survives a nonzero exit. Paths are allocated by the attempt, never accepted from external JSON. No TRX is created. The current TRX-required cohort consumer explicitly reports incompatibility; use standalone owned acceptance for this slice. Default .NET/Go routing and stack detection are unchanged.
 
 ## Operator proof, required before final acceptance
 
@@ -19,7 +21,8 @@ $candidate = (Get-Location).Path # exact, clean candidate checkout
 $fixture = Join-Path ([IO.Path]::GetTempPath()) ('crosswalk-vitest-' + [guid]::NewGuid().ToString('N'))
 $receipts = Join-Path $fixture '.orchestrator/operator-proof'
 $probe = '<retained candidate build directory>/CrosswalkAcceptanceProbe.dll'
-$env:MCG_ORCHESTRATOR_CROSSWALK_PATH = '<absolute real Crosswalk executable>'
+$dataRoot = '<application data root containing tools/crosswalk/crosswalk.exe>'
+$crosswalk = Join-Path $dataRoot 'tools/crosswalk/crosswalk.exe'
 Copy-Item -LiteralPath (Join-Path $candidate 'tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Fixtures/CrosswalkVitest') -Destination $fixture -Recurse
 Push-Location $fixture
 npm ci --ignore-scripts --no-audit --no-fund
@@ -28,15 +31,15 @@ git init -b main
 git add .
 git -c user.name=CrosswalkFixture -c user.email=crosswalk-fixture@example.invalid commit -m fixture
 New-Item -ItemType Directory -Path $receipts -Force | Out-Null
-& $env:MCG_ORCHESTRATOR_CROSSWALK_PATH list $fixture 1> (Join-Path $receipts 'discovery.json') 2> (Join-Path $receipts 'discovery.stderr')
+& $crosswalk list $fixture 1> (Join-Path $receipts 'discovery.json') 2> (Join-Path $receipts 'discovery.stderr')
 $LASTEXITCODE | Set-Content (Join-Path $receipts 'discovery.exit')
 $discovery = Get-Content -Raw (Join-Path $receipts 'discovery.json') | ConvertFrom-Json
 $pass = @($discovery | Where-Object name -eq 'crosswalk passing selection')
 $fail = @($discovery | Where-Object name -eq 'crosswalk known failing selection')
 if ($pass.Count -ne 1 -or $fail.Count -ne 1) { throw 'inspect exact adapter discovery names; select one unmodified ID for each fixture test' }
-dotnet $probe $candidate $fixture $receipts $pass[0].id 1> (Join-Path $receipts 'passing.stdout') 2> (Join-Path $receipts 'passing.stderr')
+dotnet $probe $candidate $fixture $receipts $pass[0].id --data-root $dataRoot 1> (Join-Path $receipts 'passing.stdout') 2> (Join-Path $receipts 'passing.stderr')
 $LASTEXITCODE | Set-Content (Join-Path $receipts 'passing.exit')
-dotnet $probe $candidate $fixture $receipts $fail[0].id 1> (Join-Path $receipts 'failing.stdout') 2> (Join-Path $receipts 'failing.stderr')
+dotnet $probe $candidate $fixture $receipts $fail[0].id --data-root $dataRoot 1> (Join-Path $receipts 'failing.stdout') 2> (Join-Path $receipts 'failing.stderr')
 $LASTEXITCODE | Set-Content (Join-Path $receipts 'failing.exit')
 Pop-Location
 ```
@@ -49,4 +52,4 @@ If installed Crosswalk cannot represent the listed IDs or the required normalize
 
 ## Acceptance-owned regression selectors
 
-`GoalAcceptanceVerifierCrosswalkTests`, `GoalAcceptanceVerifierCrosswalkEvidenceTests`, `GoalAcceptanceVerifierCrosswalkBoundaryTests`, `CrosswalkClientTests`, `ReceiptTestFailureReaderTests`, `NormalizedResultRetentionScenarioTests`, `ProjectStackResolverDecisionTests`, and `GoalAcceptanceVerifierTestsGoTestJsonReceipt`. Run the existing normalized reader/writer suites as required by changed dependency selection. Developer/Tester/Reviewer must not launch test hosts.
+`CrosswalkExecutableResolverTests`, `CrosswalkShadowDetectTests`, `GoalAcceptanceVerifierCrosswalkTests`, `GoalAcceptanceVerifierCrosswalkEvidenceTests`, `GoalAcceptanceVerifierCrosswalkBoundaryTests`, `CrosswalkClientTests`, `ReceiptTestFailureReaderTests`, `NormalizedResultRetentionScenarioTests`, `ProjectStackResolverDecisionTests`, and `GoalAcceptanceVerifierTestsGoTestJsonReceipt`. Run the existing normalized reader/writer suites as required by changed dependency selection. Developer/Tester/Reviewer must not launch test hosts. The installed default executable's path, version and hash are confirmed by the operator after this slice lands; that check is outside this slice's numbered criteria.

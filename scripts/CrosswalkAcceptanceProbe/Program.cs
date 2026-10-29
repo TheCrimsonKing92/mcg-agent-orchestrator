@@ -5,14 +5,23 @@ using System.Text.Json.Nodes;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 // Operator-only host: calls the public owned acceptance API, never the Crosswalk client directly.
-if (args.Length != 4)
+if (args.Length != 4 && (args.Length != 6 || args[4] != "--data-root" || string.IsNullOrWhiteSpace(args[5])))
 {
-    Console.Error.WriteLine("Usage: CrosswalkAcceptanceProbe <candidate-repo> <fixture-worktree> <receipts-directory> <opaque-id>");
+    Console.Error.WriteLine("Usage: CrosswalkAcceptanceProbe <candidate-repo> <fixture-worktree> <receipts-directory> <opaque-id> [--data-root <path>]");
     return 64;
 }
 var candidate = Path.GetFullPath(args[0]);
 var fixture = Path.GetFullPath(args[1]);
 var receipts = Path.GetFullPath(args[2]);
+var dataRoot = args.Length == 6 ? args[5] : Environment.GetEnvironmentVariable("MCG_ORCHESTRATOR_DATA")?.Trim();
+if (string.IsNullOrWhiteSpace(dataRoot))
+{
+    var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+    dataRoot = string.IsNullOrWhiteSpace(localAppData)
+        ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".mcg-agent-orchestrator")
+        : Path.Combine(localAppData, "Mcg.AgentOrchestrator");
+}
+var executable = new CrosswalkExecutableResolver(dataRoot: dataRoot);
 Directory.CreateDirectory(receipts);
 var options = new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true };
 var config = Path.Combine(fixture, "config");
@@ -29,8 +38,9 @@ File.WriteAllText(Path.Combine(config, "acceptance-manifest.json"), manifest.ToJ
 var id = "crosswalk-" + Guid.NewGuid().ToString("N");
 await using var owner = AcceptanceExecutionOwners.CreateAttempt(fixture, options: new(
     RunId: id, ResultsPrefix: Path.Combine(receipts, id), IntegrationBranch: "main"));
-var result = await new GoalAcceptanceVerifier().RunOwnedAsync(fixture, null, null, null, null, owner);
-var binary = Environment.GetEnvironmentVariable("MCG_ORCHESTRATOR_CROSSWALK_PATH");
+var result = await new GoalAcceptanceVerifier { CrosswalkExecutable = executable }
+    .RunOwnedAsync(fixture, null, null, null, null, owner);
+var check = result.Checks?.SingleOrDefault(check => check.Name == "real crosswalk selection");
 var envelope = new
 {
     candidateCommit = Git(candidate, "rev-parse", "HEAD"),
@@ -38,7 +48,7 @@ var envelope = new
     candidateDirtyPaths = Git(candidate, "status", "--short"),
     infrastructureAssembly = Identity(typeof(GoalAcceptanceVerifier).Assembly.Location),
     executionAssembly = Identity(typeof(WorkerProcessRunner).Assembly.Location),
-    crosswalkExecutable = binary is null ? null : Identity(binary),
+    crosswalkExecutable = new { path = check?.CrosswalkExecutablePath, sha256 = check?.CrosswalkExecutableSha256 },
     selectedId = args[3], hostExitCode = result.Passed ? 0 : 1, result
 };
 var receipt = Path.Combine(receipts, id + ".operator.json");

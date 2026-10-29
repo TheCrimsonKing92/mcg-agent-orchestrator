@@ -8,7 +8,7 @@ public static class ProjectStackResolver
     public static Toolchain Resolve(string workingDirectory, string? projectHomeDirectory)
         => Resolve(workingDirectory, projectHomeDirectory, CrosswalkShadowDetect.Shared);
 
-    internal static Toolchain Resolve(string workingDirectory, string? projectHomeDirectory, CrosswalkShadowDetect shadow)
+    internal static Toolchain Resolve(string workingDirectory, string? projectHomeDirectory, CrosswalkShadowDetect? shadow)
     {
         if (!string.IsNullOrWhiteSpace(projectHomeDirectory))
         {
@@ -23,7 +23,13 @@ public static class ProjectStackResolver
                     // Read only an explicit declaration: ProjectModel's default is not evidence.
                     var stack = declaration.Deserialize<ProjectStack>();
                     if (Enum.IsDefined(stack))
-                        return stack == ProjectStack.Go ? Toolchain.Go : Toolchain.Dotnet;
+                        return stack switch
+                        {
+                            ProjectStack.Go => Toolchain.Go,
+                            ProjectStack.Node => Toolchain.Node,
+                            ProjectStack.Dotnet => Toolchain.Dotnet,
+                            _ => throw new InvalidOperationException($"No toolchain mapping for declared stack {stack}.")
+                        };
                 }
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or
@@ -33,7 +39,8 @@ public static class ProjectStackResolver
             }
         }
 
-        return shadow.Observe(workingDirectory, projectHomeDirectory, TargetToolchainDetector.Detect(workingDirectory));
+        var detected = TargetToolchainDetector.Detect(workingDirectory);
+        return shadow?.Observe(workingDirectory, projectHomeDirectory, detected) ?? detected;
     }
 
     internal static ProjectStack? GuidanceStack(Toolchain toolchain, bool isOrchestratorHome) => toolchain switch

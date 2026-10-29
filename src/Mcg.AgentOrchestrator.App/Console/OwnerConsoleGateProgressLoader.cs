@@ -37,12 +37,13 @@ internal sealed class OwnerConsoleGateProgressLoader(string logPath, string mani
             var gate = OwnerConsoleGateProgress.Build(now, events, lanes, history,
                 id => titles.FirstOrDefault(pair => pair.Key.StartsWith(id, StringComparison.Ordinal)).Value,
                 capacity: capacity.LocalBudget);
+            var evidence = _conductTail.Select("host-evidence", OwnerConsoleHostEvidenceRuns.Parse, 1_048_576).ToArray();
             return gate with
             {
                 Ended = OwnerConsoleGateEnd.Read(events),
                 Capacity = capacity,
-                HostActivity = OwnerConsoleHostEvidenceRuns.Fold(
-                    _conductTail.Select("host-evidence", OwnerConsoleHostEvidenceRuns.Parse, 1_048_576), now),
+                HostActivity = OwnerConsoleHostEvidenceRuns.Fold(evidence, now),
+                EvidenceEnded = evidence.Select(entry => entry?.End).OfType<OwnerConsoleEvidenceAttemptEnd>().ToArray(),
                 Lanes = gate.Lanes.Select(row => row.State == OwnerConsoleGateLaneState.Done && row.Outcome == "failed" && !row.IsAttribution
                     ? row with { FailingTestNames = FailureNames.Read(row) } : row).ToArray()
             };

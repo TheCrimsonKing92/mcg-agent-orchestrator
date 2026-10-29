@@ -1,5 +1,6 @@
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
+using Mcg.AgentOrchestrator.App.Orchestration;
 
 namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 
@@ -16,7 +17,7 @@ internal static class OwnerConsoleGoalDetailFormatter
     {
         var detail = await query.LoadAsync(id, token);
         if (detail is null) { output.WriteLine("goal state unavailable"); return null; }
-        if (gate is not null) detail = detail.WithGate(gate());
+        if (gate is not null) detail = query.Observe(detail, gate());
         detail = detail with { PriorityWarning = priorityWarning };
         Render(detail, output, zone ?? TimeZoneInfo.Local);
         return detail.Goal;
@@ -47,6 +48,7 @@ internal static class OwnerConsoleGoalDetailFormatter
             OwnerConsoleLandingBlockerText.Detail(goal, zone) is { } blocker)
             output.WriteLine("Landing blocker: " + blocker);
         if (detail.Gate is { } liveGate) output.WriteLine("Gate: " + OwnerGoalDetailGateLine.Text(liveGate));
+        if (detail.Evidence is { } evidence) RenderEvidence(evidence, output);
         if (detail.Changes is { } changes)
             foreach (var line in changes.DetailLines()) output.WriteLine(line);
         output.WriteLine("Tasks:");
@@ -60,6 +62,36 @@ internal static class OwnerConsoleGoalDetailFormatter
                 (lines.Count == 0 || lines[^1].Phrase != phrase)) lines.Add((item.Timestamp, phrase));
         output.WriteLine(lines.Count == 0 ? "Recent events: none" : "Recent events:");
         foreach (var line in lines.TakeLast(10)) output.WriteLine($"  {line.Time.ToLocalTime():HH:mm:ss} {Plain(line.Phrase)}");
+    }
+
+    private static void RenderEvidence(OwnerConsoleEvidenceAttemptProgress progress, IOwnerConsoleOutput output)
+    {
+        var parts = new List<string>();
+        if (progress.Ordinal is { } ordinal) parts.Add(FormattableString.Invariant($"attempt {ordinal}"));
+        if (progress.StartedAt is { } start && start <= progress.ObservedAt)
+        {
+            var elapsed = progress.ObservedAt - start;
+            parts.Add(FormattableString.Invariant($"elapsed {Math.Floor(elapsed.TotalMinutes):0}m {elapsed.Seconds}s"));
+        }
+        if (parts.Count > 0) output.WriteLine("Evidence: " + string.Join(", ", parts));
+        if (!string.IsNullOrWhiteSpace(progress.Lane)) output.WriteLine("Running: " + progress.Lane);
+        parts.Clear();
+        if (progress.Passed is { } passed) parts.Add(FormattableString.Invariant($"{passed} passed"));
+        if (progress.Failed is { } failed) parts.Add(FormattableString.Invariant($"{failed} failed"));
+        if (parts.Count > 0) output.WriteLine("Tests so far: " + string.Join(", ", parts));
+        if (progress.LastProgressAt is { } updated && updated <= progress.ObservedAt)
+        {
+            var age = progress.ObservedAt - updated;
+            output.WriteLine(age.TotalMinutes > ConductorWatchProgressReporter.DefaultStallWarningMinutes
+                ? FormattableString.Invariant($"no progress for {Math.Floor(age.TotalMinutes):0} min - possible stall")
+                : FormattableString.Invariant($"Updated {Math.Floor(age.TotalSeconds):0} s ago"));
+        }
+        if (progress.Previous is not { } previous) return;
+        parts.Clear();
+        if (previous.DurationSeconds is { } seconds) parts.Add(FormattableString.Invariant($"{seconds / 60:0.0} min"));
+        if (!string.IsNullOrWhiteSpace(previous.Outcome)) parts.Add(previous.Outcome);
+        if (previous.TestsExecuted is { } tests) parts.Add(FormattableString.Invariant($"{tests} tests"));
+        if (parts.Count > 0) output.WriteLine("Last attempt: " + string.Join(", ", parts));
     }
 
     private static string Plain(string text) => text.Replace('{', ' ').Replace('}', ' ').Replace('\r', ' ').Replace('\n', ' ');

@@ -4,6 +4,9 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 
 public interface IOrchestratorStateQueries
 {
+    Task<GoalPromotionFact?> ReadPromotionFactAsync(GoalId goalId, CancellationToken cancellationToken = default) =>
+        Task.FromResult<GoalPromotionFact?>(null);
+
     /// <summary>
     /// Reads attention policy inputs without full goal/task snapshot materialization. Null explicitly
     /// denotes an unsupported capability; failures and cancellation must propagate to the caller.
@@ -95,6 +98,7 @@ public sealed record TerminalOwnerQuestionHold(
 public sealed record AttentionGoalReadFacts(string GoalId, GoalStatus Status, int BriefVersion,
     bool HasWaitingTasks = false);
 public sealed record AttentionGateEvidence(string GoalId, GateTestObligation Obligation);
+public sealed record AttentionPostLandingDuty(string GoalId, CriterionEvidenceObligation Obligation);
 public sealed record AttentionOwnerQuestionEvidence(string GoalId, GoalHoldSnapshot Hold, IReadOnlyList<string> TaskIds);
 
 /// <summary>Physical history reads and sparse adapters, not full GoalSnapshot/TaskSnapshot loads.</summary>
@@ -106,7 +110,8 @@ public sealed record AttentionReadProjection(
     IReadOnlyList<AttentionGateEvidence> GateEvidence,
     IReadOnlyList<AttentionOwnerQuestionEvidence> OwnerQuestions,
     IReadOnlyList<ProviderUsageGoalEvidence> ProviderEvidence,
-    AttentionProjectionReadCounts Reads);
+    AttentionProjectionReadCounts Reads,
+    IReadOnlyList<AttentionPostLandingDuty>? PostLandingDuties = null);
 
 public sealed record AcceptanceQueueFact(string GoalId, GoalPriority Priority,
     DateTimeOffset VerifiedAt, DateTimeOffset CreatedAt);

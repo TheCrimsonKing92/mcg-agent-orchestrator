@@ -48,6 +48,14 @@ public abstract class CliTaskQueryTestSupport
 
         public IReadOnlyList<string?> ObservedWriteOperationTags => _observedWriteOperationTags.AsReadOnly();
 
+        public bool SupportsAttentionProjection { get; set; }
+
+        public Task<AttentionReadProjection?> ReadAttentionProjectionAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult<AttentionReadProjection?>(SupportsAttentionProjection
+                ? new([], [], [], [], new(0, 0, 0, 0, 0), _kernel.Goals.SelectMany(goal =>
+                    goal.OutstandingPostLandingDuties.Select(duty => new AttentionPostLandingDuty(goal.Id.Value, duty))).ToArray())
+                : null);
+
         public Task<IReadOnlyList<HumanInputRequestSnapshot>> ListOpenHumanInputRequestsAsync(
             CancellationToken cancellationToken = default)
         {

@@ -231,7 +231,7 @@ internal static partial class LandingExecutor
                 AcceptanceCohortLandingOutcome.StateInvalidated,
                 $"Merge train receipt invalidated at the main compare-and-swap boundary: {mainUpdate.Error}");
         }
-        RecordSuccessfulPromotion(workspace,
+        RecordSuccessfulPromotion(workspace, kernel,
             receipt.Identity.Members.Select(member => (member.GoalId, member.CandidateRevision)).ToArray(),
             receipt.Identity.ObservedMainRevision, commit, GoalPromotionFact.MergeTrainProvenance, promotionClock);
         if (checkoutInspection.Outcome == RootCheckoutLandingGuard.Outcome.FastForward &&

@@ -18,6 +18,7 @@ public sealed partial class SqliteOrchestratorStateRepository
         var hasArchive = (long)(await archiveTable.ExecuteScalarAsync(cancellationToken))! != 0;
         var facts = new List<AttentionGoalReadFacts>();
         var gates = new List<AttentionGateEvidence>();
+        var duties = new List<AttentionPostLandingDuty>();
         var questions = new List<AttentionOwnerQuestionEvidence>();
         var providers = new List<ProviderUsageGoalEvidence>();
         var archiveReads = 0;
@@ -62,6 +63,11 @@ public sealed partial class SqliteOrchestratorStateRepository
                 facts.Add(new(id, status, briefVersion, !metadataOnly && AttentionElements(root, "Tasks")
                     .Any(task => ReadAttentionField<WorkTaskStatus>(task, "Status") == WorkTaskStatus.WaitingForHuman)));
                 if (metadataOnly) continue; // A missing archive retains the baseline metadata-only behavior.
+
+                duties.AddRange(ReadAttentionArray<CriterionEvidenceObligation>(root, "CriterionEvidenceObligations")
+                    .Where(item => item.IsValidatedPostLanding &&
+                        item.State is not (CriterionEvidenceState.Satisfied or CriterionEvidenceState.Repaired))
+                    .Select(item => new AttentionPostLandingDuty(id, item)));
 
                 if (options.IncludeGateEvidence)
                 {
@@ -120,7 +126,7 @@ public sealed partial class SqliteOrchestratorStateRepository
             finally { archive?.Dispose(); }
         }
         return new(facts, gates, questions, providers, new(facts.Count, archiveReads, archiveDecodes,
-            providers.Sum(goal => goal.Tasks.Count), questions.Sum(question => question.TaskIds.Count)));
+            providers.Sum(goal => goal.Tasks.Count), questions.Sum(question => question.TaskIds.Count)), duties);
     }
 
     private static T? ReadAttentionField<T>(JsonElement element, string name) =>

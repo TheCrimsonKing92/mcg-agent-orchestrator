@@ -4,49 +4,50 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 
 internal sealed class CrosswalkClient
 {
-    internal const string PathVariable = "MCG_ORCHESTRATOR_CROSSWALK_PATH";
     internal static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(5);
 
-    private readonly Func<string, string?> _readEnvironment;
+    private readonly CrosswalkExecutableResolver _resolver;
     private readonly Func<WorkerProcessRunRequest, CancellationToken, Task<WorkerProcessRunResult>> _runProcessAsync;
     private readonly TimeSpan _timeout;
 
     internal CrosswalkClient(
-        Func<string, string?>? readEnvironment = null,
+        CrosswalkExecutableResolver resolver,
         Func<WorkerProcessRunRequest, CancellationToken, Task<WorkerProcessRunResult>>? runProcessAsync = null,
         TimeSpan? timeout = null)
     {
-        _readEnvironment = readEnvironment ?? Environment.GetEnvironmentVariable;
+        _resolver = resolver;
         _runProcessAsync = runProcessAsync ?? WorkerProcessRunner.RunBufferedAsync;
         _timeout = timeout ?? DefaultTimeout;
     }
 
     internal CrosswalkDetectOutcome Detect(string root)
     {
+        CrosswalkExecutableIdentity? executable = null;
         try
         {
-            var path = _readEnvironment(PathVariable);
-            if (string.IsNullOrWhiteSpace(path))
-                return new(CrosswalkDetectOutcome.NotConfigured, null, string.Empty);
-            if (!File.Exists(path))
-                return new(CrosswalkDetectOutcome.Missing, null, string.Empty);
+            var resolution = _resolver.Resolve();
+            executable = resolution.Identity;
+            if (executable is null)
+                return new(resolution.Status, null, resolution.Detail);
 
             var request = new WorkerProcessRunRequest(
-                $"& {Quote(path)} detect {Quote(root)}; exit $LASTEXITCODE", root, _timeout);
+                $"& {Quote(executable.Path)} detect {Quote(root)}; exit $LASTEXITCODE", root, _timeout);
             var run = _runProcessAsync(request, CancellationToken.None).GetAwaiter().GetResult();
+            if (run.TimedOut)
+                return new(CrosswalkDetectOutcome.TimedOut, null, string.Empty) { Executable = executable };
             if (run.ExitCode != 0)
-                return new(CrosswalkDetectOutcome.ExitNonZero, null, $"exit={run.ExitCode}");
+                return new(CrosswalkDetectOutcome.ExitNonZero, null, $"exit={run.ExitCode}") { Executable = executable };
             if (!CrosswalkDetectResult.TryParse(run.StandardOutput, out var result))
-                return new(CrosswalkDetectOutcome.InvalidJson, null, string.Empty);
-            return new(CrosswalkDetectOutcome.Detected, result, string.Empty);
+                return new(CrosswalkDetectOutcome.InvalidJson, null, string.Empty) { Executable = executable };
+            return new(CrosswalkDetectOutcome.Detected, result, string.Empty) { Executable = executable };
         }
         catch (OperationCanceledException)
         {
-            return new(CrosswalkDetectOutcome.TimedOut, null, string.Empty);
+            return new(CrosswalkDetectOutcome.TimedOut, null, string.Empty) { Executable = executable };
         }
         catch (Exception exception)
         {
-            return new(CrosswalkDetectOutcome.StartFailed, null, exception.GetType().Name);
+            return new(CrosswalkDetectOutcome.StartFailed, null, exception.GetType().Name) { Executable = executable };
         }
     }
 
@@ -65,7 +66,7 @@ internal sealed class CrosswalkClient
             return ParseList(json);
         }, cancellationToken).ConfigureAwait(false);
         return new(outcome.Status, outcome.Result, outcome.Detail)
-        { ExitCode = outcome.ExitCode, StandardError = outcome.Stderr, Diagnostics = outcome.Diagnostics };
+        { ExitCode = outcome.ExitCode, StandardError = outcome.Stderr, Diagnostics = outcome.Diagnostics, Executable = outcome.Executable };
     }
 
     internal async Task<CrosswalkRunOutcome> RunAsync(string root, IEnumerable<string> ids, TimeSpan timeout,
@@ -79,28 +80,28 @@ internal sealed class CrosswalkClient
             return read.Status == TestResultReadStatus.Readable ? read.Records : null;
         }, cancellationToken, arguments).ConfigureAwait(false);
         return new(outcome.Status, outcome.Result, outcome.Detail)
-        { ExitCode = outcome.ExitCode, StandardError = outcome.Stderr, Diagnostics = outcome.Diagnostics };
+        { ExitCode = outcome.ExitCode, StandardError = outcome.Stderr, Diagnostics = outcome.Diagnostics, Executable = outcome.Executable };
     }
 
     private async Task<(string Status, IReadOnlyList<T> Result, string Detail, int? ExitCode,
-        string Stderr, IReadOnlyList<CrosswalkInvocationDiagnostic> Diagnostics)> ExecuteAsync<T>(
+        string Stderr, IReadOnlyList<CrosswalkInvocationDiagnostic> Diagnostics, CrosswalkExecutableIdentity? Executable)> ExecuteAsync<T>(
         string root, string verb, TimeSpan timeout, Func<string, IReadOnlyList<T>?> parse,
         CancellationToken cancellationToken, string arguments = "")
     {
         var diagnostics = new List<CrosswalkInvocationDiagnostic>();
         WorkerProcessRunResult? run = null;
+        CrosswalkExecutableIdentity? executable = null;
         string status = CrosswalkDetectOutcome.Detected, detail = "";
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var path = _readEnvironment(PathVariable);
-            if (string.IsNullOrWhiteSpace(path))
-                return Failure(CrosswalkDetectOutcome.NotConfigured, CrosswalkDiagnosticCategory.NotConfigured);
-            if (!File.Exists(path))
-                return Failure(CrosswalkDetectOutcome.Missing, CrosswalkDiagnosticCategory.MissingBinary);
+            var resolution = _resolver.Resolve();
+            executable = resolution.Identity;
+            if (executable is null)
+                return Failure(resolution.Status, resolution.DiagnosticCategory!.Value, resolution.Detail);
 
             var request = new WorkerProcessRunRequest(
-                $"& {Quote(path)} {verb} {Quote(root)}{arguments}; exit $LASTEXITCODE", root, timeout);
+                $"& {Quote(executable.Path)} {verb} {Quote(root)}{arguments}; exit $LASTEXITCODE", root, timeout);
             run = await _runProcessAsync(request, cancellationToken).ConfigureAwait(false);
             if (cancellationToken.IsCancellationRequested)
                 SetFailure("cancelled", CrosswalkDiagnosticCategory.Cancelled);
@@ -124,7 +125,7 @@ internal sealed class CrosswalkClient
             {
                 SetFailure(CrosswalkDetectOutcome.InvalidJson, CrosswalkDiagnosticCategory.InvalidJson);
             }
-            return (status, result ?? Array.Empty<T>(), detail, run.ExitCode, run.StandardError, diagnostics);
+            return (status, result ?? Array.Empty<T>(), detail, run.ExitCode, run.StandardError, diagnostics, executable);
         }
         catch (OperationCanceledException)
         {
@@ -141,11 +142,11 @@ internal sealed class CrosswalkClient
             if (diagnostics.Count == 0) { status = value; detail = message; }
             diagnostics.Add(new(category, message));
         }
-        (string, IReadOnlyList<T>, string, int?, string, IReadOnlyList<CrosswalkInvocationDiagnostic>) Failure(
+        (string, IReadOnlyList<T>, string, int?, string, IReadOnlyList<CrosswalkInvocationDiagnostic>, CrosswalkExecutableIdentity?) Failure(
             string value, CrosswalkDiagnosticCategory category, string message = "")
         {
             SetFailure(value, category, message);
-            return (status, Array.Empty<T>(), detail, run?.ExitCode, run?.StandardError ?? "", diagnostics);
+            return (status, Array.Empty<T>(), detail, run?.ExitCode, run?.StandardError ?? "", diagnostics, executable);
         }
     }
 
