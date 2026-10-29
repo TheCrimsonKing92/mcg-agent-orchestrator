@@ -393,7 +393,6 @@ protected static void CompleteResearcherAndPlannerArtifacts(
 
     var worktree = GoalWorktrees.Ensure(root, goal.Id);
     mutateWorktree?.Invoke(worktree);
-    var head = ReadGit(worktree, ["rev-parse", "--short", "HEAD"]);
     if (role == AgentRole.Planner &&
         includePlannerContract &&
         !PlannerOutputContract.TryValidate(standardOutput, out _, out _))
@@ -401,8 +400,16 @@ protected static void CompleteResearcherAndPlannerArtifacts(
         standardOutput = PlannerContractPlanFixture() + Environment.NewLine + standardOutput;
     }
 
-    standardOutput = standardOutput.Replace("{commit}", head, StringComparison.Ordinal);
-    standardError = standardError.Replace("{commit}", head, StringComparison.Ordinal);
+    if (standardOutput.Contains("{commit}", StringComparison.Ordinal) ||
+        standardError.Contains("{commit}", StringComparison.Ordinal))
+    {
+        // These tiny fixture repositories use git's default seven-character abbreviation.
+        var head = InfrastructureTestSupport.TryReadGitHeadInProcess(worktree, out var fullHead) && fullHead is not null
+            ? fullHead[..7]
+            : ReadGit(worktree, ["rev-parse", "--short", "HEAD"]);
+        standardOutput = standardOutput.Replace("{commit}", head, StringComparison.Ordinal);
+        standardError = standardError.Replace("{commit}", head, StringComparison.Ordinal);
+    }
 
     var logs = Path.Combine(root, "logs");
     Directory.CreateDirectory(logs);
