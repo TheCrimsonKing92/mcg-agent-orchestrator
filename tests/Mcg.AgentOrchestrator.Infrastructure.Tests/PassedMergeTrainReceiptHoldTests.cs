@@ -6,7 +6,8 @@ using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 // Parallel-safe: repositories, stores, cleanup hooks and captured gate starts are fixture-owned.
-public sealed class PassedMergeTrainReceiptHoldTests(ITestOutputHelper output) : AcceptanceCohortWorkflowTests
+public sealed class PassedMergeTrainReceiptHoldTests(ITestOutputHelper output, CohortCandidateTemplate template)
+    : AcceptanceCohortWorkflowTests, IClassFixture<CohortCandidateTemplate>
 {
     [Fact]
     public void PendingHumanInputHoldsReceiptOnlyReplayUntilKernelAnswer()
@@ -475,25 +476,30 @@ public sealed class PassedMergeTrainReceiptHoldTests(ITestOutputHelper output) :
     private Fixture CreatePassedTrain(bool materializeReceipt = false)
     {
         output.WriteLine("RECEIPT_HOLD_PHASE setup=repository-start");
-        var repo = CreateReducedAcceptanceCohortRepository();
-        Directory.CreateDirectory(Path.Combine(repo, "config"));
-        File.WriteAllText(Path.Combine(repo, "config", "acceptance-manifest.json"), "{}");
-        RunGit(repo, "add", "config/acceptance-manifest.json");
-        // Keep the common fixture setup in the seed commit, before any member branches exist.
-        RunGit(repo, "commit", "--amend", "--no-edit");
-        output.WriteLine("RECEIPT_HOLD_PHASE setup=repository-ready");
-        var kernel = new AgentOrchestratorKernel();
         var paths = new[]
         {
             "tests/Mcg.AgentOrchestrator.Core.Tests/HeldFirst.cs",
             "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/HeldSecond.cs",
             "tests/Mcg.AgentOrchestrator.Dashboard.Tests/HeldThird.cs"
         };
+        var copy = template.Copy("receipt-hold", 3, (preparedRepo, ids) =>
+        {
+            Directory.CreateDirectory(Path.Combine(preparedRepo, "config"));
+            File.WriteAllText(Path.Combine(preparedRepo, "config", "acceptance-manifest.json"), "{}");
+            RunGit(preparedRepo, "add", "config/acceptance-manifest.json");
+            // Keep the common fixture setup in the seed commit, before any member branches exist.
+            RunGit(preparedRepo, "commit", "--amend", "--no-edit");
+            for (var index = 0; index < ids.Length; index++)
+                CreateWorktreeCandidate(preparedRepo, ids[index], paths[index], $"member {index}");
+        });
+        var repo = copy.Repo;
+        output.WriteLine("RECEIPT_HOLD_PHASE setup=repository-ready");
+        var kernel = new AgentOrchestratorKernel();
         var goals = paths.Select((path, index) =>
         {
             output.WriteLine($"RECEIPT_HOLD_PHASE setup=member-start member={index}");
-            var goal = CreateCompletedGoal(kernel, $"Held train {index}", repo);
-            var candidate = CreateWorktreeCandidate(repo, goal.Id, path, $"member {index}");
+            var goal = copy.CreateCompletedGoal(kernel, index, $"Held train {index}");
+            var candidate = copy.Revisions[index];
             kernel.RecordGoalRefinement(goal.Id, new RefinedSpec(goal.Objective,
                 ["The full acceptance gate passes"], VerificationClass.TestVerifiable, [], [])
             {

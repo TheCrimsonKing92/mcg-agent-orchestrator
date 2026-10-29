@@ -7,7 +7,8 @@ using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 // Each case owns its git repository, worktrees, database and cleanup hooks; no timers or shared state.
-public sealed class AcceptanceCohortWorkflowTestsTrainRedAttribution : AcceptanceCohortWorkflowTests
+public sealed class AcceptanceCohortWorkflowTestsTrainRedAttribution(CohortCandidateTemplate template)
+    : AcceptanceCohortWorkflowTests, IClassFixture<CohortCandidateTemplate>
 {
     [Theory]
     [InlineData(0, false)]
@@ -373,31 +374,37 @@ public sealed class AcceptanceCohortWorkflowTestsTrainRedAttribution : Acceptanc
         int memberCount = 3,
         bool gateOnly = true)
     {
-        var repo = CreateReducedAcceptanceCohortRepository();
+        var copy = template.Copy($"attribution-{memberCount}", memberCount, (preparedRepo, ids) =>
+        {
+            AddAcceptanceManifest(preparedRepo);
+            var unchanged = "tests/UnchangedTests.cs";
+            Directory.CreateDirectory(Path.Combine(preparedRepo, "tests"));
+            File.WriteAllText(Path.Combine(preparedRepo, unchanged), "namespace Ns; public class UnchangedTests { }");
+            RunGit(preparedRepo, "add", unchanged);
+            RunGit(preparedRepo, "commit", "-m", "Add unchanged test source");
+            for (var index = 0; index < ids.Length; index++)
+            {
+                var className = Identity(index).Split('.')[1];
+                var shared = index < 2 ? "public partial class SharedTests { }" : string.Empty;
+                var guards = index == 1
+                    ? "public class AcceptanceGateEngineSettingsTests { } public class WorkflowDecisionCoverageRatchetTests { }" : string.Empty;
+                _ = CreateWorktreeCandidate(preparedRepo, ids[index], Paths[index],
+                    $"namespace Ns; public class {className} {{ }} {shared} {guards}");
+            }
+        });
+        var repo = copy.Repo;
         var cleanup = CreateIsolatedCleanupContext(repo);
         try
         {
-            AddAcceptanceManifest(repo);
-            var unchanged = "tests/UnchangedTests.cs";
-            Directory.CreateDirectory(Path.Combine(repo, "tests"));
-            File.WriteAllText(Path.Combine(repo, unchanged), "namespace Ns; public class UnchangedTests { }");
-            RunGit(repo, "add", unchanged);
-            RunGit(repo, "commit", "-m", "Add unchanged test source");
             var kernel = new AgentOrchestratorKernel();
             var goals = Enumerable.Range(0, memberCount).Select(index =>
             {
-                var goal = CreateCompletedGoal(kernel, $"Attributed train member {index}", repo);
+                var goal = copy.CreateCompletedGoal(kernel, index, $"Attributed train member {index}");
                 kernel.RecordGoalRefinement(goal.Id, new RefinedSpec(goal.Objective,
                     ["The full acceptance gate passes"], VerificationClass.TestVerifiable, [], [])
                 {
                     AcceptanceGateOwnedAcceptanceCriteria = ["The full acceptance gate passes"]
                 });
-                var className = Identity(index).Split('.')[1];
-                var shared = index < 2 ? "public partial class SharedTests { }" : string.Empty;
-                var guards = index == 1
-                    ? "public class AcceptanceGateEngineSettingsTests { } public class WorkflowDecisionCoverageRatchetTests { }" : string.Empty;
-                _ = CreateWorktreeCandidate(repo, goal.Id, Paths[index],
-                    $"namespace Ns; public class {className} {{ }} {shared} {guards}");
                 return goal;
             }).ToArray();
             var verifier = new SequenceAcceptanceVerifier(results(repo));

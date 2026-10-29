@@ -6,7 +6,8 @@ using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Microsoft.Data.Sqlite;
 
-public sealed class AcceptanceCohortWorkflowTestsMergeTrain : AcceptanceCohortWorkflowTests
+public sealed class AcceptanceCohortWorkflowTestsMergeTrain(CohortCandidateTemplate template)
+    : AcceptanceCohortWorkflowTests, IClassFixture<CohortCandidateTemplate>
 {
 
     [Fact]
@@ -59,23 +60,26 @@ public sealed class AcceptanceCohortWorkflowTestsMergeTrain : AcceptanceCohortWo
     [InlineData("submission-failure")]
     public void ExactTestedMergeTrainCommit_LandsThreeGoalsWithPerGoalCoverage(string scenario)
     {
-        var repo = CreateReducedAcceptanceCohortRepository();
+        var copy = template.Copy("exact-train", 3, (preparedRepo, ids) =>
+        {
+            AddAcceptanceManifest(preparedRepo);
+            AddSourceSizeAuthority(preparedRepo, ("tests/Mcg.AgentOrchestrator.Core.Tests/TrainFirst.cs", 1));
+            CreateWorktreeCandidate(preparedRepo, ids[0], "tests/Mcg.AgentOrchestrator.Core.Tests/TrainFirst.cs", "first");
+            CreateWorktreeCandidate(preparedRepo, ids[1], "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/TrainSecond.cs", "second");
+            CreateWorktreeCandidate(preparedRepo, ids[2], "tests/Mcg.AgentOrchestrator.Dashboard.Tests/TrainThird.cs", "third");
+        });
+        var repo = copy.Repo;
         var cleanupContext = CreateIsolatedCleanupContext(repo);
         try
         {
-            AddAcceptanceManifest(repo);
-            AddSourceSizeAuthority(repo, ("tests/Mcg.AgentOrchestrator.Core.Tests/TrainFirst.cs", 1));
             var kernel = new AgentOrchestratorKernel();
-            var firstGoal = CreateCompletedGoal(kernel, "First train member", repo);
-            var secondGoal = CreateCompletedGoal(kernel, "Second train member", repo);
-            var thirdGoal = CreateCompletedGoal(kernel, "Third train member", repo);
+            var firstGoal = copy.CreateCompletedGoal(kernel, 0, "First train member");
+            var secondGoal = copy.CreateCompletedGoal(kernel, 1, "Second train member");
+            var thirdGoal = copy.CreateCompletedGoal(kernel, 2, "Third train member");
             var main = RunGitOutput(repo, "rev-parse", "main").Trim();
-            var first = CreateWorktreeCandidate(
-                repo, firstGoal.Id, "tests/Mcg.AgentOrchestrator.Core.Tests/TrainFirst.cs", "first");
-            var second = CreateWorktreeCandidate(
-                repo, secondGoal.Id, "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/TrainSecond.cs", "second");
-            var third = CreateWorktreeCandidate(
-                repo, thirdGoal.Id, "tests/Mcg.AgentOrchestrator.Dashboard.Tests/TrainThird.cs", "third");
+            var first = copy.Revisions[0];
+            var second = copy.Revisions[1];
+            var third = copy.Revisions[2];
             foreach (var (goal, candidate) in new[]
                      {
                          (firstGoal, first),

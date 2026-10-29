@@ -5,7 +5,8 @@ using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 // Each case owns its repository, worktrees, cleanup hooks and database; no shared state or timers.
-public sealed class AcceptanceCohortWorkflowTestsTrainImplicatedExclusion : AcceptanceCohortWorkflowTests
+public sealed class AcceptanceCohortWorkflowTestsTrainImplicatedExclusion(CohortCandidateTemplate template)
+    : AcceptanceCohortWorkflowTests, IClassFixture<CohortCandidateTemplate>
 {
     [Theory]
     [InlineData(false)]
@@ -202,24 +203,28 @@ public sealed class AcceptanceCohortWorkflowTestsTrainImplicatedExclusion : Acce
         int memberCount = 3,
         bool gateOnly = true)
     {
-        var repo = CreateReducedAcceptanceCohortRepository();
+        string[] paths = ["tests/Mcg.AgentOrchestrator.Core.Tests/First.cs",
+            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Second.cs",
+            "tests/Mcg.AgentOrchestrator.Dashboard.Tests/Newest.cs"];
+        var copy = template.Copy($"implicated-{memberCount}", memberCount, (preparedRepo, ids) =>
+        {
+            AddAcceptanceManifest(preparedRepo);
+            for (var index = 0; index < ids.Length; index++)
+                CreateWorktreeCandidate(preparedRepo, ids[index], paths[index], $"member {index}");
+        });
+        var repo = copy.Repo;
         var cleanup = CreateIsolatedCleanupContext(repo);
         try
         {
-            AddAcceptanceManifest(repo);
             var kernel = new AgentOrchestratorKernel();
-            string[] paths = ["tests/Mcg.AgentOrchestrator.Core.Tests/First.cs",
-                "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Second.cs",
-                "tests/Mcg.AgentOrchestrator.Dashboard.Tests/Newest.cs"];
             var goals = Enumerable.Range(0, memberCount).Select(index =>
             {
-                var goal = CreateCompletedGoal(kernel, $"Train member {index}", repo);
+                var goal = copy.CreateCompletedGoal(kernel, index, $"Train member {index}");
                 kernel.RecordGoalRefinement(goal.Id, new RefinedSpec(goal.Objective,
                     ["The full acceptance gate passes"], VerificationClass.TestVerifiable, [], [])
                 {
                     AcceptanceGateOwnedAcceptanceCriteria = ["The full acceptance gate passes"]
                 });
-                _ = CreateWorktreeCandidate(repo, goal.Id, paths[index], $"member {index}");
                 return goal;
             }).ToArray();
             var verifier = new SequenceAcceptanceVerifier(results(repo));
