@@ -7,47 +7,53 @@ namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 
 internal static class OwnerConsoleBoardRenderer
 {
-    private const int PriorityColumn = 3;
-    private const int StatusColumn = 4;
-
     internal static string Preview(OwnerConsoleSelectedGoalPreview preview, int width,
         string? stage = null, TimeZoneInfo? zone = null) =>
         string.Join('\n', OwnerConsoleSelectedPreview.Lines(preview, stage, zone ?? TimeZoneInfo.Local, width));
 
     internal static void Render(DataTable table, TableView view, IReadOnlyList<OwnerConsoleBoardRow> rows,
-        int paneWidth, int titleWidth)
+        int paneWidth, int titleWidth, bool showProject = false)
     {
+        var hadProject = table.Columns.Contains("PROJECT");
+        if (showProject && !hadProject) table.Columns.Add("PROJECT").SetOrdinal(0);
+        else if (!showProject && hadProject) table.Columns.Remove("PROJECT");
+        if (hadProject != showProject) view.Table = new DataTableSource(table);
+        var titleColumn = showProject ? 3 : 2;
+        var priorityColumn = titleColumn + 1;
+        var statusColumn = titleColumn + 2;
         view.Style.RowColorGetter = args => args.RowIndex >= 0 && args.RowIndex < rows.Count && rows[args.RowIndex].Dimmed
             ? new Scheme(view.GetScheme().Disabled) : null;
-        var cells = rows.Select(row => new[] { row.GoalPrefix, row.Epic, row.Title, row.Priority, row.Stage, Age(row.Age) }).ToArray();
-        var widestTitle = cells.Select(row => row[2].GetColumns()).DefaultIfEmpty().Max();
+        var cells = rows.Select(row => showProject
+            ? new[] { row.Project, row.GoalPrefix, row.Epic, row.Title, row.Priority, row.Stage, Age(row.Age) }
+            : new[] { row.GoalPrefix, row.Epic, row.Title, row.Priority, row.Stage, Age(row.Age) }).ToArray();
+        var widestTitle = cells.Select(row => row[titleColumn].GetColumns()).DefaultIfEmpty().Max();
         var widths = Enumerable.Range(0, table.Columns.Count).Select(column =>
             Math.Max(table.Columns[column].ColumnName.GetColumns(), cells.Select(row => row[column].GetColumns()).DefaultIfEmpty().Max())).ToArray();
         var showPriority = rows.Any(row => row.Priority is { Length: > 0 } and not "Normal");
         if (paneWidth > 0)
         {
-            var statusHeaderWidth = table.Columns[StatusColumn].ColumnName.GetColumns();
-            var statusWanted = Math.Min(widths[StatusColumn], Math.Max(statusHeaderWidth, paneWidth / 2));
+            var statusHeaderWidth = table.Columns[statusColumn].ColumnName.GetColumns();
+            var statusWanted = Math.Min(widths[statusColumn], Math.Max(statusHeaderWidth, paneWidth / 2));
             for (var column = 0; column < widths.Length; column++)
-                if (column != 2) widths[column] = Math.Min(widths[column], Math.Max(table.Columns[column].ColumnName.Length, paneWidth / 6));
-            titleWidth = Math.Max(1, paneWidth - widths.Where((_, column) => column != 2).Sum() - widths.Length - 1);
+                if (column != titleColumn) widths[column] = Math.Min(widths[column], Math.Max(table.Columns[column].ColumnName.Length, paneWidth / 6));
+            titleWidth = Math.Max(1, paneWidth - widths.Where((_, column) => column != titleColumn).Sum() - widths.Length - 1);
             if (!showPriority || titleWidth < Math.Min(OwnerConsoleLineFitter.MinimumTitleColumns, widestTitle))
             {
                 showPriority = false;
-                titleWidth = Math.Max(1, paneWidth - widths.Where((_, column) => column != 2 && column != PriorityColumn).Sum() - (widths.Length - 1) - 1);
+                titleWidth = Math.Max(1, paneWidth - widths.Where((_, column) => column != titleColumn && column != priorityColumn).Sum() - (widths.Length - 1) - 1);
             }
             // Keep the existing PRIORITY hiding decision, then let STATUS use TITLE's spare space.
-            var titleAndStatusWidth = titleWidth + widths[StatusColumn];
-            widths[StatusColumn] = Math.Max(statusHeaderWidth, Math.Min(statusWanted,
+            var titleAndStatusWidth = titleWidth + widths[statusColumn];
+            widths[statusColumn] = Math.Max(statusHeaderWidth, Math.Min(statusWanted,
                 titleAndStatusWidth - Math.Min(OwnerConsoleLineFitter.MinimumTitleColumns, widestTitle)));
-            titleWidth = Math.Max(1, titleAndStatusWidth - widths[StatusColumn]);
+            titleWidth = Math.Max(1, titleAndStatusWidth - widths[statusColumn]);
         }
-        view.Style.GetOrCreateColumnStyle(PriorityColumn).Visible = showPriority;
-        if (titleWidth > 0) widths[2] = Math.Min(widths[2], titleWidth);
+        if (titleWidth > 0) widths[titleColumn] = Math.Min(widths[titleColumn], titleWidth);
         view.MaxCellWidth = Math.Max(1, widths.Max());
         for (var column = 0; column < widths.Length; column++)
         {
             var style = view.Style.GetOrCreateColumnStyle(column);
+            style.Visible = column != priorityColumn || showPriority;
             style.MaxWidth = Math.Max(1, widths[column]);
             style.MinWidth = style.MaxWidth;
         }
@@ -56,7 +62,7 @@ internal static class OwnerConsoleBoardRenderer
         {
             for (var column = 0; column < row.Length; column++)
                 row[column] = OwnerConsoleLineFitter.Fit(row[column], OwnerConsoleLineSpans.None,
-                    column == 2 ? titleWidth : paneWidth > 0 ? widths[column] : 0);
+                    column == titleColumn ? titleWidth : paneWidth > 0 ? widths[column] : 0);
             table.Rows.Add(row);
         }
         view.Update();

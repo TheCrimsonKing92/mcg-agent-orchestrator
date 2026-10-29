@@ -366,12 +366,13 @@ public sealed class OwnerConsoleActivityFollowScenarioTests
     }
 
     [Fact]
-    public void Registry_Follow_IsKeylessGlobalViewCommandAfterFleet()
+    public void Registry_Follow_IsKeylessGlobalViewCommandAfterProjectScope()
     {
         Assert.Empty(OwnerConsoleBindings.Validate(OwnerConsoleBindings.All));
         var rows = OwnerConsoleBindings.All.ToArray();
         var follow = OwnerConsoleBindings.Follow;
-        Assert.Same(follow, rows[Array.FindIndex(rows, row => row.Command == "fleet") + 1]);
+        Assert.Same(OwnerConsoleBindings.ProjectScope, rows[Array.FindIndex(rows, row => row.Command == "fleet") + 1]);
+        Assert.Same(follow, rows[Array.FindIndex(rows, row => row == OwnerConsoleBindings.ProjectScope) + 1]);
         Assert.Equal(OwnerConsoleScope.Global, follow.Scope);
         Assert.Equal(OwnerConsoleCommandOwner.View, follow.Owner);
         Assert.Null(follow.Key);
