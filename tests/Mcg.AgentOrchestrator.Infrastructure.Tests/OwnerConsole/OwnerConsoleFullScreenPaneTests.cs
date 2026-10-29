@@ -28,7 +28,7 @@ public sealed class OwnerConsoleFullScreenPaneTests
         Assert.Equal(selected.Id.Value, view.SelectedGoalId);
         Assert.Contains("22222222  Second goal", detail.Text);
         Assert.Contains("Second goal", detail.Text);
-        Assert.Contains(selected.Status.ToString(), detail.Text);
+        Assert.Contains("Status: in progress", detail.Text);
         Assert.Contains("Stage: Created", detail.Text);
         Assert.Contains("Role: Tester", detail.Text);
         Assert.Contains("Recent events: none", detail.Text);
