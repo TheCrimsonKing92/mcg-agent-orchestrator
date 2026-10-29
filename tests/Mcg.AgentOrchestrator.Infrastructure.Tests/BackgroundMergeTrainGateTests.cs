@@ -5,7 +5,8 @@ using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
 using System.Text.Json;
 
-public sealed class BackgroundMergeTrainGateTests : AcceptanceCohortWorkflowTests
+public sealed class BackgroundMergeTrainGateTests(CohortCandidateTemplate template)
+    : AcceptanceCohortWorkflowTests, IClassFixture<CohortCandidateTemplate>
 {
     [Fact]
     public void PlannerConflict_EscalatesWhileAnotherTrainOccupiesAcceptanceWidth()
@@ -308,26 +309,227 @@ public sealed class BackgroundMergeTrainGateTests : AcceptanceCohortWorkflowTest
         }
     }
 
-    private static (string Repo, AgentOrchestratorKernel Kernel, Goal[] Goals) CreateReadyTrain()
+    [Fact]
+    public void CandidateCopy_HiddenGitFile_RepairsPointersAndPreservesAttributes()
     {
-        var repo = CreateReducedAcceptanceCohortRepository();
-        AddAcceptanceManifest(repo);
+        const string key = "hidden-git-file";
+        byte[]? originalPointer = null;
+        var copy = template.Copy(key, 1, (repo, ids) =>
+        {
+            CreateWorktreeCandidate(repo, ids[0], "hidden-candidate.txt", "candidate");
+            var worktree = Assert.IsType<string>(GoalWorktrees.TryResolve(repo, ids[0]));
+            var gitFile = Path.Combine(worktree, ".git");
+            if (OperatingSystem.IsWindows())
+            {
+                File.SetAttributes(gitFile, File.GetAttributes(gitFile) | FileAttributes.Hidden);
+                Assert.True(File.GetAttributes(gitFile).HasFlag(FileAttributes.Hidden));
+            }
+            originalPointer = File.ReadAllBytes(gitFile);
+        });
+        try
+        {
+            var worktree = Assert.IsType<string>(GoalWorktrees.TryResolve(copy.Repo, copy.GoalIds[0]));
+            var gitFile = Path.Combine(worktree, ".git");
+            var administration = Assert.Single(Directory.GetDirectories(Path.Combine(copy.Repo, ".git", "worktrees")));
+            Assert.Equal("gitdir: " + administration.Replace('\\', '/') + "\n", File.ReadAllText(gitFile));
+            Assert.Equal(gitFile.Replace('\\', '/') + "\n", File.ReadAllText(Path.Combine(administration, "gitdir")));
+            if (OperatingSystem.IsWindows())
+                Assert.True(File.GetAttributes(gitFile).HasFlag(FileAttributes.Hidden));
+            Assert.Equal(copy.Revisions[0], RunGitOutput(worktree, "rev-parse", "HEAD").Trim());
+            Assert.Empty(RunGitOutput(worktree, "status", "--porcelain").Trim());
+            var sourceWorktree = Assert.IsType<string>(GoalWorktrees.TryResolve(template.TemplatePath(key), copy.GoalIds[0]));
+            Assert.NotNull(originalPointer);
+            Assert.Equal(originalPointer, File.ReadAllBytes(Path.Combine(sourceWorktree, ".git")));
+        }
+        finally
+        {
+            DeleteDirectory(copy.Repo);
+        }
+    }
+
+    [Fact]
+    public void CandidateCopy_StaleIndexes_CanUpdateExistingFilesInRootAndLinkedWorktree()
+    {
+        const string key = "stale-indexes";
+        const string path = "existing.txt";
+        byte[]? rootIndex = null;
+        byte[]? memberIndex = null;
+        var copy = template.Copy(key, 1, (repo, ids) =>
+        {
+            File.WriteAllText(Path.Combine(repo, path), "before");
+            RunGit(repo, "add", path);
+            RunGit(repo, "commit", "-m", "Track existing file");
+            CreateWorktreeCandidate(repo, ids[0], path, "after");
+            var worktree = Assert.IsType<string>(GoalWorktrees.TryResolve(repo, ids[0]));
+            // Force stale stat entries without pacing or changing any tracked content.
+            File.SetLastWriteTimeUtc(Path.Combine(repo, path), DateTime.UnixEpoch);
+            File.SetLastWriteTimeUtc(Path.Combine(worktree, path), DateTime.UnixEpoch);
+            rootIndex = File.ReadAllBytes(Path.Combine(repo, ".git", "index"));
+            memberIndex = File.ReadAllBytes(Path.GetFullPath(
+                RunGitOutput(worktree, "rev-parse", "--git-path", "index").Trim(), worktree));
+        });
+        try
+        {
+            var worktree = Assert.IsType<string>(GoalWorktrees.TryResolve(copy.Repo, copy.GoalIds[0]));
+            var baseline = RunGitOutput(copy.Repo, "rev-parse", "HEAD").Trim();
+            var candidate = copy.Revisions[0];
+            // No preparatory refresh: the returned copy must already support read-tree.
+            RunGit(copy.Repo, "update-ref", "refs/heads/main", candidate, baseline);
+            RunGit(copy.Repo, "read-tree", "-m", "-u", baseline, candidate);
+            Assert.Equal("after", File.ReadAllText(Path.Combine(copy.Repo, path)));
+            Assert.Empty(RunGitOutput(copy.Repo, "status", "--porcelain").Trim());
+            RunGit(worktree, "update-ref", "refs/heads/" + GoalWorktrees.BranchName(copy.GoalIds[0]), baseline, candidate);
+            RunGit(worktree, "read-tree", "-m", "-u", candidate, baseline);
+            Assert.Equal("before", File.ReadAllText(Path.Combine(worktree, path)));
+            Assert.Empty(RunGitOutput(worktree, "status", "--porcelain").Trim());
+
+            var source = template.TemplatePath(key);
+            var sourceWorktree = Assert.IsType<string>(GoalWorktrees.TryResolve(source, copy.GoalIds[0]));
+            Assert.NotNull(rootIndex);
+            Assert.NotNull(memberIndex);
+            Assert.Equal(rootIndex, File.ReadAllBytes(Path.Combine(source, ".git", "index")));
+            Assert.Equal(memberIndex, File.ReadAllBytes(Path.GetFullPath(
+                RunGitOutput(sourceWorktree, "rev-parse", "--git-path", "index").Trim(), sourceWorktree)));
+            Assert.Equal(baseline, RunGitOutput(source, "rev-parse", "main").Trim());
+            Assert.Equal(candidate, RunGitOutput(sourceWorktree, "rev-parse", "HEAD").Trim());
+            Assert.Equal("before", File.ReadAllText(Path.Combine(source, path)));
+            Assert.Equal("after", File.ReadAllText(Path.Combine(sourceWorktree, path)));
+        }
+        finally
+        {
+            DeleteDirectory(copy.Repo);
+        }
+    }
+
+    [Fact]
+    public void CandidateCopy_RealConstruction_PreservesTopologyAndTrainOutcome()
+    {
+        var fresh = CreateReducedAcceptanceCohortRepository();
+        var (copy, copyKernel, copyGoals) = CreateReadyTrain();
+        var (sibling, _, siblingGoals) = CreateReadyTrain();
+        try
+        {
+            // This arm deliberately uses the original builders, independently of the recipe.
+            AddAcceptanceManifest(fresh);
+            var freshKernel = new AgentOrchestratorKernel();
+            var freshGoals = new[]
+            {
+                CreateCompletedGoal(freshKernel, "First train member", fresh),
+                CreateCompletedGoal(freshKernel, "Second train member", fresh),
+                CreateCompletedGoal(freshKernel, "Third train member", fresh)
+            };
+            string[] paths = ["tests/Mcg.AgentOrchestrator.Core.Tests/RestartFirst.cs",
+                "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/RestartSecond.cs",
+                "tests/Mcg.AgentOrchestrator.Dashboard.Tests/RestartThird.cs"];
+            string[] contents = ["first", "second", "third"];
+            var mainTree = RunGitOutput(fresh, "rev-parse", "main^{tree}").Trim();
+            Assert.Equal(mainTree, RunGitOutput(copy, "rev-parse", "main^{tree}").Trim());
+            for (var index = 0; index < freshGoals.Length; index++)
+            {
+                var goal = freshGoals[index];
+                var candidate = CreateWorktreeCandidate(fresh, goal.Id, paths[index], contents[index]);
+                freshKernel.RecordGoalRefinement(goal.Id, new RefinedSpec(goal.Objective,
+                    ["The full acceptance gate passes"], VerificationClass.TestVerifiable, [], [])
+                    { AcceptanceGateOwnedAcceptanceCriteria = ["The full acceptance gate passes"] });
+                freshKernel.MapCriterionEvidenceOwner(goal.Id, 0, 1, CriterionEvidenceOwner.Acceptance,
+                    "test", CriterionEvidenceScopes.FullAcceptanceGate, expectedCandidateSha: candidate);
+                var worktree = Assert.IsType<string>(GoalWorktrees.TryResolve(copy, copyGoals[index].Id));
+                Assert.StartsWith(copy + Path.DirectorySeparatorChar, worktree, StringComparison.OrdinalIgnoreCase);
+                Assert.Empty(RunGitOutput(worktree, "status", "--porcelain").Trim());
+                Assert.Equal(contents[index], File.ReadAllText(Path.Combine(worktree, paths[index])));
+                Assert.Equal(RunGitOutput(fresh, "rev-parse", candidate + "^{tree}").Trim(),
+                    RunGitOutput(worktree, "rev-parse", "HEAD^{tree}").Trim());
+                Assert.Equal(mainTree, RunGitOutput(worktree, "rev-parse", "HEAD^1^{tree}").Trim());
+                Assert.Equal(mainTree, RunGitOutput(fresh, "rev-parse", candidate + "^1^{tree}").Trim());
+                Assert.Equal(paths[index], RunGitOutput(worktree, "diff", "--name-only", "main...HEAD").Trim());
+                Assert.Equal(RunGitOutput(fresh, "diff", "--name-only", "main..." + candidate).Trim(),
+                    RunGitOutput(worktree, "diff", "--name-only", "main...HEAD").Trim());
+            }
+            var topology = RunGitOutput(copy, "worktree", "list", "--porcelain");
+            Assert.DoesNotContain("prunable", topology, StringComparison.Ordinal);
+            var worktrees = topology.Split('\n').Where(line => line.StartsWith("worktree ", StringComparison.Ordinal))
+                .Select(line => Path.GetFullPath(line[9..].Trim())).ToArray();
+            Assert.Equal(4, worktrees.Length);
+            Assert.Contains(Path.GetFullPath(copy), worktrees, StringComparer.OrdinalIgnoreCase);
+            Assert.All(worktrees, path =>
+            {
+                Assert.True(Path.GetFullPath(path).Equals(Path.GetFullPath(copy), StringComparison.OrdinalIgnoreCase) ||
+                    path.StartsWith(copy + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase));
+                Assert.Empty(RunGitOutput(path, "status", "--porcelain").Trim());
+            });
+
+            var prepared = template.TemplatePath("ready-train");
+            var preparedHead = RunGitOutput(prepared, "rev-parse", "main").Trim();
+            var preparedState = File.ReadAllBytes(OrchestratorWorkspace.ForDirectory(prepared).SqliteStatePath);
+            var freshOutcome = Run(fresh, freshKernel, freshGoals);
+            var copyOutcome = Run(copy, copyKernel, copyGoals);
+            Assert.Equal(freshOutcome, copyOutcome);
+            Assert.Equal(MergeTrainGateOutcome.Passed, copyOutcome.Outcome);
+            Assert.Equal(0, copyOutcome.Ejections);
+            Assert.Equal(1, copyOutcome.Runs);
+            Assert.All(copyGoals, goal => Assert.Equal(GoalStatus.Completed, goal.Status));
+            Assert.Equal(preparedHead, RunGitOutput(prepared, "rev-parse", "main").Trim());
+            Assert.Equal(preparedHead, RunGitOutput(sibling, "rev-parse", "main").Trim());
+            Assert.Equal(preparedState, File.ReadAllBytes(OrchestratorWorkspace.ForDirectory(prepared).SqliteStatePath));
+            for (var index = 0; index < copyGoals.Length; index++)
+            {
+                var original = RunGitOutput(prepared, "rev-parse", GoalWorktrees.BranchName(copyGoals[index].Id)).Trim();
+                var copiedTree = Assert.IsType<string>(GoalWorktrees.TryResolve(sibling, siblingGoals[index].Id));
+                File.WriteAllText(Path.Combine(copiedTree, "independent.txt"), "copy only");
+                RunGit(copiedTree, "add", "independent.txt");
+                RunGit(copiedTree, "commit", "-m", "Mutate copy only");
+                Assert.Equal(original, RunGitOutput(prepared, "rev-parse", GoalWorktrees.BranchName(copyGoals[index].Id)).Trim());
+                Assert.NotEqual(original, RunGitOutput(sibling, "rev-parse", GoalWorktrees.BranchName(siblingGoals[index].Id)).Trim());
+            }
+            File.WriteAllText(Path.Combine(copy, "independent.txt"), "main copy only");
+            RunGit(copy, "add", "independent.txt");
+            RunGit(copy, "commit", "-m", "Mutate copied main");
+            Assert.Equal(preparedHead, RunGitOutput(prepared, "rev-parse", "main").Trim());
+            Assert.Equal(preparedHead, RunGitOutput(sibling, "rev-parse", "main").Trim());
+        }
+        finally
+        {
+            DeleteDirectory(fresh);
+            DeleteDirectory(copy);
+            DeleteDirectory(sibling);
+        }
+
+        static (MergeTrainGateOutcome Outcome, int Ejections, int Runs, string Members) Run(
+            string repo, AgentOrchestratorKernel kernel, Goal[] goals)
+        {
+            var verifier = new SequenceAcceptanceVerifier([new(true, false, 0, null,
+                TestResultPaths: [WritePassingTrx(repo, "contract-green.trx")])]);
+            var driver = new ConductorDriver(kernel, OrchestratorWorkspace.ForDirectory(repo), verifier,
+                AgentCatalog.Default().Agents, WorkerProfileCatalog.Default(), cleanupHooks: CreateIsolatedCleanupContext(repo).Hooks);
+            var result = driver.RunMergeTrain(ProjectTrainSelection(driver, goals), goals, ConductorAutonomyPolicy.Permissive);
+            Assert.Equal(3, result.MemberResults.Count);
+            Assert.All(goals, goal => Assert.Equal(GoalStatus.Completed, goal.Status));
+            return (Assert.IsType<MergeTrainReceipt>(result.Receipt).Outcome, result.Ejections.Count, verifier.RunCount,
+                string.Join(",", goals.Select(goal => result.MemberResults[goal.Id.Value].Outcome.GetType().FullName)));
+        }
+    }
+
+    private (string Repo, AgentOrchestratorKernel Kernel, Goal[] Goals) CreateReadyTrain()
+    {
+        var copy = template.Copy("ready-train", 3, (preparedRepo, ids) =>
+        {
+            AddAcceptanceManifest(preparedRepo);
+            CreateWorktreeCandidate(preparedRepo, ids[0],
+                "tests/Mcg.AgentOrchestrator.Core.Tests/RestartFirst.cs", "first");
+            CreateWorktreeCandidate(preparedRepo, ids[1],
+                "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/RestartSecond.cs", "second");
+            CreateWorktreeCandidate(preparedRepo, ids[2],
+                "tests/Mcg.AgentOrchestrator.Dashboard.Tests/RestartThird.cs", "third");
+        });
+        var repo = copy.Repo;
         var kernel = new AgentOrchestratorKernel();
         var goals = new[]
         {
-            CreateCompletedGoal(kernel, "First train member", repo),
-            CreateCompletedGoal(kernel, "Second train member", repo),
-            CreateCompletedGoal(kernel, "Third train member", repo)
+            copy.CreateCompletedGoal(kernel, 0, "First train member"),
+            copy.CreateCompletedGoal(kernel, 1, "Second train member"),
+            copy.CreateCompletedGoal(kernel, 2, "Third train member")
         };
-        var candidates = new[]
-        {
-            CreateWorktreeCandidate(repo, goals[0].Id,
-                "tests/Mcg.AgentOrchestrator.Core.Tests/RestartFirst.cs", "first"),
-            CreateWorktreeCandidate(repo, goals[1].Id,
-                "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/RestartSecond.cs", "second"),
-            CreateWorktreeCandidate(repo, goals[2].Id,
-                "tests/Mcg.AgentOrchestrator.Dashboard.Tests/RestartThird.cs", "third")
-        };
+        var candidates = copy.Revisions;
         foreach (var (goal, candidate) in goals.Zip(candidates))
         {
             kernel.RecordGoalRefinement(goal.Id, new RefinedSpec(goal.Objective,

@@ -95,12 +95,12 @@ public sealed class OwnerConsoleViewModelBuilderTests
         Assert.Equal("Control plane", finished.Epic);
         Assert.Equal("Finished tasks", finished.Title);
         Assert.Equal("Active", finished.State);
-        Assert.Equal("-", finished.Stage);
+        Assert.Equal("in progress", finished.Stage);
         Assert.Equal(TimeSpan.FromMinutes(2), finished.Age);
         var review = Assert.Single(model.Board, row => row.GoalPrefix == "22222222");
         Assert.Equal(string.Empty, review.Epic);
         Assert.Equal("Review search", review.Title);
-        Assert.Equal("Reviewer", review.Stage);
+        Assert.Equal("in progress: Reviewer", review.Stage);
     }
 
     [Fact]

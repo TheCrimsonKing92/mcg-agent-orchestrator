@@ -134,7 +134,7 @@ public sealed class OwnerConsoleLandingBlockerViewTests
             if (scenario == "developer")
             {
                 Assert.Equal(OwnerConsoleAttention.WorkerRunning, expected.SortKey.Rank);
-                Assert.Equal("Developer", expected.Stage);
+                Assert.Equal("in progress: Developer", expected.Stage);
             }
         }
         Assert.Equal(Render(baseline), actualText);

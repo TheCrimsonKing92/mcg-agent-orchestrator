@@ -132,7 +132,7 @@ public sealed class OwnerConsoleGoalDialogTests
             harness.Questions.Items.Add(new("new-question", Id, OwnerQuestionKind.HumanInput, "Continue?"));
             view.Render(await Model(harness));
             await dialog.LastLoad.WaitAsync(TestContext.Current.CancellationToken);
-            Assert.Contains("Status: Verified", dialog.Current.Text);
+            Assert.Contains("Status: reviewed, awaiting gate", dialog.Current.Text);
             Assert.Contains("Landing: waiting for the gate (1st)", dialog.Current.Text);
             Assert.Equal(offset, dialog.Page.Offset);
             Assert.Contains("Open question (d)", dialog.Actions);

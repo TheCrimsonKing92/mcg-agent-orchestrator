@@ -34,17 +34,19 @@ internal static class OwnerConsoleStageDescriber
                     return $"queued for gate #{queuePosition}, behind {gate.Members[0].Id[..Math.Min(8, gate.Members[0].Id.Length)]}";
                 return "waiting for gate" + (queuePosition is null ? "" : $" ({OwnerConsoleHoldPhrase.Ordinal(queuePosition.Value)} in queue)");
             case OwnerConsoleAttention.WorkerRunning:
-                return OwnerConsoleBoardSortKey.RunningTask(goal)!.RequiredRole.ToString();
+                return Labelled(goal, OwnerConsoleBoardSortKey.RunningTask(goal)!.RequiredRole.ToString());
             case OwnerConsoleAttention.RecentTerminal:
                 var reason = goal.Status == GoalStatus.Failed
                     ? goal.Timeline.Where(item => item.Kind == ProgressKind.TaskFailed).MaxBy(item => item.OccurredAt)?.Message
                     : null;
                 reason ??= OwnerConsoleBoardSortKey.LatestPolicy(goal)?.Message;
-                return goal.Status.ToString().ToLowerInvariant() + ": " +
+                return OwnerConsoleStatusLabel.For(goal.Status) + ": " +
                     (OwnerHoldReason.FirstLine(reason) ?? "The reason was not recorded.");
-            case OwnerConsoleAttention.Other: return OwnerConsoleGoalDetail.Stage(goal);
+            case OwnerConsoleAttention.Other: return Labelled(goal, OwnerConsoleGoalDetail.Stage(goal));
             default: throw new ArgumentOutOfRangeException(nameof(key), key.Rank, "Unknown board attention rank.");
         }
     }
 
+    private static string Labelled(Goal goal, string role) => OwnerConsoleStatusLabel.For(goal.Status) +
+        (role == "-" ? "" : ": " + role);
 }
