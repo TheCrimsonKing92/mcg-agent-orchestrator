@@ -1915,6 +1915,7 @@ public static void DropToLow() {
                 buildChannel = new WorkerBuildRequestChannel(parameters.WorkingDirectory,
                     (buildService ?? throw new InvalidOperationException("Enrolled dispatch has no worker build service."))(buildReference));
             heartbeatHooks?.BeforeTaskIntentAdmission?.Invoke(startInfo);
+            WorkerMcgEnvironmentAllowlist.RemoveDisallowed(startInfo.Environment);
             startInfo.Environment[WorkerSandboxOptions.DispatchWorkerVariable] = "1";
             Process StartPreparedWorker()
             {
