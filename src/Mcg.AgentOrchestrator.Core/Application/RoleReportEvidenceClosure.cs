@@ -8,7 +8,8 @@ internal sealed class RoleReportEvidenceClosure(
 {
     internal IReadOnlyDictionary<HumanInputRequestId, string> Close(Goal goal,
         IEnumerable<HumanInputRequest> requests, string landingCandidateSha,
-        Func<string, string?> passedGateSourceForClass, Func<string, string?>? removedTestClassSource = null)
+        Func<string, string?> passedGateSourceForClass, Func<string, string?>? removedTestClassSource = null,
+        Func<string, string, bool>? conductorOnlyRange = null)
     {
         lock (requestLock)
         {
@@ -35,7 +36,7 @@ internal sealed class RoleReportEvidenceClosure(
                     ? "brief-version-differs"
                     : owner == "developer"
                         ? DeveloperSkipReason(goal, request, task, passedGateSourceForClass, removedTestClassSource, out tests, out gate)
-                        : RoundSkipReason(goal, task, role);
+                        : RoundSkipReason(goal, task, role, landingCandidateSha, conductorOnlyRange);
                 if (reason is not null)
                 {
                     skipped.Add(request.Id, reason);
@@ -103,7 +104,8 @@ internal sealed class RoleReportEvidenceClosure(
             return identity == name || segments.Length >= 2 && segments[^2] == name;
         });
 
-    private static string? RoundSkipReason(Goal goal, TaskSpec? task, AgentRole role)
+    private static string? RoundSkipReason(Goal goal, TaskSpec? task, AgentRole role,
+        string landingCandidateSha, Func<string, string, bool>? conductorOnlyRange)
     {
         if (task?.Status != WorkTaskStatus.Completed || task.LastVerification is not { } verification ||
             !WorkerResultBlockers.TryFindPassVerdict(verification))
@@ -112,9 +114,12 @@ internal sealed class RoleReportEvidenceClosure(
             blockers != WorkerResultBlockers.BlockersStatus.None))
             return "owner-round-incomplete";
         var candidate = Latest(goal, AgentRole.Developer)?.LastDispatch?.ResultCommit;
-        return !string.IsNullOrWhiteSpace(candidate) && !string.IsNullOrWhiteSpace(verification.ReviewedCommit) &&
-            string.Equals(verification.ReviewedCommit.Trim(), candidate, StringComparison.OrdinalIgnoreCase)
-                ? null : "owner-candidate-differs";
+        var reviewed = verification.ReviewedCommit?.Trim();
+        if (string.IsNullOrWhiteSpace(reviewed)) return "owner-candidate-differs";
+        if (!string.IsNullOrWhiteSpace(candidate) && string.Equals(reviewed, candidate, StringComparison.OrdinalIgnoreCase))
+            return null;
+        return !string.IsNullOrWhiteSpace(landingCandidateSha) && conductorOnlyRange?.Invoke(reviewed, landingCandidateSha) == true
+            ? null : "owner-candidate-differs";
     }
 
     private static TaskSpec? Latest(Goal goal, AgentRole role) => goal.Tasks

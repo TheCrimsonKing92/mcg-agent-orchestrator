@@ -18,7 +18,9 @@ internal static partial class LandingExecutor
         if (!string.IsNullOrWhiteSpace(candidateRevision))
             skipReasons = kernel.CloseRoleReportEvidence(goal.Id, candidateRevision,
                 RoleReportGateClassEvidence.For(orchestratorDirectory, goal.Id, candidateRevision),
-                RemovedTestClassSource(workspace, goal.Id, candidateRevision));
+                RemovedTestClassSource(workspace, goal.Id, candidateRevision),
+                (reviewed, landing) => ConductorOnlyCandidateRange.IsConductorOnly(
+                    workspace.ResolveExecutionDirectory(goal.Id), workspace.IntegrationBranch, reviewed, landing));
         var obligations = GateTestObligationEvaluator.Evaluate(goal, orchestratorDirectory, candidateRevision,
             new(workspace.ExecutionDirectory, workspace.IntegrationBranch), kernel.HumanInputRequests.ToArray());
         foreach (var result in obligations.Where(result => result.Outcome == GateTestObligationEvaluator.Outcome.Satisfied &&
