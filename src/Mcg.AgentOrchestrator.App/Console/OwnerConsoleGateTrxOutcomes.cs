@@ -1,5 +1,6 @@
 using System.Xml;
 using System.Xml.Linq;
+using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 
@@ -17,7 +18,13 @@ internal sealed record OwnerConsoleGateTrxOutcomes(bool Available,
     {
         try
         {
-            var results = XDocument.Load(path).Descendants()
+            var document = XDocument.Load(path);
+            var definitionsByTestId = document.Descendants()
+                .Where(element => element.Name.LocalName == "UnitTest" &&
+                    !string.IsNullOrWhiteSpace((string?)element.Attribute("id")))
+                .GroupBy(element => (string)element.Attribute("id")!, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
+            var results = document.Descendants()
                 .Where(element => element.Name.LocalName == "UnitTestResult").ToArray();
             var failures = new List<string>();
             var skipped = 0;
@@ -27,7 +34,8 @@ internal sealed record OwnerConsoleGateTrxOutcomes(bool Available,
                 switch (((string?)result.Attribute("outcome"))?.Trim().ToUpperInvariant())
                 {
                     case "FAILED": case "ERROR": case "TIMEOUT":
-                        failures.Add((string?)result.Attribute("testName") ?? "");
+                        definitionsByTestId.TryGetValue((string?)result.Attribute("testId") ?? "", out var definition);
+                        failures.Add(AcceptanceTrxTestIdentityResolver.Resolve(result, definition) ?? "");
                         break;
                     case "NOTEXECUTED": case "SKIPPED": skipped++; break;
                     case "PASSED": passed++; break;

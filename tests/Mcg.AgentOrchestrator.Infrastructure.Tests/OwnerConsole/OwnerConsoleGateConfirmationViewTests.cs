@@ -127,6 +127,47 @@ public sealed class OwnerConsoleGateConfirmationViewTests
         Assert.DoesNotContain("…", summary);
     }
 
+    [Theory]
+    [InlineData("verification-check", "Failed")]
+    [InlineData("check-complete", "Failed")]
+    [InlineData("check-complete", "Passed")]
+    public void Confirmation_MtpNamesWithTwoFailedLanes_LinksByResolvedIdentity(
+        string phase, string outcome)
+    {
+        using var fixture = new Fixture();
+        const string otherTarget = "infrastructure tests: Other";
+        fixture.WriteDefinedFailure(Target, "Sample.Tests.RealFailure", "Fails");
+        fixture.WriteDefinedFailure(otherTarget, "Sample.Tests.OtherFailure", "Fails");
+        fixture.WriteResults(Focused, "-run-1", (Failure, outcome));
+
+        var gate = fixture.Load(phase, outcome, otherFailedLane: true);
+        Assert.Equal(3, gate.Lanes.Count);
+        var lane = Assert.Single(gate.Lanes, row => row.Target == Target);
+        Assert.Equal(new[] { Failure + "(value: 1)" },
+            new OwnerConsoleGateFailureNames().ReadOutcomes(lane).FailureTestNames);
+        Assert.Equal(new[] { "RealFailure.Fails" }, lane.FailingTestNames);
+        var other = Assert.Single(gate.Lanes, row => row.Target == otherTarget);
+        Assert.Equal(new[] { "OtherFailure.Fails" }, other.FailingTestNames);
+        Assert.Null(other.Confirmation);
+        var confirmation = Assert.IsType<OwnerConsoleGateConfirmation>(lane.Confirmation);
+        Assert.Equal(phase == "verification-check", confirmation.Running);
+        Assert.Equal(1, confirmation.TargetCount);
+
+        var lines = Render(gate);
+        var summary = phase == "verification-check" ? "confirming: re-running 1 failed test(s), 47s" :
+            outcome == "Failed" ? "confirmed: failed again (real failure)" :
+            "not reproduced: passed on re-run (flake)";
+        var laneIndex = Array.FindIndex(lines, line => line.StartsWith(" x Remainder ", StringComparison.Ordinal));
+        Assert.True(laneIndex >= 0, "The failed Remainder lane must be visible.");
+        Assert.Equal("     RealFailure.Fails", lines[laneIndex + 1]);
+        Assert.Equal("     " + summary, lines[laneIndex + 2]);
+        Assert.Single(lines, line => line == "     " + summary);
+        Assert.EndsWith(phase == "verification-check" ? " | FAILING, confirming 1 failure(s)" :
+            outcome == "Failed" ? " | FAILED, 1 confirmed failure(s)" : " | FAILING", lines[0]);
+        Assert.DoesNotContain(lines, line => line.StartsWith("RUNNING", StringComparison.Ordinal));
+        Assert.DoesNotContain(lines, line => line.Contains("A friendly display name", StringComparison.Ordinal));
+    }
+
     private static string[] Render(OwnerConsoleGateProgress gate, int width = 200, bool expanded = false) =>
         OwnerConsoleGateLayout.Lines(gate, width, expanded).ToArray();
 
@@ -170,13 +211,34 @@ public sealed class OwnerConsoleGateConfirmationViewTests
             AcceptanceArtifactFileNames.BoundFileName(AcceptanceArtifactFileNames.SanitizeFileName(
                 Prefix + "." + AcceptanceArtifactFileNames.Slug(target) + suffix), ".trx"));
 
-        internal OwnerConsoleGateProgress Load(string? confirmationPhase = null, string outcome = "failed")
+        internal void WriteDefinedFailure(string target, string className, string methodName)
+        {
+            XNamespace ns = "http://microsoft.com/schemas/VisualStudio/TeamTest/2010";
+            var testId = Guid.NewGuid().ToString("D");
+            const string displayName = "A friendly display name(value: 1)";
+            new XDocument(new XElement(ns + "TestRun",
+                new XElement(ns + "Results", new XElement(ns + "UnitTestResult",
+                    new XAttribute("testId", testId.ToUpperInvariant()),
+                    new XAttribute("testName", displayName), new XAttribute("outcome", "Failed"))),
+                new XElement(ns + "TestDefinitions", new XElement(ns + "UnitTest",
+                    new XAttribute("id", testId), new XAttribute("name", displayName),
+                    new XElement(ns + "TestMethod", new XAttribute("className", className),
+                        new XAttribute("name", methodName)))))).Save(TrxPath(target, ""));
+        }
+
+        internal OwnerConsoleGateProgress Load(string? confirmationPhase = null, string outcome = "failed",
+            bool otherFailedLane = false)
         {
             var manifest = Path.Combine(_directory, "manifest.json");
             var log = Path.Combine(_directory, "conduct-events.log");
-            File.WriteAllText(manifest,
-                """{"engine":{"infrastructureTestLanes":[{"name":"Remainder","estimatedSerialSeconds":804.6}]}}""");
+            File.WriteAllText(manifest, JsonSerializer.Serialize(new
+            {
+                engine = new { infrastructureTestLanes = (otherFailedLane ? new[] { "Remainder", "Other" } : new[] { "Remainder" })
+                    .Select(name => new { name, estimatedSerialSeconds = 804.6 }) }
+            }));
             var events = new List<string> { Progress(-60, "check-complete", Target, "remainder", "failed") };
+            if (otherFailedLane)
+                events.Add(Progress(-59, "check-complete", "infrastructure tests: Other", "other", "failed"));
             if (confirmationPhase is not null)
                 events.Add(Progress(-47, confirmationPhase, Focused, "remainder-run-1", outcome));
             File.WriteAllLines(log, events);
