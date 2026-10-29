@@ -210,7 +210,7 @@ public sealed class OwnerConsoleSelectedPreviewTests
             await TestHangGuard.WaitAsync(loaded.Task, "selected summary load entered");
             view.Window.Layout(new Size(100, 40));
             var frame = Assert.Single(view.Window.SubViews.OfType<FrameView>(), frame => frame.Title == "SELECTED 11111111");
-            Assert.Equal("Loading…", Assert.Single(frame.SubViews.OfType<Label>()).Text);
+            Assert.Equal(string.Join('\n', Title, Stage), Assert.Single(frame.SubViews.OfType<Label>()).Text);
         }
         finally { release.TrySetResult(); }
         await TestHangGuard.WaitAsync(view.PreviewLoad, "selected panel publication");

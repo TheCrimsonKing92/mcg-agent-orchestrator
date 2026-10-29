@@ -1,4 +1,3 @@
-using System.Collections.ObjectModel;
 using Terminal.Gui.Input;
 using Terminal.Gui.ViewBase;
 using Terminal.Gui.Views;
@@ -11,6 +10,7 @@ internal sealed class OwnerConsoleGateDialog : FrameView
     private readonly Label _footer = new() { Y = Pos.AnchorEnd(1), Width = Dim.Fill(), Height = 1,
         Text = OwnerConsoleDialogBindings.GateHelp.HintLabel! };
     private OwnerConsoleGateProgress? _gate;
+    internal OwnerConsoleListRenderer SourceRenderer { get; } = new();
     private string? _goalId;
     internal bool Expanded { get; private set; }
     internal bool IsOpen { get; private set; }
@@ -52,8 +52,8 @@ internal sealed class OwnerConsoleGateDialog : FrameView
         }
         var selected = _body.SelectedItem ?? 0;
         Lines = OwnerConsoleGateLayout.Lines(gate, OwnerConsoleEpicFormatter.Width(_body.Viewport.Width), Expanded);
-        _body.SetSource(new ObservableCollection<string>(Lines));
-        _body.SelectedItem = Math.Clamp(selected, 0, Math.Max(0, Lines.Count - 1));
+        if (SourceRenderer.Apply(_body, Lines))
+            _body.SelectedItem = Math.Clamp(selected, 0, Math.Max(0, Lines.Count - 1));
         RenderTitle();
     }
 

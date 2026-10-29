@@ -5,10 +5,11 @@ namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 
 internal static class OwnerConsoleActivityTitle
 {
-    internal static string Title(OwnerConsoleOverflow overflow, bool following, int columns, string? filter = null)
+    internal static string Title(OwnerConsoleOverflow overflow, bool following, int columns, string? filter = null,
+        string? status = null)
     {
         filter = OwnerConsoleActivityFilter.Normalize(filter);
-        const string baseTitle = "ACTIVITY";
+        var baseTitle = "ACTIVITY" + (status is null ? "" : $" ({status})");
         var longSuffix = (overflow.Above > 0 ? $" · {overflow.Above} above" : "") +
             (overflow.Below > 0 ? $" · {overflow.Below} below" : "");
         var longTitle = baseTitle + (filter is null ? "" : OwnerConsoleActivityFilter.LongTitle(filter)) + " · " + (following ? "following" : "inspecting") + longSuffix;

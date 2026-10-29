@@ -1,4 +1,3 @@
-using System.Collections.ObjectModel;
 using Terminal.Gui.Input;
 using Terminal.Gui.ViewBase;
 using Terminal.Gui.Views;
@@ -20,6 +19,7 @@ internal sealed class OwnerConsoleDecisionDialog : Dialog
     private string? _text;
     private bool _formatting;
     private bool _disposed;
+    private readonly OwnerConsoleListRenderer _source = new();
 
     internal event Action? Closed;
     internal string BannerText { get; private set; } = "";
@@ -92,8 +92,9 @@ internal sealed class OwnerConsoleDecisionDialog : Dialog
             var height = _body.Viewport.Height > 0 ? _body.Viewport.Height : 15;
             if (_text != state.Text) { _text = state.Text; _page = new(state.Text, width, height); }
             else _page.Resize(width, height);
-            _body.SetSource(new ObservableCollection<string>(_page.Visible));
-            _body.SelectedItem = _page.Selected - _page.Offset;
+            var changed = _source.Apply(_body, _page.Visible);
+            var selected = _page.Selected - _page.Offset;
+            if (changed || _body.SelectedItem != selected) _body.SelectedItem = selected;
             var title = OwnerConsoleOverflow.Title("Decision", _page.Overflow,
                 Frame.Width - OwnerConsoleOverflow.TitleChrome);
             if (Title != title) Title = title;

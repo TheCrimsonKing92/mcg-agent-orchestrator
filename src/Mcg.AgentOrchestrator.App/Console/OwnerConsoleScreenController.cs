@@ -12,6 +12,7 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
 {
     private readonly OwnerEpicDetailQuery _epicDetail = new(epics, clock);
     private readonly OwnerGoalDetailQuery _goalDetail = goalDetail;
+    private readonly OwnerConsoleLastGood<string, OwnerConsoleGoalDialog.Content> _goalLastGood = new();
     private readonly object _notificationGate = new();
     private readonly IOwnerConsoleNotifier _notifier = notifier ?? new NullOwnerConsoleNotifier();
     private readonly OwnerConsoleNotificationDetector _notifications = new(notifications ?? new());
@@ -134,10 +135,11 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
     {
         cancellationToken.ThrowIfCancellationRequested();
         var row = Model?.Board.FirstOrDefault(item => !item.IsForeign && !item.IsDiagnostic && item.GoalId == goalId);
-        using var dialog = new OwnerConsoleGoalDialog(this, OwnerConsoleGoalDetailLoading.Placeholder(goalId, row),
+        var retained = _goalLastGood.TryGet(goalId, out var prior);
+        using var dialog = new OwnerConsoleGoalDialog(this, retained ? prior : OwnerConsoleGoalDetailLoading.Placeholder(goalId, row),
             token => ComposeGoalAsync(goalId, token),
             decision => ShowDecisionAsync(decision, operation, cancellationToken), dialogs.ShowTextAsync, cancellationToken,
-            loadOnStart: true);
+            loadOnStart: true, initialContentLoaded: retained, remember: content => _goalLastGood.Remember(goalId, content));
         await dialogs.ShowGoalAsync(dialog);
         _requestedEpicId = dialog.RequestedEpicId;
         _requestedGateGoalId = dialog.RequestedGateGoalId;
