@@ -2100,7 +2100,7 @@ internal static partial class CliPersistentStateRunner
             }
             catch (Exception ex)
             {
-                throw GoalCreationDeliveryIncomplete(goal.Id, ex);
+                throw GoalCreationSideEffectDelivery.Incomplete(goal.Id, ex);
             }
         }
 
@@ -2251,7 +2251,7 @@ internal static partial class CliPersistentStateRunner
         }
         catch (Exception ex)
         {
-            throw GoalCreationDeliveryIncomplete(goal.Id, ex);
+            throw GoalCreationSideEffectDelivery.Incomplete(goal.Id, ex);
         }
     }
 
@@ -2306,12 +2306,6 @@ internal static partial class CliPersistentStateRunner
 
         return new GoalCreationDeliveryResult(goalId.Value, GoalCreationDeliveryDisposition.Delivered);
     }
-
-    private static InvalidOperationException GoalCreationDeliveryIncomplete(GoalId goalId, Exception exception) =>
-        new(
-            $"GOAL_CREATE_DELIVERY_INCOMPLETE goal={goalId.Value} " +
-            $"retry=\"goal-delivery-retry {goalId.Value}\" detail={exception.Message}",
-            exception);
 
     private static void PersistPostCreationGoalChanges(
         ITransactionalOrchestratorStateRepository stateRepository,

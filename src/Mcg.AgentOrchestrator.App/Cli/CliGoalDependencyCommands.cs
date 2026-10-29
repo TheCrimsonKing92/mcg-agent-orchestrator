@@ -68,9 +68,12 @@ internal static class CliGoalDependencyCommands
         return dependencies;
     }
 
-    internal static void ApplyAtCreation(AgentOrchestratorKernel kernel, Goal created, IReadOnlyList<Goal> dependencies)
+    internal static IReadOnlyCollection<string> ApplyAtCreation(AgentOrchestratorKernel kernel, Goal created, IReadOnlyList<Goal> dependencies)
     {
+        // Capture derived edges before explicit edges mutate DependsOn, including overlapping edges.
+        var preparedSourceBacklogDependencies = created.DependsOn.Select(id => id.Value).ToArray();
         foreach (var dependency in dependencies)
             kernel.SetGoalDependency(created.Id, dependency.Id);
+        return preparedSourceBacklogDependencies;
     }
 }
