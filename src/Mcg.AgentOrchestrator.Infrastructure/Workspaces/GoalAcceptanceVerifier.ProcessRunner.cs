@@ -48,11 +48,9 @@ public sealed partial class GoalAcceptanceVerifier
         IReadOnlyDictionary<string, string?> childEnvironmentOverrides,
         bool resolveBareCommand = true,
         CancellationToken cancellationToken = default) =>
-        RunProcessAsync(
+        AcceptanceProcessTestContext.RunManifestCommandAsync(
             BuildCommandArguments(check), workingDirectory, commandTimeout,
-            forceUtf8ConsoleOutput: false, cancellationToken,
-            resolveBareCommand: resolveBareCommand,
-            childEnvironmentOverrides: childEnvironmentOverrides);
+            childEnvironmentOverrides, resolveBareCommand, cancellationToken);
 
     internal static Task<(CommandResult Result, string HeartbeatPath)> RunProcessWithHeartbeatForTestsAsync(
         string[] arguments,
@@ -82,30 +80,11 @@ public sealed partial class GoalAcceptanceVerifier
         CancellationToken timeoutSignal = default,
         Func<Process, SpawnProcessIdentity>? registrationIdentityReader = null)
     {
-        var heartbeatContext = new GateHeartbeatContext(
-            "test-goal",
-            "verification-check",
-            "owned-child-cleanup",
-            null,
-            heartbeatPath,
-            null,
-            string.Join(' ', arguments.Select(QuoteForDisplay)),
-            null);
         var result = await RunProcessAsync(
-                arguments,
-                workingDirectory,
-                commandTimeout,
-                forceUtf8ConsoleOutput: false,
-                cancellationToken,
-                cleanupObserver,
-                timeoutSignal,
-                registrationIdentityReader is null
-                    ? null
-                    : process => new SpawnProcessIdentityReadResult(
-                        registrationIdentityReader(process),
-                        1,
-                        "test-identity-seam"),
-                heartbeatContext: heartbeatContext).ConfigureAwait(false);
+            arguments, workingDirectory, commandTimeout, forceUtf8ConsoleOutput: false,
+            cancellationToken, cleanupObserver, timeoutSignal,
+            AcceptanceProcessTestContext.IdentityReader(registrationIdentityReader),
+            heartbeatContext: AcceptanceProcessTestContext.Heartbeat(arguments, heartbeatPath)).ConfigureAwait(false);
         return (result, heartbeatPath);
     }
 
@@ -142,8 +121,7 @@ public sealed partial class GoalAcceptanceVerifier
         bool stopOnCaptureLimit = false,
         bool? keepCaptureFiles = null,
         Action<int>? resumeObserver = null,
-        bool resolveBareCommand = false,
-        IReadOnlyDictionary<string, string?>? childEnvironmentOverrides = null) =>
+        bool resolveBareCommand = false) =>
         await AcceptanceCheckProcessInvoker.RunAsync(
             arguments, workingDirectory, commandTimeout, forceUtf8ConsoleOutput, cancellationToken,
             timeoutSignal, registrationIdentityReader, new AcceptanceProcessRequest
@@ -163,7 +141,6 @@ public sealed partial class GoalAcceptanceVerifier
                 KeepCaptureFiles = keepCaptureFiles,
                 ResumeObserver = resumeObserver,
                 ResolveBareCommand = resolveBareCommand,
-                ChildEnvironmentOverrides = childEnvironmentOverrides,
             }).ConfigureAwait(false);
 
     internal static class ProcessInvokerAccess

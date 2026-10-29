@@ -67,30 +67,13 @@ internal static class AcceptanceCheckProcessInvoker
         var keepOutputFiles = false;
         var stdoutPipeName = OperatingSystem.IsWindows() ? $"mcg-acc-{Guid.NewGuid():N}-out" : null;
         var stderrPipeName = OperatingSystem.IsWindows() ? $"mcg-acc-{Guid.NewGuid():N}-err" : null;
-        var startInfo = GoalAcceptanceVerifierCaptureCustody.BuildAcceptanceProcessStartInfo(
+        var startInfo = AcceptanceShellProcessStartInfo.ForCheck(
             arguments,
             workingDirectory,
             stdoutPipeName is null ? null : $@"\\.\pipe\{stdoutPipeName}",
             stderrPipeName is null ? null : $@"\\.\pipe\{stderrPipeName}",
             forceUtf8ConsoleOutput,
-            environment =>
-            {
-                AcceptanceHermeticEnvironment.ConfigureHermeticVerificationEnvironment(
-                    environment, workingDirectory, heartbeatContext?.BuildEnvironmentRoot);
-                if (string.IsNullOrWhiteSpace(gateInvocationId))
-                    TempRootApparatusLossReceiptStore.ApplyCurrentScope(environment);
-                else
-                    TempRootApparatusLossReceiptStore.ApplyScope(environment, gateInvocationId, apparatusReceiptPath);
-                if (request.ChildEnvironmentOverrides is { } overrides)
-                {
-                    foreach (var pair in overrides)
-                    {
-                        if (pair.Value is null) environment.Remove(pair.Key);
-                        else environment[pair.Key] = pair.Value;
-                    }
-                }
-            },
-            request.ResolveBareCommand,
+            request,
             out var resolvedCommandPath);
         CancellationTokenSource? captureDrainCts = null;
         Task<CaptureLimitResult>[]? captureDrains = null;

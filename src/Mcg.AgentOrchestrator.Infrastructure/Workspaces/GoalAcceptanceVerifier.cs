@@ -3466,54 +3466,17 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         return null;
     }
 
-    private static string? BuildManagedDotnetResultSummary(CommandResult result, bool transientCompilerLockRetried)
-    {
-        var summary = AppendResourceReceipt(
+    private static string? BuildManagedDotnetResultSummary(CommandResult result, bool transientCompilerLockRetried) =>
+        AcceptanceCommandResultSummary.ManagedDotnet(result,
             result.TimedOut ? BuildTimeoutSummary(result) : ExtractResultSummary(result.Output),
-            result.ResourceAccounting,
-            result.ResourceAccountingExpected);
-        if (!transientCompilerLockRetried)
-        {
-            return summary;
-        }
-
-        const string remediation = "build artifact lock detected; holder attributed; remediation retried";
-        return string.IsNullOrWhiteSpace(summary)
-            ? remediation
-            : $"{remediation}; {summary}";
-    }
+            transientCompilerLockRetried);
 
     private static string PrefixResultSummary(string prefix, string? summary) =>
         AcceptanceDotnetBuildPhase.PrefixResultSummary(prefix, summary);
 
-    private static string? BuildGenericCommandResultSummary(CommandResult result)
-    {
-        var summary = result.TimedOut ? BuildTimeoutSummary(result) : ExtractResultSummary(result.Output);
-        if (result.ResolvedCommandPath is { } resolvedPath)
-        {
-            var receipt = $"resolved_command={QuoteForDisplay(resolvedPath)}";
-            summary = string.IsNullOrWhiteSpace(summary) ? receipt : $"{summary}; {receipt}";
-        }
-        return AppendResourceReceipt(summary, result.ResourceAccounting, result.ResourceAccountingExpected);
-    }
-
-    private static string? AppendResourceReceipt(
-        string? summary,
-        TaskProcessResourceAccounting? accounting,
-        bool accountingExpected)
-    {
-        var receipt = accounting is null
-            ? accountingExpected ? "RESOURCE phase=gate cpu_ms=0 peak_mem_bytes=0 io_bytes=0 accounting_source=accounting-unavailable" : null
-            : $"RESOURCE phase=gate cpu_ms={accounting.CpuMilliseconds} peak_mem_bytes={accounting.PeakMemoryBytes} io_bytes={accounting.IoBytes} accounting_source={accounting.AccountingSource}";
-        if (receipt is null)
-        {
-            return summary;
-        }
-
-        return string.IsNullOrWhiteSpace(summary)
-            ? receipt
-            : $"{summary}; {receipt}";
-    }
+    private static string? BuildGenericCommandResultSummary(CommandResult result) =>
+        AcceptanceCommandResultSummary.GenericCommand(result,
+            result.TimedOut ? BuildTimeoutSummary(result) : ExtractResultSummary(result.Output));
 
     // A testhost that crashes MID-run ("host process exited unexpectedly" / "Test Run Aborted") with no
     // completed all-passed banner and no real test failure is an environmental abort, not a verdict. A
