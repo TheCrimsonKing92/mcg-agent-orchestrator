@@ -187,7 +187,7 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalQueriesAndLanding
             resumeCommand: "provider auth resume");
 
         var output = CaptureConsole(() =>
-            ConsoleViews.PrintHumanInputWorklist(goal, kernel.BuildHumanInputWorklist(goal.Id)));
+            ReadinessWorklistTextView.PrintHumanInputWorklist(goal, kernel.BuildHumanInputWorklist(goal.Id)));
 
         Xunit.Assert.Contains("command: provider auth resume", output, StringComparison.Ordinal);
         Xunit.Assert.DoesNotContain($"answer {request.Id.Value} <answer>", output, StringComparison.Ordinal);
