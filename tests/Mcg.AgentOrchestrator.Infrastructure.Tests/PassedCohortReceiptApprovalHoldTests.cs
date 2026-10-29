@@ -165,14 +165,16 @@ public sealed class PassedCohortReceiptApprovalHoldTests : AcceptanceCohortWorkf
         internal AcceptanceCohortReceipt Receipt { get; }
         internal Dictionary<GoalId, GoalStatus> PersistedStatuses { get; } = [];
 
-        internal Scenario()
+        internal Scenario(int? protectedMemberIndex = 0)
         {
             AddAcceptanceManifest(Repo);
             Goals = [CreateCompletedGoal(Kernel, "Protected member", Repo), CreateCompletedGoal(Kernel, "Ordinary member", Repo)];
             CandidateRevisions =
             [
-                CreateWorktreeCandidate(Repo, Goals[0].Id, Protected, "protected"),
-                CreateWorktreeCandidate(Repo, Goals[1].Id, "tests/ApprovalPartner.cs", "ordinary")
+                CreateWorktreeCandidate(Repo, Goals[0].Id,
+                    protectedMemberIndex == 0 ? Protected : "tests/ApprovalFirst.cs", "protected"),
+                CreateWorktreeCandidate(Repo, Goals[1].Id,
+                    protectedMemberIndex == 1 ? Protected : "tests/ApprovalPartner.cs", "ordinary")
             ];
             foreach (var (goal, revision) in Goals.Zip(CandidateRevisions))
             {
@@ -215,10 +217,11 @@ public sealed class PassedCohortReceiptApprovalHoldTests : AcceptanceCohortWorkf
         internal void AssertGateStarted() =>
             Assert.True(_started.Wait(TimeSpan.FromSeconds(30)), "Ordinary admission did not start a new gate.");
 
-        internal IReadOnlyList<string> Tick(OperatorIntentCoordinator? intents = null)
+        internal IReadOnlyList<string> Tick(OperatorIntentCoordinator? intents = null,
+            ConductEventLogWriter? events = null)
         {
             BatchTickSummary? tick = null;
-            new ConductorBatchLoop(operatorIntents: intents).Run(Kernel, Driver, ConductorAutonomyPolicy.Permissive,
+            new ConductorBatchLoop(operatorIntents: intents, conductEventLogWriter: events).Run(Kernel, Driver, ConductorAutonomyPolicy.Permissive,
                 Path.Combine(Repo, "stop-does-not-exist"), maxIterations: 1, onTick: summary => tick = summary,
                 persistGoalTick: (kernel, ids) =>
                 {
