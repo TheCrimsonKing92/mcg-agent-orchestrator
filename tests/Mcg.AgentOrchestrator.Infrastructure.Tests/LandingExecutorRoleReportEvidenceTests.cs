@@ -1,5 +1,6 @@
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 // Real git repositories use the existing landing runner's isolated fixture and cleanup.
@@ -187,7 +188,10 @@ public sealed class LandingExecutorRoleReportEvidenceTests
                 goal, candidate, ProspectiveEvidenceGateFixture.PassingRows);
             Assert.Equal(2, kernel.GetPendingHumanInput(goal.Id).Count);
 
-            var result = LandingExecutor.Execute(kernel, goal, workspace);
+            // The retighten touches shared infrastructure; permit that independent ownership gate
+            // so this fixture tests whether the owner evidence waits allow landing.
+            var result = LandingExecutor.Execute(kernel, goal, workspace,
+                policy: ConductorAutonomyPolicy.Permissive);
 
             if (change == "conductor")
             {
@@ -205,9 +209,15 @@ public sealed class LandingExecutorRoleReportEvidenceTests
             {
                 Assert.False(result.MainAdvanced);
                 var escalation = Assert.IsType<LandingDecision.Escalate>(result.Decision);
-                Assert.Contains("owner round not accepted as evidence: owner-candidate-differs", escalation.Reason);
-                Assert.False(reviewerWait.IsCompleted);
-                Assert.False(testerWait.IsCompleted);
+                Assert.Equal(2, escalation.Decision!.Rung);
+                Assert.Equal(2, kernel.GetPendingHumanInput(goal.Id).Count);
+                Assert.All(new[] { reviewerWait, testerWait }, wait =>
+                {
+                    Assert.False(wait.IsCompleted);
+                    Assert.Null(wait.Answer);
+                    Assert.Contains(goal.Timeline, item => item.Kind == ProgressKind.TaskNote &&
+                        item.Message == $"ROLE_REPORT_EVIDENCE_SKIPPED request={wait.Id.Value[..8]} reason=owner-candidate-differs");
+                });
                 Assert.Equal(mainBefore, LandingExecutorTests.ReadGit(repo, "rev-parse", "main"));
             }
         }
