@@ -23,7 +23,7 @@ public sealed class PassedCohortReceiptApprovalHoldTests : AcceptanceCohortWorkf
             Assert.All(scenario.Goals, goal => Assert.Contains(
                 $"goal={goal.Id.Value[..8]}", progress.Single(line =>
                     line.StartsWith("ADMISSION ", StringComparison.Ordinal) &&
-                    line.EndsWith($" goal={goal.Id.Value[..8]}", StringComparison.Ordinal))));
+                    RecipientGoalField(line) == $"goal={goal.Id.Value[..8]}")));
             Assert.DoesNotContain(progress, line => line.Contains("ACCEPTANCE_COHORT_ENTRY", StringComparison.Ordinal) ||
                 line.Contains("outcome=inflight", StringComparison.Ordinal) ||
                 line.Contains("result=admitted", StringComparison.Ordinal));
@@ -78,9 +78,9 @@ public sealed class PassedCohortReceiptApprovalHoldTests : AcceptanceCohortWorkf
         var waiting = scenario.Goals[0].Id.Value[..8];
         foreach (var member in scenario.Goals)
         {
-            // The shared reason also names the waiting goal; the final field identifies the recipient.
+            // The shared reason also names the waiting goal; the last goal field identifies the recipient.
             var line = Assert.Single(progress.Where(line => line.StartsWith("ADMISSION ", StringComparison.Ordinal) &&
-                line.EndsWith($" goal={member.Id.Value[..8]}", StringComparison.Ordinal)));
+                RecipientGoalField(line) == $"goal={member.Id.Value[..8]}"));
             Assert.Contains($"receipt={scenario.Receipt.ReceiptId}", line, StringComparison.Ordinal);
             Assert.Contains($"cohort waits on landing-denylist approval for {waiting}, not on a gate", line, StringComparison.Ordinal);
             Assert.Contains($"approve-policy-change {waiting} {scenario.CandidateRevisions[0]} --text-file <reason-file>", line, StringComparison.Ordinal);
@@ -115,6 +115,12 @@ public sealed class PassedCohortReceiptApprovalHoldTests : AcceptanceCohortWorkf
                 scenario.Kernel, [second], [candidate], scenario.Goals, new HashSet<GoalId> { scenario.Goals[0].Id },
                 _ => true, new HashSet<string>(), results, 1, progress.Add);
     }
+
+    // EmitProgress appends a timestamp after the recipient. Ignore that suffix without matching
+    // the waiting member's goal field embedded earlier in the shared approval reason.
+    private static string? RecipientGoalField(string line) =>
+        line.Split(' ', StringSplitOptions.RemoveEmptyEntries)
+            .LastOrDefault(field => field.StartsWith("goal=", StringComparison.Ordinal));
 
     private sealed class Scenario : IDisposable
     {
