@@ -73,17 +73,17 @@ public sealed class RemoteExecutorSerializedKeyClaimTests
         {
             case "acceptance":
                 f.Executor.Submit = (request, _) => Task.FromResult(new RemoteLaneSubmission(f.CompletedHandle(request)));
-                var accepted = await coordinator.RunRemoteAsync(lane, entry, TimeSpan.FromMinutes(1), default);
+                var accepted = await coordinator.RunRemoteAsync(lane, entry, TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(1), default);
                 Assert.NotNull(accepted.Accepted);
                 Assert.Equal(RemoteLaneOutcomeCode.Accepted, Assert.Single(f.Health()).Outcome);
                 break;
             case "executor-busy":
                 f.Executor.Submit = (_, _) => Task.FromResult(new RemoteLaneSubmission(null, "executor-busy"));
-                Assert.Null((await coordinator.RunRemoteAsync(lane, entry, TimeSpan.FromMinutes(1), default)).Accepted);
+                Assert.Null((await coordinator.RunRemoteAsync(lane, entry, TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(1), default)).Accepted);
                 Assert.Equal(RemoteLaneOutcomeCode.ExecutorBusy, Assert.Single(f.Health()).Outcome);
                 break;
             case "unreachable":
-                Assert.Null((await coordinator.RunRemoteAsync(lane, entry, TimeSpan.FromMinutes(1), default)).Accepted);
+                Assert.Null((await coordinator.RunRemoteAsync(lane, entry, TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(1), default)).Accepted);
                 Assert.Equal(RemoteLaneOutcomeCode.Unreachable, Assert.Single(f.Health()).Outcome);
                 break;
             case "cache-reuse": coordinator.Release(entry.Id, lane.Name); break;

@@ -1,5 +1,4 @@
 using System.Runtime.CompilerServices;
-using System.Globalization;
 using Mcg.AgentOrchestrator.Core;
 using static Mcg.AgentOrchestrator.Infrastructure.AcceptancePolicyShardPlanner;
 
@@ -125,29 +124,6 @@ public sealed partial class GoalAcceptanceVerifier
     internal static IReadOnlyDictionary<(string Lane, string Filter), RemoteExecutorLaneSeconds>
         ReadRemoteLaneOfferHistory(string path) => RemoteLaneOfferHistoryReader.Read(path);
 
-    private sealed class RemoteLaneOfferPlan(IReadOnlyDictionary<string, RemoteLaneOfferInputs> inputs)
-    {
-        private readonly object _sync = new();
-        private readonly Dictionary<string, RemoteLaneOfferDecision> _decisions = new(StringComparer.Ordinal);
-        private double? _finish;
-
-        internal RemoteLaneOfferDecision Decide(string lane, int concurrency, Action<string> report)
-        {
-            lock (_sync)
-            {
-                if (_decisions.TryGetValue(lane, out var existing)) return existing;
-                _finish ??= RemoteLaneOfferPolicy.ExpectedLocalFinishSeconds(inputs.Values.Select(input =>
-                    RemoteLaneOfferPolicy.ResolveLocalSeconds(input.LocalMedianSeconds, input.LocalSamples,
-                        input.ManifestEstimateSeconds)), concurrency);
-                var decision = RemoteLaneOfferPolicy.Decide(inputs[lane] with { ExpectedLocalFinishSeconds = _finish.Value });
-                _decisions.Add(lane, decision);
-                report(string.Create(CultureInfo.InvariantCulture,
-                    $"REMOTE_LANE_POLICY lane=\"{lane}\" decision={(decision.Offer ? "offer" : "keep-local")} reason={decision.Reason} L={decision.LocalSeconds:0.###} Ln={decision.Inputs.LocalSamples} R={decision.RemoteSeconds:0.###} Rn={decision.Inputs.RemoteSamples} F={_finish.Value:0.###}") + RemoteLaneOfferPolicy.FailureFields(decision));
-                return decision;
-            }
-        }
-    }
-
     private void ReportRemoteLanePolicy(string line)
     {
         Console.WriteLine(line);
@@ -161,10 +137,12 @@ public sealed partial class GoalAcceptanceVerifier
         IReadOnlyList<AcceptanceManifestCheck> shards, int concurrency, AcceptancePartitionVerdictCache? cache, GoalId? goal, int slot)
     {
         remote.Occupancy ??= new(goal?.Value, slot, _storageRoot, GateHeartbeatRunClass.Classify(_executionContext), GateHeartbeatRunClass.ResolveRunId(_executionContext));
-        return new(lane => _remoteLaneOfferPlans.GetValue(remote, _ => throw new InvalidOperationException("Remote lane offer plan missing."))
-                .Decide(lane, shards.All(UsesMicrosoftTestingPlatform) ? concurrency : 1, ReportRemoteLanePolicy).Offer,
+        var plan = _remoteLaneOfferPlans.GetValue(remote, _ => throw new InvalidOperationException("Remote lane offer plan missing."));
+        return new(lane => plan.Decide(lane, shards.All(UsesMicrosoftTestingPlatform) ? concurrency : 1,
+                EngineSettings.ResolveCheckTimeout(shards.FirstOrDefault(check => check.Name == lane)?.TimeoutMinutes), ReportRemoteLanePolicy).Offer,
             (check, entry) => AcceptanceGateLaneProgress.RemoteStarted(goal, check.Name, entry.Id, slot, _storageRoot, EmitGateProgress),
-            check => EngineSettings.ResolveCheckTimeout(check.TimeoutMinutes), cache, _timeProvider);
+            check => EngineSettings.ResolveCheckTimeout(check.TimeoutMinutes),
+            check => plan.Deadline(check.Name, EngineSettings.ResolveCheckTimeout(check.TimeoutMinutes)), cache, _timeProvider);
     }
     private RemoteLaneEarlyOffer? StartRemoteLaneEarlyOffer(IReadOnlyList<AcceptanceManifestCheck> checks,
         AcceptancePartitionVerdictCache? cache, GoalId? goal, int? slot, DotnetBuildEnvironmentLease? lease,

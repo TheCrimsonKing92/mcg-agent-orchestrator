@@ -229,7 +229,7 @@ public sealed class RemoteLaneCoordinatorLeaseDecisionTests
             Assert.Equal(_entry, _coordinator.TryClaimIdleExecutor());
         }
         internal Task<RemoteLaneOutcome> RunAsync() =>
-            _coordinator!.RunRemoteAsync(_check, _entry, TimeSpan.FromSeconds(120), CancellationToken.None);
+            _coordinator!.RunRemoteAsync(_check, _entry, TimeSpan.FromSeconds(120), TimeSpan.FromSeconds(120), CancellationToken.None);
         internal RemoteExecutorHealthRecord Row() => Assert.Single(RemoteExecutorHealthLedger.ReadAll(Ledger));
         internal JsonDocument Json() => JsonDocument.Parse(Assert.Single(File.ReadAllLines(Ledger)));
         internal void AssertReleasedAndRetired()

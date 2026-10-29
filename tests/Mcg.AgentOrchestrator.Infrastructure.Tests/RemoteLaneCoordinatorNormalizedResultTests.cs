@@ -151,7 +151,7 @@ public sealed class RemoteLaneCoordinatorNormalizedResultTests
         }
 
         internal Task<RemoteLaneOutcome> RunAsync() =>
-            _coordinator.RunRemoteAsync(_check, _entry, TimeSpan.FromMinutes(10), CancellationToken.None);
+            _coordinator.RunRemoteAsync(_check, _entry, TimeSpan.FromMinutes(10), TimeSpan.FromMinutes(10), CancellationToken.None);
 
         internal AcceptanceCheckResult AssertAccepted(RemoteLaneOutcome outcome)
         {
