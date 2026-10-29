@@ -122,7 +122,7 @@ public sealed class PassedCohortReceiptApprovalHoldTests : AcceptanceCohortWorkf
         line.Split(' ', StringSplitOptions.RemoveEmptyEntries)
             .LastOrDefault(field => field.StartsWith("goal=", StringComparison.Ordinal));
 
-    private sealed class Scenario : IDisposable
+    internal sealed class Scenario : IDisposable
     {
         private readonly ManualResetEventSlim _started = new();
         private readonly ManualResetEventSlim _release = new();
@@ -177,6 +177,15 @@ public sealed class PassedCohortReceiptApprovalHoldTests : AcceptanceCohortWorkf
         }
 
         internal string GoalState() => JsonSerializer.Serialize(Kernel.ExportSnapshot().Goals);
+
+        internal void BlockNextGate()
+        {
+            _started.Reset();
+            _release.Reset();
+        }
+
+        internal void AssertGateStarted() =>
+            Assert.True(_started.Wait(TimeSpan.FromSeconds(30)), "Ordinary admission did not start a new gate.");
 
         internal IReadOnlyList<string> Tick(OperatorIntentCoordinator? intents = null)
         {
