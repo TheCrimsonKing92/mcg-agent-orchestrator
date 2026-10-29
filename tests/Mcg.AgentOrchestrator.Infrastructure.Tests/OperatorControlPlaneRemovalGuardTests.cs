@@ -47,10 +47,10 @@ public sealed class OperatorControlPlaneRemovalGuardTests
     }
 
     [Fact]
-    public void FindForbiddenLiterals_KeptDeliveryAndStewardTypes_ReportsNoMatches()
+    public void FindForbiddenLiterals_KeptDeliveryTypes_ReportsNoMatches()
     {
         var matches = FindForbiddenLiterals(
-            "ComposeDailyBacklogDigest StewardDailyBacklogDigest " +
+            "ComposeDailyBacklogDigest " +
             "DiscordControlPlaneDeliverer ControlPlaneDecisionCard");
 
         Assert.Empty(matches);
@@ -87,7 +87,53 @@ public sealed class OperatorControlPlaneRemovalGuardTests
             "ControlPlanePushReceipt",
             "ControlPlaneDeliveryOperation",
             "ControlPlaneDeliveryBatchResult",
-            "ControlPlaneMuteControl"
+            "ControlPlaneMuteControl",
+            "StewardPrecedentKey",
+            "StewardBriefingBundleInputs",
+            "StewardBriefingBundleProducer",
+            "IStewardTriageEngine",
+            "StewardComposer",
+            "StewardDispatcher",
+            "StewardWakeReason",
+            "StewardWakeDecisionKind",
+            "StewardOutputKind",
+            "StewardEscalationCategory",
+            "StewardDispositionKind",
+            "StewardDispatchOptions",
+            "StewardWakeSignal",
+            "StewardWakeDecision",
+            "StewardWakeScheduler",
+            "StewardEscalationItem",
+            "StewardGoalTaskRecord",
+            "StewardNumericReceiptSummary",
+            "StewardPrecedentMatch",
+            "StewardPolicySnapshot",
+            "StewardInterruptBudgetLedger",
+            "StewardProvenanceLink",
+            "StewardQuotedWorkerProse",
+            "StewardBriefingBundle",
+            "StewardBacklogCandidate",
+            "StewardRankedBacklogItem",
+            "StewardDailyBacklogDigest",
+            "StewardDailyBrief",
+            "StewardAutonomousAction",
+            "StewardBoardStateDiff",
+            "StewardCatchUpReplay",
+            "StewardStormCollapseJudgment",
+            "StewardHeartbeat",
+            "StewardCardLoadMeasurement",
+            "StewardOutput`1",
+            "StewardTriageBatch",
+            "StewardDispatchResult",
+            "StewardInboxDisposition",
+            "StewardTriageReceipt",
+            "StewardBypassPolicy",
+            "StewardHeartbeatCalculator",
+            "StewardInputHasher",
+            "IStewardTriageReceiptStore",
+            "InMemoryStewardTriageReceiptStore",
+            "SqliteStewardTriageReceiptStore",
+            "SqliteStewardTriageReceiptStore+StoredDisposition"
         ];
         foreach (var name in removedTypes)
             Assert.Null(assembly.GetType("Mcg.AgentOrchestrator.Infrastructure." + name));
@@ -103,12 +149,12 @@ public sealed class OperatorControlPlaneRemovalGuardTests
             "RecordingControlPlaneMessageTransport",
             "ControlPlaneDecisionCard",
             "ControlPlaneDeliveryChannel",
-            "StewardDispatcher",
             "DeadManHeartbeatClient"
         ];
         foreach (var name in keptTypes)
             Assert.NotNull(assembly.GetType("Mcg.AgentOrchestrator.Infrastructure." + name));
-        Assert.Contains(StoreSchemaRegistry.Inventory, entry => entry.StoreName == "steward-triage-receipts");
+        Assert.DoesNotContain(StoreSchemaRegistry.Inventory, entry => entry.StoreName == "steward-triage-receipts");
+        Assert.DoesNotContain("StewardTriage", Enum.GetNames<ControlPlaneCardSource>());
     }
 
     internal static IReadOnlyList<string> FindForbiddenLiterals(string sourceText) =>

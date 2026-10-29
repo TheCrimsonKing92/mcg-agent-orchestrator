@@ -68,7 +68,7 @@ public sealed class OwnerConsoleBoardAttentionTests
         var model = await Builder(harness, clock).BuildAsync(new(clock.Now, null, [], 0));
 
         Assert.Equal(["55555555", "44444444", "33333333", "22222222", "11111111"], model.Board.Select(row => row.GoalId));
-        Assert.Equal(["question for you", "held: depends on 71bb0340", "gate running 6m", "waiting for gate (1st in queue)", "Developer"],
+        Assert.Equal(["question for you", "held: depends on 71bb0340", "gate running 6m", "waiting for gate (1st in queue)", "in progress: Developer"],
             model.Board.Select(row => row.Stage));
         Assert.All(model.Board, row => Assert.False(row.Dimmed));
         Assert.Equal(1, harness.State.Calls.Count(call => call == "metadata"));
@@ -131,7 +131,7 @@ public sealed class OwnerConsoleBoardAttentionTests
         Assert.Equal(1, model.Status.ActiveGoals);
         Assert.Equal(1, model.Status.FailedToday);
         Assert.Contains("failed today: 1", view.StatusText);
-        Assert.Equal("failed: explicit escalation", view.BoardTable.Rows[1]["STAGE"]);
+        Assert.Equal("failed: explicit escalation", view.BoardTable.Rows[1]["STATUS"]);
         var colors = view.BoardPane.Style.RowColorGetter!;
         Assert.Null(colors(ColorArgs(view, 0)));
         Assert.Equal(view.BoardPane.GetScheme().Disabled, colors(ColorArgs(view, 1))!.Normal);
@@ -158,7 +158,7 @@ public sealed class OwnerConsoleBoardAttentionTests
 
         Assert.Equal(["22222222", "11111111"], cleared.Board.Select(row => row.GoalId));
         Assert.Equal("held: depends on 71bb0340", cleared.Board[0].Stage);
-        Assert.Equal("Developer", cleared.Board[1].Stage);
+        Assert.Equal("in progress: Developer", cleared.Board[1].Stage);
     }
 
     [Theory]

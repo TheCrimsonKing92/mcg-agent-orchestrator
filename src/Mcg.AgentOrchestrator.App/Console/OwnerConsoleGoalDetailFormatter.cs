@@ -27,7 +27,8 @@ internal static class OwnerConsoleGoalDetailFormatter
     {
         var goal = detail.Goal;
         output.WriteLine(goal.Id.Value[..Math.Min(8, goal.Id.Value.Length)] + "  " + OwnerGoalTitle.From(goal.Objective));
-        output.WriteLine("Status: " + goal.Status);
+        var status = OwnerConsoleStatusLabel.For(goal.Status);
+        output.WriteLine("Status: " + status);
         if (OwnerConsolePriorityText.DetailLine(goal) is { } priority) output.WriteLine(priority);
         if (detail.PriorityWarning is { } warning) output.WriteLine("Priority warning: " + warning);
         if (goal.Isolation == GoalIsolation.Solo) output.WriteLine("Isolation: solo");
@@ -35,7 +36,8 @@ internal static class OwnerConsoleGoalDetailFormatter
             output.WriteLine("Source: backlog " + source[..Math.Min(8, source.Length)] +
                 (goal.SourceBacklogCoverage is { } coverage ? ", " + coverage.ToString().ToLowerInvariant() : ""));
         var stage = GoalLifecycle.ResolveState(goal, new(IsBlocked: goal.CurrentHold is not null)).ToString();
-        if (stage != goal.Status.ToString()) output.WriteLine("Stage: " + stage);
+        if (stage != goal.Status.ToString() && !string.Equals(stage, status, StringComparison.OrdinalIgnoreCase))
+            output.WriteLine("Stage: " + stage);
         var role = OwnerConsoleGoalDetail.Stage(goal);
         if (role != "-") output.WriteLine("Role: " + role);
         // A committed-candidate summary owns failure applicability. Retained history alone
