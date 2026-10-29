@@ -214,6 +214,7 @@ if (startupArgs.Count > 0 && startupArgs[0] == AcceptanceJobCustodianHost.Subcom
 }
 OrchestratorHome.ExportForDescendants(OrchestratorHome.ResolveForLaunch(repoRoot));
 OrchestratorDataRoot.ExportForDescendants();
+CrosswalkExecutableComposition.Install();
 try
 {
     if (CliCommandHelp.TryPrintStartupHelp(startupArgs))

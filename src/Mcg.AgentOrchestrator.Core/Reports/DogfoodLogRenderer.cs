@@ -31,11 +31,24 @@ public enum DogfoodAcceptanceDisposition
 public sealed record DogfoodLandingEvidence(
     DogfoodAcceptanceDisposition AcceptanceDisposition,
     string? AcceptanceOutcome = null,
-    bool WasManuallyLanded = false)
+    bool WasManuallyLanded = false,
+    DogfoodLandingProvenance? Provenance = null,
+    string? Reason = null)
 {
     public static DogfoodLandingEvidence Unknown { get; } =
         new(DogfoodAcceptanceDisposition.Unknown);
 }
+
+public sealed record DogfoodLandingProvenance(
+    string Source,
+    string GoalId,
+    string GroupId,
+    string ReceiptId,
+    string MemberCandidateRevision,
+    string CombinedTreeRevision,
+    string ObservedMainRevision,
+    string PromotedMainRevision,
+    string LandingAuthority);
 
 public static class DogfoodLogRenderer
 {
@@ -80,8 +93,13 @@ public static class DogfoodLogRenderer
         var taskLines = goal.Tasks.Select(BuildTaskLine).ToList();
         var goalStatus = goal.Status == GoalStatus.Failed ? " Goal status: Failed." : string.Empty;
         var acceptanceStatus = BuildAcceptanceStatus(landingEvidence);
+        var provenance = landingEvidence.Provenance is { } p
+            ? $" Evidence: {p.Source}; goal={p.GoalId}; group={p.GroupId}; receipt={p.ReceiptId}; candidate={p.MemberCandidateRevision}; tree={p.CombinedTreeRevision}; observed-main={p.ObservedMainRevision}; promoted-main={p.PromotedMainRevision}; landing={p.LandingAuthority}."
+            : string.Empty;
+        var reason = string.IsNullOrWhiteSpace(landingEvidence.Reason)
+            ? string.Empty : $" Evidence reason: {landingEvidence.Reason.ReplaceLineEndings(" ")}.";
 
-        return $"Goal {prefix}: {objectiveOneLine}. {string.Join(" ", taskLines)}{goalStatus} {acceptanceStatus}";
+        return $"Goal {prefix}: {objectiveOneLine}. {string.Join(" ", taskLines)}{goalStatus} {acceptanceStatus}{provenance}{reason}";
     }
 
     private static string BuildAcceptanceStatus(DogfoodLandingEvidence evidence)

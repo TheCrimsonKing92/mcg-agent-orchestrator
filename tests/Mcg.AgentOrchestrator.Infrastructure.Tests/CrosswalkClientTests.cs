@@ -1,7 +1,7 @@
 using Mcg.AgentOrchestrator.Infrastructure;
 using Xunit;
 
-// Parallel-safe: every case owns its files and injects environment and process boundaries.
+// Private files and injected process boundaries; only the negative control mutates the retired variable.
 public sealed class CrosswalkClientTests : IDisposable
 {
     private readonly DirectoryInfo _sandbox = Directory.CreateTempSubdirectory("crosswalk-client-'");
@@ -76,15 +76,10 @@ public sealed class CrosswalkClientTests : IDisposable
     public void Detect_UnavailablePath_DoesNotStartRunner(string? configured, string status)
     {
         var calls = 0;
-        string? variable = null;
-        var client = new CrosswalkClient(name =>
-        {
-            variable = name;
-            return configured == "missing.exe" ? Path.Combine(_sandbox.FullName, configured) : configured;
-        }, (_, _) => { calls++; return Task.FromResult(new WorkerProcessRunResult(0, GoJson, "")); });
+        var client = new CrosswalkClient(Resolver(configured == "missing.exe" ? Path.Combine(_sandbox.FullName, configured) : configured),
+            (_, _) => { calls++; return Task.FromResult(new WorkerProcessRunResult(0, GoJson, "")); });
 
         Assert.Equal(new CrosswalkDetectOutcome(status, null, ""), client.Detect(_sandbox.FullName));
-        Assert.Equal(CrosswalkClient.PathVariable, variable);
         Assert.Equal(0, calls);
     }
 
@@ -95,7 +90,7 @@ public sealed class CrosswalkClientTests : IDisposable
         var root = Directory.CreateDirectory(Path.Combine(_sandbox.FullName, "root's folder")).FullName;
         WorkerProcessRunRequest? request = null;
         var calls = 0;
-        var client = new CrosswalkClient(_ => path, (value, token) =>
+        var client = new CrosswalkClient(Resolver(path), (value, token) =>
         {
             Interlocked.Increment(ref calls);
             request = value;
@@ -130,7 +125,7 @@ public sealed class CrosswalkClientTests : IDisposable
         var calls = 0;
         var timeout = TimeSpan.FromSeconds(17);
         WorkerProcessRunRequest? request = null;
-        var client = new CrosswalkClient(_ => path, (value, _) =>
+        var client = new CrosswalkClient(Resolver(path), (value, _) =>
         {
             calls++;
             request = value;
@@ -145,22 +140,25 @@ public sealed class CrosswalkClientTests : IDisposable
             return Task.FromResult(new WorkerProcessRunResult(status == "exit-nonzero" ? 2 : 0, "garbage", ""));
         }, timeout);
 
-        Assert.Equal(new CrosswalkDetectOutcome(status, null, detail), client.Detect(_sandbox.FullName));
+        var outcome = client.Detect(_sandbox.FullName);
+        Assert.Equal(new CrosswalkDetectOutcome(status, null, detail) { Executable = Resolver(path).Resolve().Identity }, outcome);
         Assert.Equal(1, calls);
         Assert.Equal(timeout, Assert.IsType<WorkerProcessRunRequest>(request).Timeout);
     }
 
     [Fact]
-    public void Detect_EnvironmentReaderThrows_ReturnsStartFailed()
+    public void Detect_HashReadFails_ReturnsStartFailed()
     {
         var calls = 0;
-        var client = new CrosswalkClient(_ => throw new InvalidOperationException(), (_, _) =>
+        var path = CreateExecutable();
+        using var locked = File.Open(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+        var client = new CrosswalkClient(Resolver(path), (_, _) =>
         {
             calls++;
             return Task.FromResult(new WorkerProcessRunResult(0, GoJson, ""));
         });
 
-        Assert.Equal(new CrosswalkDetectOutcome("start-failed", null, "InvalidOperationException"),
+        Assert.Equal(new CrosswalkDetectOutcome("start-failed", null, "IOException"),
             client.Detect(_sandbox.FullName));
         Assert.Equal(0, calls);
     }
@@ -173,7 +171,7 @@ public sealed class CrosswalkClientTests : IDisposable
         var timeout = TimeSpan.FromSeconds(17);
         WorkerProcessRunRequest? request = null;
         var calls = 0;
-        var client = new CrosswalkClient(_ => path, (value, token) =>
+        var client = new CrosswalkClient(Resolver(path), (value, token) =>
         {
             calls++;
             request = value;
@@ -207,7 +205,7 @@ public sealed class CrosswalkClientTests : IDisposable
         var timeout = TimeSpan.FromSeconds(71);
         WorkerProcessRunRequest? request = null;
         var calls = 0;
-        var client = new CrosswalkClient(_ => path, (value, token) =>
+        var client = new CrosswalkClient(Resolver(path), (value, token) =>
         {
             calls++;
             request = value;
@@ -251,7 +249,7 @@ public sealed class CrosswalkClientTests : IDisposable
     {
         var path = CreateExecutable();
         WorkerProcessRunRequest? request = null;
-        var client = new CrosswalkClient(_ => path, (value, _) =>
+        var client = new CrosswalkClient(Resolver(path), (value, _) =>
         {
             request = value;
             return Task.FromResult(new WorkerProcessRunResult(0, RunJson, ""));
@@ -273,12 +271,8 @@ public sealed class CrosswalkClientTests : IDisposable
     public void ListAndRun_UnavailablePath_ReturnEmptyWithoutStartingRunner(string? configured, string status)
     {
         var calls = 0;
-        var variables = new List<string>();
-        var client = new CrosswalkClient(name =>
-        {
-            variables.Add(name);
-            return configured == "missing.exe" ? Path.Combine(_sandbox.FullName, configured) : configured;
-        }, (_, _) => { calls++; return Task.FromResult(new WorkerProcessRunResult(0, "", "")); });
+        var client = new CrosswalkClient(Resolver(configured == "missing.exe" ? Path.Combine(_sandbox.FullName, configured) : configured),
+            (_, _) => { calls++; return Task.FromResult(new WorkerProcessRunResult(0, "", "")); });
 
         var list = client.List(_sandbox.FullName);
         var run = client.Run(_sandbox.FullName, [], TimeSpan.FromMinutes(1));
@@ -289,7 +283,6 @@ public sealed class CrosswalkClientTests : IDisposable
         Assert.Empty(run.Result);
         Assert.Equal("", list.Detail);
         Assert.Equal("", run.Detail);
-        Assert.Equal(new[] { CrosswalkClient.PathVariable, CrosswalkClient.PathVariable }, variables);
         Assert.Equal(0, calls);
     }
 
@@ -306,7 +299,7 @@ public sealed class CrosswalkClientTests : IDisposable
         var requests = new List<WorkerProcessRunRequest>();
         var listTimeout = TimeSpan.FromSeconds(17);
         var runTimeout = TimeSpan.FromSeconds(31);
-        var client = new CrosswalkClient(_ => path, (request, _) =>
+        var client = new CrosswalkClient(Resolver(path), (request, _) =>
         {
             requests.Add(request);
             Exception? failure = status switch
@@ -340,7 +333,7 @@ public sealed class CrosswalkClientTests : IDisposable
     {
         var path = CreateExecutable();
         var calls = 0;
-        var client = new CrosswalkClient(_ => path, (_, _) =>
+        var client = new CrosswalkClient(Resolver(path), (_, _) =>
         {
             calls++;
             return Task.FromResult(new WorkerProcessRunResult(exit, "not JSON", "usage error\nunsupported stack\n"));
@@ -360,15 +353,18 @@ public sealed class CrosswalkClientTests : IDisposable
             Assert.NotEqual(CrosswalkDetectOutcome.ExitNonZero, list.Status);
             Assert.NotEqual(CrosswalkDetectOutcome.ExitNonZero, run.Status);
         }
-        Assert.Equal(new CrosswalkDetectOutcome("exit-nonzero", null, $"exit={exit}"), client.Detect(_sandbox.FullName));
+        Assert.Equal(new CrosswalkDetectOutcome("exit-nonzero", null, $"exit={exit}")
+            { Executable = Resolver(path).Resolve().Identity }, client.Detect(_sandbox.FullName));
         Assert.Equal(3, calls);
     }
 
     [Fact]
-    public void ListAndRun_EnvironmentReaderThrows_ReturnStartFailedWithoutStartingRunner()
+    public void ListAndRun_HashReadFails_ReturnStartFailedWithoutStartingRunner()
     {
         var calls = 0;
-        var client = new CrosswalkClient(_ => throw new InvalidOperationException(), (_, _) =>
+        var path = CreateExecutable();
+        using var locked = File.Open(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+        var client = new CrosswalkClient(Resolver(path), (_, _) =>
         {
             calls++;
             return Task.FromResult(new WorkerProcessRunResult(0, "", ""));
@@ -379,8 +375,8 @@ public sealed class CrosswalkClientTests : IDisposable
 
         Assert.Equal("start-failed", list.Status);
         Assert.Equal("start-failed", run.Status);
-        Assert.Equal("InvalidOperationException", list.Detail);
-        Assert.Equal("InvalidOperationException", run.Detail);
+        Assert.Equal("IOException", list.Detail);
+        Assert.Equal("IOException", run.Detail);
         Assert.Empty(list.Result);
         Assert.Empty(run.Result);
         Assert.Equal(0, calls);
@@ -401,7 +397,7 @@ public sealed class CrosswalkClientTests : IDisposable
     public void List_InvalidShape_ReturnsInvalidJsonWithoutPartialRefs(string json)
     {
         var path = CreateExecutable();
-        var client = new CrosswalkClient(_ => path,
+        var client = new CrosswalkClient(Resolver(path),
             (_, _) => Task.FromResult(new WorkerProcessRunResult(0, json, "")));
 
         var outcome = client.List(_sandbox.FullName);
@@ -416,7 +412,7 @@ public sealed class CrosswalkClientTests : IDisposable
     public void List_EmptyAndDuplicateRefs_PreservesAllowedValues(string json, int count)
     {
         var path = CreateExecutable();
-        var client = new CrosswalkClient(_ => path,
+        var client = new CrosswalkClient(Resolver(path),
             (_, _) => Task.FromResult(new WorkerProcessRunResult(0, json, "")));
 
         var outcome = client.List(_sandbox.FullName);
@@ -433,7 +429,7 @@ public sealed class CrosswalkClientTests : IDisposable
     public void Run_ExtraStdout_ReturnsInvalidJson(string prefix, string suffix)
     {
         var path = CreateExecutable();
-        var client = new CrosswalkClient(_ => path,
+        var client = new CrosswalkClient(Resolver(path),
             (_, _) => Task.FromResult(new WorkerProcessRunResult(0, prefix + RunJson + suffix, "")));
 
         var outcome = client.Run(_sandbox.FullName, [], TimeSpan.FromMinutes(1));
@@ -455,7 +451,7 @@ public sealed class CrosswalkClientTests : IDisposable
     public void Run_InvalidNormalizedRecord_ReturnsInvalidJsonWithoutPartialRecords(string json)
     {
         var path = CreateExecutable();
-        var client = new CrosswalkClient(_ => path,
+        var client = new CrosswalkClient(Resolver(path),
             (_, _) => Task.FromResult(new WorkerProcessRunResult(0, json, "")));
 
         var outcome = client.Run(_sandbox.FullName, [], TimeSpan.FromMinutes(1));
@@ -474,7 +470,7 @@ public sealed class CrosswalkClientTests : IDisposable
         CrosswalkDiagnosticCategory? category)
     {
         using var owner = new CancellationTokenSource();
-        var client = new CrosswalkClient(_ => CreateExecutable(), (_, token) =>
+        var client = new CrosswalkClient(Resolver(CreateExecutable()), (_, token) =>
         {
             Assert.Equal(owner.Token, token);
             return Task.FromResult(new WorkerProcessRunResult(exit, RunJson, "stderr receipt", timedOut, limited));
@@ -492,7 +488,7 @@ public sealed class CrosswalkClientTests : IDisposable
     [InlineData("{}", CrosswalkDiagnosticCategory.MalformedResults)]
     public async Task RunAsync_SeparatesParsingFromPrimaryInvocationFailure(string json, CrosswalkDiagnosticCategory secondary)
     {
-        var client = new CrosswalkClient(_ => CreateExecutable(), (_, _) =>
+        var client = new CrosswalkClient(Resolver(CreateExecutable()), (_, _) =>
             Task.FromResult(new WorkerProcessRunResult(2, json, "unsupported adapter")));
         var outcome = await client.RunAsync(_sandbox.FullName, [], TimeSpan.FromSeconds(30), CancellationToken.None);
         Assert.Equal("exit-2", outcome.Status);
@@ -506,6 +502,67 @@ public sealed class CrosswalkClientTests : IDisposable
         var path = Path.Combine(_sandbox.FullName, "crosswalk's tool.exe");
         File.WriteAllText(path, "");
         return path;
+    }
+
+    private CrosswalkExecutableResolver Resolver(string? path) => new(path, _sandbox.FullName,
+        (_, _) => Task.FromResult(new WorkerProcessRunResult(0, "test-version", "")));
+
+    [Fact]
+    public void ExplicitPath_TakesPrecedenceForEveryVerb()
+    {
+        var path = CreateExecutable();
+        var defaultPath = Path.Combine(_sandbox.FullName, "tools", "crosswalk", "crosswalk.exe");
+        Directory.CreateDirectory(Path.GetDirectoryName(defaultPath)!);
+        File.WriteAllText(defaultPath, "default executable");
+        var calls = new List<WorkerProcessRunRequest>();
+        var resolver = Resolver(path);
+        var client = new CrosswalkClient(resolver, (request, _) =>
+        {
+            calls.Add(request);
+            return Task.FromResult(new WorkerProcessRunResult(0,
+                request.Command.Contains("' detect '") ? GoJson : request.Command.Contains("' list '") ? ListJson : RunJson, ""));
+        });
+        Assert.Equal("detected", client.Detect(_sandbox.FullName).Status);
+        Assert.Equal("detected", client.List(_sandbox.FullName).Status);
+        Assert.Equal("detected", client.Run(_sandbox.FullName, [], TimeSpan.FromSeconds(5)).Status);
+        Assert.Equal(3, calls.Count);
+        Assert.All(calls, request =>
+        {
+            Assert.StartsWith("& '" + path.Replace("'", "''") + "' ", request.Command);
+            Assert.DoesNotContain(defaultPath, request.Command);
+        });
+    }
+
+    [Fact]
+    public void RetiredEnvironmentPath_IsIgnoredWithoutLaunchingAnyProcess()
+    {
+        const string variable = "MCG_ORCHESTRATOR_CROSSWALK_PATH";
+        var previous = Environment.GetEnvironmentVariable(variable);
+        var calls = new List<WorkerProcessRunRequest>();
+        var versionCalls = 0;
+        // This is an existing host executable; it must never be selected or started.
+        var executable = Environment.ProcessPath!;
+        Assert.True(File.Exists(executable));
+        try
+        {
+            Environment.SetEnvironmentVariable(variable, executable);
+            var resolver = new CrosswalkExecutableResolver(dataRoot: _sandbox.FullName, runVersionAsync: (_, _) =>
+            {
+                versionCalls++;
+                return Task.FromResult(new WorkerProcessRunResult(0, "unexpected", ""));
+            });
+            var client = new CrosswalkClient(resolver, (request, _) =>
+            {
+                calls.Add(request);
+                return Task.FromResult(new WorkerProcessRunResult(0, GoJson, ""));
+            });
+            Assert.Equal("not-configured", client.Detect(_sandbox.FullName).Status);
+            Assert.Equal("not-configured", client.List(_sandbox.FullName).Status);
+            Assert.Equal("not-configured", client.Run(_sandbox.FullName, [], TimeSpan.FromSeconds(5)).Status);
+            Assert.Equal(0, versionCalls);
+            Assert.Empty(calls);
+        }
+        finally { Environment.SetEnvironmentVariable(variable, previous); }
     }
 
     public void Dispose() => _sandbox.Delete(recursive: true);

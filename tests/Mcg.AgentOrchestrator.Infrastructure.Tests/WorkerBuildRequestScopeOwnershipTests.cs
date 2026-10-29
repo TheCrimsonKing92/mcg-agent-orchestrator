@@ -14,7 +14,7 @@ public sealed class WorkerBuildRequestScopeOwnershipTests
     [InlineData(true, true)]
     public async Task SuccessorPreparation_PreservesNativeCompletion(bool abortStart, bool reload)
     {
-        using var fixture = new WorkerBuildRequestFixture(goalBranch: true);
+        using var fixture = new WorkerBuildRequestFixture(compilerMode: WorkerBuildRequestFixture.CompilerMode.Fake, goalBranch: true);
         var original = await fixture.RunHelper();
         Assert.Equal(WorkerBuildOutcome.Success, original.Outcome);
         Assert.Equal(0, original.CompilerExitCode);
@@ -54,7 +54,7 @@ public sealed class WorkerBuildRequestScopeOwnershipTests
     [Fact]
     public async Task SuccessorCompletion_UsesItsOwnNativeDispatchScope()
     {
-        using var fixture = new WorkerBuildRequestFixture(goalBranch: true);
+        using var fixture = new WorkerBuildRequestFixture(compilerMode: WorkerBuildRequestFixture.CompilerMode.Fake, goalBranch: true);
         Assert.Equal(WorkerBuildOutcome.Success, (await fixture.RunHelper()).Outcome);
         // Give the successor a different dispatch base while keeping the built tree unchanged.
         fixture.Git("add", WorkerBuildRequestFixture.Source);
@@ -79,7 +79,7 @@ public sealed class WorkerBuildRequestScopeOwnershipTests
         intents.BindPreparedAdmission(admission, reference.DispatchAt);
         reference = reference with { Admission = admission };
         WorkerBuildRequestScopeSupport.Save(fixture, kernel);
-        var host = new WorkerBuildRequestHost(reference, storageRoot: fixture.Storage);
+        var host = new WorkerBuildRequestHost(reference, storageRoot: fixture.Storage, launchOverride: fixture.LaunchOverride);
         var response = await host.ExecuteAsync(new WorkerBuildRequest(1, "successor", [WorkerBuildRequestFixture.Project], "Debug"),
             identity, CancellationToken.None);
         Assert.Equal(WorkerBuildOutcome.Success, response.Outcome);
@@ -89,6 +89,7 @@ public sealed class WorkerBuildRequestScopeOwnershipTests
         Assert.False(result.MissingEvidence, result.Diagnostic);
         var stored = WorkerBuildRequestScopeSupport.Load(fixture).GetTask(fixture.GoalId, successorId);
         var invocation = Assert.Single(stored.WorkerBuildInvocations);
+        fixture.AssertCompilerImages(invocation);
         Assert.True(invocation.Consumed);
         Assert.Equal(reference.DispatchId, invocation.DispatchId);
         Assert.NotEqual(fixture.Reference.DispatchId, invocation.DispatchId);

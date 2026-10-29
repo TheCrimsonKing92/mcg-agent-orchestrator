@@ -14,12 +14,14 @@ internal static class GoalLandingPostActions
         DogfoodLandingEvidence evidence;
         try
         {
-            evidence = ResolveDogfoodLandingEvidence(
-                GoalOperationJournal.Read(executionDirectory, goal.Id));
+            var journal = GoalOperationJournal.Read(executionDirectory, goal.Id);
+            evidence = DogfoodLandingEvidenceResolver.Resolve(
+                goal.Id, executionDirectory, Path.GetDirectoryName(Path.GetFullPath(dogfoodLogStorePath))!,
+                journal, ResolveDogfoodLandingEvidence(journal));
         }
         catch (Exception ex)
         {
-            evidence = DogfoodLandingEvidence.Unknown;
+            evidence = DogfoodLandingEvidence.Unknown with { Reason = $"Evidence lookup failed: {ex.GetType().Name}" };
             writeLine?.Invoke(
                 $"Dogfood acceptance evidence unavailable for goal {goal.Id.Value[..8]} ({ex.GetType().Name}); recording unknown status.");
         }

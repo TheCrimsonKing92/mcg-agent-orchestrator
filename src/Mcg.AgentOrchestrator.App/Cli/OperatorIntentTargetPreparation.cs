@@ -22,7 +22,22 @@ internal static class OperatorIntentTargetPreparation
             observations[goalId.Value] = new ConductorGoalReloadObservation.Missing();
             return false;
         }
-        if (stored.Status == GoalStatus.Completed || GoalStatusSemantics.ExcludesFromConductorWorkingSet(stored.Status))
+        if (stored.Status == GoalStatus.Completed)
+        {
+            kernel.ReplaceGoalStateWithSnapshot(stored,
+                snapshot.HumanInputRequests.Where(request => request.GoalId == goalId.Value).ToArray());
+            var target = kernel.GetGoal(goalId);
+            if (target.CriterionEvidenceObligations.Any(item => item.IsValidatedPostLanding))
+            {
+                var publication = new SqliteOrchestratorStateRepository(context.Workspace.SqliteStatePath)
+                    .ReadPromotionFactAsync(goalId).GetAwaiter().GetResult();
+                if (publication is not null) kernel.BindPostLandingPublication(goalId, publication);
+                return true;
+            }
+            observations[goalId.Value] = new ConductorGoalReloadObservation.Terminal(stored.Status);
+            return false;
+        }
+        if (GoalStatusSemantics.ExcludesFromConductorWorkingSet(stored.Status))
         {
             kernel.ReplaceGoalStateWithSnapshot(stored,
                 snapshot.HumanInputRequests.Where(request => request.GoalId == goalId.Value).ToArray());

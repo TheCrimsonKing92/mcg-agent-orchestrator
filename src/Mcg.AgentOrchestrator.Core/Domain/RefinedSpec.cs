@@ -26,6 +26,7 @@ public sealed record RefinedSpec(
     IReadOnlyList<RefinedSpecDecision> Decisions,
     IReadOnlyList<RefinedSpecOpenQuestion> OpenQuestions)
 {
+    public IReadOnlyList<CriterionEvidenceDeclaration> CriterionEvidenceDeclarations { get; init; } = [];
     public IReadOnlyList<string> OperatorOwnedAcceptanceCriteria { get; init; } = [];
 
     public IReadOnlyList<string> AcceptanceGateOwnedAcceptanceCriteria { get; init; } = [];

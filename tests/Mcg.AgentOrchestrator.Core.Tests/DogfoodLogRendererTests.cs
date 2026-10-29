@@ -2,6 +2,27 @@ using Mcg.AgentOrchestrator.Core;
 
 public sealed class DogfoodLogRendererTests
 {
+    [Xunit.Fact]
+    public void GroupedProvenance_RendersEveryCanonicalIdentityAndSeparateReason()
+    {
+        var kernel = new AgentOrchestratorKernel(new FakeClock());
+        var goal = kernel.CreateGoal("Render grouped landing", [new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer)]);
+        var provenance = new DogfoodLandingProvenance("cohort", goal.Id.Value, "canonical-group", "canonical-receipt",
+            new string('a', 40), new string('b', 40), new string('c', 40), new string('d', 40), "finalized-member-landing");
+        var evidence = new DogfoodLandingEvidence(DogfoodAcceptanceDisposition.Passed, "passed", Provenance: provenance);
+        var entry = DogfoodLogRenderer.Render(goal, evidence);
+        Assert.Contains("Acceptance passed.", entry.Summary);
+        Assert.Contains($"goal={goal.Id.Value}; group=canonical-group; receipt=canonical-receipt", entry.Summary);
+        Assert.Contains($"candidate={provenance.MemberCandidateRevision}; tree={provenance.CombinedTreeRevision}", entry.Summary);
+        Assert.Contains($"observed-main={provenance.ObservedMainRevision}; promoted-main={provenance.PromotedMainRevision}", entry.Summary);
+        Assert.Contains("landing=finalized-member-landing", entry.Summary);
+        Assert.Equal(provenance, entry.LandingEvidence.Provenance);
+        var rejected = DogfoodLogRenderer.Render(goal, new(DogfoodAcceptanceDisposition.Inconclusive,
+            "grouped-authority-unavailable", Reason: "Member candidate binding mismatch"));
+        Assert.Contains("Evidence reason: Member candidate binding mismatch", rejected.Summary);
+        Assert.DoesNotContain("Acceptance passed.", rejected.Summary);
+    }
+
     private static readonly DateTimeOffset FixedAt = new(2026, 6, 14, 10, 0, 0, TimeSpan.Zero);
 
     [Xunit.Fact(DisplayName = "DogfoodLogRenderer_renders_correct_entry_from_full_receipts")]

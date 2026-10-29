@@ -48,7 +48,11 @@ internal static class AttentionShowReadRoute
         var store = CollaborationItemStore.OpenExisting(workspace.OrchestratorDirectory);
         var storedItems = store.ListAsync().GetAwaiter().GetResult();
         var attentionQueue = store.GetAttentionQueueAsync().GetAwaiter().GetResult();
-        var selection = AttentionReadGoalSelection.Select(metadata, openWaits, storedItems, attentionQueue);
+        var projection = stateQueries.ReadAttentionProjectionAsync().GetAwaiter().GetResult();
+        var dutyIds = AttentionReadGoalSelection.ReadPostLandingDutyGoalIds(stateQueries, metadata, projection);
+        if (dutyIds is null)
+            return false;
+        var selection = AttentionReadGoalSelection.Select(metadata, openWaits, storedItems, attentionQueue, dutyIds);
         if (selection.Decline)
             return false;
 

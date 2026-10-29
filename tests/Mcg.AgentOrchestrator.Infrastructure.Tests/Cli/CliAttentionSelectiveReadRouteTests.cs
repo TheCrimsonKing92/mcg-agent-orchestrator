@@ -124,13 +124,28 @@ public sealed class CliAttentionSelectiveReadRouteTests : CliTaskQueryTestSuppor
         using var fixture = new Fixture(withWait: true, parkD: form != "show");
         var repository = new ProbeStateRepository(fixture.Kernel) { ThrowOnOutbox = true };
 
-        var read = Run(["attention", form], repository, fixture.Workspace);
+        // JSON's full-hydration contract belongs to the unsupported-projection fallback.
+        // The duty-only projection used by the text fixtures has no JSON goal facts.
+        var read = Run(["attention", form], repository, fixture.Workspace,
+            supportsAttentionProjection: form != "--json");
 
         Assert.True(read.Served);
         Assert.False(read.Changed);
         Assert.Equal(30, repository.LoadedGoalIds.Count);
         Assert.Equal(1, repository.LoadGoalsCount);
         Assert.Equal(0, repository.FullLoadAttempts);
+        if (form == "--json")
+        {
+            using var json = JsonDocument.Parse(read.Output);
+            var payload = json.RootElement.GetProperty("payload");
+            var wait = Assert.Single(payload.GetProperty("waits").EnumerateArray());
+            Assert.Equal(Id(1), wait.GetProperty("goalId").GetString());
+            Assert.Equal("Live question", wait.GetProperty("question").GetString());
+            var items = payload.GetProperty("items").EnumerateArray().ToArray();
+            Assert.Equal(2, items.Length);
+            Assert.Contains(items, item => item.GetProperty("subject").GetString() == "Decision 2");
+            Assert.Contains(items, item => item.GetProperty("subject").GetString() == "Cross-goal decision");
+        }
     }
 
     [Fact]
@@ -171,8 +186,10 @@ public sealed class CliAttentionSelectiveReadRouteTests : CliTaskQueryTestSuppor
     }
 
     private static (bool Served, bool Changed, string Output) Run(
-        string[] args, ProbeStateRepository repository, OrchestratorWorkspace workspace, bool direct = false)
+        string[] args, ProbeStateRepository repository, OrchestratorWorkspace workspace, bool direct = false,
+        bool supportsAttentionProjection = true)
     {
+        repository.SupportsAttentionProjection = supportsAttentionProjection;
         IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
         var profiles = WorkerProfileCatalog.Default();
         Goal? currentGoal = null;

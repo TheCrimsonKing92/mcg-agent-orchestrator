@@ -41,7 +41,7 @@ internal static class CliLifecycleGoalExecution
             CleanupContext = cleanup,
             AcceptanceVerifier = new GoalAcceptanceVerifier(
                 cleanup.Hooks.BuildStorageRoot ?? DotnetBuildEnvironmentManager.CaptureStorageRoot(),
-                workspace.OrchestratorDirectory)
+                workspace.OrchestratorDirectory) { CrosswalkExecutable = CrosswalkExecutableComposition.ForProcess }
         };
         try
         {

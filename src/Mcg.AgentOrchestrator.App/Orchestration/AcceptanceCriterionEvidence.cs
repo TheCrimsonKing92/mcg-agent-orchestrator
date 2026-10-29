@@ -19,7 +19,7 @@ internal static partial class AcceptanceCriterionEvidence
             ConductorParallelAcceptanceAttemptCoordinator.BuildReplayContextFingerprint(goal) != attempt.ReplayContextFingerprint)
             return false;
         var candidateSha = attempt.BranchHeadSha!;
-        var matching = goal.GetOutstandingCriterionEvidenceObligations(candidateSha)
+        var matching = goal.GetLandingPrerequisiteObligations(candidateSha)
             .Where(item => item.Owner is not (CriterionEvidenceOwner.Operator or CriterionEvidenceOwner.Worker) ||
                 item.RequiredScope == CriterionEvidenceScopes.FullAcceptanceGate)
             .ToArray();
@@ -45,7 +45,7 @@ internal static partial class AcceptanceCriterionEvidence
 
     public static string HoldIdentity(Goal goal, string? candidateSha)
     {
-        var obligations = goal.GetOutstandingCriterionEvidenceObligations(candidateSha)
+        var obligations = goal.GetLandingPrerequisiteObligations(candidateSha)
             .OrderBy(item => item.Id, StringComparer.Ordinal)
             .Select(item => $"{item.Id}:{item.FindingStableId}:{item.Owner}:{item.State}:{item.RequiredScope}");
         var payload = $"{candidateSha}:{goal.AuthoritativeRefinedSpecVersion?.Version}:{string.Join("|", obligations)}";
@@ -90,7 +90,7 @@ internal static partial class AcceptanceCriterionEvidence
     {
         var diagnostic = RecordFullAcceptanceEvidence(goal, candidateSha, kernel, evidenceSource: null, integrationBranch, executionDirectory, currentHeadSha);
         if (diagnostic is not null) return diagnostic;
-        var outstanding = goal.GetOutstandingCriterionEvidenceObligations(candidateSha)
+        var outstanding = goal.GetLandingPrerequisiteObligations(candidateSha)
             .Where(IsBoundOrNonAcceptanceObligation)
             .ToArray();
         if (outstanding.Length == 0) return null;
@@ -145,7 +145,7 @@ internal static partial class AcceptanceCriterionEvidence
 
         var diagnostic = RecordFullAcceptanceEvidence(goal, normalizedCandidate, kernel, evidenceSource, integrationBranch, executionDirectory);
         if (diagnostic is not null) return diagnostic;
-        var outstanding = goal.GetOutstandingCriterionEvidenceObligations(normalizedCandidate)
+        var outstanding = goal.GetLandingPrerequisiteObligations(normalizedCandidate)
             .Where(IsBoundOrNonAcceptanceObligation)
             .ToArray();
         if (outstanding.Length == 0) return null;
@@ -194,7 +194,7 @@ internal static partial class AcceptanceCriterionEvidence
         string? evidenceSource,
         string integrationBranch, string? executionDirectory, string? currentHeadSha = null)
     {
-        var outstanding = goal.GetOutstandingCriterionEvidenceObligations(candidateSha);
+        var outstanding = goal.GetLandingPrerequisiteObligations(candidateSha);
         if (outstanding.Count == 0) return null;
         if (kernel is null || string.IsNullOrWhiteSpace(candidateSha))
         {
@@ -202,7 +202,7 @@ internal static partial class AcceptanceCriterionEvidence
         }
 
         TryCarryPatchEquivalentBindings(goal, candidateSha, kernel, integrationBranch, executionDirectory, out var carryRefusal, currentHeadSha);
-        outstanding = goal.GetOutstandingCriterionEvidenceObligations(candidateSha);
+        outstanding = goal.GetLandingPrerequisiteObligations(candidateSha);
         var matching = outstanding
             .Where(item =>
                 item.Owner == CriterionEvidenceOwner.Acceptance &&
@@ -233,7 +233,7 @@ internal static partial class AcceptanceCriterionEvidence
 
         if (carryRefusal is not null)
         {
-            var operatorObligations = goal.GetOutstandingCriterionEvidenceObligations(candidateSha)
+            var operatorObligations = goal.GetLandingPrerequisiteObligations(candidateSha)
                 .Where(item => item.Owner == CriterionEvidenceOwner.Operator &&
                     item.State == CriterionEvidenceState.Satisfied &&
                     !string.Equals(item.ExpectedCandidateSha, candidateSha, StringComparison.OrdinalIgnoreCase))

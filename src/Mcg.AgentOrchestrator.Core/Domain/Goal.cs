@@ -175,6 +175,16 @@ public sealed class Goal
             obligation.State != CriterionEvidenceState.Repaired &&
             IsCurrentCriterionEvidenceObligation(obligation) && !obligation.HasSatisfiedEvidenceFor(candidateSha)).ToArray();
 
+    public IReadOnlyList<CriterionEvidenceObligation> LandingPrerequisiteObligations =>
+        OutstandingCriterionEvidenceObligations.Where(item => item.IsLandingPrerequisite).ToArray();
+
+    public IReadOnlyList<CriterionEvidenceObligation> GetLandingPrerequisiteObligations(string? candidateSha) =>
+        GetOutstandingCriterionEvidenceObligations(candidateSha).Where(item => item.IsLandingPrerequisite).ToArray();
+
+    public IReadOnlyList<CriterionEvidenceObligation> OutstandingPostLandingDuties =>
+        _criterionEvidenceObligations.Where(item => item.IsValidatedPostLanding &&
+            item.State != CriterionEvidenceState.Satisfied && item.State != CriterionEvidenceState.Repaired).ToArray();
+
     private bool IsCurrentCriterionEvidenceObligation(CriterionEvidenceObligation obligation) =>
         !_effectiveAcceptanceCriteriaCorrections.Any(correction =>
             correction.IsWaiver && string.Equals(
@@ -321,8 +331,9 @@ public sealed class Goal
         }
     }
 
-    internal void SetRefinedSpec(RefinedSpec spec, DateTimeOffset recordedAt)
+    internal void SetRefinedSpec(RefinedSpec spec, DateTimeOffset recordedAt, bool validate = true)
     {
+        if (validate) ValidateCriterionLifecycleRefinement(spec);
         var current = AuthoritativeRefinedSpecVersion;
         if (current is null)
         {
@@ -336,6 +347,21 @@ public sealed class Goal
         }
 
         var currentIndex = _refinedSpecVersions.FindIndex(version => version.Version == current.Version);
+        if (validate)
+        {
+            foreach (var criterion in spec.AcceptanceCriteria)
+            {
+                var index = _criterionEvidenceObligations.FindIndex(item => item.CriterionVersion == current.Version &&
+                    item.Criterion == criterion);
+                if (index < 0) continue;
+                var declaration = spec.CriterionEvidenceDeclarations.SingleOrDefault(item => item.Criterion == criterion);
+                var existing = _criterionEvidenceObligations[index];
+                _criterionEvidenceObligations[index] = existing with
+                {
+                    Phase = declaration?.Phase ?? CriterionEvidencePhase.PreLanding, ObservationScope = declaration?.ObservationScope
+                };
+            }
+        }
         _refinedSpecVersions[currentIndex] = current with { Spec = spec };
         EnsureCriterionEvidenceObligations(spec, current.Version, recordedAt);
     }
@@ -410,7 +436,17 @@ public sealed class Goal
                 !string.Equals(obligation.Id, obligation.ReplacementObligationId, StringComparison.Ordinal);
         }
         var version = _refinedSpecVersions.SingleOrDefault(item => item.Version == obligation.CriterionVersion);
-        return version is not null && obligation.CriterionIndex >= 0 &&
+        var declarations = version?.Spec.CriterionEvidenceDeclarations.Where(item => item.Criterion == obligation.Criterion).ToArray() ?? [];
+        var declaration = declarations.FirstOrDefault();
+        return version is not null && declarations.Length <= 1 &&
+            (declaration is null || CriterionEvidenceLifecycle.IsValidDeclaration(version.Spec, declaration)) &&
+            (obligation.Phase != CriterionEvidencePhase.PostLanding || declaration is { Atomic: true }) &&
+            obligation.Phase == (declaration?.Phase ?? CriterionEvidencePhase.PreLanding) &&
+            obligation.ObservationScope == declaration?.ObservationScope &&
+            (obligation.Publication is null || (obligation.Publication.GoalId == Id.Value &&
+             version.RecordedAt <= obligation.Publication.PromotedAt &&
+             string.Equals(obligation.ExpectedCandidateSha, obligation.Publication.CandidateRevision, StringComparison.OrdinalIgnoreCase))) &&
+            obligation.CriterionIndex >= 0 &&
             obligation.CriterionIndex < version.Spec.AcceptanceCriteria.Count &&
             obligation.Id == CriterionEvidenceObligation.BuildId(obligation.CriterionVersion, obligation.CriterionIndex) &&
             string.Equals(obligation.Criterion, version.Spec.AcceptanceCriteria[obligation.CriterionIndex].Trim(), StringComparison.Ordinal) &&
@@ -503,6 +539,8 @@ public sealed class Goal
 
         var id = CriterionEvidenceObligation.BuildId(criterionVersion, criterionIndex);
         var existingIndex = _criterionEvidenceObligations.FindIndex(item => item.Id == id);
+        if (existingIndex >= 0 && _criterionEvidenceObligations[existingIndex].Phase == CriterionEvidencePhase.PostLanding)
+            throw new InvalidOperationException("Post-landing authority can only be declared through validated refinement and cannot be rebound by ownership mapping.");
         var normalizedScope = RequireText(
             requiredScope ?? (owner == CriterionEvidenceOwner.Acceptance
                 ? CriterionEvidenceScopes.FullAcceptanceGate
@@ -570,13 +608,23 @@ public sealed class Goal
         string scope,
         bool passed,
         string detail,
-        DateTimeOffset recordedAt)
+        DateTimeOffset recordedAt,
+        CriterionPostLandingObservation? observation = null,
+        string? actor = null)
     {
         var index = _criterionEvidenceObligations.FindIndex(item => item.Id == obligationId);
         if (index < 0)
             throw new KeyNotFoundException($"Criterion evidence obligation '{obligationId}' was not found.");
 
         var existing = _criterionEvidenceObligations[index];
+        if (existing.Phase == CriterionEvidencePhase.PostLanding &&
+            (existing.Publication is not { } publication || publication.GoalId != Id.Value ||
+             !string.Equals(publication.CandidateRevision, candidateSha, StringComparison.OrdinalIgnoreCase) ||
+             observation is null || string.IsNullOrWhiteSpace(actor) ||
+             !CriterionEvidenceLifecycle.MatchesObservation(existing, observation, recordedAt)))
+            throw new InvalidOperationException("Post-landing evidence requires attributed activation and a subsequent matching observation of the original landed artifact.");
+        if (existing.Phase != CriterionEvidencePhase.PostLanding && (observation is not null || actor is not null))
+            throw new InvalidOperationException("Observation metadata cannot change an obligation's phase.");
         if (owner is not (CriterionEvidenceOwner.Acceptance or CriterionEvidenceOwner.Operator) ||
             existing.Owner != owner ||
             (existing.Owner == CriterionEvidenceOwner.Acceptance && string.IsNullOrWhiteSpace(existing.ExpectedCandidateSha)) ||
@@ -589,7 +637,7 @@ public sealed class Goal
         receiptId = RequireText(receiptId, nameof(receiptId));
         detail = RequireText(detail, nameof(detail));
         var incoming = new CriterionEvidenceReceipt(owner, candidateSha, receiptId, scope.Trim(), passed,
-            detail, existing.Provenance, recordedAt);
+            detail, existing.Provenance, recordedAt, observation, actor);
         if (existing.FindReceipt(receiptId) is { } recorded)
         {
             if (recorded.HasSamePayload(incoming)) return existing;
@@ -607,6 +655,8 @@ public sealed class Goal
             ReceiptId = receiptId,
             Detail = detail,
             RecordedAt = recordedAt,
+            Observation = observation,
+            ObservationActor = actor,
             PriorReceipts = existing.ArchiveCurrentReceipt()
         };
         _criterionEvidenceObligations[index] = updated;
@@ -629,6 +679,7 @@ public sealed class Goal
             return null;
 
         var obligation = _criterionEvidenceObligations[index];
+        if (obligation.Publication is not null && obligation.IsValidatedPostLanding) return obligation;
         // The binding follows the commit a Reviewer reviewed; evidence moves only through the equivalence check.
         var bound = ReviewedCandidateEvidenceBinding.Apply(obligation, normalizedCandidate, recordedAt);
         _criterionEvidenceObligations[index] = bound;
@@ -679,6 +730,40 @@ public sealed class Goal
         return replacement;
     }
 
+    internal void BindPostLandingPublication(GoalPromotionFact publication)
+    {
+        if (publication.GoalId != Id.Value) throw new InvalidOperationException("Publication belongs to another goal.");
+        var eligible = _criterionEvidenceObligations.Where(item => item.IsValidatedPostLanding &&
+            item.Publication is null && IsCurrentCriterionEvidenceObligation(item) &&
+            _refinedSpecVersions.Any(version => version.Version == item.CriterionVersion &&
+                version.RecordedAt <= publication.PromotedAt)).ToArray();
+        if (eligible.Any(item => item.ExpectedCandidateSha is not null &&
+            !string.Equals(item.ExpectedCandidateSha, publication.CandidateRevision, StringComparison.OrdinalIgnoreCase)))
+            throw new InvalidOperationException("Publication does not match the declared duty's candidate.");
+        foreach (var duty in eligible)
+        {
+            var index = _criterionEvidenceObligations.FindIndex(item => item.Id == duty.Id);
+            _criterionEvidenceObligations[index] = duty with
+            {
+                ExpectedCandidateSha = publication.CandidateRevision, Publication = publication
+            };
+        }
+    }
+
+    private void ValidateCriterionLifecycleRefinement(RefinedSpec spec)
+    {
+        CriterionEvidenceLifecycle.Validate(spec);
+        foreach (var existing in _criterionEvidenceObligations)
+        {
+            if (!spec.AcceptanceCriteria.Contains(existing.Criterion, StringComparer.Ordinal)) continue;
+            var declaration = spec.CriterionEvidenceDeclarations.SingleOrDefault(item => item.Criterion == existing.Criterion);
+            if ((existing.ReceiptId is not null || existing.PriorReceipts is { Count: > 0 } || existing.Publication is not null) &&
+                (existing.Phase != (declaration?.Phase ?? CriterionEvidencePhase.PreLanding) ||
+                 existing.ObservationScope != declaration?.ObservationScope))
+                throw new InvalidOperationException("An evidenced or published obligation's phase and observation scope cannot change.");
+        }
+    }
+
     private void EnsureCriterionEvidenceObligations(RefinedSpec spec, int criterionVersion, DateTimeOffset recordedAt)
     {
         for (var index = 0; index < spec.AcceptanceCriteria.Count; index++)
@@ -690,6 +775,30 @@ public sealed class Goal
             }
 
             var criterion = RequireText(spec.AcceptanceCriteria[index], nameof(spec));
+            var declarations = spec.CriterionEvidenceDeclarations.Where(item => item.Criterion == criterion).ToArray();
+            if (declarations.Length > 0)
+            {
+                var declaration = declarations[0];
+                var declaredOwner = spec.OperatorOwnedAcceptanceCriteria.Count(item => item == criterion) == 1 &&
+                    !spec.AcceptanceGateOwnedAcceptanceCriteria.Contains(criterion)
+                    ? CriterionEvidenceOwner.Operator : CriterionEvidenceOwner.Unknown;
+                if (declarations.Length != 1 || !CriterionEvidenceLifecycle.IsValid(declaration.Phase, declaredOwner, declaration.ObservationScope) ||
+                    declaration.Phase == CriterionEvidencePhase.PostLanding && !declaration.Atomic)
+                {
+                    _criterionEvidenceObligations.Add(new(id, index, criterionVersion, criterion,
+                        CriterionEvidenceOwner.Unknown, CriterionEvidenceState.Pending, "lifecycle declaration repair required",
+                        CriterionEvidenceLifecycle.AtomicDeclarationRequired, recordedAt));
+                    continue;
+                }
+                if (declaration.Phase == CriterionEvidencePhase.PostLanding)
+                {
+                    _criterionEvidenceObligations.Add(new(id, index, criterionVersion, criterion,
+                        CriterionEvidenceOwner.Operator, CriterionEvidenceState.Pending, "operator observation",
+                        "authoritative refined spec; explicit post-landing declaration", recordedAt,
+                        Phase: declaration.Phase, ObservationScope: declaration.ObservationScope));
+                    continue;
+                }
+            }
             var operatorOwnershipEntries = spec.OperatorOwnedAcceptanceCriteria.Count(item =>
                 string.Equals(item.Trim(), criterion, StringComparison.Ordinal));
             if (operatorOwnershipEntries > 0)
@@ -750,6 +859,7 @@ public sealed class Goal
 
     internal RefinedSpecVersion RecordRefinedSpec(RefinedSpec spec, DateTimeOffset recordedAt)
     {
+        ValidateCriterionLifecycleRefinement(spec);
         var current = AuthoritativeRefinedSpecVersion;
         if (current is null)
         {
@@ -769,7 +879,7 @@ public sealed class Goal
             AuthoritativeBrief.Version);
         _refinedSpecVersions.Add(replacement);
         var priorNonWorkerObligations = _criterionEvidenceObligations
-            .Where(item => item.CriterionVersion == current.Version &&
+            .Where(item => item.Phase == CriterionEvidencePhase.PreLanding && item.CriterionVersion == current.Version &&
                            item.Owner is CriterionEvidenceOwner.Acceptance or CriterionEvidenceOwner.Operator &&
                            item.State != CriterionEvidenceState.Repaired)
             .ToArray();
@@ -833,7 +943,7 @@ public sealed class Goal
         DateTimeOffset recordedAt)
     {
         foreach (var existing in _criterionEvidenceObligations
-                     .Where(item => item.CriterionVersion == superseded.Version &&
+                     .Where(item => item.Phase == CriterionEvidencePhase.PreLanding && item.CriterionVersion == superseded.Version &&
                                     item.Owner is CriterionEvidenceOwner.Acceptance or CriterionEvidenceOwner.Operator &&
                                     item.Provenance.StartsWith("operator mapping by ", StringComparison.Ordinal))
                      .ToArray())
@@ -1327,7 +1437,7 @@ public sealed class Goal
         }
         else if (snapshot.RefinedSpec is { } legacyRefinedSpec)
         {
-            goal.SetRefinedSpec(FromRefinedSpecSnapshot(legacyRefinedSpec), initialRecordedAt);
+            goal.SetRefinedSpec(FromRefinedSpecSnapshot(legacyRefinedSpec), initialRecordedAt, validate: false);
         }
 
         goal.RestoreCriterionEvidenceObligations(snapshot.CriterionEvidenceObligations);
@@ -1444,7 +1554,8 @@ public sealed class Goal
                 question.BlastRadius)).ToList(),
             spec.OperatorOwnedAcceptanceCriteria.ToList(),
             spec.ClarificationAnswerHistory.ToList(),
-            spec.AcceptanceGateOwnedAcceptanceCriteria.ToList());
+            spec.AcceptanceGateOwnedAcceptanceCriteria.ToList(),
+            spec.CriterionEvidenceDeclarations.ToList());
 
     private static RefinedSpec FromRefinedSpecSnapshot(RefinedSpecSnapshot snapshot) =>
         new(
@@ -1469,6 +1580,7 @@ public sealed class Goal
                 question.BlastRadius)).ToList())
         {
             OperatorOwnedAcceptanceCriteria = snapshot.OperatorOwnedAcceptanceCriteria ?? [],
+            CriterionEvidenceDeclarations = snapshot.CriterionEvidenceDeclarations ?? [],
             AcceptanceGateOwnedAcceptanceCriteria = snapshot.AcceptanceGateOwnedAcceptanceCriteria ?? [],
             ClarificationAnswerHistory = snapshot.ClarificationAnswerHistory ?? []
         };

@@ -64,7 +64,7 @@ private static bool HandleWorkspaceCommand(CliExecutionContext context, IReadOnl
             }
 
             var outstandingEvidence = context.Kernel.GetGoal(goal.Id)
-                .GetOutstandingCriterionEvidenceObligations(candidateHead.Output.Trim());
+                .GetLandingPrerequisiteObligations(candidateHead.Output.Trim());
             if (outstandingEvidence.Count > 0)
             {
                 Console.WriteLine(
@@ -84,10 +84,8 @@ private static bool HandleWorkspaceCommand(CliExecutionContext context, IReadOnl
                 return false;
             }
 
-            var merge = context.Worktrees.TryFastForwardMerge(
-                executionDirectory,
-                goal.Id,
-                () => PostLandingCanaryFactory.BuildMutationBlockReason(context.Workspace));
+            var merge = CliWorkspaceMerge.MergeWithPublication(context, goal, out var publication,
+                mutationBlocker: () => PostLandingCanaryFactory.BuildMutationBlockReason(context.Workspace));
             Console.WriteLine(merge is null
                 ? "Goal has no workspace branch to merge."
                 : FormatWorkspaceMerge(merge));
@@ -105,7 +103,7 @@ private static bool HandleWorkspaceCommand(CliExecutionContext context, IReadOnl
                         landingSha.Succeeded ? landingSha.Output.Trim() : null),
                     Console.WriteLine);
             }
-            return false;
+            return publication is not null;
 
         case "rebase":
             Console.WriteLine(FormatWorkspaceRebase(context.Worktrees.TryRebaseOntoMain(executionDirectory, goal.Id)));

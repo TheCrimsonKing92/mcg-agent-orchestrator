@@ -166,6 +166,11 @@ public sealed class CliAttentionShowSelectiveReadTests : CliTaskQueryTestSupport
         public List<string> ReturnedGoalIds { get; } = [];
         public HashSet<string> ArchivedIds { get; } = new(StringComparer.Ordinal);
 
+        public Task<AttentionReadProjection?> ReadAttentionProjectionAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult<AttentionReadProjection?>(new([], [], [], [], new(0, 0, 0, 0, 0),
+                kernel.Goals.SelectMany(goal => goal.OutstandingPostLandingDuties
+                    .Select(duty => new AttentionPostLandingDuty(goal.Id.Value, duty))).ToArray()));
+
         public Task<IReadOnlyList<GoalSummary>> ListGoalMetadataAsync(
             CancellationToken cancellationToken = default) => Probe.ListGoalMetadataAsync(cancellationToken);
 

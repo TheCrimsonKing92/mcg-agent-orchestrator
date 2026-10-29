@@ -180,7 +180,8 @@ internal sealed partial class ConductorAuthorHost
     {
         var result = ConductorAuthorResultParser.Parse(output);
         var brief = kernel.Goals.FirstOrDefault(goal => goal.Id.Value == item.GoalId)?.Objective;
-        return result?.Kind == "ask-owner" || result?.Kind == "answer" &&
+        return result?.Kind == "ask-owner" && ConductorAuthorAnswerRouting.SettleOwnedBrief(item, brief) is null ||
+            result?.Kind == "answer" &&
             ConductorAuthorAnswerRouting.Decide(item, result.Text!, result.EvidenceReferences,
                 brief, result.BriefCitations).EscalationReason is not null;
     }
@@ -208,6 +209,13 @@ internal sealed partial class ConductorAuthorHost
             }
             if (result.Kind == "ask-owner")
             {
+                if (ConductorAuthorAnswerRouting.SettleOwnedBrief(item, goal.Objective) is { } settlement)
+                {
+                    var references = settlement.GroundedCitations!.Select(citation => $"brief-span={citation}")
+                        .Append("grounded-reason=model-ask-owner").ToArray();
+                    SubmitAnswer(item, settlement.SubmittedText, references, null, "grounded-answer");
+                    return;
+                }
                 Escalate(kernel, goal, item, result.Question!, result.Recommendation!, "model-ask-owner", changed);
                 _claims.Complete(identity, "owner-question");
                 return;

@@ -10,7 +10,9 @@ public sealed record CriterionEvidenceReceipt(
     bool Passed,
     string Detail,
     string Provenance,
-    DateTimeOffset RecordedAt)
+    DateTimeOffset RecordedAt,
+    CriterionPostLandingObservation? Observation = null,
+    string? Actor = null)
 {
     internal bool IsWellFormed =>
         Owner is CriterionEvidenceOwner.Operator or CriterionEvidenceOwner.Acceptance &&
@@ -24,5 +26,6 @@ public sealed record CriterionEvidenceReceipt(
         string.Equals(CandidateSha, other.CandidateSha, StringComparison.OrdinalIgnoreCase) &&
         string.Equals(ReceiptId, other.ReceiptId, StringComparison.Ordinal) &&
         string.Equals(Scope, other.Scope, StringComparison.Ordinal) &&
-        string.Equals(Detail, other.Detail, StringComparison.Ordinal);
+        string.Equals(Detail, other.Detail, StringComparison.Ordinal) &&
+        Observation == other.Observation && Actor == other.Actor;
 }

@@ -12,7 +12,7 @@ internal static partial class AcceptanceCriterionEvidence
         if (TryPlanPatchEquivalentBindings(goal, candidateSha, integrationBranch, executionDirectory,
                 out _, out _, out _, out var refusal))
             return null;
-        var obligation = goal.GetOutstandingCriterionEvidenceObligations(candidateSha)
+        var obligation = goal.GetLandingPrerequisiteObligations(candidateSha)
             .FirstOrDefault(item => item.Owner == CriterionEvidenceOwner.Acceptance &&
                 !string.IsNullOrWhiteSpace(item.ExpectedCandidateSha) &&
                 !string.Equals(item.ExpectedCandidateSha, candidateSha, StringComparison.OrdinalIgnoreCase) &&
@@ -26,7 +26,7 @@ internal static partial class AcceptanceCriterionEvidence
     private static string FormatRefusedCarryHold(
         Goal goal, string candidateSha, CriterionEvidenceObligation obligation, string? refusal)
     {
-        var stale = goal.GetOutstandingCriterionEvidenceObligations(candidateSha)
+        var stale = goal.GetLandingPrerequisiteObligations(candidateSha)
             .Where(item => item.Owner == CriterionEvidenceOwner.Acceptance &&
                 !string.IsNullOrWhiteSpace(item.ExpectedCandidateSha) &&
                 !string.Equals(item.ExpectedCandidateSha, candidateSha, StringComparison.OrdinalIgnoreCase) &&
@@ -64,8 +64,8 @@ internal static partial class AcceptanceCriterionEvidence
         out string? refusal, string? currentHeadSha = null)
     {
         refusal = null;
-        eligible = goal.GetOutstandingCriterionEvidenceObligations(candidateSha)
-            .Where(item =>
+        eligible = goal.GetLandingPrerequisiteObligations(candidateSha)
+            .Where(item => item.Phase == CriterionEvidencePhase.PreLanding &&
                 !string.IsNullOrWhiteSpace(item.ExpectedCandidateSha) &&
                 !string.Equals(item.ExpectedCandidateSha, candidateSha, StringComparison.OrdinalIgnoreCase) &&
                 (item.Owner == CriterionEvidenceOwner.Acceptance &&
@@ -84,7 +84,7 @@ internal static partial class AcceptanceCriterionEvidence
         evidenceByHead = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         if (eligible.Length == 0) return false;
         if (eligible.Any(item => item.Owner == CriterionEvidenceOwner.Acceptance && item.State == CriterionEvidenceState.Satisfied) &&
-            goal.GetOutstandingCriterionEvidenceObligations(candidateSha).Any(item =>
+            goal.GetLandingPrerequisiteObligations(candidateSha).Any(item =>
                 item.Owner == CriterionEvidenceOwner.Acceptance &&
                 string.Equals(item.RequiredScope, CriterionEvidenceScopes.FullAcceptanceGate, StringComparison.Ordinal) &&
                 !string.Equals(item.ExpectedCandidateSha, candidateSha, StringComparison.OrdinalIgnoreCase) &&

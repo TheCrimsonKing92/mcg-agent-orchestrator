@@ -939,6 +939,257 @@ public sealed class BacklogSelectiveGoalReadTests(ITestOutputHelper output) : Cl
         Assert.Equal(1, candidate.Count("similarity-projected"));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Similarity_ProjectionRejectedValidSnapshot_FallsBackToFullDeserializer(bool archive)
+    {
+        using var fixture = await Fixture.Create(0, 256);
+        if (archive) await fixture.MakeTerminalAndArchive(CompletedId);
+        using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = fixture.Workspace.SqliteStatePath, Pooling = false
+        }.ToString()))
+        {
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = archive
+                ? "SELECT snapshot_json FROM goal_snapshot_archive WHERE goal_id = $id"
+                : "SELECT snapshot_json FROM goals WHERE id = $id";
+            command.Parameters.AddWithValue("$id", CompletedId);
+            var stored = command.ExecuteScalar();
+            Assert.NotNull(stored);
+            var json = archive ? GoalSnapshotArchiveCodec.Decode(stored)! : (string)stored;
+            var options = new JsonSerializerOptions();
+            options.Converters.Add(new System.Text.Json.Serialization.JsonStringEnumConverter());
+            var snapshot = JsonSerializer.Deserialize<GoalSnapshot>(json, options);
+            Assert.NotNull(snapshot);
+            Assert.Equal(CompletedId, snapshot.Id);
+            Assert.Equal(GoalStatus.Completed, snapshot.Status);
+        }
+
+        string[] args = ["backlog-similar", "quartz", "--excerpt", "--limit", "100"];
+        var baseline = Run(args, fixture.Workspace, true);
+        Receipt candidate = null!;
+        const string member = "Tasks[0].Description";
+        string error;
+        using (SqliteOrchestratorStateRepository.ForceSimilarityProjectionRejectionForTesting(CompletedId, member))
+            error = AsyncLocalConsoleRouter.CaptureError(() => candidate = Run(args, fixture.Workspace, false));
+
+        Assert.Equal(baseline.Text, candidate.Text);
+        Assert.Contains($"kind=goal id={CompletedId[..8]}", candidate.Text);
+        var line = $"SIMILARITY_PROJECTION_FALLBACK goal={CompletedId} member={member}";
+        // A hot metadata stub and its archive are distinct deserializations in one listing.
+        var expectedFallbacks = archive ? 2 : 1;
+        Assert.Equal(Enumerable.Repeat(line, expectedFallbacks), candidate.Fallbacks);
+        Assert.Equal(Enumerable.Repeat(line, expectedFallbacks),
+            error.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries));
+        Assert.All(candidate.Events.Where(evt => evt.Operation == line), evt => Assert.Equal(CompletedId, evt.GoalId));
+        Assert.DoesNotContain("unexpectedly passed", error);
+        var after = Run(args, fixture.Workspace, false);
+        Assert.Empty(after.Fallbacks);
+        Assert.Equal(baseline.Text, after.Text);
+    }
+
+    public static IEnumerable<object[]> ValidSimilaritySnapshots()
+    {
+        foreach (var archive in new[] { false, true })
+        foreach (var shape in new[]
+        {
+            "versions-1", "versions-2", "versions-3", "versions-reversed", "corrections", "waiver",
+            "obligations", "evidence", "combined", "omitted", "null", "empty", "reordered",
+            "metadata", "metadata-empty", "large", "large-reordered"
+        })
+            yield return [archive, shape];
+    }
+
+    [Theory]
+    [MemberData(nameof(ValidSimilaritySnapshots))]
+    public async Task Similarity_ValidSnapshotMatrix_ProjectsWithoutFallback(bool archive, string shape)
+    {
+        using var fixture = await Fixture.Create(0, 256);
+        if (archive) await fixture.MakeTerminalAndArchive(CompletedId);
+        var original = JsonSerializer.Deserialize<GoalSnapshot>(fixture.ReadSnapshotJson(CompletedId, archive),
+            SnapshotJsonOptions())!;
+        var node = BuildSimilaritySnapshot(original, shape);
+        var json = node.ToJsonString();
+        fixture.ReplaceSnapshotJson(CompletedId, json, archive);
+        // Read the actual persisted bytes, including archive codec round-tripping.
+        var accepted = JsonSerializer.Deserialize<GoalSnapshot>(fixture.ReadSnapshotJson(CompletedId, archive),
+            SnapshotJsonOptions());
+        Assert.NotNull(accepted);
+        Assert.Equal(CompletedId, accepted.Id);
+        Assert.Equal(GoalStatus.Completed, accepted.Status);
+        if (shape.StartsWith("large", StringComparison.Ordinal))
+        {
+            foreach (var member in new[] { "Timeline", "BriefVersions", "RefinedSpecVersions", "GateTestObligations" })
+                Assert.True(node[member]!.ToJsonString().Length > 65536, member);
+            Assert.True(node["Tasks"]!.ToJsonString().Length < 16384);
+        }
+
+        string[] args = ["backlog-similar", "quartz", "--excerpt", "--limit", "100"];
+        var baseline = Run(args, fixture.Workspace, true); // Invalid domain fixtures must fail here, never be skipped.
+        Receipt candidate = null!;
+        var error = AsyncLocalConsoleRouter.CaptureError(() => candidate = Run(args, fixture.Workspace, false));
+        Assert.Equal(baseline.Text, candidate.Text);
+        Assert.Empty(candidate.Fallbacks); // Successful full fallback must not hide projection rejection in this matrix.
+        Assert.Empty(error);
+        if (shape == "combined") // An explicit park retains Active lifecycle and is excluded by both readers.
+        {
+            Assert.DoesNotContain($"kind=goal id={CompletedId[..8]}", candidate.Text);
+            Assert.Equal(0, candidate.Count("similarity-projected"));
+        }
+        else
+        {
+            Assert.Contains($"kind=goal id={CompletedId[..8]}", candidate.Text);
+            Assert.Equal(1, candidate.Count("similarity-projected"));
+        }
+    }
+
+    private static JsonObject BuildSimilaritySnapshot(GoalSnapshot original, string shape)
+    {
+        var large = shape.StartsWith("large", StringComparison.Ordinal);
+        var versionCount = shape switch { "versions-1" => 1, "versions-3" => 3, _ => 2 };
+        var spec = new RefinedSpecSnapshot(large ? new string('s', 70000) : "quartz contract",
+            ["quartz criterion"], "TestVerifiable", [], []);
+        var briefs = Enumerable.Range(1, versionCount).Select(version => new GoalBriefVersion(version,
+            version == versionCount ? original.Objective : large ? new string('b', 70000) : "older quartz brief",
+            Stamp, "revision", version == versionCount ? null : version + 1)).ToArray();
+        var specs = Enumerable.Range(1, Math.Min(versionCount, 2)).Select(version => new RefinedSpecVersionSnapshot(
+            version, spec, Stamp, version, version == Math.Min(versionCount, 2) ? null : version + 1)).ToArray();
+        var snapshot = original with { BriefVersions = briefs, RefinedSpec = spec, RefinedSpecVersions = specs };
+        if (shape == "versions-reversed")
+            snapshot = snapshot with { BriefVersions = briefs.Reverse().ToArray(), RefinedSpecVersions = specs.Reverse().ToArray() };
+        if (shape is "corrections" or "waiver" or "combined" || large)
+            snapshot = snapshot with
+            {
+                EffectiveAcceptanceCriteriaCorrections =
+                [new("old quartz criterion", "quartz correction", "operator", Stamp, null, ProgressKind.GoalCreated,
+                    IsWaiver: shape is "waiver" or "combined",
+                    Dispositions: shape == "corrections" ? null : [new("quartz criterion", "retained")])]
+            };
+        if (shape is "obligations" or "combined" || large)
+        {
+            var obligation = new GateTestObligation("quartz", 2, ["BacklogSelectiveGoalReadTests"], "planner",
+                large ? new string('g', 70000) : "evidence", Stamp,
+                new PlannerEvidenceIdentity(CompletedId, "planner", 2, 0, "quartz"),
+                new PlannerEvidencePayload(0, "quartz", "post-implementation", "acceptance-gate", "needed", "reason",
+                    null, null, ["BacklogSelectiveGoalReadTests"]));
+            snapshot = snapshot with
+            {
+                GateTestObligations =
+                [new("old", 1, ["BacklogSelectiveGoalReadTests"], "planner", "superseded", Stamp), obligation,
+                    obligation with { PlannerEvidence = obligation.PlannerEvidence! with
+                        { Selectors = ["BacklogSelectiveGoalReadTests"] } }]
+            };
+        }
+        if (shape is "evidence" or "combined" || large)
+            snapshot = snapshot with
+            {
+                CriterionEvidenceObligations =
+                [new("criterion-v1-0", 0, 1, "quartz criterion", CriterionEvidenceOwner.Operator,
+                    CriterionEvidenceState.Pending, "manual", "operator", Stamp),
+                 new("criterion-v2-0", 0, 2, "quartz criterion", CriterionEvidenceOwner.Operator,
+                    CriterionEvidenceState.Satisfied, "manual", "operator", Stamp, "candidate", "receipt", "observed"),
+                 new("old-malformed", 0, 2, "quartz criterion", CriterionEvidenceOwner.Unknown,
+                    CriterionEvidenceState.Repaired, "manual", "operator repair", Stamp,
+                    ReplacementObligationId: "criterion-v2-0", ReplacementOwner: CriterionEvidenceOwner.Operator)]
+            };
+        if (shape is "combined" or "corrections" or "waiver")
+            snapshot = snapshot with
+            {
+                ExplicitDisposition = new(1, shape == "combined"
+                    ? GoalExplicitDispositionAction.Park : GoalExplicitDispositionAction.Unpark),
+                ParkedLifecycleStatus = shape == "combined" ? GoalStatus.Active : null
+            };
+        if (large)
+            snapshot = snapshot with
+            {
+                Tasks = original.Tasks.Take(1).ToArray(),
+                Timeline = [new(CompletedId, null, ProgressKind.GoalCreated, new string('t', 70000), Stamp)]
+            };
+        if (shape is "metadata" or "metadata-empty")
+            snapshot = snapshot with { IsMetadataOnly = true, Tasks = [], Timeline = [], CreatedAt = Stamp, TerminatedAt = Stamp };
+
+        var node = JsonSerializer.SerializeToNode(snapshot, SnapshotJsonOptions())!.AsObject();
+        string[] optionalCollections = ["BriefVersions", "RefinedSpecVersions", "EffectiveAcceptanceCriteriaCorrections",
+            "CriterionEvidenceObligations", "GateTestObligations"];
+        if (shape is "omitted" or "null" or "empty" or "metadata-empty")
+        {
+            node.Remove("RefinedSpec");
+            foreach (var member in optionalCollections)
+                if (shape == "omitted") node.Remove(member);
+                else node[member] = shape == "null" ? null : new JsonArray();
+        }
+        if (shape is "reordered" or "large-reordered")
+            node = new JsonObject(node.Reverse().Select(member =>
+                new KeyValuePair<string, JsonNode?>(member.Key, member.Value?.DeepClone())));
+        return node;
+    }
+
+    public static IEnumerable<object[]> RejectedSimilaritySnapshots()
+    {
+        foreach (var archive in new[] { false, true })
+        // Archive reads first validate a valid hot stub. Force only hot corruption so the
+        // hook does not turn that unrelated valid stub into a successful fallback.
+        foreach (var force in archive ? new[] { false } : new[] { false, true })
+        {
+            yield return [archive, force, "Tasks", """[{"Description":42}]""", "$.Tasks[0].Description"];
+            yield return [archive, force, "CreatedAt", "\"invalid date\"", "$.CreatedAt"];
+        }
+    }
+
+    [Theory]
+    [MemberData(nameof(RejectedSimilaritySnapshots))]
+    public async Task Similarity_FullDeserializerRejection_PreservesOriginalDiagnostic(
+        bool archive, bool force, string member, string value, string path)
+    {
+        using var fixture = await Fixture.Create(0, 256);
+        if (archive) await fixture.MakeTerminalAndArchive(CompletedId);
+        fixture.ReplaceSnapshotMember(CompletedId, member, value, archive);
+        var json = fixture.ReadSnapshotJson(CompletedId, archive);
+        using var stream = new MemoryStream(System.Text.Encoding.UTF8.GetBytes(json));
+        var expected = Assert.Throws<JsonException>(() => JsonSerializer.Deserialize<GoalSnapshot>(stream, SnapshotJsonOptions()));
+        Assert.Equal(path, expected.Path);
+        Assert.NotNull(expected.LineNumber);
+        Assert.NotNull(expected.BytePositionInLine);
+        // The full deserializer owns the type name; compare its actual diagnostic below.
+
+        var events = new List<GoalSnapshotReadObservation>();
+        var repository = SqliteOrchestratorStateRepository.OpenReadOnly(fixture.Workspace.SqliteStatePath, events.Add);
+        IReadOnlyList<SimilarityDocument>? documents = null;
+        Exception? actual = null;
+        string error;
+        using (force ? SqliteOrchestratorStateRepository.ForceSimilarityProjectionRejectionForTesting(CompletedId, member) : null)
+            error = AsyncLocalConsoleRouter.CaptureError(() => actual = Record.Exception(() =>
+                documents = repository.ListCompletedGoalSimilarityDocumentsAsync().GetAwaiter().GetResult()));
+        Assert.DoesNotContain(events, evt => evt.Operation.StartsWith("SIMILARITY_PROJECTION_FALLBACK ", StringComparison.Ordinal));
+        Assert.DoesNotContain("SIMILARITY_PROJECTION_FALLBACK", error);
+        if (archive)
+        {
+            var failure = Assert.IsType<JsonException>(actual);
+            Assert.Equal(expected.Message, failure.Message);
+            Assert.Equal(expected.Path, failure.Path);
+            Assert.Equal(expected.LineNumber, failure.LineNumber);
+            Assert.Equal(expected.BytePositionInLine, failure.BytePositionInLine);
+            Assert.Empty(error);
+        }
+        else
+        {
+            Assert.Null(actual);
+            Assert.NotNull(documents);
+            Assert.DoesNotContain(documents, document => document.Id == CompletedId);
+            Assert.Equal($"QUARANTINED goal {CompletedId[..8]}: {expected.GetType().Name}: {expected.Message}", error.TrimEnd('\r', '\n'));
+        }
+    }
+
+    private static JsonSerializerOptions SnapshotJsonOptions()
+    {
+        var options = new JsonSerializerOptions();
+        options.Converters.Add(new System.Text.Json.Serialization.JsonStringEnumConverter());
+        return options;
+    }
+
     private static Receipt Run(string[] args, OrchestratorWorkspace workspace, bool baseline)
     {
         var events = new List<GoalSnapshotReadObservation>();
@@ -989,6 +1240,8 @@ public sealed class BacklogSelectiveGoalReadTests(ITestOutputHelper output) : Cl
         internal string[] Requested => Ids("requested");
         internal string[] Deserialized => Ids("hot-deserialized");
         internal string[] Archived => Ids("archive-deserialized");
+        internal string[] Fallbacks => Events.Where(evt => evt.Operation.StartsWith(
+            "SIMILARITY_PROJECTION_FALLBACK ", StringComparison.Ordinal)).Select(evt => evt.Operation).ToArray();
         internal long Characters => Events.Where(evt => evt.Operation is "hot-deserialized" or "archive-deserialized"
             or "similarity-projected").Sum(evt => evt.MaterializedCharacters);
         private string[] Ids(string operation) => Events.Where(evt => evt.Operation == operation).Select(evt => evt.GoalId!).ToArray();
@@ -1064,6 +1317,19 @@ public sealed class BacklogSelectiveGoalReadTests(ITestOutputHelper output) : Cl
 
         internal void ReplaceTasks(string id, string tasks, bool archive = false)
             => ReplaceSnapshotMember(id, "Tasks", tasks, archive);
+
+        internal string ReadSnapshotJson(string id, bool archive = false)
+        {
+            using var connection = Open(workspace.SqliteStatePath);
+            using var command = connection.CreateCommand();
+            command.CommandText = archive
+                ? "SELECT snapshot_json FROM goal_snapshot_archive WHERE goal_id = $id"
+                : "SELECT snapshot_json FROM goals WHERE id = $id";
+            command.Parameters.AddWithValue("$id", id);
+            var stored = command.ExecuteScalar();
+            Assert.NotNull(stored);
+            return archive ? GoalSnapshotArchiveCodec.Decode(stored)! : (string)stored;
+        }
 
         internal void ReplaceSnapshotMember(string id, string member, string value, bool archive = false)
         {
