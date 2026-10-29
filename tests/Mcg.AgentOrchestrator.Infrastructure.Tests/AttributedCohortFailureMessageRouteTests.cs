@@ -140,6 +140,7 @@ public sealed class AttributedCohortFailureMessageRouteTests
             "cohort-attribution=combined-red cohort-partition=partition-1 reproduced=Tests.Fails";
         RecordCohortFailure(kernel, goal, evidence: evidence);
         var db = Path.Combine(files.Root, "state.db");
+        StateDbMigrations.EnsureUpToDate(db);
         await new SqliteOrchestratorStateRepository(db).SaveAsync(kernel);
 
         var resumed = await new SqliteOrchestratorStateRepository(db).LoadAsync();
@@ -181,6 +182,7 @@ public sealed class AttributedCohortFailureMessageRouteTests
         var beforeDecision = AttributedFailureDeveloperRoute.Decide(second, before, Candidate);
         Assert.True(beforeDecision.IsRoute);
         var db = Path.Combine(files.Root, "state.db");
+        StateDbMigrations.EnsureUpToDate(db);
         await new SqliteOrchestratorStateRepository(db).SaveAsync(kernel);
         File.Delete(trx);
         Assert.False(File.Exists(trx));
