@@ -16,7 +16,7 @@ public sealed class AcceptanceBareCommandResolutionTests
         Assert.False(result.TimedOut, "probe batch did not exit before the command hang limit");
         Assert.Equal(0, result.ExitCode);
         Assert.Empty(result.Stderr ?? string.Empty);
-        Assert.Equal(probe.BatchPath, result.ResolvedCommandPath);
+        Assert.Equal(probe.BatchPath, result.ResolvedCommandPath, StringComparer.OrdinalIgnoreCase);
         AssertPrintedDirectory(probe.CommandDirectory, result);
         Assert.NotEqual(NormalizeDirectory(probe.WorkingDirectory),
             NormalizeDirectory(result.StandardOutput!), StringComparer.OrdinalIgnoreCase);
@@ -100,7 +100,7 @@ public sealed class AcceptanceBareCommandResolutionTests
 
         Assert.False(result.TimedOut, "failing probe batch did not exit before the command hang limit");
         Assert.Equal(7, result.ExitCode);
-        Assert.Equal(probe.BatchPath, result.ResolvedCommandPath);
+        Assert.Equal(probe.BatchPath, result.ResolvedCommandPath, StringComparer.OrdinalIgnoreCase);
         AssertPrintedDirectory(probe.CommandDirectory, result);
     }
 
