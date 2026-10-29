@@ -30,18 +30,18 @@ internal sealed partial class ConductorDriver
             TaskOutcomeClassifier.TryExtractRule(
                 DispatchFailureClassifier.Classify(candidate, verification).ClassifierReceipt) is { } rule &&
             (string.Equals(rule, DispatchFailureDiagnosticMarker.WorkerBuildCheckFailed, StringComparison.Ordinal) ||
-             (string.Equals(rule, DispatchFailureDiagnosticMarker.WorkerBuildEvidenceMissing,
-                 StringComparison.Ordinal) && WorkerBuildCheckRecoveryText.NoBuildCause(
+             (DispatchFailureDiagnosticMarker.SharesMissingEvidenceRecovery(rule)
+                 && WorkerBuildCheckRecoveryText.NoBuildCause(
                      verification.StandardError + Environment.NewLine + verification.StandardOutput) != WorkerBuildNoBuildCause.None) ||
-             ((rule == DispatchFailureDiagnosticMarker.WorkerBuildEvidenceMissing || TaskOutcomeClassifier.IsIncompleteScopeDeclaration(rule)) &&
+             ((DispatchFailureDiagnosticMarker.SharesMissingEvidenceRecovery(rule) || TaskOutcomeClassifier.IsIncompleteScopeDeclaration(rule)) &&
               WorkerBuildInfrastructureEvidence.LastDispatchEndedOnQueueCapacity(candidate))));
         if (task is null) return null;
         var capacity = WorkerBuildInfrastructureEvidence.LastDispatchEndedOnQueueCapacity(task) && !(task.CompletionBuildEvidence is { Phase: CompletionBuildEvidencePhase.CompilerFailure } build && build.DispatchAt == task.LastDispatch?.DispatchedAt);
         var cause = capacity ? WorkerBuildNoBuildCause.SlotCapacity : WorkerBuildCheckRecoveryText.NoBuildCause(
             task.LastVerification!.StandardError + Environment.NewLine + task.LastVerification.StandardOutput);
         if (!capacity && cause == WorkerBuildNoBuildCause.SlotCapacity &&
-            TaskOutcomeClassifier.TryExtractRule(DispatchFailureClassifier.Classify(task, task.LastVerification!).ClassifierReceipt) !=
-                DispatchFailureDiagnosticMarker.WorkerBuildEvidenceMissing)
+            !DispatchFailureDiagnosticMarker.SharesMissingEvidenceRecovery(
+                TaskOutcomeClassifier.TryExtractRule(DispatchFailureClassifier.Classify(task, task.LastVerification!).ClassifierReceipt)))
             cause = WorkerBuildNoBuildCause.None;
         var errors = cause == WorkerBuildNoBuildCause.SlotCapacity ? null : WorkerBuildLogErrorReader.ReadNewest(_workerBuildArtifactsPath(goal.Id));
         var noBuild = errors is null && cause != WorkerBuildNoBuildCause.None;
