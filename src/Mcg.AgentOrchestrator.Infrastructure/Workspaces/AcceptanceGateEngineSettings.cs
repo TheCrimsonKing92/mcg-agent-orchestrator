@@ -15,6 +15,7 @@ internal sealed class AcceptanceGateEngineSettings
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase
     };
 
+    public IReadOnlyList<string> LaneTestSourceRoots { get; init; } = [];
     public IReadOnlyList<AcceptanceTestLane> InfrastructureTestLanes { get; init; } = [];
     public IReadOnlyList<AcceptanceMtpInvocation> MtpInvocations { get; init; } = [];
     [JsonIgnore]
@@ -95,6 +96,15 @@ internal sealed class AcceptanceGateEngineSettings
 
     private void Validate()
     {
+        if (LaneTestSourceRoots is null)
+        {
+            throw new InvalidDataException("Acceptance manifest engine laneTestSourceRoots must be a list of repository-relative directories.");
+        }
+        foreach (var root in LaneTestSourceRoots)
+        {
+            LaneTestSourceRootResolver.ValidateEntry(root);
+        }
+
         if (MaxConcurrentShards < 1)
         {
             throw new InvalidDataException("Acceptance manifest engine maxConcurrentShards must be at least 1.");
