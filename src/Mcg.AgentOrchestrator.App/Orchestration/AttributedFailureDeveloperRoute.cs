@@ -22,6 +22,14 @@ internal static class AttributedFailureDeveloperRoute
                 cohort.Groups["tests"].Value.Split(',', StringSplitOptions.RemoveEmptyEntries)
                     .Select(test => test.Trim()).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray());
 
+        var reproduction = Regex.Match(detail,
+            @"\Amerge train RED attributed \(reproduction\) receipt (?<receipt>\S+): (?<tests>[^\r\n]+)\r?\n(?<detail>reproduced [\s\S]+)\z");
+        if (reproduction.Success)
+            return new("train-reproduction", reproduction.Groups["receipt"].Value, summary.BranchHeadSha,
+                reproduction.Groups["tests"].Value.Split(',').Select(test => test.Trim())
+                    .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray(),
+                reproduction.Groups["detail"].Value);
+
         var train = Regex.Match(detail,
             @"\Amerge train RED attributed \((?<source>ownership|reach|path|recorded)\) receipt (?<receipt>\S+): (?<tests>[^\r\n]+)\z");
         return train.Success
@@ -97,7 +105,8 @@ internal static class AttributedFailureDeveloperRoute
             {
                 $"ATTRIBUTED_FAILURE_ROUTE source={failure.Source} candidate_sha={failure.CandidateSha} receipt_id={failure.ReceiptId} signature={signature}",
                 "failing_tests=" + string.Join(',', failure.FailingTests)
-            }.Concat(goal.RefinedSpec?.AcceptanceCriteria ?? [])
+            }.Concat(failure.ReproductionDetail is { } detail ? new[] { detail } : [])
+            .Concat(goal.RefinedSpec?.AcceptanceCriteria ?? [])
             .Append("1. Read the named failing tests at this candidate and decide whether the code or the test is wrong. " +
                 "2. Fix the code, or fix the test so it asserts the intended behavior; never weaken, loosen or remove an assertion to make it pass. " +
                 "3. List every failing test's class in `tests: deferred - ` so the conductor runs it."));
