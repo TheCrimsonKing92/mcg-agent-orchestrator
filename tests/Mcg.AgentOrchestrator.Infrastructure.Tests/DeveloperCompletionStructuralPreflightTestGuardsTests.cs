@@ -14,7 +14,9 @@ public sealed class DeveloperCompletionStructuralPreflightTestGuardsTests
     private const string TestDirectory = "tests/Mcg.AgentOrchestrator.Infrastructure.Tests";
     private const string FixturePath = TestDirectory + "/GuardFixture.cs";
     private const string PartitionManifest = """
-        { "version": 1, "engine": { "infrastructureTestLanes": [
+        { "version": 1, "engine": {
+          "laneTestSourceRoots": ["tests/Mcg.AgentOrchestrator.Infrastructure.Tests", "tests/Mcg.AgentOrchestrator.TestSupport"],
+          "infrastructureTestLanes": [
           { "name": "Dotnet build slots", "filter": "FullyQualifiedName~ConductorBatchLoopTests", "ownedCollections": ["DotnetBuildSlots"] },
           { "name": "Remainder balance B", "filter": "FullyQualifiedName~RunGoalServiceTests" },
           { "name": "Remainder", "filter": "FullyQualifiedName!~ConductorBatchLoopTests&FullyQualifiedName!~RunGoalService" }
