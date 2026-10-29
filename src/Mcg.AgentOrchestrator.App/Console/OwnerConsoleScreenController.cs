@@ -17,6 +17,8 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
     private readonly OwnerConsoleNotificationDetector _notifications = new(notifications ?? new());
     private OwnerConsoleBellTiers _bellTiers = OwnerConsoleBellTiers.All;
     private readonly AnswerIntentStatusTracker _answerTracking = answerTracking ?? new(answers.ReadStatusAsync, clock);
+    private OwnerDecisionWorkflow? _decisionWorkflow;
+    private OwnerDecisionWorkflow Decisions => _decisionWorkflow ??= new(questions, answers, dialogs, _answerTracking, resolutions, clock);
     public void Dispose() => _answerTracking.Dispose();
 
     internal event Action? ModelApplied;
@@ -96,7 +98,7 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
         else if (key == ConsoleKey.DownArrow) SelectIndex(SelectedIndex + 1);
         else if (key == ConsoleKey.Enter && Selected() is { } detail)
             await ShowDecisionAsync(detail, operation, cancellationToken);
-        else if (character is 'a' or 'r') await AnswerAsync(character == 'a', operation, cancellationToken);
+        else if (character is 'a' or 'r') await Decisions.AnswerAsync(Selected(), character == 'a', operation, cancellationToken);
         else if (character == ':')
         {
             var command = await dialogs.PromptTextAsync("Command", OwnerConsoleKeyHints.CommandPrompt);
@@ -110,7 +112,7 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
     internal OwnerConsoleDecision? SelectedDecision => Selected();
 
     internal static bool AnswersInConsole(OwnerConsoleDecision decision) =>
-        decision.Kind == OwnerQuestionKind.ExperimentReading || !OwnerQuestionViewOnly.IsViewOnly(decision.Kind);
+        OwnerDecisionWorkflow.AnswersInConsole(decision);
 
     internal Task ShowHelpAsync() => dialogs.ShowTextAsync("Help", OwnerConsoleKeyHints.HelpText);
 
@@ -119,19 +121,10 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
     internal string ResolutionText(OwnerQuestionResolution resolution) =>
         OwnerQuestionResolutionText.Build(resolution, clock.LocalTimeZone);
 
-    private async Task ShowDecisionAsync(OwnerConsoleDecision decision, OwnerConsoleScreenOperation? operation,
-        CancellationToken cancellationToken)
-    {
-        using var detail = new OwnerConsoleDecisionDetail(decision, clock.LocalTimeZone,
-            (target, accept, notify) => AnswerAsync(accept, operation, cancellationToken, target, notify),
-            async token => resolutions is null || string.IsNullOrEmpty(decision.GoalId) ? null :
-                (await resolutions.ListForGoalAsync(decision.GoalId, token)).FirstOrDefault(item => item.Id == decision.Id),
-            text => dialogs.ShowTextAsync("Help", text), cancellationToken);
-        void Refresh() => detail.Observe(Model?.Decisions.FirstOrDefault(item => item.Id == decision.Id));
-        ModelApplied += Refresh;
-        try { await dialogs.ShowDecisionAsync(detail); }
-        finally { ModelApplied -= Refresh; }
-    }
+    private Task ShowDecisionAsync(OwnerConsoleDecision decision, OwnerConsoleScreenOperation? operation,
+        CancellationToken cancellationToken) =>
+        Decisions.ShowDecisionAsync(decision, () => Model, handler => ModelApplied += handler,
+            handler => ModelApplied -= handler, operation, cancellationToken);
 
     internal Task<OwnerGoalChangeSummary?> LoadGoalSummaryAsync(string goalId, CancellationToken token) =>
         _goalDetail.LoadSummaryAsync(goalId, token);
@@ -171,68 +164,6 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
         var failure = goal.RetainedAcceptanceFailure is { } recorded ? OwnerConsoleGoalLanding.FailureText(recorded, clock.LocalTimeZone) : null;
         var gateGoalId = Model?.Gate?.ForMember(goalId) is not null ? goalId : null;
         return new(string.Join(Environment.NewLine, lines), choiceLines, resolved, openQuestion, failure, epicId, gateGoalId);
-    }
-
-    private async Task AnswerAsync(bool accept, OwnerConsoleScreenOperation? operation, CancellationToken cancellationToken,
-        OwnerConsoleDecision? target = null, Action<string>? notice = null)
-    {
-        var decision = target ?? Selected();
-        if (decision is null) return;
-        if (decision.Kind == OwnerQuestionKind.ExperimentReading)
-        {
-            await new OwnerExperimentDecisionFlow(questions, answers, dialogs, _answerTracking)
-                .RunAsync(decision, operation, notice, cancellationToken);
-            return;
-        }
-        if (!AnswersInConsole(decision))
-        {
-            await ShowNoticeAsync("View only", OwnerQuestionViewOnly.Notice(decision.Kind, decision.GoalId));
-            return;
-        }
-        string? text;
-        if (accept)
-        {
-            if (string.IsNullOrWhiteSpace(decision.ProposedDefault))
-            { await ShowNoticeAsync("Decision", $"question {decision.Number} has no proposed default"); return; }
-            if (!await dialogs.ConfirmAsync("Accept default?", decision.ProposedDefault)) return;
-            text = decision.ProposedDefault;
-        }
-        else text = await dialogs.PromptTextAsync("Answer", decision.FullText);
-        if (text is null) return;
-        if (string.IsNullOrWhiteSpace(text) || text.StartsWith("--", StringComparison.Ordinal))
-        { await ShowNoticeAsync("Answer", "Answer cannot be empty or start with --"); return; }
-        var title = "Answer";
-        var message = string.Empty;
-        OwnerAnswerSubmission? submission = null;
-        if (!await RunDependencyAsync(accept ? "accept default" : "answer", async stepToken =>
-        {
-            try
-            {
-                var live = (await questions.ReadAsync(stepToken)).Live.FirstOrDefault(item => item.ItemId == decision.Id);
-                if (live is null)
-                { title = "Decision"; message = $"question {decision.Number} is no longer open"; return; }
-                if (live != decision.ToQuestion())
-                { title = "Decision"; message = "Question changed; review it again before answering."; return; }
-                stepToken.ThrowIfCancellationRequested();
-                submission = answers.Submit(live, text);
-                message = AnswerIntentStatusTracker.Queued(decision.Number, decision.GoalPrefix);
-            }
-            catch (OperationCanceledException) when (stepToken.IsCancellationRequested) { throw; }
-            catch (Exception ex) { message = $"error: {ex.Message}"; }
-        }, operation, cancellationToken)) return;
-        cancellationToken.ThrowIfCancellationRequested();
-        if (submission is not null && operation is not null)
-        {
-            Notify(message);
-            _answerTracking.Track(submission.IntentId, decision.Number, decision.GoalPrefix, Notify, cancellationToken,
-                text => { operation.ReportFailure(text); notice?.Invoke(text); });
-            return;
-        }
-        await ShowNoticeAsync(title, message);
-
-        void Notify(string text) { operation!.Notify(text); notice?.Invoke(text); }
-        Task ShowNoticeAsync(string heading, string text)
-        { notice?.Invoke(text); return dialogs.ShowTextAsync(heading, text); }
     }
 
     internal async Task RunCommandAsync(string raw, OwnerConsoleScreenOperation? operation = null,
