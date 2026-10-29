@@ -446,7 +446,7 @@ internal sealed partial class WorkerArtifactWriter
             "# Deterministic Verification Checklist",
             string.Empty,
             $"Working directory: {workingDirectory}",
-            $"Acceptance manifest: {WorkerAcceptanceManifestLine.Render(workingDirectory, _targetHome.AcceptanceManifestPath is { } resolveManifest ? resolveManifest(workingDirectory) : Path.Combine(workingDirectory, "config", "acceptance-manifest.json"))}",
+            $"Acceptance manifest: {WorkerAcceptanceManifestLine.Render(workingDirectory, WorkerManifestTestProjectReader.ResolvePath(workingDirectory, _targetHome))}",
             $"Current verification plan: {(string.IsNullOrWhiteSpace(task.VerificationPlan) ? "missing" : "present")}",
             $"Prior tasks inspected: {priorTasks.Count}",
             $"Prior completed tasks: {completedPriorTasks.Count}",
