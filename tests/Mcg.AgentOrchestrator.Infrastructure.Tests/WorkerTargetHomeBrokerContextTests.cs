@@ -12,6 +12,7 @@ public sealed class WorkerTargetHomeBrokerContextTests
         var root = InfrastructureTestSupport.CreateTempDirectory();
         try
         {
+            Assert.False(File.Exists(Path.Combine(root, "config", "acceptance-manifest.json")));
             var task = new TaskSpec(TaskId.New(), "Improve the parser.", role);
             var goal = new AgentOrchestratorKernel().CreateGoal("Improve the parser", [task]);
             var defaultBytes = WriteBrokers(null);
@@ -28,7 +29,14 @@ public sealed class WorkerTargetHomeBrokerContextTests
             var brokerStart = home.IndexOf("- backlog-log-evidence", StringComparison.Ordinal);
             var brokerEnd = home.IndexOf(Environment.NewLine + Environment.NewLine + "## Broker Output Contract",
                 brokerStart, StringComparison.Ordinal);
-            Assert.Equal(home.Remove(brokerStart, brokerEnd - brokerStart + Environment.NewLine.Length), nonHome);
+            var expected = home.Remove(brokerStart, brokerEnd - brokerStart + Environment.NewLine.Length);
+            var recommendation = expected.Split(Environment.NewLine)
+                .Single(line => line.StartsWith("  Current recommendation: ", StringComparison.Ordinal));
+            // This fixture has no manifest: the foreign plan must report that exact diagnostic.
+            const string missingManifest = "; acceptance manifest is missing at config/acceptance-manifest.json; no project checks derived";
+            expected = expected.Replace(recommendation + Environment.NewLine,
+                recommendation + missingManifest + Environment.NewLine, StringComparison.Ordinal);
+            Assert.Equal(expected, nonHome);
 
             byte[] WriteBrokers(WorkerTargetHome? targetHome)
             {
