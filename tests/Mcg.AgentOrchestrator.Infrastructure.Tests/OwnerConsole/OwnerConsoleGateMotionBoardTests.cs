@@ -22,7 +22,7 @@ public sealed class OwnerConsoleGateMotionBoardTests
         Assert.Equal("gate running 6m, no output change 14m", model.Board.Single(row => row.GoalId == GateGoal).Stage);
         Assert.Equal("gate running 6m, no output change 14m", model.Board.Single(row => row.GoalId == GateGoal).StageWithoutQuestion);
         Assert.Equal("waiting for gate (1st in queue)", model.Board.Single(row => row.GoalId == WaitingGoal).Stage);
-        Assert.Equal("Developer", model.Board.Single(row => row.GoalId == WorkerGoal).Stage);
+        Assert.Equal("in progress: Developer", model.Board.Single(row => row.GoalId == WorkerGoal).Stage);
     }
 
     [Theory]
@@ -39,7 +39,7 @@ public sealed class OwnerConsoleGateMotionBoardTests
             harness.Liveness, new Epics(), clock).BuildBoardAsync();
 
         Assert.Equal([GateGoal], calls);
-        Assert.Equal(["gate running 6m", "waiting for gate (1st in queue)", "Developer"],
+        Assert.Equal(["gate running 6m", "waiting for gate (1st in queue)", "in progress: Developer"],
             withoutParameter.Board.Select(row => row.Stage));
         Assert.Equal(withoutParameter.Board.Select(row => (row.GoalId, row.Stage, row.StageWithoutQuestion)),
             withDelegate.Board.Select(row => (row.GoalId, row.Stage, row.StageWithoutQuestion)));

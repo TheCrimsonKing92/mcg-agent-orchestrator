@@ -37,7 +37,7 @@ public sealed class OwnerConsolePriorityBadgeTests
         Assert.Equal("11111111 Readable title",
             OwnerConsoleGateFormatter.Lines(model.Gate)[1]);
         using var table = new DataTable();
-        foreach (var column in new[] { "GOAL", "EPIC", "TITLE", "PRIORITY", "STATE", "STAGE", "AGE" }) table.Columns.Add(column);
+        foreach (var column in new[] { "GOAL", "EPIC", "TITLE", "PRIORITY", "STATUS", "AGE" }) table.Columns.Add(column);
         using var view = new TableView { Table = new DataTableSource(table) };
         OwnerConsoleBoardRenderer.Render(table, view, model.Board, 0, 0);
         Assert.Equal("Readable title", table.Rows[0][2]);
@@ -71,12 +71,12 @@ public sealed class OwnerConsolePriorityBadgeTests
         var goal = harness.Kernel.CreateGoal(new GoalId("11111111-detail"), "Readable title",
             [new(TaskId.New(), "Build", AgentRole.Developer)]);
         var normal = Render(goal);
-        Assert.Equal(string.Join(Environment.NewLine, "11111111  Readable title", "Status: Draft",
+        Assert.Equal(string.Join(Environment.NewLine, "11111111  Readable title", "Status: draft",
             "Stage: Created", "Role: Developer", "Tasks:", "  Developer: Pending", "Recent events: none", ""), normal);
         goal = WithStoredPriority(harness.Kernel, goal, GoalPriority.High);
         GoalIsolationCommands.Apply(harness.Kernel, goal.Id, GoalIsolation.Solo, "test", "setup");
-        Assert.Equal(normal.Replace("Status: Draft" + Environment.NewLine,
-            "Status: Draft" + Environment.NewLine + "Priority: High (inherited from dependent goal 22222222; not set with goal-priority)" + Environment.NewLine +
+        Assert.Equal(normal.Replace("Status: draft" + Environment.NewLine,
+            "Status: draft" + Environment.NewLine + "Priority: High (inherited from dependent goal 22222222; not set with goal-priority)" + Environment.NewLine +
             "Isolation: solo" + Environment.NewLine), Render(goal));
         var gate = Gate([new("11111111", "Readable title")]);
         Assert.Equal("11111111 Readable title", OwnerConsoleGateFormatter.Lines(gate)[1]);

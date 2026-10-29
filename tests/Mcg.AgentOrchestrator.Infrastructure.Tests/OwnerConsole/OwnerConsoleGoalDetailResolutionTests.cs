@@ -70,7 +70,7 @@ public sealed class OwnerConsoleGoalDetailResolutionTests
         var text = Assert.Single(dialogs.Texts).Text;
         Assert.Contains(role + " sent back: The answer loses its evidence.", text);
         Assert.DoesNotContain("a problem needs correction", text);
-        Assert.Contains("Status: Verified", text);
+        Assert.Contains("Status: reviewed, awaiting gate", text);
         Assert.DoesNotContain("Stage: Verified", text);
         Assert.DoesNotContain("Role: -", text);
     }
