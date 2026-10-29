@@ -8,6 +8,7 @@ namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 internal static class OwnerConsoleBoardRenderer
 {
     private const int PriorityColumn = 3;
+    private const int StatusColumn = 4;
 
     internal static string Preview(OwnerConsoleSelectedGoalPreview preview, int width,
         string? stage = null, TimeZoneInfo? zone = null) =>
@@ -25,6 +26,8 @@ internal static class OwnerConsoleBoardRenderer
         var showPriority = rows.Any(row => row.Priority is { Length: > 0 } and not "Normal");
         if (paneWidth > 0)
         {
+            var statusHeaderWidth = table.Columns[StatusColumn].ColumnName.GetColumns();
+            var statusWanted = Math.Min(widths[StatusColumn], Math.Max(statusHeaderWidth, paneWidth / 2));
             for (var column = 0; column < widths.Length; column++)
                 if (column != 2) widths[column] = Math.Min(widths[column], Math.Max(table.Columns[column].ColumnName.Length, paneWidth / 6));
             titleWidth = Math.Max(1, paneWidth - widths.Where((_, column) => column != 2).Sum() - widths.Length - 1);
@@ -33,6 +36,11 @@ internal static class OwnerConsoleBoardRenderer
                 showPriority = false;
                 titleWidth = Math.Max(1, paneWidth - widths.Where((_, column) => column != 2 && column != PriorityColumn).Sum() - (widths.Length - 1) - 1);
             }
+            // Keep the existing PRIORITY hiding decision, then let STATUS use TITLE's spare space.
+            var titleAndStatusWidth = titleWidth + widths[StatusColumn];
+            widths[StatusColumn] = Math.Max(statusHeaderWidth, Math.Min(statusWanted,
+                titleAndStatusWidth - Math.Min(OwnerConsoleLineFitter.MinimumTitleColumns, widestTitle)));
+            titleWidth = Math.Max(1, titleAndStatusWidth - widths[StatusColumn]);
         }
         view.Style.GetOrCreateColumnStyle(PriorityColumn).Visible = showPriority;
         if (titleWidth > 0) widths[2] = Math.Min(widths[2], titleWidth);
