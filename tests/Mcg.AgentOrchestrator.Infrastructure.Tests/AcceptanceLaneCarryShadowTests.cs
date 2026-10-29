@@ -250,6 +250,10 @@ public sealed class AcceptanceLaneCarryShadowTests
         internal string Root { get; } = Path.Combine(Path.GetTempPath(), "mcg-carry-tests", Guid.NewGuid().ToString("N"));
         internal Fixture()
         {
+            var config = Path.Combine(Root, "config");
+            Directory.CreateDirectory(config);
+            File.WriteAllText(Path.Combine(config, "acceptance-manifest.json"),
+                """{"engine":{"laneTestSourceRoots":["tests/Mcg.AgentOrchestrator.Infrastructure.Tests"]}}""");
             var sources = Path.Combine(Root, "tests", "Mcg.AgentOrchestrator.Infrastructure.Tests");
             Directory.CreateDirectory(sources);
             File.WriteAllText(Path.Combine(sources, "CarryFixtureTests.cs"),

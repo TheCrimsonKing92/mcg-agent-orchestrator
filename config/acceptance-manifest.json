@@ -11,6 +11,10 @@
       "buildServerShutdownMinutes": 5,
       "discoveryMinutes": 10
     },
+    "laneTestSourceRoots": [
+      "tests/Mcg.AgentOrchestrator.Infrastructure.Tests",
+      "tests/Mcg.AgentOrchestrator.TestSupport"
+    ],
     "infrastructureTestLanes": [
       {
         "name": "Cli",

@@ -75,6 +75,7 @@ public sealed class AcceptanceTestClassSourceCacheTests
             {
               "version": 1,
               "engine": {
+                "laneTestSourceRoots": ["tests/Mcg.AgentOrchestrator.Infrastructure.Tests", "tests/Mcg.AgentOrchestrator.TestSupport"],
                 "infrastructureTestLanes": [
                   { "name": "Alpha", "filter": "FullyQualifiedName~SeedTests", "ownedCollections": ["Alpha"] },
                   { "name": "Remainder", "filter": "FullyQualifiedName!~SeedTests" }
@@ -156,6 +157,8 @@ public sealed class AcceptanceTestClassSourceCacheTests
             .Select(index => tree.PathOf("worktree-" + index)).ToArray();
         foreach (var root in roots)
         {
+            tree.Write(System.IO.Path.GetRelativePath(tree.Root,
+                System.IO.Path.Combine(root, "config", "acceptance-manifest.json")), SourceManifest);
             var path = System.IO.Path.Combine(root, TestProject, "AlphaTests.cs");
             tree.Write(System.IO.Path.GetRelativePath(tree.Root, path), Consumer("AlphaTests", "\"" + root.Replace('\\', '/') + "\""));
             var result = AcceptanceTestClassSourceScanner.Scan(root);
@@ -224,10 +227,19 @@ public sealed class AcceptanceTestClassSourceCacheTests
     private static string Consumer(string name, string expression) =>
         $"[Xunit.Collection({expression})] public class {name} {{ [Xunit.Fact] public void Runs() {{ }} }}";
 
+    private const string SourceManifest = """
+        {"engine":{"laneTestSourceRoots":[
+          "tests/Mcg.AgentOrchestrator.Infrastructure.Tests",
+          "tests/Mcg.AgentOrchestrator.TestSupport"
+        ]}}
+        """;
+
     private sealed class TestTree : IDisposable
     {
         internal string Root { get; } = System.IO.Path.Combine(System.IO.Path.GetTempPath(),
             "acceptance-source-cache-" + Guid.NewGuid().ToString("N"));
+
+        internal TestTree() => Write("config/acceptance-manifest.json", SourceManifest);
 
         internal string PathOf(string relativePath) => System.IO.Path.Combine(Root, relativePath);
 
