@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text.Json;
 using Mcg.AgentOrchestrator.App.Cli;
@@ -238,44 +237,16 @@ public sealed class ImpactReplayCommandTests
 
         public string Git(params string[] args)
         {
-            var start = new ProcessStartInfo("git")
+            var result = InfrastructureTestSupport.RunGitProbe(_root, args, new Dictionary<string, string>
             {
-                WorkingDirectory = _root, UseShellExecute = false, CreateNoWindow = true,
-                RedirectStandardOutput = true, RedirectStandardError = true
-            };
-            start.Environment.Clear();
-            foreach (var name in new[] { "PATH", "SystemRoot", "WINDIR", "TEMP", "TMP", "PATHEXT" })
-                if (Environment.GetEnvironmentVariable(name) is { } value) start.Environment[name] = value;
-            start.Environment["HOME"] = _root;
-            start.Environment["USERPROFILE"] = _root;
-            start.Environment["GIT_CONFIG_NOSYSTEM"] = "1";
-            start.Environment["GIT_CONFIG_GLOBAL"] = Path.Combine(_root, "no-global-config");
-            start.Environment["GIT_TERMINAL_PROMPT"] = "0";
-            foreach (var arg in args) start.ArgumentList.Add(arg);
-            using var process = Process.Start(start);
-            Assert.NotNull(process);
-            var stdout = process.StandardOutput.ReadToEndAsync();
-            var stderr = process.StandardError.ReadToEndAsync();
-            if (!process.WaitForExit(60_000))
-            {
-                process.Kill(entireProcessTree: true);
-                Assert.Fail("Fixture Git command did not exit within the hang-detector bound.");
-            }
-            Assert.True(process.ExitCode == 0, $"git {string.Join(' ', args)}: {stderr.GetAwaiter().GetResult()}");
-            return stdout.GetAwaiter().GetResult();
+                ["HOME"] = _root,
+                ["USERPROFILE"] = _root
+            });
+            InfrastructureTestSupport.RequireCompleteGitOutput(result);
+            Assert.True(result.Succeeded, result.ToString());
+            return result.StandardOutput;
         }
 
-        public void Dispose()
-        {
-            if (!Directory.Exists(_root)) return;
-            // Git objects may be read-only on Windows; only normalize files owned by this fixture.
-            foreach (var path in Directory.EnumerateFiles(_root, "*", SearchOption.AllDirectories))
-            {
-                var attributes = File.GetAttributes(path);
-                if ((attributes & FileAttributes.ReadOnly) != 0)
-                    File.SetAttributes(path, attributes & ~FileAttributes.ReadOnly);
-            }
-            Directory.Delete(_root, recursive: true);
-        }
+        public void Dispose() => SharedTestSupport.RemoveTempDirectory(_root);
     }
 }
