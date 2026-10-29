@@ -131,7 +131,34 @@ public sealed class OwnerConsolePriorityColumnTests
         OwnerConsoleBoardRenderer.Render(table, view, [row], 0, 0);
         Assert.True(view.Style.GetOrCreateColumnStyle(3).Visible);
         OwnerConsoleBoardRenderer.Render(table, view, [], 40, 0);
-        Assert.True(view.Style.GetOrCreateColumnStyle(3).Visible);
+        Assert.False(view.Style.GetOrCreateColumnStyle(3).Visible);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(40)]
+    [InlineData(120)]
+    public void AllNormalRowsHidePriorityAndMixedRowsRestoreIt(int width)
+    {
+        OwnerConsoleBoardRow first = new("11111111", "Epic", "First goal", "Active", "Developer", null,
+            "11111111-first", Priority: "Normal");
+        var second = first with { GoalPrefix = "22222222", GoalId = "22222222-second", Title = "Second goal" };
+        using var table = BoardTable();
+        using var view = new TableView { Table = new DataTableSource(table) };
+        OwnerConsoleBoardRenderer.Render(table, view, [first, second], width, 0);
+        Assert.False(view.Style.GetOrCreateColumnStyle(3).Visible);
+        Assert.Equal(2, table.Rows.Count);
+        Assert.All(table.Rows.Cast<DataRow>(), row => Assert.Equal("Normal", row["PRIORITY"]));
+
+        OwnerConsoleBoardRenderer.Render(table, view, [first, second with { Priority = "High" }], width, 0);
+        Assert.Equal(width != 40, view.Style.GetOrCreateColumnStyle(3).Visible);
+        Assert.Equal("Normal", table.Rows[0]["PRIORITY"]);
+        Assert.Equal("High", table.Rows[1]["PRIORITY"]);
+
+        OwnerConsoleBoardRenderer.Render(table, view, [first, second], width, 0);
+        Assert.False(view.Style.GetOrCreateColumnStyle(3).Visible);
+        OwnerConsoleBoardRenderer.Render(table, view, [], width, 0);
+        Assert.False(view.Style.GetOrCreateColumnStyle(3).Visible);
     }
 
     [Theory]

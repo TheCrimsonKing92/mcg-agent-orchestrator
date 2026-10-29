@@ -4,10 +4,20 @@ namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 internal sealed record OwnerGoalSummarySection(string State, IReadOnlyList<string> Items,
     string Source, int Omitted = 0, IReadOnlyList<string>? ExpandedItems = null);
 
+// Raw facts already loaded for goal detail; preview wording never derives from diagnostic states.
+internal enum OwnerGoalPreviewChangeKind { None, Unavailable, Listed }
+internal enum OwnerGoalPreviewEvidenceKind { Gate, Focused }
+internal sealed record OwnerGoalPreviewChanges(OwnerGoalPreviewChangeKind Kind, IReadOnlyList<string> Files, int Total);
+internal sealed record OwnerGoalPreviewEvidence(OwnerGoalPreviewEvidenceKind Kind, bool Passed, DateTimeOffset At,
+    string? FirstFailedCheck = null);
+internal sealed record OwnerGoalPreviewFacts(string Title, OwnerGoalPreviewChanges Changes, OwnerGoalPreviewEvidence? Evidence);
+
 internal sealed record OwnerGoalChangeSummary(string GoalId, int BriefVersion, string CriteriaIdentity,
     string? Candidate, OwnerGoalSummarySection Planned, OwnerGoalSummarySection Changed,
     OwnerGoalSummarySection Reported, OwnerGoalSummarySection Verified, string Landing)
 {
+    internal OwnerGoalPreviewFacts? Preview { get; init; }
+
     internal OwnerGoalChangeSummary AsStale() => this with
     {
         Planned = Planned with { State = "[stale — refresh queued] " + Planned.State },
