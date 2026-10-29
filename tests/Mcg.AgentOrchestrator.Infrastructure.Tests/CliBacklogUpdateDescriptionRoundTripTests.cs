@@ -198,7 +198,9 @@ public sealed class CliBacklogUpdateDescriptionRoundTripTests : CliCommandTestBa
 
     private async Task<(OrchestratorWorkspace, BacklogStore, BacklogItem, AgentOrchestratorKernel)> CreateFixture()
     {
-        var workspace = CreateRefinedWorkspace(CreateTempDirectory());
+        var root = CreateTempDirectory();
+        CliBacklogUpdateWorkspaceTemplate.CopyTo(root);
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
         var store = new BacklogStore(workspace.BacklogStorePath);
         var item = await store.AddAsync("Original title", "Original body");
         item = (await store.GetByExactIdAsync(item.Id))!;
