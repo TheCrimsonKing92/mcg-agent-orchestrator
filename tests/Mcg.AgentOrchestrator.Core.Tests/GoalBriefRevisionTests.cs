@@ -3,6 +3,77 @@ using System.Text.Json;
 
 public sealed class GoalBriefRevisionTests
 {
+    [Xunit.Theory]
+    [Xunit.InlineData("owner")]
+    [Xunit.InlineData("phase and scope")]
+    [Xunit.InlineData("declaration count")]
+    [Xunit.InlineData("criterion count")]
+    public void DeclarationFailureNamesCriterionAndRule(string rule)
+    {
+        const string criterion = "Observe the revised service";
+        var scope = new CriterionObservationScope(CriterionObservationKind.Runtime, "healthy", "service");
+        var declaration = rule == "owner"
+            ? new CriterionEvidenceDeclaration(criterion, CriterionEvidencePhase.PostLanding, scope, Atomic: true)
+            : new CriterionEvidenceDeclaration(criterion, ObservationScope: rule == "phase and scope" ? scope : null);
+        var spec = new RefinedSpec("Contract", [rule == "criterion count" ? "Another criterion" : criterion],
+            VerificationClass.TestVerifiable, [], [])
+        {
+            CriterionEvidenceDeclarations = rule == "declaration count" ? [declaration, declaration] : [declaration],
+            AcceptanceGateOwnedAcceptanceCriteria = [criterion]
+        };
+
+        var failure = Xunit.Assert.Throws<ArgumentException>(() => CriterionEvidenceLifecycle.Validate(spec));
+
+        Xunit.Assert.StartsWith(CriterionEvidenceLifecycle.AtomicDeclarationRequired, failure.Message, StringComparison.Ordinal);
+        Xunit.Assert.Contains($"Offending criterion: '{criterion}'", failure.Message, StringComparison.Ordinal);
+        Xunit.Assert.Contains($"failed rule: {rule}.", failure.Message, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void FailedRefinementRevisionDiscardsSpecAndDeclarations()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Original brief");
+        kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec("Contract", ["Old criterion"],
+            VerificationClass.TestVerifiable, [], [])
+        {
+            CriterionEvidenceDeclarations = [new("Old criterion")],
+            AcceptanceGateOwnedAcceptanceCriteria = ["Old criterion"]
+        });
+        Xunit.Assert.Single(goal.CriterionEvidenceObligations);
+
+        kernel.ReviseGoalBrief(goal.Id, "Revised brief", discardFailedRefinement: true);
+
+        Xunit.Assert.Null(goal.RefinedSpec);
+        Xunit.Assert.Empty(goal.RefinedSpecVersions);
+        Xunit.Assert.Empty(goal.CriterionEvidenceObligations);
+        var restored = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot());
+        Xunit.Assert.Null(restored.GetGoal(goal.Id).RefinedSpec);
+        Xunit.Assert.Empty(restored.GetGoal(goal.Id).CriterionEvidenceObligations);
+    }
+
+    [Xunit.Fact]
+    public void FailedRefinementResetRefusesEvidencedObligationsBeforeRevising()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Original brief");
+        kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec("Contract", ["Operator check"],
+            VerificationClass.TestVerifiable, [], [])
+        {
+            OperatorOwnedAcceptanceCriteria = ["Operator check"]
+        });
+        var obligation = Xunit.Assert.Single(goal.CriterionEvidenceObligations);
+        kernel.RecordCriterionEvidence(goal.Id, obligation.Id, obligation.Owner, new string('a', 40),
+            "operator-proof", obligation.RequiredScope, true, "Verified operator check");
+        var before = JsonSerializer.Serialize(kernel.ExportSnapshot());
+
+        var failure = Xunit.Assert.Throws<InvalidOperationException>(() =>
+            kernel.ReviseGoalBrief(goal.Id, "Revised brief", discardFailedRefinement: true));
+
+        Xunit.Assert.Contains("cannot be discarded", failure.Message, StringComparison.Ordinal);
+        Xunit.Assert.Equal(before, JsonSerializer.Serialize(kernel.ExportSnapshot()));
+    }
+
     [Xunit.Fact]
     public void ReviseGoalBriefPreservesIdentityHistoryAnswersAndCompletedTaskSnapshot()
     {

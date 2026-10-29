@@ -7,6 +7,113 @@ using Microsoft.Data.Sqlite;
 
 public sealed class GoalRefinementTests
 {
+    [Xunit.Fact]
+    public async Task FailedRefinementReviseResetsAndNextRunReadsRevisedBrief()
+    {
+        var workspace = OrchestratorWorkspace.ForDirectory(CreateTempDirectory());
+        var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
+        ModelFunctionCatalogStore.Save(workspace.ModelFunctionCatalogPath, new ModelFunctionCatalog([
+            new ModelFunctionBinding(ModelFunctionPurposes.SpecRefiner, ModelLane.CheapApi,
+                new ModelProfile("revision-refiner", "fake-model", ModelCapability.Text, SubscriptionMode.ApiKey))
+        ]));
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Original brief\n\n## Acceptance criteria\n\n1. Original criterion.");
+        GoalRefinementWorkCoordinator.RecordPending(kernel, goal.Id);
+        await repository.SaveAsync(kernel);
+        GoalRefinementWorkCoordinator.TryEnsurePendingOutbox(workspace, goal.Id);
+        var badProvider = new CountingResponseModelProvider("revision-refiner", """
+            {"behavioralContract":"Contract","acceptanceCriteria":[{"text":"Unmatched model criterion","phase":"PreLanding"}],"verificationClass":"TestVerifiable","decisions":[],"forks":[]}
+            """);
+
+        var failure = await Xunit.Assert.ThrowsAsync<InvalidOperationException>(() =>
+            GoalRefinementWorkCoordinator.ProcessAsync(repository, workspace,
+                new InMemoryModelProviderRegistry([badProvider]), WorkerProfileCatalog.Default(), goal.Id));
+        Xunit.Assert.StartsWith("SPEC_REFINEMENT_FAILED", failure.Message, StringComparison.Ordinal);
+        Xunit.Assert.Contains("phase=provider-refinement", failure.Message, StringComparison.Ordinal);
+        Xunit.Assert.Contains(CriterionEvidenceLifecycle.AtomicDeclarationRequired, failure.Message, StringComparison.Ordinal);
+        Xunit.Assert.Contains("Offending criterion: 'Unmatched model criterion'", failure.Message, StringComparison.Ordinal);
+        Xunit.Assert.Contains("failed rule: criterion count.", failure.Message, StringComparison.Ordinal);
+        var failedState = await repository.GetOutboxStateAsync(GoalRefinementWorkCoordinator.MessageId(goal.Id));
+        Xunit.Assert.Equal(OrchestratorStateOutboxStatus.Failed, failedState!.Status);
+        Xunit.Assert.Equal(failure.Message, failedState.Detail);
+        kernel = await repository.LoadAsync();
+        goal = kernel.GetGoal(goal.Id);
+        Xunit.Assert.True(SpecRefinementFailureResetEvaluation.Evaluate(workspace, goal));
+
+        // A failed rerun can also leave a previously attached spec available for reuse.
+        kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec("Old contract", ["Original criterion."],
+            VerificationClass.TestVerifiable, [], [])
+        {
+            AcceptanceGateOwnedAcceptanceCriteria = ["Original criterion."],
+            CriterionEvidenceDeclarations = [new("Original criterion.")]
+        });
+        await repository.SaveAsync(kernel);
+        kernel = await repository.LoadAsync();
+        goal = kernel.GetGoal(goal.Id);
+        Xunit.Assert.Equal("Original criterion.", Xunit.Assert.Single(goal.RefinedSpec!.CriterionEvidenceDeclarations).Criterion);
+        Xunit.Assert.Single(goal.CriterionEvidenceObligations);
+        var store = SpecRefinementLaunchAttemptStore.ForWorkspace(workspace);
+        store.Save(goal.Id, new SpecRefinementLaunchAttempt(DateTimeOffset.UtcNow, 3, DateTimeOffset.UtcNow,
+            GoalRefinementWorkCoordinator.MessageId(goal.Id), workspace.SqliteStatePath));
+        const string revisedBrief = "Revised brief\n\n## Acceptance criteria\n\n1. Revised criterion.";
+        kernel.ReviseGoalBrief(goal.Id, revisedBrief,
+            discardFailedRefinement: SpecRefinementFailureResetEvaluation.Evaluate(workspace, goal));
+        GoalRefinementWorkCoordinator.ResetAfterBriefRevision(kernel, workspace, goal.Id);
+        await repository.SaveAsync(kernel);
+
+        var resetGoal = (await repository.LoadAsync()).GetGoal(goal.Id);
+        Xunit.Assert.Null(resetGoal.RefinedSpec);
+        Xunit.Assert.Empty(resetGoal.RefinedSpecVersions);
+        Xunit.Assert.Empty(resetGoal.CriterionEvidenceObligations);
+        Xunit.Assert.Null(store.Get(goal.Id));
+        Xunit.Assert.True(GoalRefinementWorkCoordinator.HasPendingWork(resetGoal));
+        var goodProvider = new CountingResponseModelProvider("revision-refiner", """
+            {"behavioralContract":"New contract","acceptanceCriteria":[{"text":"Revised criterion.","phase":"PreLanding","declared_index":1}],"verificationClass":"TestVerifiable","decisions":[],"forks":[]}
+            """);
+        var processed = await GoalRefinementWorkCoordinator.ProcessAsync(repository, workspace,
+            new InMemoryModelProviderRegistry([goodProvider]), WorkerProfileCatalog.Default(), goal.Id);
+
+        Xunit.Assert.True(processed.Claimed);
+        Xunit.Assert.True(processed.Attached);
+        Xunit.Assert.Equal(1, goodProvider.InvocationCount);
+        Xunit.Assert.Contains(goodProvider.LastRequest!.Messages,
+            message => message.Content.Contains(revisedBrief, StringComparison.Ordinal));
+        var refined = (await repository.LoadAsync()).GetGoal(goal.Id);
+        Xunit.Assert.Equal(["Revised criterion."], refined.RefinedSpec!.AcceptanceCriteria);
+        Xunit.Assert.Equal("Revised criterion.", Xunit.Assert.Single(refined.RefinedSpec.CriterionEvidenceDeclarations).Criterion);
+        Xunit.Assert.False(SpecRefinementFailureResetEvaluation.Evaluate(workspace, refined));
+        Xunit.Assert.Contains(refined.Timeline, entry => entry.Message == GoalRefinementWorkCoordinator.PendingPolicyReceipt);
+    }
+
+    [Xunit.Fact]
+    public async Task ReviseWithoutRefinementFailureKeepsStoredSpecAndDeclarations()
+    {
+        var workspace = OrchestratorWorkspace.ForDirectory(CreateTempDirectory());
+        var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Original brief\n\n## Acceptance criteria\n\n1. Stable criterion.");
+        var spec = new RefinedSpec("Stable contract", ["Stable criterion."], VerificationClass.TestVerifiable, [], [])
+        {
+            CriterionEvidenceDeclarations = [new("Stable criterion.")],
+            AcceptanceGateOwnedAcceptanceCriteria = ["Stable criterion."]
+        };
+        kernel.SetGoalRefinedSpec(goal.Id, spec);
+        await repository.SaveAsync(kernel);
+        var reset = SpecRefinementFailureResetEvaluation.Evaluate(workspace, goal);
+        Xunit.Assert.False(reset);
+
+        kernel.ReviseGoalBrief(goal.Id, "Revised prose\n\n## Acceptance criteria\n\n1. Stable criterion.",
+            discardFailedRefinement: reset);
+
+        Xunit.Assert.Same(spec, goal.RefinedSpec);
+        Xunit.Assert.Same(spec.CriterionEvidenceDeclarations, goal.RefinedSpec!.CriterionEvidenceDeclarations);
+        Xunit.Assert.Single(goal.RefinedSpecVersions);
+        await repository.SaveAsync(kernel);
+        var restored = (await repository.LoadAsync()).GetGoal(goal.Id);
+        Xunit.Assert.Equal(spec.CriterionEvidenceDeclarations, restored.RefinedSpec!.CriterionEvidenceDeclarations);
+        Xunit.Assert.Single(restored.CriterionEvidenceObligations);
+    }
+
     // --- Binding selection and configuration failures ---
 
     [Xunit.Fact]
@@ -3137,9 +3244,11 @@ public sealed class GoalRefinementTests
 
         public string ProviderName => providerName;
         public int InvocationCount => Volatile.Read(ref _invocationCount);
+        public ModelRequest? LastRequest { get; private set; }
 
         public Task<ModelResponse> CompleteAsync(ModelRequest request, CancellationToken cancellationToken)
         {
+            LastRequest = request;
             Interlocked.Increment(ref _invocationCount);
             return Task.FromResult(new ModelResponse(response, new ModelUsage(1, 1), "stop"));
         }
