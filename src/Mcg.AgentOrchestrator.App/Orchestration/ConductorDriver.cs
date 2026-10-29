@@ -121,7 +121,6 @@ internal sealed partial class ConductorDriver
     private readonly Func<WorkerSandboxPrepRecoverableAction, bool> _recoverSandboxPrep;
     private readonly Action<Goal, string> _recordMissingBranchRetirement;
     internal readonly Func<Goal, IReadOnlyList<string>> _getLandingFileScopes;
-    private readonly Func<string, string> _getPreTesterMainRevision;
     private readonly Func<Goal, bool> _isVerificationGateSatisfied;
     private readonly GateReadyCandidateProjector? _gateReadyCandidateProjector;
     internal readonly AgentOrchestratorKernel? _cohortKernel;
@@ -955,10 +954,6 @@ internal sealed partial class ConductorDriver
                 ? InferRecordedFileScopes(goal)
                 : changedFiles;
         };
-        _getPreTesterMainRevision = worktree =>
-            GoalWorktrees.TryResolveCandidateMergeBase(worktree, workspace.IntegrationBranch, out var revision)
-                ? revision
-                : throw new InvalidDataException("Pre-Tester changed-file guards could not resolve the candidate merge base.");
         SliceBatchAdmissionEvaluator = new SliceBatchAdmissionEvaluator(
             () => kernel.Goals,
             goal =>
@@ -1217,7 +1212,6 @@ internal sealed partial class ConductorDriver
         _recoverSandboxPrep = recoverSandboxPrep ?? (action => action.Execute());
         _recordMissingBranchRetirement = recordMissingBranchRetirement ?? ((_, _) => { });
         _getLandingFileScopes = getLandingFileScopes ?? InferRecordedFileScopes;
-        _getPreTesterMainRevision = _ => "fixture-main-revision";
         _isVerificationGateSatisfied = isVerificationGateSatisfied ?? (_ => false);
         _gateReadyCandidateProjector = gateReadyCandidateProjector;
         _runAcceptanceCohortOverride = runAcceptanceCohort;

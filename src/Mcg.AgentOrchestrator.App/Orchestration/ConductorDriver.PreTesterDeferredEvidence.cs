@@ -116,29 +116,14 @@ internal sealed partial class ConductorDriver
                     selected.AddRange(normalized.Selections);
             }
         }
-        var changedPaths = _getLandingFileScopes(goal);
-        var changedFileGuards = _preTesterChangedFileGuards.Select(worktreePath, changedPaths,
-            (PreTesterMainRevision ?? _getPreTesterMainRevision)(worktreePath));
-        notRun.AddRange(changedFileGuards.NotRun.Where(name => prior?.Outcome != "started" ||
+        var guards = PreTesterGuardSelections.Create(_preTesterChangedFileGuards, worktreePath,
+            _getLandingFileScopes(goal), PreTesterMainRevision?.Invoke(worktreePath) ??
+            PreTesterGuardSelections.ReadMainRevision(worktreePath, _cohortWorkspace));
+        notRun.AddRange(guards.NotRun.Where(name => prior?.Outcome != "started" ||
             prior.NotRun.Contains(name, StringComparer.Ordinal)));
-        foreach (var selection in PreTesterAlwaysRunGuardTestClasses.Select(worktreePath)
-                     .Concat(PreTesterTestSourceGuardClasses.Select(worktreePath, changedPaths))
-                     .Concat(changedFileGuards.Selections))
-        {
-            if (TryNormalizeFindingEvidenceRequest(
-                    new FindingEvidenceRequest([selection]), settings,
-                    (_, _) => [],
-                    out var normalized, out _, out _, out _))
-                selected.AddRange(normalized.Selections);
-        }
-        var distinct = selected.DistinctBy(FormatFindingEvidenceSelection).ToArray();
-        // Pre-change attempts keep their original request identity and per-class TRX obligation.
-        if (prior?.Outcome == "started")
-            distinct = distinct.Where(selection =>
-                !(PreTesterAlwaysRunGuardTestClasses.ContainsClass(selection.TestClass) || PreTesterTestSourceGuardClasses.ContainsClass(selection.TestClass) ||
-                  PreTesterChangedFileGuardClasses.ContainsClass(changedFileGuards.Selections, selection.TestClass)) ||
-                prior.Selections.Contains(FormatFindingEvidenceSelection(selection), StringComparer.OrdinalIgnoreCase))
-                .ToArray();
+        selected.AddRange(guards.Normalize(settings));
+        var distinct = guards.RetainStartedSelections(selected,
+            prior?.Outcome == "started" ? prior.Selections : null, FormatFindingEvidenceSelection);
         var request = string.Join("; ", distinct.Select(FormatFindingEvidenceSelection));
         var selectionNames = distinct.Select(FormatFindingEvidenceSelection).ToArray();
         if (prior?.Outcome == "started" &&
@@ -194,12 +179,8 @@ internal sealed partial class ConductorDriver
         var attributionBatch = new FindingEvidenceBatch(
             identity, request, new FindingEvidenceRequest(distinct), [], []);
         var (outcome, candidate, failingTests, unusable) = PreTesterApparatusReceiptClassifier.ClassifyOutcome(evidence, completed, candidateSha, distinct,
-            failures =>
-            {
-                var otherFailures = failures.Where(test => !PreTesterChangedFileGuardClasses.ContainsClass(
-                    changedFileGuards.Selections, AcceptanceTestSourceResolver.ExtractClassName(test))).ToArray();
-                return otherFailures.Length == 0 || EveryFailingTestIsInsideCandidateChanges(goal, attributionBatch, otherFailures);
-            });
+            failures => guards.EveryFailureIsInsideChanges(failures,
+                otherFailures => EveryFailingTestIsInsideCandidateChanges(goal, attributionBatch, otherFailures)));
         if (attempt is not null)
             _focusedEvidenceAttemptCoordinator.RecordFocusedEvidenceRequestDispositions(attempt, requestContext.FindingRoundFingerprint, receiptId, []);
         _recordFindingEvidenceRun(goal.Id, tester.Id, PreTesterUnusableReason.AppendTo(unusable, PreTesterFailureSignatureReader.AppendTo(
