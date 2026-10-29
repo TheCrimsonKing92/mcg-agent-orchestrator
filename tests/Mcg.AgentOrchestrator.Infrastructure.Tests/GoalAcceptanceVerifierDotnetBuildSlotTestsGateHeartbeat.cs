@@ -38,7 +38,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsGateHeartbeat : Go
             TryDeleteStableSlotHeartbeat(0);
             TestOverrides.HeartbeatInterval = TimeSpan.FromMilliseconds(100);
             TestOverrides.ProgressInterval = TimeSpan.FromMilliseconds(200);
-            var verifier = new GoalAcceptanceVerifier(TestOverrides);
+            var verifier = new GoalAcceptanceVerifier(new CrosswalkExecutableResolver(), TestOverrides);
             var goalId = new GoalId("feedfacefeedfacefeedfacefeedface");
             using var cts = new CancellationTokenSource();
             Action<AcceptanceGateProgress> progressSink = item =>
@@ -124,7 +124,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsGateHeartbeat : Go
                     triggerFailsafe.TrySetResult();
                 }
             };
-            var verifier = new GoalAcceptanceVerifier(TestOverrides);
+            var verifier = new GoalAcceptanceVerifier(new CrosswalkExecutableResolver(), TestOverrides);
             run = verifier.RunOwnedAsync(
                 root,
                 new GoalId("dad1fadedad1fadedad1fadedad1fade"),
@@ -223,7 +223,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsGateHeartbeat : Go
                     unchangedOutputObserved.TrySetResult(item);
                 }
             };
-            var verifier = new GoalAcceptanceVerifier(TestOverrides);
+            var verifier = new GoalAcceptanceVerifier(new CrosswalkExecutableResolver(), TestOverrides);
             run = verifier.RunOwnedAsync(
                 root,
                 new GoalId("decafbaddecafbaddecafbaddecafbad"),

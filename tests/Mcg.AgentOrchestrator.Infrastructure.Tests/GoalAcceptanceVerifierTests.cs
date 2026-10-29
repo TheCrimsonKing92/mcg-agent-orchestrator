@@ -62,8 +62,8 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
             using var ambient = DotnetBuildEnvironmentManagerTests.EnvVarScope.ForVariable(
                 DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable,
                 ambientRoot);
-            var firstVerifier = new GoalAcceptanceVerifier(firstRoot);
-            var secondVerifier = new GoalAcceptanceVerifier(secondRoot);
+            var firstVerifier = new GoalAcceptanceVerifier(new CrosswalkExecutableResolver(), firstRoot);
+            var secondVerifier = new GoalAcceptanceVerifier(new CrosswalkExecutableResolver(), secondRoot);
             var firstEnvironment = firstVerifier.ResolveExecutionEnvironment(null, "first", null, null);
             var secondEnvironment = secondVerifier.ResolveExecutionEnvironment(null, "second", null, null);
 

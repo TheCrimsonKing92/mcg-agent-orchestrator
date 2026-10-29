@@ -1340,8 +1340,8 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
             var driver = new ConductorDriver(
                 kernel,
                 workspace,
-                new GoalAcceptanceVerifier(DotnetBuildEnvironmentManager.CaptureStorageRoot(), workspace.OrchestratorDirectory)
-                    { CrosswalkExecutable = CrosswalkExecutableComposition.ForProcess },
+                new GoalAcceptanceVerifier(CrosswalkExecutableComposition.ForProcess,
+                    DotnetBuildEnvironmentManager.CaptureStorageRoot(), workspace.OrchestratorDirectory),
                 agents,
                 profiles,
                 NullOperatorChannel.Instance,
@@ -2789,6 +2789,7 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
         GoalAcceptanceVerifier.ConfigureHermeticVerificationEnvironment(
             startInfo.Environment,
             attempt.ExecutionDirectory);
+        CrosswalkExecutableComposition.PropagateDataRoot(startInfo.Environment);
         BuildGcEnvironment.Apply(startInfo.Environment, BuildGcEnvironment.For(ResolveAttemptPolicy(attempt)));
         if (buildStorageRoot is { } storageRoot)
         {

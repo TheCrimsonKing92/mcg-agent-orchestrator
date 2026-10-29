@@ -523,6 +523,7 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
             redirectStandardStreams: !nativeFileCapture);
 
         AcceptanceHermeticEnvironment.ConfigureHermeticVerificationEnvironment(startInfo.Environment, workingDirectory);
+        CrosswalkExecutableComposition.PropagateDataRoot(startInfo.Environment);
         if (!string.IsNullOrWhiteSpace(acceptanceAttemptResultsPrefix))
         {
             if (string.IsNullOrWhiteSpace(dotnetIsolatedRoot))

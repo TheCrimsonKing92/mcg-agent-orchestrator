@@ -280,7 +280,8 @@ public interface IGoalAcceptanceVerifier
 
 public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 {
-    public CrosswalkExecutableResolver CrosswalkExecutable { get; init; } = new();
+    private CrosswalkExecutableResolver _crosswalkExecutable;
+    public CrosswalkExecutableResolver CrosswalkExecutable { get => _crosswalkExecutable; init => _crosswalkExecutable = value ?? throw new ArgumentNullException(nameof(CrosswalkExecutable), "A crosswalk executable resolver is required."); }
     public sealed record StartupContract(
         int ManifestCheckCount,
         IReadOnlyList<string> InfrastructureLaneNames);
@@ -380,14 +381,15 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     internal const int CappedOutputPreviewBytes = 64 * 1024;
     // A failed partition reruns once as a probe; Retried=true records the probe without changing its verdict.
     // Tests that assert exact partition run counts disable this within-attempt companion to the verdict cache.
-    public GoalAcceptanceVerifier() : this(DotnetBuildEnvironmentManager.CaptureStorageRoot()) { }
-    public GoalAcceptanceVerifier(DotnetBuildStorageRoot storageRoot) : this(new GoalAcceptanceVerifierTestOverrides(), storageRoot) { }
-    public GoalAcceptanceVerifier(DotnetBuildStorageRoot storageRoot, string ownerPolicyDecisionStoreDirectory) : this(storageRoot)
+    public GoalAcceptanceVerifier(CrosswalkExecutableResolver crosswalkExecutable) : this(crosswalkExecutable, DotnetBuildEnvironmentManager.CaptureStorageRoot()) { }
+    public GoalAcceptanceVerifier(CrosswalkExecutableResolver crosswalkExecutable, DotnetBuildStorageRoot storageRoot) : this(crosswalkExecutable, new GoalAcceptanceVerifierTestOverrides(), storageRoot) { }
+    public GoalAcceptanceVerifier(CrosswalkExecutableResolver crosswalkExecutable, DotnetBuildStorageRoot storageRoot, string ownerPolicyDecisionStoreDirectory) : this(crosswalkExecutable, storageRoot)
     {
         _ownerPolicyDecisionStoreDirectory = Path.GetFullPath(ownerPolicyDecisionStoreDirectory);
     }
-    internal GoalAcceptanceVerifier(GoalAcceptanceVerifierTestOverrides testOverrides, DotnetBuildStorageRoot? storageRoot = null)
+    internal GoalAcceptanceVerifier(CrosswalkExecutableResolver crosswalkExecutable, GoalAcceptanceVerifierTestOverrides testOverrides, DotnetBuildStorageRoot? storageRoot = null)
         : this(
+            crosswalkExecutable,
             (arguments, workingDirectory, timeout, cancellationToken) => RunProcessAsync(
                 arguments, workingDirectory, timeout,
                 forceUtf8ConsoleOutput: false,
@@ -403,25 +405,21 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             TimeProvider.System,
             requiresTestTelemetryReceipt: true,
             testOverrides: testOverrides,
-            storageRoot: storageRoot)
-    { }
+            storageRoot: storageRoot) { }
     internal GoalAcceptanceVerifier(
         GoalAcceptanceVerifierTestOverrides testOverrides,
         Func<string[], string, CancellationToken, Task<CommandResult>> runner,
         TimeProvider? timeProvider = null,
         Action<TimeSpan>? leaseSleep = null)
-        : this(runner, timeProvider ?? TimeProvider.System, leaseSleep, testOverrides)
-    { }
+        : this(runner, timeProvider ?? TimeProvider.System, leaseSleep, testOverrides) { }
     internal GoalAcceptanceVerifier(
         GoalAcceptanceVerifierTestOverrides testOverrides,
         Func<string[], string, TimeSpan, CancellationToken, Task<CommandResult>> runner,
         TimeProvider? timeProvider = null,
         Action<TimeSpan>? leaseSleep = null)
-        : this(runner, timeProvider ?? TimeProvider.System, leaseSleep, testOverrides)
-    { }
+        : this(runner, timeProvider ?? TimeProvider.System, leaseSleep, testOverrides) { }
     internal GoalAcceptanceVerifier(Func<string[], string, CancellationToken, Task<CommandResult>> runner)
-        : this(runner, TimeProvider.System)
-    { }
+        : this(runner, TimeProvider.System) { }
     internal GoalAcceptanceVerifier(
         Func<string[], string, CancellationToken, Task<CommandResult>> runner,
         TimeProvider timeProvider,
@@ -438,9 +436,10 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         TimeProvider timeProvider,
         Action<TimeSpan>? leaseSleep = null,
         GoalAcceptanceVerifierTestOverrides? testOverrides = null)
-        : this(runner, runner, timeProvider, leaseSleep, requiresTestTelemetryReceipt: false, testOverrides)
+        : this((testOverrides ?? new GoalAcceptanceVerifierTestOverrides()).CrosswalkExecutableForTests, runner, runner, timeProvider, leaseSleep, requiresTestTelemetryReceipt: false, testOverrides)
     { }
     private GoalAcceptanceVerifier(
+        CrosswalkExecutableResolver crosswalkExecutable,
         Func<string[], string, TimeSpan, CancellationToken, Task<CommandResult>> runner,
         Func<string[], string, TimeSpan, CancellationToken, Task<CommandResult>> discoveryRunner,
         TimeProvider timeProvider,
@@ -449,6 +448,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         GoalAcceptanceVerifierTestOverrides? testOverrides = null,
         DotnetBuildStorageRoot? storageRoot = null)
     {
+        _crosswalkExecutable = crosswalkExecutable ?? throw new ArgumentNullException(nameof(crosswalkExecutable), "A crosswalk executable resolver is required.");
         _runner = runner;
         _storageRoot = storageRoot ?? testOverrides?.BuildStorageRootForTests ?? DotnetBuildEnvironmentManager.CaptureStorageRoot();
         _structuralCoverageEvaluator = new AcceptanceStructuralCoverageEvaluator(discoveryRunner, IsBuildArtifactIoException);
@@ -464,7 +464,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     internal GoalAcceptanceVerifier(GoalAcceptanceVerifier source, IAcceptanceRunExecutionContext executionContext)
     {
         _runner = source._runner;
-        CrosswalkExecutable = source.CrosswalkExecutable;
+        _crosswalkExecutable = source.CrosswalkExecutable;
         _storageRoot = source._storageRoot;
         ResolvedMainBaselineDiscoveryCache = source.ResolvedMainBaselineDiscoveryCache;
         _ownerPolicyDecisionStoreDirectory = source._ownerPolicyDecisionStoreDirectory;
@@ -479,7 +479,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     private GoalAcceptanceVerifier(GoalAcceptanceVerifier source, AcceptanceInvocationContext invocationContext)
     {
         _runner = source._runner;
-        CrosswalkExecutable = source.CrosswalkExecutable;
+        _crosswalkExecutable = source.CrosswalkExecutable;
         _storageRoot = source._storageRoot;
         ResolvedMainBaselineDiscoveryCache = source.ResolvedMainBaselineDiscoveryCache;
         _ownerPolicyDecisionStoreDirectory = source._ownerPolicyDecisionStoreDirectory;

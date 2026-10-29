@@ -38,7 +38,7 @@ File.WriteAllText(Path.Combine(config, "acceptance-manifest.json"), manifest.ToJ
 var id = "crosswalk-" + Guid.NewGuid().ToString("N");
 await using var owner = AcceptanceExecutionOwners.CreateAttempt(fixture, options: new(
     RunId: id, ResultsPrefix: Path.Combine(receipts, id), IntegrationBranch: "main"));
-var result = await new GoalAcceptanceVerifier { CrosswalkExecutable = executable }
+var result = await new GoalAcceptanceVerifier(executable)
     .RunOwnedAsync(fixture, null, null, null, null, owner);
 var check = result.Checks?.SingleOrDefault(check => check.Name == "real crosswalk selection");
 var envelope = new

@@ -25,7 +25,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRunnerInvocationAn
             """);
         try
         {
-            var verifier = new GoalAcceptanceVerifier();
+            var verifier = new GoalAcceptanceVerifier(new CrosswalkExecutableResolver());
 
             var result = await verifier.RunAsync(root);
 
