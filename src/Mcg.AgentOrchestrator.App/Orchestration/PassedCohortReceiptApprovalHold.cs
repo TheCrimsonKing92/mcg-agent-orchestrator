@@ -3,12 +3,13 @@ using Mcg.AgentOrchestrator.Core.Conductor;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
-// A read-only, per-tick reservation of a current receipt, never a new gate or durable hold.
+// A per-tick reservation of a current receipt, never a new gate or durable hold.
 internal static class PassedCohortReceiptApprovalHold
 {
     private const string IdentityPrefix = "cohort-approval:";
 
-    internal sealed record Decision(AcceptanceCohortReceipt Receipt, string Reason);
+    internal sealed record Decision(AcceptanceCohortReceipt Receipt, string Reason,
+        IReadOnlyList<(GoalId GoalId, string HoldReason)> MissingApprovals);
 
     internal static Decision? Evaluate(
         AcceptanceCohortReceipt receipt,
@@ -46,9 +47,11 @@ internal static class PassedCohortReceiptApprovalHold
             return null;
 
         var waiting = string.Join(',', missing.Select(item => item.Member.GoalId.Value[..8]));
-        return new(receipt, $"reason=PassedCohortReceiptApprovalHeld cohort={receipt.Identity.Value} receipt={receipt.ReceiptId} " +
-            $"waiting={waiting}; cohort waits on landing-denylist approval for {waiting}, not on a gate; " +
-            string.Join("; ", missing.Select(item => item.Approval.HoldReason)));
+        // Keep the cohort and actionable approval details ahead of the event reason's length cap.
+        return new(receipt, $"cohort={receipt.Identity.Value} waiting={waiting}; " +
+            string.Join("; ", missing.Select(item => item.Approval.HoldReason)) +
+            $"; receipt={receipt.ReceiptId}; cohort waits on landing-denylist approval for {waiting}, not on a gate",
+            missing.Select(item => (item.Member.GoalId, item.Approval.HoldReason)).ToArray());
     }
 
     internal static ConductorAdvanceResult Held(Goal goal, ConductorAutonomyPolicy policy, Decision decision) =>

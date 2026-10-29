@@ -15,7 +15,8 @@ public sealed class PassedCohortReceiptApprovalHoldNegativeControlTests : Accept
     {
         using var scenario = new PassedCohortReceiptApprovalHoldTests.Scenario();
         var held = scenario.Tick();
-        Assert.Equal(2, held.Count(line => line.Contains("reason=PassedCohortReceiptApprovalHeld", StringComparison.Ordinal)));
+        Assert.Equal(2, held.Count(line => line.StartsWith("ADMISSION ", StringComparison.Ordinal) &&
+            line.Contains("reason=PassedCohortReceiptApprovalHeld", StringComparison.Ordinal)));
         var beforeReceipt = JsonSerializer.Serialize(scenario.Store.TryReadReceipt(scenario.Receipt.Identity.Value));
 
         File.WriteAllText(Path.Combine(scenario.Repo, "unrelated-main.txt"), "Advance main before owner approval.");

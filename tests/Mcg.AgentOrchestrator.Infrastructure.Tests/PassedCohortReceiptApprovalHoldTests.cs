@@ -12,10 +12,11 @@ public sealed class PassedCohortReceiptApprovalHoldTests : AcceptanceCohortWorkf
     public void HeldTick_MissingDenylistApproval_StartsNoGateAndPreservesReceiptAndMembers()
     {
         using var scenario = new Scenario();
-        var beforeGoals = scenario.GoalState();
+        var beforeGoals = MemberState();
         var beforeReceipt = JsonSerializer.Serialize(scenario.Receipt);
         var decisions = CollaborationItemStore.ForDirectory(scenario.Workspace.OrchestratorDirectory);
-        var beforeAttention = JsonSerializer.Serialize(decisions.GetAttentionQueueAsync().GetAwaiter().GetResult());
+        var beforeAttention = decisions.GetAttentionQueueAsync().GetAwaiter().GetResult();
+        Assert.Empty(beforeAttention);
         var gateCount = scenario.Verifier.RunCount;
         for (var tick = 0; tick < 2; tick++)
         {
@@ -28,15 +29,24 @@ public sealed class PassedCohortReceiptApprovalHoldTests : AcceptanceCohortWorkf
                 line.Contains("outcome=inflight", StringComparison.Ordinal) ||
                 line.Contains("result=admitted", StringComparison.Ordinal));
             Assert.Equal(gateCount, scenario.Verifier.RunCount);
-            Assert.Equal(beforeGoals, scenario.GoalState());
+            Assert.Equal(beforeGoals, MemberState());
             Assert.Equal(beforeReceipt, JsonSerializer.Serialize(scenario.Store.TryReadReceipt(scenario.Receipt.Identity.Value)));
-            Assert.Equal(beforeAttention, JsonSerializer.Serialize(decisions.GetAttentionQueueAsync().GetAwaiter().GetResult()));
+            var approval = Assert.Single(decisions.GetAttentionQueueAsync().GetAwaiter().GetResult());
+            Assert.Equal(CollaborationItemType.Decision, approval.Type);
+            Assert.Equal(scenario.Goals[0].Id.Value, approval.GoalId);
+            Assert.Contains($"approve-policy-change {scenario.Goals[0].Id.Value[..8]} {scenario.CandidateRevisions[0]}",
+                approval.Body, StringComparison.Ordinal);
             Assert.All(scenario.Goals, goal =>
             {
                 Assert.Empty(scenario.Store.ReadFinalizedLandingsForGoal(goal.Id));
                 AssertNoLanded(scenario.Workspace, goal.Id);
+                Assert.Equal(goal.Status, scenario.PersistedStatuses[goal.Id]);
             });
         }
+
+        // Only the journal and its landing-blocker observation may change during the reservation.
+        string MemberState() => JsonSerializer.Serialize(scenario.Kernel.ExportSnapshot().Goals
+            .Select(goal => goal with { Timeline = [], LandingBlocker = null }));
     }
 
     [Fact]
