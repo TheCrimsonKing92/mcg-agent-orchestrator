@@ -35,11 +35,12 @@ public static partial class GoalWorktrees
     private static bool TryReadChangedLines(string directory, string commit, out string[] changedLines)
         => TryReadChangedLines(directory, $"{commit}^", commit, out changedLines);
 
-    internal static bool TryReadChangedLines(string directory, string from, string to, out string[] changedLines)
+    internal static bool TryReadChangedLines(string directory, string from, string to, out string[] changedLines,
+        params string[] paths)
     {
         changedLines = [];
-        var result = GitCli.Run(directory, "diff", "--no-ext-diff", "--no-textconv", "--no-renames",
-            "--no-color", "-U0", from, to, "--");
+        var result = GitCli.Run(directory, ["diff", "--no-ext-diff", "--no-textconv", "--no-renames",
+            "--no-color", "-U0", from, to, "--", .. paths]);
         if (!result.Succeeded || result.DrainTimedOut || result.Output.Contains('\uFFFD')) return false;
 
         var lines = new List<string>();
@@ -79,6 +80,6 @@ public static partial class GoalWorktrees
             }
         }
         changedLines = [.. lines];
-        return lines.Count > 0;
+        return lines.Count > 0 || paths.Length > 0;
     }
 }
