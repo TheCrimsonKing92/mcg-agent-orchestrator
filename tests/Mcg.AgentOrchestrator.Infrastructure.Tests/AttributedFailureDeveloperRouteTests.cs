@@ -135,10 +135,31 @@ public sealed class AttributedFailureDeveloperRouteTests
     [InlineData("Tests.Has space")]
     [InlineData("Tests.Has,comma")]
     [InlineData("Tests.Has;semicolon")]
+    [InlineData("Tests.M(role: Planner")]
+    [InlineData("Tests.M(a: 1")]
+    [InlineData("b: 2)")]
+    [InlineData("Tests.M[role: Planner")]
+    [InlineData("Tests.M(role: Planner) suffix")]
+    [InlineData("Tests.M(role: Planner\n)")]
+    [InlineData("Tests.M(role: (Planner)")]
+    [InlineData("Tests.M(a: 1, b: 2)")]
+    [InlineData("Tests.M(role: Planner;)")]
     public void UnrepresentableIdentityDeclines(string identity)
     {
         var goal = CompletedGoal(new AgentOrchestratorKernel());
         Assert.False(AttributedFailureDeveloperRoute.Decide(goal, new("cohort", "receipt", Candidate, [identity]), Candidate).IsRoute);
+    }
+
+    [Theory]
+    [InlineData("Tests.M(role: Planner)")]
+    [InlineData("Tests.M[role: Developer]")]
+    public void CompleteParameterizedIdentityRoutes(string identity)
+    {
+        var goal = CompletedGoal(new AgentOrchestratorKernel());
+        var decision = AttributedFailureDeveloperRoute.Decide(goal,
+            new("cohort", "receipt", Candidate, [identity]), Candidate);
+        Assert.True(decision.IsRoute);
+        Assert.Contains("failing_tests=" + identity + Environment.NewLine, decision.Feedback);
     }
 
     [Fact]

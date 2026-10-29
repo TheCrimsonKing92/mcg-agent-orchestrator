@@ -22,7 +22,8 @@ internal sealed class OwnerConsoleStartupLoader(OwnerConsoleViewModelBuilder bui
         board with { DecisionsState = new(true), ActivityState = new(true) };
 
     internal Task FillAsync(OwnerConsoleViewModel model, Action<OwnerConsoleViewModel> renderUpdate,
-        OwnerConsoleViewInputs inputs, Action<OwnerConsoleActivityLoad> activityLoaded, CancellationToken token)
+        OwnerConsoleViewInputs inputs, Action<OwnerConsoleActivityLoad> activityLoaded, CancellationToken token,
+        IReadOnlyCollection<string>? ownBoardGoalIds = null)
     {
         var sync = new object();
         OwnerConsoleViewInputs? loadedInputs = null;
@@ -54,7 +55,8 @@ internal sealed class OwnerConsoleStartupLoader(OwnerConsoleViewModelBuilder bui
             try
             {
                 var loaded = await LoadBoundedAsync(step => activity.LoadAsync(
-                    model.Board.Select(row => row.GoalId).ToArray(), step), "activity", token);
+                    ownBoardGoalIds ?? model.Board.Where(row => !row.IsForeign && !row.IsDiagnostic)
+                        .Select(row => row.GoalId).ToArray(), step), "activity", token);
                 token.ThrowIfCancellationRequested();
                 activityLoaded(loaded);
                 Update(current =>
