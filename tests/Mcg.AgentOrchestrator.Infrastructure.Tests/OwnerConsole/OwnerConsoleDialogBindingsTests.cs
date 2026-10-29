@@ -45,12 +45,12 @@ public sealed class OwnerConsoleDialogBindingsTests
     }
 
     [Fact]
-    public void TypedSurfaces_DialogRowsExcluded_PreserveAllSixteenEntries()
+    public void TypedSurfaces_DialogRowsExcluded_PreserveTopLevelCommands()
     {
-        const string prompt = "conductor start | conductor stop | conductor status | digest | metrics | bell on | bell off | goal <id-prefix> | [e] epics | fleet | follow | [/] filter <text> | [l] landings | [g] gate | [?] help | [q] quit | [a] accept | [r] answer";
+        const string prompt = "conductor start | conductor stop | conductor status | digest | metrics | bell on | bell off | goal <id-prefix> | [e] epics | fleet | scope [<name>[,<name>...]|all] | follow | [/] filter <text> | [l] landings | [g] gate | [?] help | [q] quit | [a] accept | [r] answer";
         Assert.Equal(prompt, OwnerConsoleBindings.CommandPrompt);
         Assert.Equal(prompt.Split(" | "), OwnerConsoleBindings.PromptEntries);
-        Assert.Equal(18, OwnerConsoleKeyHints.Commands.Count);
+        Assert.Equal(19, OwnerConsoleKeyHints.Commands.Count);
         Assert.Null(OwnerConsoleBindings.ForLine("d"));
         Assert.Null(OwnerConsoleBindings.ForLine("w"));
         foreach (var row in OwnerConsoleDialogBindings.All.Where(row => row.Command is "question" or "failure" or "window" or "reload"))
