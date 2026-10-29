@@ -105,7 +105,7 @@ public sealed class OwnerConsoleGoalChangeSummaryTests
         {
             await TestHangGuard.WaitAsync(loadEntered.Task, "lifecycle summary load entered");
             Assert.False(previewLoad.IsCompleted);
-            Assert.Contains("Planned: loading", view.PreviewText);
+            Assert.Equal("Loading…", view.PreviewText);
             view.Window.Layout(new Size(100, 40));
             Assert.False(previewLoad.IsCompleted);
             Assert.Same(previewLoad, view.PreviewLoad);
@@ -113,8 +113,8 @@ public sealed class OwnerConsoleGoalChangeSummaryTests
         finally { layoutComplete.TrySetResult(); }
         await TestHangGuard.WaitAsync(previewLoad, "lifecycle preview publication after initial layout");
 
-        Assert.Contains(planned, view.PreviewText);
-        Assert.Contains(verified, view.PreviewText);
+        Assert.Equal(string.Join('\n', "Readable goal", changed
+            ? "Changes 2 files in 2 areas: Feature.cs and 1 more" : "No committed changes yet", "Developer"), view.PreviewText);
         Assert.Equal(phase == "pending" ? 0 : changed ? 2 : 1, artifactReads);
         Assert.Equal(changed ? 1 : 0, diffReads);
         Assert.Equal(1, promotionReads);
@@ -126,6 +126,7 @@ public sealed class OwnerConsoleGoalChangeSummaryTests
         var text = Assert.Single(dialogs.Texts);
         Assert.StartsWith("11111111  Readable goal", text);
         Assert.True(text.IndexOf("Planned:", StringComparison.Ordinal) < text.IndexOf("Tasks:", StringComparison.Ordinal));
+        Assert.Contains("Planned: " + planned, text);
         Assert.Contains("Changed:", text); Assert.Contains("Reported:", text); Assert.Contains("Verified: " + verified, text);
         Assert.Contains("brief v1", text);
         Assert.Equal(changed ? 1 : 0, diffReads); // Immutable-range cache across preview/detail.
@@ -157,7 +158,7 @@ public sealed class OwnerConsoleGoalChangeSummaryTests
 
         var rendered = await RenderSelectedGoalAsync(new TestGoal(kernel.ExportGoalSnapshot(goal.Id)), new());
 
-        Assert.Contains("Expected from brief — " + expected, rendered.Preview);
+        Assert.Equal(expected, rendered.Preview.Split('\n')[0]);
         Assert.Contains("  • " + expected + Environment.NewLine, rendered.Detail);
         Assert.Contains("  • Body" + Environment.NewLine, rendered.Detail);
         Assert.Contains("Source: authoritative brief v1", rendered.Detail);
@@ -231,7 +232,8 @@ public sealed class OwnerConsoleGoalChangeSummaryTests
             try { view.Window.Layout(new Size(100, 40)); }
             finally { layoutComplete.TrySetResult(); }
             await view.PreviewLoad.WaitAsync(Token);
-            Assert.Contains("Verified: " + expected, view.PreviewText);
+            if (expected is "passed" or "failed") Assert.Contains("gate " + expected, view.PreviewText);
+            else Assert.DoesNotContain(" · ", view.PreviewText);
             await view.HandleKeyAsync(Key.Tab);
             await view.HandleKeyAsync(Key.Enter);
             var detail = Assert.Single(dialogs.Texts);
@@ -340,12 +342,12 @@ public sealed class OwnerConsoleGoalChangeSummaryTests
         Assert.Contains("Candidate: " + candidate, detail);
         Assert.Contains("Git " + (advanced ? Next : Basis) + ".." + candidate, detail);
         var expected = advanced ? "Changed: observed empty committed range" : "Changed: observed 1 files";
-        Assert.Contains(expected, preview);
+        Assert.Contains(advanced ? "No committed changes yet" : "Changes 1 file in src: Feature.cs", preview);
         Assert.Contains(expected, detail);
         if (advanced) Assert.DoesNotContain("M src/Feature.cs", detail);
         else
         {
-            Assert.Contains("M src/Feature.cs", preview);
+            Assert.Contains("Feature.cs", preview);
             Assert.Contains("M src/Feature.cs", detail);
             Assert.Contains("latest contributing dispatch range, not whole-goal coverage", detail);
         }
@@ -390,7 +392,8 @@ public sealed class OwnerConsoleGoalChangeSummaryTests
                 });
             var (preview, detail) = await RenderSelectedGoalAsync(goal, query);
             Assert.Equal(2, reads);
-            Assert.Contains("Verified: " + expected, preview);
+            if (expected is "passed" or "failed") Assert.Contains("gate " + expected, preview);
+            else Assert.DoesNotContain(" · ", preview);
             Assert.Contains("Verified: " + expected, detail);
             Assert.DoesNotContain("Landing: last gate failed", detail);
             if (expected == "failed") Assert.Contains("retained-check", detail);
@@ -720,7 +723,7 @@ public sealed class OwnerConsoleGoalChangeSummaryTests
         using var view = new OwnerConsoleFullScreenView(app, controller, () => Task.CompletedTask);
         view.Render(Model(goal)); view.Window.Layout(new Size(width, height));
         await view.PreviewLoad.WaitAsync(Token);
-        Assert.Contains("Planned:", view.PreviewText); Assert.Contains("Changed:", view.PreviewText);
+        Assert.Contains("Readable goal", view.PreviewText); Assert.Contains("Changes 1 file", view.PreviewText);
         Assert.All(view.PreviewText.Split('\n'), line => Assert.True(line.GetColumns() <= width - 2));
         var reads = queries.ReadIds.Count;
         view.Window.Layout(new Size(width == 80 ? 100 : 80, height == 25 ? 40 : 25));
