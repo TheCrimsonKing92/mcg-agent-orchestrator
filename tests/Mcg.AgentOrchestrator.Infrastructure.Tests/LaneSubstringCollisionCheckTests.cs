@@ -8,7 +8,9 @@ public sealed class LaneSubstringCollisionCheckTests
     private const string FixturePath = "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/" + IncidentClass + ".cs";
     private const string PassMessage = "source size ratchet and acceptance manifest lane consistency checks passed";
     private const string Manifest = """
-        { "version": 1, "engine": { "infrastructureTestLanes": [
+        { "version": 1, "engine": {
+          "laneTestSourceRoots": ["tests/Mcg.AgentOrchestrator.Infrastructure.Tests", "tests/Mcg.AgentOrchestrator.TestSupport"],
+          "infrastructureTestLanes": [
           { "name": "Dotnet build slots", "filter": "FullyQualifiedName~ConductorBatchLoopTests", "ownedCollections": ["DotnetBuildSlots"] },
           { "name": "Isolated process spawning B", "filter": "(FullyQualifiedName~PatchEquivalenceIntegrationMergeTests)&Category!=HostIntegration" },
           { "name": "Remainder balance C", "filter": "FullyQualifiedName~WorkerBuildRequest|FullyQualifiedName~ExitReconcileBuild" },
