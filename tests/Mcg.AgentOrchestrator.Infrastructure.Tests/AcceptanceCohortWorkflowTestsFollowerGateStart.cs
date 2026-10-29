@@ -4,12 +4,13 @@ using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 // Parallel-safe: each fact owns its repository, attempt registry and build storage.
-public sealed class AcceptanceCohortWorkflowTestsFollowerGateStart : AcceptanceCohortWorkflowTests
+public sealed class AcceptanceCohortWorkflowTestsFollowerGateStart(CohortCandidateTemplate template)
+    : AcceptanceCohortWorkflowTests, IClassFixture<CohortCandidateTemplate>
 {
     [Fact]
     public void StartBindsFollowerPlanAndHoldsOnlyFollower()
     {
-        using var scenario = CreateScenario();
+        using var scenario = CreateScenario(template: template);
         var verifier = new SequenceAcceptanceVerifier([]);
         var driver = scenario.Driver(verifier);
         var launches = 0;
@@ -49,7 +50,7 @@ public sealed class AcceptanceCohortWorkflowTestsFollowerGateStart : AcceptanceC
     [Fact]
     public void RebaseConflictReturnsPathsWithoutRecordOrWorkspace()
     {
-        using var scenario = CreateScenario(conflicting: true);
+        using var scenario = CreateScenario(conflicting: true, template: template);
         var driver = scenario.Driver(new SequenceAcceptanceVerifier([]));
         scenario.Enable(driver, launch: _ => throw new InvalidOperationException("Conflict must not launch."));
         var members = ProjectSelection(driver, scenario.Leader, scenario.Follower).Members;
@@ -67,7 +68,7 @@ public sealed class AcceptanceCohortWorkflowTestsFollowerGateStart : AcceptanceC
     [InlineData(false)]
     public void ChildSavesVerdictBoundToRecordedIdentity(bool passed)
     {
-        using var scenario = CreateScenario();
+        using var scenario = CreateScenario(template: template);
         var result = passed ? new AcceptanceVerificationResult(true, false, 0, null,
             TestResultPaths: [WritePassingTrx(scenario.Repo, "pass.trx")]) : FailedVerification(scenario.Repo, "fail.trx", "follower-check");
         var verifier = new SequenceAcceptanceVerifier([result]);
@@ -98,7 +99,7 @@ public sealed class AcceptanceCohortWorkflowTestsFollowerGateStart : AcceptanceC
     [Fact]
     public void RestoreAfterExactLandingAdoptsAndHoldsOnlyFollower()
     {
-        using var scenario = CreateScenario();
+        using var scenario = CreateScenario(template: template);
         var first = scenario.Driver(new SequenceAcceptanceVerifier([]));
         scenario.Enable(first);
         var record = scenario.Start(first);
@@ -118,7 +119,7 @@ public sealed class AcceptanceCohortWorkflowTestsFollowerGateStart : AcceptanceC
     [Fact]
     public void RestoreReportsMainForUnrelatedLandingAndMembersForMovedFollower()
     {
-        using var scenario = CreateScenario();
+        using var scenario = CreateScenario(template: template);
         var driver = scenario.Driver(new SequenceAcceptanceVerifier([]));
         scenario.Enable(driver);
         var record = scenario.Start(driver);
@@ -131,7 +132,7 @@ public sealed class AcceptanceCohortWorkflowTestsFollowerGateStart : AcceptanceC
     [Fact]
     public void StartReturnsMainDiffersAndExistingReceiptWithoutLaunching()
     {
-        using var scenario = CreateScenario();
+        using var scenario = CreateScenario(template: template);
         var driver = scenario.Driver(new SequenceAcceptanceVerifier([]));
         scenario.Enable(driver, launch: _ => throw new InvalidOperationException("Declined start must not launch."));
         var members = ProjectSelection(driver, scenario.Leader, scenario.Follower).Members;
@@ -153,7 +154,7 @@ public sealed class AcceptanceCohortWorkflowTestsFollowerGateStart : AcceptanceC
     [Fact]
     public void FollowerInAnotherGroupedRunIsBusyWithoutLaunching()
     {
-        using var scenario = CreateScenario();
+        using var scenario = CreateScenario(template: template);
         var driver = scenario.Driver(new SequenceAcceptanceVerifier([]));
         scenario.Enable(driver, launch: _ => throw new InvalidOperationException("Busy follower must not launch."));
         var selection = ProjectSelection(driver, scenario.Leader, scenario.Follower);
@@ -170,7 +171,7 @@ public sealed class AcceptanceCohortWorkflowTestsFollowerGateStart : AcceptanceC
     [InlineData(false)]
     public void ChildUsesPinnedBaseAcrossLandingAndRecordsChangedIdentity(bool exactLanding)
     {
-        using var scenario = CreateScenario();
+        using var scenario = CreateScenario(template: template);
         var leaderRevision = RunGitOutput(GoalWorktrees.TryResolve(scenario.Repo, scenario.Leader.Id)!, "rev-parse", "HEAD");
         var verifier = new IdentityCheckingVerifier(new SequenceAcceptanceVerifier([
             new AcceptanceVerificationResult(true, false, 0, null, TestResultPaths: [WritePassingTrx(scenario.Repo, "pinned.trx")])]),
@@ -194,7 +195,7 @@ public sealed class AcceptanceCohortWorkflowTestsFollowerGateStart : AcceptanceC
     [Fact]
     public void MissingGateEvidenceIsInfrastructureFailure()
     {
-        using var scenario = CreateScenario();
+        using var scenario = CreateScenario(template: template);
         var driver = scenario.Driver(new SequenceAcceptanceVerifier([new AcceptanceVerificationResult(true, false, 0, null)]));
         scenario.Enable(driver);
         var record = scenario.Start(driver);
@@ -218,12 +219,20 @@ public sealed class AcceptanceCohortWorkflowTestsFollowerGateStart : AcceptanceC
             DotnetBuildEnvironmentLease? stableSlotLease = null, bool runBaselineArm = false) => throw new NotSupportedException();
     }
 
-    internal static Scenario CreateScenario(bool conflicting = false)
+    internal static Scenario CreateScenario(bool conflicting = false, CohortCandidateTemplate? template = null)
     {
-        var repo = CreateReducedAcceptanceCohortRepository();
+        // Other classes use this static builder; their setup remains fresh. The conflict
+        // recipe also stays fresh because only one test in this class uses it.
+        var copy = conflicting ? null : template?.Copy("follower", 2, (preparedRepo, ids) =>
+        {
+            AddAcceptanceManifest(preparedRepo);
+            CreateWorktreeCandidate(preparedRepo, ids[0], "tests/Mcg.AgentOrchestrator.Core.Tests/Leader.cs", "member-0\n");
+            CreateWorktreeCandidate(preparedRepo, ids[1], "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Follower.cs", "member-1\n");
+        });
+        var repo = copy?.Repo ?? CreateReducedAcceptanceCohortRepository();
         try
         {
-            AddAcceptanceManifest(repo);
+            if (copy is null) AddAcceptanceManifest(repo);
             if (conflicting)
             {
                 const string shared = "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Shared.cs";
@@ -233,13 +242,17 @@ public sealed class AcceptanceCohortWorkflowTestsFollowerGateStart : AcceptanceC
                 RunGit(repo, "commit", "-m", "Seed shared line");
             }
             var kernel = new AgentOrchestratorKernel();
-            var goals = new[] { CreateCompletedGoal(kernel, "Follower leader", repo), CreateCompletedGoal(kernel, "Follower member", repo) };
+            var goals = new[]
+            {
+                copy?.CreateCompletedGoal(kernel, 0, "Follower leader") ?? CreateCompletedGoal(kernel, "Follower leader", repo),
+                copy?.CreateCompletedGoal(kernel, 1, "Follower member") ?? CreateCompletedGoal(kernel, "Follower member", repo)
+            };
             var paths = conflicting ? new[] { "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Shared.cs",
                 "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Shared.cs" } : new[]
             { "tests/Mcg.AgentOrchestrator.Core.Tests/Leader.cs", "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Follower.cs" };
             for (var index = 0; index < goals.Length; index++)
             {
-                var revision = CreateWorktreeCandidate(repo, goals[index].Id, paths[index], $"member-{index}\n");
+                var revision = copy?.Revisions[index] ?? CreateWorktreeCandidate(repo, goals[index].Id, paths[index], $"member-{index}\n");
                 kernel.RecordGoalRefinement(goals[index].Id, new RefinedSpec(goals[index].Objective,
                     ["The acceptance gate passes"], VerificationClass.TestVerifiable, [], [])
                 { AcceptanceGateOwnedAcceptanceCriteria = ["The acceptance gate passes"] });

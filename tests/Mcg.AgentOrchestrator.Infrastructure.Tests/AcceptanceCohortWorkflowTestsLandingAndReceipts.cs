@@ -6,7 +6,8 @@ using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Microsoft.Data.Sqlite;
 
-public sealed class AcceptanceCohortWorkflowTestsLandingAndReceipts : AcceptanceCohortWorkflowTests
+public sealed class AcceptanceCohortWorkflowTestsLandingAndReceipts(CohortCandidateTemplate template)
+    : AcceptanceCohortWorkflowTests, IClassFixture<CohortCandidateTemplate>
 {
     private sealed class PromotionClock : IClock
     {
@@ -725,15 +726,20 @@ public sealed class AcceptanceCohortWorkflowTestsLandingAndReceipts : Acceptance
     [InlineData("typed-with-legacy")]
     public void RetryableLandingHold_PreservesPassingReceipt_AndLaterRelandsIdenticalState(string scenario)
     {
-        var repo = CreateReducedAcceptanceCohortRepository();
+        var copy = template.Copy("retryable-landing", 2, (preparedRepo, ids) =>
+        {
+            AddAcceptanceManifest(preparedRepo);
+            CreateWorktreeCandidate(preparedRepo, ids[0], "src/Mcg.AgentOrchestrator.Infrastructure/First.cs", "first");
+            CreateWorktreeCandidate(preparedRepo, ids[1], "tests/Second.cs", "second");
+        });
+        var repo = copy.Repo;
         try
         {
-            AddAcceptanceManifest(repo);
             var kernel = new AgentOrchestratorKernel();
-            var firstGoal = CreateCompletedGoal(kernel, "First retryable landing member", repo);
-            var secondGoal = CreateCompletedGoal(kernel, "Second retryable landing member", repo);
-            var firstRevision = CreateWorktreeCandidate(repo, firstGoal.Id, "src/Mcg.AgentOrchestrator.Infrastructure/First.cs", "first");
-            var secondRevision = CreateWorktreeCandidate(repo, secondGoal.Id, "tests/Second.cs", "second");
+            var firstGoal = copy.CreateCompletedGoal(kernel, 0, "First retryable landing member");
+            var secondGoal = copy.CreateCompletedGoal(kernel, 1, "Second retryable landing member");
+            var firstRevision = copy.Revisions[0];
+            var secondRevision = copy.Revisions[1];
             var verifier = new FakeAcceptanceVerifier(
                 result: null,
                 exception: new InvalidOperationException("An identical-state landing retry must reuse its exact gate receipt."));

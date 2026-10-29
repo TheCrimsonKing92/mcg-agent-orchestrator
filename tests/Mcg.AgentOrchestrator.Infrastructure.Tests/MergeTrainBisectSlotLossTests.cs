@@ -7,7 +7,8 @@ using Mcg.AgentOrchestrator.Infrastructure;
 using Microsoft.Data.Sqlite;
 
 // Parallel-safe: each case owns its repositories, database and build-slot storage root.
-public sealed class MergeTrainBisectSlotLossTests : AcceptanceCohortWorkflowTests
+public sealed class MergeTrainBisectSlotLossTests(CohortCandidateTemplate template)
+    : AcceptanceCohortWorkflowTests, IClassFixture<CohortCandidateTemplate>
 {
     [Theory]
     [InlineData(false)]
@@ -182,20 +183,24 @@ public sealed class MergeTrainBisectSlotLossTests : AcceptanceCohortWorkflowTest
 
     private void WithTrain(string evidence, Action<Scenario> assert)
     {
-        var repo = CreateReducedAcceptanceCohortRepository();
+        var names = new[] { "OldestCulpritTests", "OtherMemberTests", "NewestMemberTests" };
+        var copy = template.Copy("bisect", 3, (preparedRepo, ids) =>
+        {
+            AddAcceptanceManifest(preparedRepo);
+            for (var index = 0; index < ids.Length; index++)
+                CreateWorktreeCandidate(preparedRepo, ids[index], Paths[index], $"namespace Ns; public class {names[index]} {{ }}");
+        });
+        var repo = copy.Repo;
         var leases = new List<DotnetBuildEnvironmentLease>();
         try
         {
-            AddAcceptanceManifest(repo);
             var kernel = new AgentOrchestratorKernel();
-            var names = new[] { "OldestCulpritTests", "OtherMemberTests", "NewestMemberTests" };
             var goals = names.Select((name, index) =>
             {
-                var goal = CreateCompletedGoal(kernel, $"Train member {index}", repo);
+                var goal = copy.CreateCompletedGoal(kernel, index, $"Train member {index}");
                 kernel.RecordGoalRefinement(goal.Id, new RefinedSpec(goal.Objective,
                     ["The full acceptance gate passes"], VerificationClass.TestVerifiable, [], [])
                     { AcceptanceGateOwnedAcceptanceCriteria = ["The full acceptance gate passes"] });
-                _ = CreateWorktreeCandidate(repo, goal.Id, Paths[index], $"namespace Ns; public class {name} {{ }}");
                 return goal;
             }).ToArray();
             var workspace = OrchestratorWorkspace.ForDirectory(repo);

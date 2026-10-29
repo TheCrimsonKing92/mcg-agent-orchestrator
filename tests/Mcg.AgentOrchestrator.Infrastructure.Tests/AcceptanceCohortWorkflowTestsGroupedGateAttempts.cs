@@ -3,7 +3,8 @@ using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
 
-public sealed class AcceptanceCohortWorkflowTestsGroupedGateAttempts : AcceptanceCohortWorkflowTests
+public sealed class AcceptanceCohortWorkflowTestsGroupedGateAttempts(CohortCandidateTemplate template)
+    : AcceptanceCohortWorkflowTests, IClassFixture<CohortCandidateTemplate>
 {
     private const int FirstGeneration = 91001;
     private const int SecondGeneration = 91002;
@@ -395,22 +396,27 @@ public sealed class AcceptanceCohortWorkflowTestsGroupedGateAttempts : Acceptanc
         }
     }
 
-    private static (string Repo, AgentOrchestratorKernel Kernel, Goal[] Goals) CreateReadyMembers(int count)
+    private (string Repo, AgentOrchestratorKernel Kernel, Goal[] Goals) CreateReadyMembers(int count)
     {
-        var repo = CreateReducedAcceptanceCohortRepository();
-        AddAcceptanceManifest(repo);
-        var kernel = new AgentOrchestratorKernel();
-        var goals = Enumerable.Range(0, count)
-            .Select(index => CreateCompletedGoal(kernel, $"Grouped gate member {index}", repo)).ToArray();
         var paths = new[]
         {
             "tests/Mcg.AgentOrchestrator.Core.Tests/First.cs",
             "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Second.cs",
             "tests/Mcg.AgentOrchestrator.Dashboard.Tests/Third.cs"
         };
+        var copy = template.Copy($"grouped-{count}", count, (preparedRepo, ids) =>
+        {
+            AddAcceptanceManifest(preparedRepo);
+            for (var index = 0; index < ids.Length; index++)
+                CreateWorktreeCandidate(preparedRepo, ids[index], paths[index], $"member-{index}");
+        });
+        var repo = copy.Repo;
+        var kernel = new AgentOrchestratorKernel();
+        var goals = Enumerable.Range(0, count)
+            .Select(index => copy.CreateCompletedGoal(kernel, index, $"Grouped gate member {index}")).ToArray();
         for (var index = 0; index < count; index++)
         {
-            var revision = CreateWorktreeCandidate(repo, goals[index].Id, paths[index], $"member-{index}");
+            var revision = copy.Revisions[index];
             kernel.RecordGoalRefinement(goals[index].Id, new RefinedSpec(goals[index].Objective,
                 ["The acceptance gate passes"], VerificationClass.TestVerifiable, [], [])
             { AcceptanceGateOwnedAcceptanceCriteria = ["The acceptance gate passes"] });
