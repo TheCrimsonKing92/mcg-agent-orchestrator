@@ -31,7 +31,7 @@ public sealed class FocusedEvidenceRemoteEligibilityTests : GoalAcceptanceVerifi
     public void CollectionOwnershipKeepsAnOtherwiseUnmatchedClassLocal()
     {
         using var fixture = new Fixture("""
-            {"engine":{"infrastructureTestLanes":[
+            {"engine":{"laneTestSourceRoots":["tests/Mcg.AgentOrchestrator.Infrastructure.Tests"],"infrastructureTestLanes":[
               {"name":"Process spawning host-bound","filter":"FullyQualifiedName~HostBoundNamedFixtureTests",
                "ownedCollections":["ProcessSpawningHostBound"],"exclusiveResourceKeys":["host:ProcessSpawningHostBound"]}
             ]}}
@@ -120,7 +120,7 @@ public sealed class FocusedEvidenceRemoteEligibilityTests : GoalAcceptanceVerifi
     public void CheckLevelReasonPrecedesAllExcludedLanesInManifestOrder()
     {
         using var fixture = new Fixture("""
-            {"engine":{"infrastructureTestLanes":[
+            {"engine":{"laneTestSourceRoots":["tests/Mcg.AgentOrchestrator.Infrastructure.Tests"],"infrastructureTestLanes":[
               {"name":"First","filter":"FullyQualifiedName~HostOnlyFixture","exclusiveResourceKeys":["host:first"]},
               {"name":"Second","filter":"FullyQualifiedName~HostOnlyFixture","exclusiveResourceKeys":["host:second"]}
             ]}}
@@ -223,7 +223,8 @@ public sealed class FocusedEvidenceRemoteEligibilityTests : GoalAcceptanceVerifi
         };
         if (includeHost) lanes.Add(new("Dotnet build slots local-only", "FullyQualifiedName~HostOnlyFixture")
         { ExclusiveResourceKeys = ["xunit:DotnetBuildSlots", "host:DotnetBuildSlotsHostOnly"] });
-        return JsonSerializer.Serialize(new { version = 1, engine = new { infrastructureTestLanes = lanes },
+        return JsonSerializer.Serialize(new { version = 1, engine = new
+            { laneTestSourceRoots = new[] { "tests/Mcg.AgentOrchestrator.Infrastructure.Tests" }, infrastructureTestLanes = lanes },
             checks = Array.Empty<object>(), forbiddenChangedPathGlobs = Array.Empty<string>() },
             new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
     }
