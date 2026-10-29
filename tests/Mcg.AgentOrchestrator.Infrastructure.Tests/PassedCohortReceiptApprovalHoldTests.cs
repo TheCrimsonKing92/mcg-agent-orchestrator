@@ -136,7 +136,7 @@ public sealed class PassedCohortReceiptApprovalHoldTests : AcceptanceCohortWorkf
             Goals = [CreateCompletedGoal(Kernel, "Protected member", Repo), CreateCompletedGoal(Kernel, "Ordinary member", Repo)];
             CandidateRevisions =
             [
-                CreateWorktreeCandidate(Repo, Goals[0].Id, AcceptanceCohortWorkflowTestsDenylistOwnerHold.Watched, "protected"),
+                CreateWorktreeCandidate(Repo, Goals[0].Id, Protected, "protected"),
                 CreateWorktreeCandidate(Repo, Goals[1].Id, "tests/ApprovalPartner.cs", "ordinary")
             ];
             foreach (var (goal, revision) in Goals.Zip(CandidateRevisions))
