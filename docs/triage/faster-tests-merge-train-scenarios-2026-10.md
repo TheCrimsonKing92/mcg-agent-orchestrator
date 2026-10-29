@@ -12,7 +12,7 @@ commit or host identifier for each gate. Source inspection started at
 The Tester inspected the existing conductor receipt **R**,
 `finding-evidence-22f3701019771228c6b3b692`, for candidate
 `814471a4ed99608806b8832b13e8d54ea3e767b7`. Its result file is
-`C:/Users/miles/vcs/mcg-agent-orchestrator/.orchestrator/pre-review-evidence-attempts/ea0f333b1aec4d1490c4e359e744ff61/ea0f333b-0-20261028205116612-145e3f320829413ea5e88e343b2cc03f.result.json`.
+`.orchestrator/pre-review-evidence-attempts/ea0f333b1aec4d1490c4e359e744ff61/ea0f333b-0-20261028205116612-145e3f320829413ea5e88e343b2cc03f.result.json`.
 It records accepted/passed focused evidence, seven successful checks, exit 0,
 and no unexecuted selections. The three Infrastructure.Tests TRX files contain
 495 passed results; 169 belong to the twelve exact classes below (151 in the ten
