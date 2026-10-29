@@ -3,7 +3,7 @@ using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 [Xunit.Collection("EnvMutation")]
-public sealed class DispatchClassificationGitContractTests : WorkerDispatchTestSupport
+public sealed class WorkerDispatchTestsWorkerResultClassificationGitContractTests : WorkerDispatchTestSupport
 {
     private static void AssertExitCode(string path, int expected)
     {
