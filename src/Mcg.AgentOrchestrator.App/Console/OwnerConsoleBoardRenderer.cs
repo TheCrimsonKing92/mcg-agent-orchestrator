@@ -18,7 +18,7 @@ internal static class OwnerConsoleBoardRenderer
     {
         view.Style.RowColorGetter = args => args.RowIndex >= 0 && args.RowIndex < rows.Count && rows[args.RowIndex].Dimmed
             ? new Scheme(view.GetScheme().Disabled) : null;
-        var cells = rows.Select(row => new[] { row.GoalPrefix, row.Epic, row.Title, row.Priority, row.State, row.Stage, Age(row.Age) }).ToArray();
+        var cells = rows.Select(row => new[] { row.GoalPrefix, row.Epic, row.Title, row.Priority, row.Stage, Age(row.Age) }).ToArray();
         var widestTitle = cells.Select(row => row[2].GetColumns()).DefaultIfEmpty().Max();
         var widths = Enumerable.Range(0, table.Columns.Count).Select(column =>
             Math.Max(table.Columns[column].ColumnName.GetColumns(), cells.Select(row => row[column].GetColumns()).DefaultIfEmpty().Max())).ToArray();
@@ -31,7 +31,7 @@ internal static class OwnerConsoleBoardRenderer
             if (!showPriority || titleWidth < Math.Min(OwnerConsoleLineFitter.MinimumTitleColumns, widestTitle))
             {
                 showPriority = false;
-                titleWidth = Math.Max(1, paneWidth - widths.Where((_, column) => column != 2 && column != PriorityColumn).Sum() - 6 - 1);
+                titleWidth = Math.Max(1, paneWidth - widths.Where((_, column) => column != 2 && column != PriorityColumn).Sum() - (widths.Length - 1) - 1);
             }
         }
         view.Style.GetOrCreateColumnStyle(PriorityColumn).Visible = showPriority;

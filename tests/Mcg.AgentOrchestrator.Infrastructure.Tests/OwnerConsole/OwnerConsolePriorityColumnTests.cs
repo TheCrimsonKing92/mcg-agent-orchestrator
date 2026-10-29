@@ -107,9 +107,9 @@ public sealed class OwnerConsolePriorityColumnTests
         using var view = new TableView { Table = new DataTableSource(table) };
         OwnerConsoleBoardRenderer.Render(table, view, [row], 40, 0);
         Assert.False(view.Style.GetOrCreateColumnStyle(3).Visible);
-        var otherWidths = new[] { 0, 1, 4, 5, 6 }.Sum(column => view.Style.GetOrCreateColumnStyle(column).MaxWidth);
-        Assert.Equal(40 - otherWidths - 7, view.Style.GetOrCreateColumnStyle(2).MaxWidth);
-        Assert.True(VisibleWidths(view, table) + 7 <= 40);
+        var otherWidths = new[] { 0, 1, 4, 5 }.Sum(column => view.Style.GetOrCreateColumnStyle(column).MaxWidth);
+        Assert.Equal(40 - otherWidths - 6, view.Style.GetOrCreateColumnStyle(2).MaxWidth);
+        Assert.True(VisibleWidths(view, table) + 6 <= 40);
         Assert.Equal("Critical", table.Rows[0]["PRIORITY"]);
         AssertCellsFit(table, view);
 
@@ -117,7 +117,7 @@ public sealed class OwnerConsolePriorityColumnTests
         Assert.True(view.Style.GetOrCreateColumnStyle(3).Visible);
         Assert.Equal(8, view.Style.GetOrCreateColumnStyle(3).MaxWidth);
         Assert.True(view.Style.GetOrCreateColumnStyle(2).MaxWidth >= 16);
-        Assert.Equal(120, VisibleWidths(view, table) + 8);
+        Assert.Equal(120, VisibleWidths(view, table) + 7);
         AssertCellsFit(table, view);
 
         row = row with { Epic = "Epic", State = "Running", Stage = "Developer", Title = "Goal 00", Priority = "High" };
@@ -184,7 +184,7 @@ public sealed class OwnerConsolePriorityColumnTests
             [new(TaskId.New(), "Build", AgentRole.Developer)]);
         var normal = Render(new(goal, null, []));
         Assert.DoesNotContain(normal.Split(Environment.NewLine), line => line.StartsWith("Priority", StringComparison.Ordinal));
-        Assert.Equal(string.Join(Environment.NewLine, "11111111  Readable title", "Status: Draft",
+        Assert.Equal(string.Join(Environment.NewLine, "11111111  Readable title", "Status: draft",
             "Stage: Created", "Role: Developer", "Tasks:", "  Developer: Pending", "Recent events: none", ""), normal);
 
         harness.Kernel.SetGoalPriority(goal.Id, GoalPriority.High, "test", "setup");
@@ -219,7 +219,7 @@ public sealed class OwnerConsolePriorityColumnTests
     private static DataTable BoardTable()
     {
         var table = new DataTable();
-        foreach (var column in new[] { "GOAL", "EPIC", "TITLE", "PRIORITY", "STATE", "STAGE", "AGE" }) table.Columns.Add(column);
+        foreach (var column in new[] { "GOAL", "EPIC", "TITLE", "PRIORITY", "STATUS", "AGE" }) table.Columns.Add(column);
         return table;
     }
 

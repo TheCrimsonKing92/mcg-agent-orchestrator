@@ -180,7 +180,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
     private static DataTable CreateBoardTable()
     {
         var table = new DataTable();
-        foreach (var name in new[] { "GOAL", "EPIC", "TITLE", "PRIORITY", "STATE", "STAGE", "AGE" }) table.Columns.Add(name);
+        foreach (var name in new[] { "GOAL", "EPIC", "TITLE", "PRIORITY", "STATUS", "AGE" }) table.Columns.Add(name);
         return table;
     }
 

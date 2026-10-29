@@ -46,8 +46,8 @@ public sealed class OwnerConsoleGoalDetailFormatterTests
         Assert.Equal("11111111  Readable detail", lines[0]);
         Assert.Single(lines, line => line.Contains("Readable detail", StringComparison.Ordinal));
         Assert.DoesNotContain(lines, line => line.StartsWith("Title: ", StringComparison.Ordinal));
-        Assert.Equal("Status: " + goal.Status, lines[1]);
-        Assert.Contains("Status: " + goal.Status, text);
+        Assert.Equal("Status: in progress", lines[1]);
+        Assert.Contains("Status: in progress", text);
         Assert.Contains("Stage: Blocked", text);
         Assert.Contains("Role: Developer", text);
         foreach (var task in goal.Tasks) Assert.Single(lines, line => line == $"  {task.RequiredRole}: {task.Status}");
