@@ -785,9 +785,14 @@ public sealed class Goal
                 if (declarations.Length != 1 || !CriterionEvidenceLifecycle.IsValid(declaration.Phase, declaredOwner, declaration.ObservationScope) ||
                     declaration.Phase == CriterionEvidencePhase.PostLanding && !declaration.Atomic)
                 {
+                    var rule = declarations.Length != 1
+                        ? CriterionEvidenceDeclarationRule.DeclarationCount
+                        : declaration.Phase == CriterionEvidencePhase.PostLanding && declaredOwner != CriterionEvidenceOwner.Operator
+                            ? CriterionEvidenceDeclarationRule.Owner
+                            : CriterionEvidenceDeclarationRule.PhaseAndScope;
                     _criterionEvidenceObligations.Add(new(id, index, criterionVersion, criterion,
                         CriterionEvidenceOwner.Unknown, CriterionEvidenceState.Pending, "lifecycle declaration repair required",
-                        CriterionEvidenceLifecycle.AtomicDeclarationRequired, recordedAt));
+                        CriterionEvidenceLifecycle.DescribeDeclarationFailure(criterion, rule), recordedAt));
                     continue;
                 }
                 if (declaration.Phase == CriterionEvidencePhase.PostLanding)
@@ -855,6 +860,22 @@ public sealed class Goal
             // Worker verification stays on task verification records. This
             // collection represents only proof that survives worker scope.
         }
+    }
+
+    internal void EnsureFailedRefinementCanBeDiscarded()
+    {
+        var versions = _refinedSpecVersions.Select(version => version.Version).ToHashSet();
+        if (_criterionEvidenceObligations.Any(item => versions.Contains(item.CriterionVersion) &&
+            (item.ReceiptId is not null || item.PriorReceipts is { Count: > 0 } || item.Publication is not null)))
+            throw new InvalidOperationException("An evidenced or published obligation cannot be discarded by a brief revision.");
+    }
+
+    internal void DiscardRefinedSpecForFailedRefinement()
+    {
+        EnsureFailedRefinementCanBeDiscarded();
+        var versions = _refinedSpecVersions.Select(version => version.Version).ToHashSet();
+        _criterionEvidenceObligations.RemoveAll(item => versions.Contains(item.CriterionVersion));
+        _refinedSpecVersions.Clear();
     }
 
     internal RefinedSpecVersion RecordRefinedSpec(RefinedSpec spec, DateTimeOffset recordedAt)

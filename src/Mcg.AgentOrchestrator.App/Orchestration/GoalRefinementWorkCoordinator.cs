@@ -62,6 +62,18 @@ internal static partial class GoalRefinementWorkCoordinator
     public static void RecordPending(AgentOrchestratorKernel kernel, GoalId goalId) =>
         kernel.RecordGoalPolicyDecision(goalId, PendingPolicyReceipt);
 
+    public static bool ResetFailedClaimEscalation(OrchestratorWorkspace workspace, GoalId goalId) =>
+        SpecRefinementLaunchAttemptStore.ForWorkspace(workspace).Reset(goalId);
+
+    public static void ResetAfterBriefRevision(
+        AgentOrchestratorKernel kernel, OrchestratorWorkspace workspace, GoalId goalId)
+    {
+        ResetFailedClaimEscalation(workspace, goalId);
+        if (!HasPendingWork(kernel.GetGoal(goalId)))
+            RecordPending(kernel, goalId);
+        TryEnsurePendingOutbox(workspace, goalId);
+    }
+
     public static bool HasPendingWork(Goal goal) =>
         goal.RefinedSpec is null &&
         goal.Timeline.Any(entry =>
@@ -243,7 +255,7 @@ internal static partial class GoalRefinementWorkCoordinator
             GoalEventsTimelineMirror.AppendMissing(committedEventWriter!, goalId, committedRefinementEvents, "spec-refinement");
 
         if (claimed)
-            SpecRefinementLaunchAttemptStore.ForWorkspace(workspace).Reset(goalId);
+            ResetFailedClaimEscalation(workspace, goalId);
 
         return new GoalRefinementWorkProcessResult(goalId.Value, claimed, attached);
     }

@@ -561,18 +561,16 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             if (GetFlagValue(parts, "--brief-file") is not null || GetFlagValue(parts, "--text-file") is not null)
                 PrintBriefLintAdvisory(newBrief);
 
+            var resetRefinement = SpecRefinementFailureResetEvaluation.Evaluate(context.Workspace, goal);
             var result = context.Kernel.ReviseGoalBrief(
                 goal.Id,
                 newBrief,
                 inlineReason ?? reasonFromFile,
-                answerSupersessions);
-            var refinedCriteriaReceipt = result.RefinedCriteriaReDerived
-                ? result.RefinedCriteriaCount!.Value.ToString(System.Globalization.CultureInfo.InvariantCulture)
-                : "unchanged";
-            Console.WriteLine(
-                $"Goal brief revised: goal={result.GoalId.Value} authoritative=v{result.AuthoritativeVersion.Version} " +
-                $"not-yet-started={result.NotYetStartedTaskIds.Count} in-flight={result.InFlightTaskIds.Count} " +
-                $"completed-unchanged={result.CompletedTaskIds.Count} refined-criteria={refinedCriteriaReceipt}");
+                answerSupersessions,
+                discardFailedRefinement: resetRefinement);
+            if (resetRefinement)
+                GoalRefinementWorkCoordinator.ResetAfterBriefRevision(context.Kernel, context.Workspace, goal.Id);
+            GoalBriefRevisionReceipt.WriteSummary(result, resetRefinement);
             Console.WriteLine($"  not-yet-started tasks: {FormatRevisionTaskIds(result.NotYetStartedTaskIds)}");
             Console.WriteLine($"  in-flight tasks (continue on prior dispatch snapshot): {FormatRevisionTaskIds(result.InFlightTaskIds)}");
             Console.WriteLine($"  completed tasks (unchanged): {FormatRevisionTaskIds(result.CompletedTaskIds)}");
