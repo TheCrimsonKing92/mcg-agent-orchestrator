@@ -30,7 +30,7 @@ internal sealed class CliExecutionContext(
     bool? isStandardInputRedirected = null,
     Action? registerAcceptanceGuardAbort = null,
     Func<AcceptanceMergeGuardPreflightRequest, AcceptanceMergeGuardPreflightResult>? prepareAcceptanceMergeGuard = null,
-    Action<Goal>? finalizeGoalCreation = null,
+    Action<Goal, IReadOnlyCollection<string>?>? finalizeGoalCreation = null,
     CollaborationItemRaise? refinementCollaborationItemRaise = null,
     Func<AgentOrchestratorKernel, IReadOnlyCollection<GoalId>, IReadOnlyList<GoalSnapshotCheckpointResult>>? checkpointGoalKernel = null,
     TransientSqliteLoadHold? initialConductLoopLoadHold = null,
@@ -228,7 +228,8 @@ public AcceptanceMergeGuardPreflightResult PrepareAcceptanceMergeGuard(Acceptanc
 
 public void RegisterAcceptanceGuardAbort() => registerAcceptanceGuardAbort?.Invoke();
 
-public void FinalizeGoalCreation(Goal goal) => finalizeGoalCreation?.Invoke(goal);
+public void FinalizeGoalCreation(Goal goal, IReadOnlyCollection<string>? preparedSourceBacklogDependencies = null) =>
+    finalizeGoalCreation?.Invoke(goal, preparedSourceBacklogDependencies);
 
 public bool HasGoalCreationFinalizer => finalizeGoalCreation is not null;
 

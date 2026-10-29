@@ -2050,7 +2050,7 @@ internal static partial class CliPersistentStateRunner
         var deferredCollaborationWriter = new DeferredGoalCreationCollaborationWriter(
             CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory));
 
-        void FinalizeGoalCreation(Goal goal)
+        void FinalizeGoalCreation(Goal goal, IReadOnlyCollection<string>? preparedSourceBacklogDependencies)
         {
             GoalRefinementWorkCoordinator.RecordPending(kernel, goal.Id);
             var preparedSnapshot = kernel.ExportGoalSnapshot(goal.Id);
@@ -2063,7 +2063,9 @@ internal static partial class CliPersistentStateRunner
             CommitGoalCreationAsync(outboxRepository, workspace, preparedSnapshot,
                     (currentKernel, _) =>
                     {
-                        GoalCreationPreconditionValidator.Validate(currentKernel, preparedSnapshot, workspace);
+                        GoalCreationPreconditionValidator.Validate(
+                            currentKernel, preparedSnapshot, workspace,
+                            preparedSourceBacklogDependencies: preparedSourceBacklogDependencies);
                         currentKernel.ReplaceGoalWithSnapshot(preparedSnapshot);
                         if (request is not null)
                         {
@@ -2098,7 +2100,7 @@ internal static partial class CliPersistentStateRunner
             }
             catch (Exception ex)
             {
-                throw GoalCreationDeliveryIncomplete(goal.Id, ex);
+                throw GoalCreationSideEffectDelivery.Incomplete(goal.Id, ex);
             }
         }
 
@@ -2249,7 +2251,7 @@ internal static partial class CliPersistentStateRunner
         }
         catch (Exception ex)
         {
-            throw GoalCreationDeliveryIncomplete(goal.Id, ex);
+            throw GoalCreationSideEffectDelivery.Incomplete(goal.Id, ex);
         }
     }
 
@@ -2304,12 +2306,6 @@ internal static partial class CliPersistentStateRunner
 
         return new GoalCreationDeliveryResult(goalId.Value, GoalCreationDeliveryDisposition.Delivered);
     }
-
-    private static InvalidOperationException GoalCreationDeliveryIncomplete(GoalId goalId, Exception exception) =>
-        new(
-            $"GOAL_CREATE_DELIVERY_INCOMPLETE goal={goalId.Value} " +
-            $"retry=\"goal-delivery-retry {goalId.Value}\" detail={exception.Message}",
-            exception);
 
     private static void PersistPostCreationGoalChanges(
         ITransactionalOrchestratorStateRepository stateRepository,

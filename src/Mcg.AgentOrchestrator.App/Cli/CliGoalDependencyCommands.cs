@@ -52,9 +52,8 @@ internal static class CliGoalDependencyCommands
             return [];
         if (parts.Any(part => part.Equals("--simple", StringComparison.OrdinalIgnoreCase) ||
             part.Equals("--run", StringComparison.OrdinalIgnoreCase) ||
-            part.Equals("--from-backlog", StringComparison.OrdinalIgnoreCase) ||
-            part.Equals("--backlog-item", StringComparison.OrdinalIgnoreCase)))
-            throw new ArgumentException("--depends-on is supported only by goal <objective> --depends-on <goal-prefix> and goal --brief-file <path> --depends-on <goal-prefix>; it cannot be combined with --simple, --run, --from-backlog or --backlog-item.");
+            part.Equals("--from-backlog", StringComparison.OrdinalIgnoreCase)))
+            throw new ArgumentException("--depends-on is supported only by goal <objective> --depends-on <goal-prefix> and goal --brief-file <path> --depends-on <goal-prefix>; it cannot be combined with --simple, --run or --from-backlog.");
 
         var dependencies = new List<Goal>();
         var seen = new HashSet<GoalId>();
@@ -69,9 +68,12 @@ internal static class CliGoalDependencyCommands
         return dependencies;
     }
 
-    internal static void ApplyAtCreation(AgentOrchestratorKernel kernel, Goal created, IReadOnlyList<Goal> dependencies)
+    internal static IReadOnlyCollection<string> ApplyAtCreation(AgentOrchestratorKernel kernel, Goal created, IReadOnlyList<Goal> dependencies)
     {
+        // Capture derived edges before explicit edges mutate DependsOn, including overlapping edges.
+        var preparedSourceBacklogDependencies = created.DependsOn.Select(id => id.Value).ToArray();
         foreach (var dependency in dependencies)
             kernel.SetGoalDependency(created.Id, dependency.Id);
+        return preparedSourceBacklogDependencies;
     }
 }

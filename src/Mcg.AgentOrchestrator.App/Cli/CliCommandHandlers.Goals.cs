@@ -376,8 +376,8 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 context.EventWriter,
                 context.RefinementCollaborationItemRaise);
             ApplySourceBacklogItemLink(context, context.CurrentGoal, goalSourceBacklogLink);
-            CliGoalDependencyCommands.ApplyAtCreation(context.Kernel, context.CurrentGoal, goalDependsOn);
-            context.FinalizeGoalCreation(context.CurrentGoal);
+            var preparedSourceBacklogDependencies = CliGoalDependencyCommands.ApplyAtCreation(context.Kernel, context.CurrentGoal, goalDependsOn);
+            context.FinalizeGoalCreation(context.CurrentGoal, preparedSourceBacklogDependencies);
             EpicAtCreation.AssignAfterCommit(context.Workspace, PortfolioMemberKind.Goal, context.CurrentGoal.Id.Value, goalEpicId);
             if (summary)
                 GoalCreationSummaryView.Print(context.CurrentGoal, "created", context.Workspace.PortfolioStorePath);

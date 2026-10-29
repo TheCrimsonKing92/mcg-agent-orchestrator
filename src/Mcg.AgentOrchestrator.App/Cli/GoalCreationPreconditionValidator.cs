@@ -12,7 +12,8 @@ internal static class GoalCreationPreconditionValidator
         AgentOrchestratorKernel currentKernel,
         GoalSnapshot preparedSnapshot,
         OrchestratorWorkspace workspace,
-        string? replacementPredecessorGoalId = null)
+        string? replacementPredecessorGoalId = null,
+        IReadOnlyCollection<string>? preparedSourceBacklogDependencies = null)
     {
         if (currentKernel.Goals.Any(goal => goal.Id.Value == preparedSnapshot.Id))
             throw Changed("prepared-goal-id-exists", ("goal", preparedSnapshot.Id));
@@ -135,7 +136,9 @@ internal static class GoalCreationPreconditionValidator
             currentDependencies.Add(dependencyGoal.Id.Value);
         }
 
-        if (!currentDependencies.SetEquals(preparedDependencies))
+        var preparedDerivedDependencies = (preparedSourceBacklogDependencies ?? preparedSnapshot.DependsOn ?? [])
+            .ToHashSet(StringComparer.Ordinal);
+        if (!currentDependencies.SetEquals(preparedDerivedDependencies))
         {
             throw Changed(
                 "source-backlog-dependencies-changed",
