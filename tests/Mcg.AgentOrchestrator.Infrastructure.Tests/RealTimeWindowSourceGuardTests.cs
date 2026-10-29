@@ -6,8 +6,6 @@ public sealed class RealTimeWindowSourceGuardTests
     [
         ("AcceptanceOutputCaptureTests.cs", "ConsumedSubBufferOutputIsPublishedWhileSourceRemainsOpen"),
         ("AcceptanceOutputCaptureTests.cs", "TerminalOnlyFlushControlWithholdsLiveBytesButPreservesFinalOutput"),
-        ("StewardTests.cs", "StewardDispatcherTimeoutCancelsTimedOutTriageWork"),
-        ("StewardTests.cs", "StewardDispatcherFailOpenRoutesRawWhenEngineTimesOut"),
         ("ConductorBatchLoopTestsParallelAcceptance.cs", "BatchLoopDocIntersectionAdmitsConcurrentlyWithEvidence")
     ];
 

@@ -7,8 +7,7 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 public enum ControlPlaneCardSource
 {
     CollaborationDecision = 1,
-    OperatorInboxEscalation = 2,
-    StewardTriage = 3
+    OperatorInboxEscalation = 2
 }
 
 public enum ControlPlaneDeliveryChannel
