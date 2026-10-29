@@ -147,24 +147,9 @@ internal static class OwnerActivityNarrator
                     if (OwnerExperimentReadingNarration.TryNarrate(item, out var readingSentence, out var readingWhy, out var readingNext, out var readingAct))
                         Add(item, readingSentence, readingWhy, readingNext, readingAct);
                     break;
-                case "acceptance":
-                    if (Field(item, "result") == "passed")
-                        Add(item, name + ": passed its tests, landing next", "The required checks passed.", "The conductor will land this work.",
-                            spans: SingleTitle(name, 0) with { OutcomeStart = name.Length + 2, OutcomeLength = "passed".Length });
-                    else if (Field(item, "result") is "failed" or "blocked") TestResult(item, [item.GoalId], false);
-                    break;
-                case "acceptance-cohort":
-                    var members = Members(item);
-                    if (members.Length < 2) break;
-                    if (head == "ACCEPTANCE_COHORT_CHILD_COMPLETED")
-                    {
-                        if (ordered.Skip(index + 1).Any(value => value.EventKind == "acceptance-cohort" &&
-                            Members(value).Select(Prefix).Order().SequenceEqual(members.Select(Prefix).Order()) &&
-                            Field(value, "outcome") is "failed" or "passed")) break;
-                        if (Field(item, "verdict") is not ("failed" or "passed")) break;
-                    }
-                    else if (Field(item, "outcome") is not ("failed" or "passed" or "interaction-only")) break;
-                    TestResult(item, members, true);
+                case "acceptance" or "acceptance-cohort":
+                    if (OwnerAcceptanceNarration.TryNarrate(ordered, index, Name, evidence, attention, out var accepted))
+                        Add(item, accepted.Sentence, accepted.Why, accepted.Next, accepted.Act, accepted.Spans, accepted.GoalPrefixes);
                     break;
                 case "canary-gate":
                     if (Field(item, "result") == "failed")
@@ -259,58 +244,6 @@ internal static class OwnerActivityNarrator
                 "Check DECISIONS for an owner question; otherwise the conductor will retry when it can.",
                 spans: SingleTitle(waitingTitle, "Waiting: ".Length));
         }
-        void TestResult(OwnerConductEvent source, string?[] ids, bool joint)
-        {
-            var passed = Field(source, "outcome") == "passed" || Field(source, "verdict") == "passed";
-            var named = GoalList(joint ? "Joint test run for " : "", joint ? ids.Select(FullName).ToArray() : [Name(source.GoalId)]);
-            var label = named.Text;
-            var spans = named.Spans with { OutcomeStart = label.Length + 2, OutcomeLength = (passed ? "passed" : "failed").Length };
-            var goalPrefixes = joint && ids.Length > 1 ? ids.Select(Prefix).ToArray() : null;
-            if (passed) { Add(source, label + ": passed", "The joint checks passed.", "The conductor will land the work.", spans: spans, goalPrefixes: goalPrefixes); return; }
-            var follow = ordered.Skip(Array.IndexOf(ordered, source) + 1).TakeWhile(value =>
-                !(joint ? value.EventKind == source.EventKind && Members(value).Length > 1 &&
-                    Field(value, "outcome") is "failed" or "passed" :
-                    value.EventKind == "acceptance" && Prefix(value.GoalId) == Prefix(source.GoalId) &&
-                    Field(value, "result") is "failed" or "passed" or "blocked"))
-                .Where(value => ids.Any(id => Prefix(id) == Prefix(value.GoalId))).ToArray();
-            var facts = evidence?.Invoke(source);
-            var attributed = Field(source, "attribution") is "FirstMemberFailed" or "SecondMemberFailed" or "BothMembersFailed" || facts?.OwnTest == true;
-            var ownerQuestion = attention?.Any(entry => entry.ResolvedAt is null &&
-                ids.Any(id => Prefix(id) == Prefix(entry.Question.GoalId))) == true;
-            var developer = follow.Any(value => value.EventKind == "goal-lifecycle" &&
-                (Head(value) == "TaskDispatched" && Role(value) == "Developer" || Head(value) == "TaskFailed" && Field(value, "outcome") == "finding"));
-            var next = ownerQuestion ? "needs you" :
-                developer ? "sent back to the Developer" :
-                follow.Any(value => Field(value, "result") is "held" or "retrying" or "started" ||
-                    value.EventKind == "infrastructure-deferral") || Field(source, "result") == "retrying" ? "retrying automatically" :
-                attributed || Field(source, "next") == "developer" ? "sent back to the Developer" :
-                "awaiting the conductor's next step";
-            var partitions = Field(source, "partitions");
-            var interaction = Field(source, "outcome") == "interaction-only" || Field(source, "attribution") == "InteractionOnly";
-            var unrelated = !interaction && (Field(source, "reason")?.Contains("flak", StringComparison.OrdinalIgnoreCase) == true ||
-                partitions is not null && partitions.Split(',').All(value => value.EndsWith(":Passed", StringComparison.OrdinalIgnoreCase)));
-            var test = Field(source, "tests") ?? facts?.Tests.FirstOrDefault();
-            var own = attributed;
-            var checks = Field(source, "checks") ?? facts?.Checks.FirstOrDefault();
-            var reason = !string.IsNullOrWhiteSpace(facts?.FirstFailure) ? facts.FirstFailure : interaction ? "the changes failed when tested together" : unrelated ? "an unrelated flaky test failed" : own ?
-                test is not null ? "its own new test " + Words(test, "check") + " failed" : "its own checks failed" :
-                Field(source, "type") == "timeout" ? "the test run timed out" : Field(source, "stage") switch
-                {
-                    "rebase" => "the changes could not be updated to main",
-                    "merge" => "the changes could not be added to main",
-                    "source-size-preflight" => "a source file exceeded its size limit",
-                    _ => checks is not null ? "the check " + Words(checks.Replace('_', ' '), "verification") + " failed" :
-                        test is not null ? Words(test, "") + " failed" : FailureReason(source) is { } rejection ? "plan rejected: " + rejection :
-                        "the failure reason has not been recorded"
-                };
-            var sentence = label + (joint ? ": failed (" : ": failed its tests (") + reason + "); " + next;
-            var why = reason + ".";
-            if (joint && test is not null && !own) why += " Failed test: " + Words(test, "the recorded check") + ".";
-            if (facts?.Checks.Count > 0) why += " Failed check: " + Words(facts.Checks[0], "the recorded check") + ".";
-            Add(source, sentence, why, next + ".", ownerQuestion ?
-                "Yes. Review the failed check and answer the question in DECISIONS." : next == "needs you" ?
-                "Yes. Review the failed check and conductor status." : "No. The conductor is handling the next step.", spans, goalPrefixes);
-        }
     }
 
     private static string? DetailLead(OwnerConductEvent item) => Head(item) switch
@@ -332,9 +265,9 @@ internal static class OwnerActivityNarrator
         return new(start, title.Length, colon < 0 ? 0 : colon + 1, trailingLength);
     }
 
-    private static OwnerConsoleLineSpans SingleTitle(string title, int start) => new([TitleSpan(title, start)]);
+    internal static OwnerConsoleLineSpans SingleTitle(string title, int start) => new([TitleSpan(title, start)]);
 
-    private static (string Text, OwnerConsoleLineSpans Spans) GoalList(
+    internal static (string Text, OwnerConsoleLineSpans Spans) GoalList(
         string lead, IReadOnlyList<string> titles, IReadOnlyList<string>? tails = null)
     {
         var text = new StringBuilder(lead);
@@ -401,7 +334,7 @@ internal static class OwnerActivityNarrator
         return string.Join("\n", lines);
     }
 
-    private static string? FailureReason(OwnerConductEvent item)
+    internal static string? FailureReason(OwnerConductEvent item)
     {
         var reason = Field(item, "rejection") ?? OwnerPlanRejectionReason.Read(item.Detail);
         if (reason is null) return null;
@@ -442,7 +375,7 @@ internal static class OwnerActivityNarrator
         ? value == Field(right, "tick") : left.Timestamp == right.Timestamp;
     private static bool ClearsHold(OwnerConductEvent item) => item.EventKind is "owner-hold-cleared" or "train-receipt-released" ||
         item.EventKind == "goal-lifecycle" && Head(item) is "TaskDispatched" or "TaskCompleted" || IsLanding(item);
-    private static string Role(OwnerConductEvent item) => Field(item, "role") is "Author" or "Planner" or "Researcher" or "Developer" or "Tester" or "Reviewer"
+    internal static string Role(OwnerConductEvent item) => Field(item, "role") is "Author" or "Planner" or "Researcher" or "Developer" or "Tester" or "Reviewer"
         ? Field(item, "role")! : "Worker";
 }
 
