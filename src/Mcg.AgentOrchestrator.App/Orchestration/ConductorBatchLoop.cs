@@ -2480,33 +2480,8 @@ internal sealed partial class ConductorBatchLoop
         string stopFilePath,
         IConductorWakeSignal? wakeSignal,
         IReadOnlyList<string> trackedExitCodePaths,
-        IReadOnlyList<string>? runningAttemptExitCodePaths = null)
-    {
-        wakeSignal?.UpdateTrackedExitArtifacts(trackedExitCodePaths);
-        if (wakeSignal is IConductorAttemptExitWakeSignal attemptWake) attemptWake.UpdateTrackedAttemptExitArtifacts(runningAttemptExitCodePaths ?? []);
-        var remaining = interval;
-        var poll = TimeSpan.FromSeconds(WatchStopPollIntervalSeconds);
-        while (remaining > TimeSpan.Zero)
-        {
-            if (IsStopRequested(stopFilePath))
-                return WatchSleepResult.StopRequested;
-            var slice = remaining < poll ? remaining : poll;
-            if (wakeSignal is not null)
-            {
-                if (wakeSignal.Wait(slice))
-                    return WatchSleepResult.WakeSignaled;
-            }
-            else
-            {
-                Thread.Sleep(slice);
-            }
-            remaining -= slice;
-        }
-
-        return IsStopRequested(stopFilePath)
-            ? WatchSleepResult.StopRequested
-            : WatchSleepResult.FallbackElapsed;
-    }
+        IReadOnlyList<string>? runningAttemptExitCodePaths = null) =>
+        ConductorWatchSleep.Wait(interval, stopFilePath, wakeSignal, trackedExitCodePaths, runningAttemptExitCodePaths);
 
     private static string FormatOutcome(ConductorAdvanceOutcome outcome) => outcome switch
     {

@@ -7,6 +7,31 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 // Observes excluded members too, so a pre-walk approval intent cannot strand its partner.
 internal static class PassedCohortReceiptApprovalHoldAdmission
 {
+    internal static (Goal[] Eligible, ConductorSpeculativeAcceptanceCandidate[] Candidates) ApplyBeforeGating(
+        ConductorDriver driver, ConductorAutonomyPolicy policy, AgentOrchestratorKernel kernel,
+        Goal[] eligible, ConductorSpeculativeAcceptanceCandidate[] candidates,
+        IReadOnlyList<Goal> scopedGoals, IReadOnlySet<GoalId> intentChangedGoalIds,
+        Func<Goal, bool> otherwiseEligible, IReadOnlySet<string> activeGoalIds,
+        Dictionary<string, ParallelLandingOutcome> results, int tick, Action<string> recordProgress,
+        Func<bool> suppressNewAdmission, Func<Goal, bool> requiresCircuitHold, ISet<GoalId> changedGoalIds)
+    {
+        if (!suppressNewAdmission())
+            (eligible, candidates) = Apply(driver, policy, kernel, eligible, candidates,
+                scopedGoals, intentChangedGoalIds, otherwiseEligible, activeGoalIds, results, tick, recordProgress);
+        if (!suppressNewAdmission() && driver.AcceptanceCohortsEnabled &&
+            eligible.Length >= ConductorAcceptanceCohortSelector.CohortSize && !eligible.Any(requiresCircuitHold))
+        {
+            var beforePrelanding = eligible.ToDictionary(goal => goal.Id, GoalKernelChange.Capture);
+            (eligible, candidates) = PassedCohortReceiptReplay.LandBeforeTrainSelection(
+                driver, policy, eligible, candidates, results, tick, recordProgress, kernel);
+            // A restored approval-intent target is outside the ordinary walk. Persist its landing
+            // here, together with any other state changed by this pre-land pass.
+            foreach (var (id, before) in beforePrelanding)
+                if (GoalKernelChange.Changed(before, kernel, id)) changedGoalIds.Add(id);
+        }
+        return (eligible, candidates);
+    }
+
     internal static (Goal[] Eligible, ConductorSpeculativeAcceptanceCandidate[] Candidates) Apply(
         ConductorDriver driver, ConductorAutonomyPolicy policy, AgentOrchestratorKernel kernel,
         Goal[] eligible, ConductorSpeculativeAcceptanceCandidate[] candidates,
