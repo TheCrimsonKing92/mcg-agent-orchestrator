@@ -63,7 +63,7 @@ internal static class GoalRefinementGate
                 !string.IsNullOrWhiteSpace(item.CorrelationKey))
             .ToArray();
         if (goal.RefinedSpec.OpenQuestions.Any(question =>
-                HasResolvedAnswerPendingSync(question, resolvedItems)))
+                HasResolvedAnswerPendingSync(goal, question, resolvedItems)))
         {
             return new GoalRefinementReadinessResult(
                 GoalRefinementReadiness.RepairRequired,
@@ -81,9 +81,13 @@ internal static class GoalRefinementGate
     }
 
     private static bool HasResolvedAnswerPendingSync(
+        Goal goal,
         RefinedSpecOpenQuestion question,
         IReadOnlyList<CollaborationItem> resolvedItems)
     {
+        if (!GoalRefinementService.CanResolveDeclaredOwnershipQuestion(goal, question))
+            return false;
+
         var exactMatches = resolvedItems
             .Where(item => string.Equals(item.CorrelationKey, question.Id, StringComparison.Ordinal))
             .ToArray();
@@ -253,6 +257,18 @@ internal static class GoalRefinementGate
             return
                 $"Stale spec clarification detected for goal {goal.Id.Value[..8]}: {string.Join(", ", staleTopicKeys)}. " +
                 $"Recovery: run `{recoveryCommand}` to clear stale clarification attention, then retry dispatch.";
+        }
+
+        if (goal.RefinedSpec?.OpenQuestions.Any(question =>
+                string.Equals(question.Status, "Open", StringComparison.OrdinalIgnoreCase) &&
+                !GoalRefinementService.CanResolveDeclaredOwnershipQuestion(goal, question) &&
+                items.Any(item =>
+                    item.Type == CollaborationItemType.Clarification &&
+                    CollaborationItemLifecycle.IsTerminal(item.Status) &&
+                    string.Equals(item.CorrelationKey, question.Id, StringComparison.Ordinal))) == true)
+        {
+            return "The ownership answer cannot take effect until the brief is revised. " +
+                $"Run `revise {goal.Id.Value[..8]} --brief-file <path> --reason-file <path>` before dispatching planner work.";
         }
 
         return openClarifications.Length == 0
