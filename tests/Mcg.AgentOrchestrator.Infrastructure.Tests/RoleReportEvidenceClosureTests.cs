@@ -1,7 +1,7 @@
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
-// Parallel-safe: every scenario owns its in-memory kernel and has no external resources.
+// Parallel-safe: each scenario owns its kernel and any git fixture owns a unique temporary root.
 public sealed class RoleReportEvidenceClosureTests
 {
     internal const string ReportCriterion = "The Developer reports `tests: deferred - ` followed, directly after the hyphen and comma-separated, by every test class it touched or added. The Tester's evidence_request runs them. Developer owns; Acceptance executes. TEST-VERIFIABLE.";
@@ -205,6 +205,94 @@ public sealed class RoleReportEvidenceClosureTests
     }
 
     [Theory]
+    [InlineData(AgentRole.Reviewer, false)]
+    [InlineData(AgentRole.Tester, true)]
+    public void RoleRound_ConductorMergeAndRetighten_ClosesWait(AgentRole role, bool hermetic)
+    {
+        using var repo = new ConductorOnlyCandidateRangeTests.Repository();
+        repo.Merge(hermetic ? "MCG Acceptance Gate" : "mcg-orchestrator",
+            hermetic ? "acceptance-gate@localhost" : "mcg-orchestrator@localhost");
+        repo.Ratchet(19, hermetic);
+        var scenario = CreateScenario();
+        RecordRole(scenario, role, repo.Reviewed);
+        var request = CreateWait(scenario, role.ToString());
+        var queried = new List<(string Reviewed, string Landing)>();
+
+        var skipped = scenario.Kernel.CloseRoleReportEvidence(scenario.Goal.Id, repo.Head,
+            _ => throw new Exception("Developer only"), conductorOnlyRange: (reviewed, landing) =>
+            {
+                queried.Add((reviewed, landing));
+                return ConductorOnlyCandidateRange.IsConductorOnly(repo.Root, "main", reviewed, landing);
+            });
+
+        Assert.Equal(new[] { (repo.Reviewed, repo.Head) }, queried);
+        Assert.Empty(skipped);
+        Assert.True(request.IsCompleted);
+        Assert.Contains($"candidate={repo.Reviewed} landing_candidate={repo.Head}", request.Answer);
+        Assert.Empty(scenario.Kernel.GetPendingHumanInput(scenario.Goal.Id));
+    }
+
+    [Theory]
+    [InlineData(AgentRole.Reviewer, "worker")]
+    [InlineData(AgentRole.Tester, "worker")]
+    [InlineData(AgentRole.Reviewer, "goal-work")]
+    [InlineData(AgentRole.Tester, "goal-work")]
+    [InlineData(AgentRole.Reviewer, "ratchet-increase")]
+    [InlineData(AgentRole.Tester, "ratchet-increase")]
+    public void RoleRound_UnreviewedRange_KeepsCandidateDiffers(AgentRole role, string change)
+    {
+        using var repo = new ConductorOnlyCandidateRangeTests.Repository();
+        repo.Merge(change == "worker" ? "worker" : "mcg-orchestrator",
+            change == "worker" ? "worker@example.invalid" : "mcg-orchestrator@localhost");
+        if (change == "goal-work")
+        {
+            repo.Write("goal.txt", "unreviewed Developer output\n");
+            ConductorOnlyCandidateRangeTests.Commit(repo.Root);
+        }
+        if (change == "ratchet-increase") repo.Ratchet(21);
+        var scenario = CreateScenario();
+        RecordRole(scenario, role, repo.Reviewed);
+        var request = CreateWait(scenario, role.ToString());
+
+        var skipped = scenario.Kernel.CloseRoleReportEvidence(scenario.Goal.Id, repo.Head, _ => null,
+            conductorOnlyRange: (reviewed, landing) =>
+                ConductorOnlyCandidateRange.IsConductorOnly(repo.Root, "main", reviewed, landing));
+
+        Assert.Equal("owner-candidate-differs", skipped[request.Id]);
+        Assert.False(request.IsCompleted);
+        Assert.Null(request.Answer);
+    }
+
+    [Theory]
+    [InlineData("same-candidate")]
+    [InlineData("incomplete")]
+    [InlineData("missing-reviewed")]
+    [InlineData("missing-landing")]
+    public void RoleRound_PreservesOtherChecks_WithoutQueryingRange(string condition)
+    {
+        var scenario = CreateScenario();
+        RecordRole(scenario, AgentRole.Reviewer,
+            condition == "same-candidate" ? "B" : condition == "missing-reviewed" ? "" : "A",
+            verdict: condition == "incomplete" ? "needs-work" : "pass");
+        var request = CreateWait(scenario, "reviewer");
+
+        var skipped = scenario.Kernel.CloseRoleReportEvidence(scenario.Goal.Id,
+            condition == "missing-landing" ? "" : "C", _ => null,
+            conductorOnlyRange: (_, _) => throw new Exception("Range must not bypass other checks"));
+
+        if (condition == "same-candidate")
+        {
+            Assert.Empty(skipped);
+            Assert.True(request.IsCompleted);
+        }
+        else
+        {
+            Assert.Equal(condition == "incomplete" ? "owner-round-incomplete" : "owner-candidate-differs", skipped[request.Id]);
+            Assert.False(request.IsCompleted);
+        }
+    }
+
+    [Theory]
     [InlineData(AgentRole.Reviewer, "A", "pass", WorkTaskStatus.Completed, "owner-candidate-differs")]
     [InlineData(AgentRole.Tester, "A", "pass", WorkTaskStatus.Completed, "owner-candidate-differs")]
     [InlineData(AgentRole.Reviewer, "B", "needs-work", WorkTaskStatus.Completed, "owner-round-incomplete")]
@@ -341,16 +429,18 @@ public sealed class RoleReportEvidenceClosureTests
         var started = DispatchTime.AddSeconds(2);
         scenario.Kernel.RecordTaskDispatch(scenario.Goal.Id, task.Id, new TaskDispatchRecord(
             "codex-cli", "verify", "C:\\fixture", started, BaseCommit: candidate));
-        var output = string.Join(Environment.NewLine, "WORKER_RESULT:", "files: none", "commands: inspect",
-            "tests: deferred - GateProofTests", "commit: none", "blockers: none", "findings: []", "touched_anchors: []",
-            "criteria_verdicts: [{\"criterion_index\":0,\"verdict\":\"not-verifiable\",\"evidence\":\"Acceptance executes\"}]",
-            $"verdict: {verdict}", "model_fit: fixture/model - adequate - inspection", "skills: none", "confidence: high", "END_WORKER_RESULT");
         scenario.Kernel.RecordTaskVerification(scenario.Goal.Id, task.Id, new TaskVerificationRecord(
-            "verify", "C:\\fixture", 0, output, string.Empty, started.AddSeconds(1), WorkerResultPresent: true));
+            "verify", "C:\\fixture", 0, RoleOutput(verdict), string.Empty, started.AddSeconds(1), WorkerResultPresent: true));
         scenario.Kernel.ReportWorkerTaskProgress(scenario.Goal.Id, task.Id, status, "Role round adjudicated.");
         Assert.Equal(candidate, task.LastVerification!.ReviewedCommit);
         return task;
     }
+
+    internal static string RoleOutput(string verdict) =>
+        string.Join(Environment.NewLine, "WORKER_RESULT:", "files: none", "commands: inspect",
+            "tests: deferred - GateProofTests", "commit: none", "blockers: none", "findings: []", "touched_anchors: []",
+            "criteria_verdicts: [{\"criterion_index\":0,\"verdict\":\"not-verifiable\",\"evidence\":\"Acceptance executes\"}]",
+            $"verdict: {verdict}", "model_fit: fixture/model - adequate - inspection", "skills: none", "confidence: high", "END_WORKER_RESULT");
 
     private sealed record Scenario(AgentOrchestratorKernel Kernel, Goal Goal, TaskSpec Planner,
         TaskSpec Developer, TaskSpec Reviewer, TaskSpec Tester);
