@@ -18,6 +18,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
     private readonly CancellationToken _token;
     private readonly CancellationTokenSource _lifetime;
     private ITimer? _noticeExpiryTimer;
+    private readonly OwnerStatusPresenter _statusPresenter = new();
     private readonly Label _status = new() { Width = Dim.Fill(), Height = 1 };
     private readonly Label _notice = new() { Y = Pos.AnchorEnd(3), Width = Dim.Fill(), Height = 1 };
     private readonly ListView _decisions = new() { Width = Dim.Fill(), Height = Dim.Fill() };
@@ -313,19 +314,8 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
     private void RenderStatus()
     {
         if (_controller.Model is not { } model) return;
-        var status = model.Status;
-        var gateSegment = model.Gate is { } gate ? " | " + OwnerConsoleGateFormatter.StatusSegment(gate) : "";
-        _status.Text = $"conductor: {(status.ConductorRunning ? "running" : "stopped")}{gateSegment} | active: {status.ActiveGoals} | decisions: {status.LiveDecisions} | last event: {Age(status.LastEventAge)} | landed today: {status.LandedToday} | bell: {_controller.BellStatusText}";
-        if (status.HiddenQuestions > 0) _status.Text += $" | hidden: {status.HiddenQuestions}";
-        if (_refreshedAt is { } refreshed)
-        {
-            var age = _clock.GetUtcNow() - refreshed;
-            _status.Text += age.TotalSeconds > 3 * _refreshInterval.TotalSeconds
-                ? $" | stale {Math.Max(1, (int)age.TotalMinutes)}m"
-                : $" | refreshed {TimeZoneInfo.ConvertTime(refreshed, _clock.LocalTimeZone):HH:mm:ss}";
-        }
-        if (status.FailedToday > 0) _status.Text += $" | failed today: {status.FailedToday}";
-        if (_working.Count > 0) _status.Text += $" | working: {string.Join(", ", _working.Values)}";
+        _status.Text = _statusPresenter.Compose(model.Status, model.Gate, _controller.BellStatusText,
+            _refreshedAt, _clock.GetUtcNow(), _clock.LocalTimeZone, _refreshInterval, _working.Values);
     }
 
     // Host ticks repaint freshness even when the state refresh is blocked or has failed.
@@ -717,9 +707,6 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
                 { RowOffset = _board.RowOffset, ColumnOffset = _board.ColumnOffset },
             Pane(_activity, _activity.SelectedItem ?? -1, null, ActivityLines.Count));
     }
-
-    private static string Age(TimeSpan? span) => span is null ? "unknown" :
-        span.Value.TotalMinutes < 1 ? $"{span.Value.TotalSeconds:0}s" : span.Value.TotalHours < 1 ? $"{span.Value.TotalMinutes:0}m" : $"{span.Value.TotalHours:0}h";
 
     public void Dispose()
     {

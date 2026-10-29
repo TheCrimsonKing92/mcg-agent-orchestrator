@@ -355,7 +355,7 @@ internal static class SourceSizeRatchet
             // for outcome/compatibility mutations; parsing and application live in dedicated collaborators.
             // Goal 9d55c9bf adds four lines to classify dogfood-log list at the existing kernel-state route seam;
             // extracting this single switch case would split route ownership. No additional headroom.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Cli/CliPersistentStateRunner.cs", 3326),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Cli/CliPersistentStateRunner.cs", 3322),
             // Goal 03aaf13e adds the explicit-root isolation fact at the verifier's existing execution-
             // environment seam; the production verifier remains at its prior ceiling.
             // Goal 56ff780e keeps passed/failed/unknown shard-completion producer coverage in its owning
@@ -443,7 +443,7 @@ internal static class SourceSizeRatchet
             // interruption cause and PID-identity evidence; owning-suite assertions preserve coverage.
             // Raised for goal 2dd0ece6: the real dispatch leak guard tests exercise the launched-host
             // ownership path without splitting this already consolidated classification fixture.
-            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/WorkerDispatchTestsWorkerResultClassification.cs", 4824),
+            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/WorkerDispatchTestsWorkerResultClassification.cs", 4817),
             // Goal 46ff9f83 adds unequal logical-width/build-permit controls and the typed maximum diagnostic.
             // Goal 289b469d adds the per-stage registration-fault decision table, bounded-cap proof, durable
             // fault/verdict state distinction, and paid-round negative controls owned by this existing class.
@@ -652,7 +652,7 @@ internal static class SourceSizeRatchet
             // the command owns intent submission. After integrating main, measured 5972 lines in the same 18 partials; no headroom.
             // Goal 9d55c9bf adds the same four-line dogfood-log list case in the owning route classifier;
             // keep classification centralized across the same 18 partial files. No additional headroom.
-            new SourceClassCeiling("CliPersistentStateRunner", 4467, 17),
+            new SourceClassCeiling("CliPersistentStateRunner", 4463, 17),
             // Goal 5935c270 extracts subscription-plan output into SubscriptionPlanTextView
             // (2026-10-09 console architecture review, finding 4, taming slice 13).
             // Goal c0ff6203 extracts six small text views (taming slice 14).

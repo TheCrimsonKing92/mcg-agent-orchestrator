@@ -35,7 +35,7 @@ public static bool ExecuteCommand(
     bool? isStandardInputRedirected = null,
     Action? registerAcceptanceGuardAbort = null,
     Func<AcceptanceMergeGuardPreflightRequest, AcceptanceMergeGuardPreflightResult>? prepareAcceptanceMergeGuard = null,
-    Action<Goal>? finalizeGoalCreation = null,
+    Action<Goal, IReadOnlyCollection<string>?>? finalizeGoalCreation = null,
     IGoalLifecycleEventWriter? eventWriter = null,
     CollaborationItemRaise? refinementCollaborationItemRaise = null,
     Func<AgentOrchestratorKernel, IReadOnlyCollection<GoalId>, IReadOnlyList<GoalSnapshotCheckpointResult>>? checkpointGoalKernel = null,

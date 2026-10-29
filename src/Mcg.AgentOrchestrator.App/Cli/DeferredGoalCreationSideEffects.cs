@@ -96,6 +96,12 @@ internal static class GoalCreationSideEffectDelivery
     internal static Action<GoalId>? BeforeStateCommit { get; set; }
     internal static Action<string>? BeforeEffectDelivery { get; set; }
 
+    internal static InvalidOperationException Incomplete(GoalId goalId, Exception exception) =>
+        new(
+            $"GOAL_CREATE_DELIVERY_INCOMPLETE goal={goalId.Value} " +
+            $"retry=\"goal-delivery-retry {goalId.Value}\" detail={exception.Message}",
+            exception);
+
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase
