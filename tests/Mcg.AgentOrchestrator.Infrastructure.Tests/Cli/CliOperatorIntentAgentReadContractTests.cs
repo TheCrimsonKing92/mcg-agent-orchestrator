@@ -77,6 +77,43 @@ public sealed class CliOperatorIntentAgentReadContractTests : CliTaskQueryTestSu
         }
     }
 
+    [Fact]
+    public async Task Status_LegacyDiscordIntent_ReadsListsAndRendersStoredAttribution()
+    {
+        using var fixture = new IntentFixture(CreateTempDirectory());
+        var seed = await fixture.Store.EnqueueAsync(Record("legacy", TaskId) with
+        {
+            Channel = "discord",
+            AuthenticationAssurance = "discord-operator-allowlist"
+        });
+
+        var persisted = Assert.IsType<OperatorIntentRecord>(await fixture.Store.GetAsync(seed.Id));
+        Assert.Equal("discord", persisted.Channel);
+        Assert.Equal("discord-operator-allowlist", persisted.AuthenticationAssurance);
+        var listed = Assert.Single(await fixture.Store.ListForGoalAsync(GoalId));
+        Assert.Equal(persisted.Id, listed.Id);
+        Assert.Equal(persisted.Channel, listed.Channel);
+        Assert.Equal(persisted.AuthenticationAssurance, listed.AuthenticationAssurance);
+
+        var text = RunRoute(["operator-intent-status", seed.Id], fixture.Workspace);
+        Assert.Equal(0, text.Code);
+        Assert.Empty(text.Error);
+        Assert.Equal($"Operator intent {seed.Id}: verb=retry goal=12345678 " +
+            $"task=abcdef01 status=Pending actor=operator channel=discord " +
+            $"auth=discord-operator-allowlist outcome=pending{Environment.NewLine}", text.Output);
+
+        var json = RunRoute(["operator-intent-status", seed.Id, "--json"], fixture.Workspace);
+        Assert.Equal(0, json.Code);
+        Assert.Empty(json.Error);
+        using var document = JsonDocument.Parse(json.Output);
+        var payload = document.RootElement.GetProperty("payload");
+        Assert.Equal(seed.Id, payload.GetProperty("id").GetString());
+        Assert.Equal("discord", payload.GetProperty("channel").GetString());
+        var afterRead = Assert.IsType<OperatorIntentRecord>(await fixture.Store.GetAsync(seed.Id));
+        Assert.Equal(persisted.Channel, afterRead.Channel);
+        Assert.Equal(persisted.AuthenticationAssurance, afterRead.AuthenticationAssurance);
+    }
+
     [Theory]
     [InlineData(OperatorIntentStatus.Applied, 0)]
     [InlineData(OperatorIntentStatus.Rejected, 2)]

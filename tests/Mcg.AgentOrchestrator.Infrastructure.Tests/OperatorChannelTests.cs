@@ -71,6 +71,26 @@ public sealed class OperatorChannelTests : CliCommandTestBase
 
     // ---- NullOperatorChannel ----
 
+    // Parallel-safe: the catalog and composition use a private temporary directory.
+    [Xunit.Fact]
+    public void Composition_LegacyDiscordCatalog_ReturnsNullChannel()
+    {
+        var root = CreateTempDirectory();
+        var path = Path.Combine(root, "operator-channel.json");
+        File.WriteAllText(path, """
+            { "channelType": "discord", "forumChannelId": "42",
+              "operatorUserIds": ["user1", "user2"], "isNull": false }
+            """);
+
+        var catalog = OperatorChannelStore.Load(path);
+
+        // Prove the legacy record loaded instead of falling back after a read failure.
+        Assert.Equal("discord", catalog.ChannelType);
+        Assert.False(catalog.IsNull);
+        var channel = OperatorChannelComposition.Create(catalog, root);
+        Assert.Same(NullOperatorChannel.Instance, channel);
+    }
+
     [Xunit.Fact(DisplayName = "NullOperatorChannel_send_is_noop")]
     public async Task NullOperatorChannelSendIsNoop()
     {

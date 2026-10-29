@@ -52,6 +52,14 @@ public sealed class OperatorControlPlaneRemovalGuardTests
     }
 
     [Fact]
+    public void FindForbiddenLiterals_DiscordGatewayListener_ReportsViolation()
+    {
+        var matches = FindForbiddenLiterals("class DiscordGatewayListener { }");
+
+        Assert.Equal("DiscordGatewayListener", Assert.Single(matches));
+    }
+
+    [Fact]
     public void FindForbiddenLiterals_KeptDeliveryTypes_ReportsNoMatches()
     {
         var matches = FindForbiddenLiterals(
