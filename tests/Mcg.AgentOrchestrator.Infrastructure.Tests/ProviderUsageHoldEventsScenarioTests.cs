@@ -94,9 +94,9 @@ public sealed class ProviderUsageHoldEventsScenarioTests
         var placed = Events(scenario).Where(evt => evt.EventKind == "provider-hold-placed").ToArray();
         Assert.Equal(2, placed.Length);
         Assert.Equal(DateTimeOffset.Parse("2026-10-17T11:39:00Z"), placed[1].Timestamp);
-        Assert.Equal("2026-10-17T11:39:00.0000000+00:00", OwnerActivityNarrator.Field(placed[1], "placed_at"));
-        Assert.Equal(ProviderBudgetHoldSchedules.FormatInstant(schedule.NextProbeAt), OwnerActivityNarrator.Field(placed[1], "next_probe"));
-        Assert.Equal(schedule.Attempt.ToString(System.Globalization.CultureInfo.InvariantCulture), OwnerActivityNarrator.Field(placed[1], "attempt"));
+        Assert.Equal("2026-10-17T11:39:00.0000000+00:00", OwnerEventFields.Field(placed[1], "placed_at"));
+        Assert.Equal(ProviderBudgetHoldSchedules.FormatInstant(schedule.NextProbeAt), OwnerEventFields.Field(placed[1], "next_probe"));
+        Assert.Equal(schedule.Attempt.ToString(System.Globalization.CultureInfo.InvariantCulture), OwnerEventFields.Field(placed[1], "attempt"));
         Assert.DoesNotContain(Events(scenario), evt => evt.EventKind == "provider-hold-restored");
     }
 

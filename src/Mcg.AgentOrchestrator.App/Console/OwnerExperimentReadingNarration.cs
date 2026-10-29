@@ -8,18 +8,18 @@ internal static class OwnerExperimentReadingNarration
         out string nextStep, out string ownerAction)
     {
         sentence = reason = nextStep = ownerAction = "";
-        var id = OwnerActivityNarrator.Field(evt, "experiment");
+        var id = OwnerEventFields.Field(evt, "experiment");
         if (string.IsNullOrWhiteSpace(id)) return false;
 
         var prefix = id[..Math.Min(8, id.Length)];
-        var trigger = OwnerActivityNarrator.Field(evt, "trigger") switch
+        var trigger = OwnerEventFields.Field(evt, "trigger") switch
         {
             "stop-rule" => ": stop rule reached",
             "guardrail" => ": guardrail breached",
             _ => ""
         };
         sentence = $"Experiment {prefix} reading due{trigger}";
-        reason = long.TryParse(OwnerActivityNarrator.Field(evt, "observed"), NumberStyles.Integer,
+        reason = long.TryParse(OwnerEventFields.Field(evt, "observed"), NumberStyles.Integer,
             CultureInfo.InvariantCulture, out var count)
             ? $"The observed count is {count.ToString(CultureInfo.InvariantCulture)}."
             : "The observed count is not available.";

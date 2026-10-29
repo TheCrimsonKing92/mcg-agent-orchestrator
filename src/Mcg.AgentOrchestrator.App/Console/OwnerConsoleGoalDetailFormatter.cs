@@ -56,7 +56,7 @@ internal static class OwnerConsoleGoalDetailFormatter
         output.WriteLine("Tasks:");
         foreach (var task in goal.Tasks) output.WriteLine($"  {task.RequiredRole}: {task.Status}");
         if (goal.CurrentHold is { } hold)
-            output.WriteLine("Waiting on: " + OwnerActivityNarrator.WaitingOn(hold.Blocker));
+            output.WriteLine("Waiting on: " + OwnerActivityText.WaitingOn(hold.Blocker));
         foreach (var line in OwnerGoalReturnExplanation.Lines(goal, zone)) output.WriteLine(line);
         var lines = new List<(DateTimeOffset Time, string Phrase)>();
         foreach (var item in detail.RecentEvents)
@@ -101,7 +101,7 @@ internal static class OwnerConsoleGoalDetailFormatter
     internal static string? Finding(Goal goal, OwnerConductEvent item)
     {
         if (!item.Detail.StartsWith("TaskFailed", StringComparison.Ordinal)) return null;
-        var id = OwnerActivityNarrator.Field(item, "task");
+        var id = OwnerEventFields.Field(item, "task");
         var task = goal.Tasks.FirstOrDefault(task => task.Id.Value == id);
         if (task?.RequiredRole is not (AgentRole.Reviewer or AgentRole.Tester)) return null;
         var result = task.VerificationHistory.Where(record => record.CompletedAt <= item.Timestamp)

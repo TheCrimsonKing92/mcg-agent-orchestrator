@@ -8,7 +8,7 @@ internal sealed class OwnerGateFailureEvidence(string orchestratorDirectory)
 {
     internal OwnerActivityTestEvidence? Read(OwnerConductEvent item)
     {
-        var attempt = OwnerActivityNarrator.Field(item, "attempt");
+        var attempt = OwnerEventFields.Field(item, "attempt");
         var prefix = item.GoalId;
         var root = Path.Combine(orchestratorDirectory, "acceptance-gate-attempts");
         if (attempt is null || prefix is null || !Directory.Exists(root) ||

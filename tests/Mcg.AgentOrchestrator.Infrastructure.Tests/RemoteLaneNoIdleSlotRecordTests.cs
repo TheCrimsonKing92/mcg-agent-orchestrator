@@ -52,7 +52,7 @@ public sealed class RemoteLaneNoIdleSlotRecordTests : IDisposable
         var fake = new FakeRemoteLaneExecutor { Submit = (_, _) => Task.FromResult(new RemoteLaneSubmission(null, failure)) };
         using var coordinator = Coordinator(fake);
         var entry = Assert.IsType<RemoteLaneExecutorEntry>(coordinator.TryClaimIdleExecutor());
-        await coordinator.RunRemoteAsync(Lane(), entry, TimeSpan.FromMinutes(1), default);
+        await coordinator.RunRemoteAsync(Lane(), entry, TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(1), default);
         Assert.Null(coordinator.TryClaimIdleExecutor(Lane("B")));
         var row = Assert.Single(RemoteExecutorHealthLedger.ReadAll(Ledger), row => row.Outcome == RemoteLaneOutcomeCode.OfferSkippedNoExecutor);
         Assert.Equal(state, Assert.Single(row.Occupancy!).State);

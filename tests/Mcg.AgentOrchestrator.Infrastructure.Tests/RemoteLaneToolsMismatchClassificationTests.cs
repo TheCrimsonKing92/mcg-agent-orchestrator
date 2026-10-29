@@ -69,7 +69,7 @@ public sealed class RemoteLaneToolsMismatchClassificationTests
                 Name = "lane", Type = "dotnet-test",
                 Project = "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
                 Arguments = ["--filter", "FullyQualifiedName~FixtureTests"]
-            }, entry, TimeSpan.FromMinutes(1), default);
+            }, entry, TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(1), default);
             Assert.Null(outcome.Accepted);
             Assert.Single(fake.Requests);
             var path = RemoteExecutorHealthLedger.ResolveStorePath(root);

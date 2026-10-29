@@ -10,7 +10,7 @@ internal sealed class OwnerActivityEvidenceReader(string databasePath)
 {
     internal OwnerActivityTestEvidence? Read(OwnerConductEvent item)
     {
-        var id = OwnerActivityNarrator.Field(item, "receipt");
+        var id = OwnerEventFields.Field(item, "receipt");
         if (id is null || !File.Exists(databasePath)) return null;
         try
         {
