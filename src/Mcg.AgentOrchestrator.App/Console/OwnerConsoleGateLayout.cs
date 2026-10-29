@@ -31,7 +31,7 @@ internal static class OwnerConsoleGateLayout
             if (gate.Failing)
                 lines.AddRange(Wrap(header + " | " + OwnerConsoleGateConfirmation.Header(failed.Where(row => !row.IsAttribution).ToArray()), width));
             else lines.Add(header);
-            lines.Add(string.Join(" + ", gate.Members.Select(member => member.Id + (member.Title.Length == 0 ? "" : " " + member.Title))));
+            lines.AddRange(OwnerConsoleGateMemberLines.Lines(gate.Members));
             lines.Add($" x {counted.Count(Failed)} failed   > {counted.Count(row => row.State == OwnerConsoleGateLaneState.Running)} running   + {counted.Count(row => row.State == OwnerConsoleGateLaneState.Done && row.Outcome == "passed")} passed   = {counted.Count(row => row.State == OwnerConsoleGateLaneState.Cached)} cached   . {counted.Count(row => row.State == OwnerConsoleGateLaneState.Queued)} queued");
             if (!gate.Failing) lines.Add(OwnerConsoleGateFormatter.ProgressLine(gate));
             Section("FAILED", failed, failureNames: true);
