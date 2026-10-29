@@ -21,7 +21,12 @@ public sealed class OperatorControlPlaneRemovalGuardTests
         "ControlPlaneMuteControl",
         "BacklogDigestCadence",
         "ControlPlaneDeliveryPolicy",
-        "control-plane-delivery"
+        "control-plane-delivery",
+        "DiscordGatewayListener",
+        "DiscordOperatorChannel",
+        "DiscordNetForumApi",
+        "operator-listen",
+        "Discord.Net"
     ];
 
     [Fact]
@@ -62,8 +67,8 @@ public sealed class OperatorControlPlaneRemovalGuardTests
         var commands = CliArgumentParser.RecognizedCommands;
 
         Assert.DoesNotContain("operator-control-plane", commands, StringComparer.OrdinalIgnoreCase);
-        Assert.Contains("operator-channel", commands, StringComparer.OrdinalIgnoreCase);
-        Assert.Contains("operator-listen", commands, StringComparer.OrdinalIgnoreCase);
+        Assert.DoesNotContain("operator-channel", commands, StringComparer.OrdinalIgnoreCase);
+        Assert.DoesNotContain("operator-listen", commands, StringComparer.OrdinalIgnoreCase);
         Assert.Contains("operator-inbox", commands, StringComparer.OrdinalIgnoreCase);
     }
 

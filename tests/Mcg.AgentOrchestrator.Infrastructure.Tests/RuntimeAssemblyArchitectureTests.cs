@@ -18,7 +18,7 @@ public sealed class RuntimeAssemblyArchitectureTests
     private static readonly ReflectionAssembly InfrastructureAssembly = typeof(GoalAcceptanceVerifier).Assembly;
     private static readonly ReflectionAssembly ExecutionAssembly = typeof(CohortAcceptanceStore).Assembly;
     private static readonly ReflectionAssembly ProvidersAssembly = typeof(ProviderSmokeTester).Assembly;
-    private static readonly ReflectionAssembly OperatorCommsAssembly = typeof(DiscordDecisionApplier).Assembly;
+    private static readonly ReflectionAssembly OperatorCommsAssembly = typeof(NullOperatorChannel).Assembly;
     private static readonly ReflectionAssembly AppAssembly = typeof(SubscriptionPlanBuilder).Assembly;
     private static readonly ReflectionAssembly[] RuntimeAssemblies =
         [CoreAssembly, InfrastructureAssembly, ExecutionAssembly, ProvidersAssembly, OperatorCommsAssembly, AppAssembly];

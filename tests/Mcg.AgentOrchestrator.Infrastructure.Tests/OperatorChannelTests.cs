@@ -2,13 +2,6 @@ using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
-using Org.BouncyCastle.Crypto;
-using Org.BouncyCastle.Crypto.Generators;
-using Org.BouncyCastle.Crypto.Parameters;
-using Org.BouncyCastle.Crypto.Signers;
-using Org.BouncyCastle.Security;
-using System.Text;
-using System.Text.Json;
 
 public sealed class OperatorChannelTests : CliCommandTestBase
 {
@@ -48,8 +41,6 @@ public sealed class OperatorChannelTests : CliCommandTestBase
         var catalog = OperatorChannelStore.Load(path);
 
         Assert.Equal("discord", catalog.ChannelType);
-        Assert.Equal("42", catalog.ForumChannelId);
-        Assert.Equal(["user1"], catalog.OperatorUserIds);
         OperatorChannelStore.Save(path, catalog);
         Assert.DoesNotContain("dashboardBaseUrl", File.ReadAllText(path), StringComparison.Ordinal);
     }
@@ -67,22 +58,7 @@ public sealed class OperatorChannelTests : CliCommandTestBase
         var catalog = OperatorChannelStore.Load(path);
 
         Assert.Equal("discord", catalog.ChannelType);
-        Assert.Equal("41", catalog.ForumChannelId);
-        Assert.Equal("progress-thread", catalog.ProgressThreadId);
         Assert.True(catalog.DeadManHeartbeatEnabled);
-    }
-
-    [Xunit.Fact]
-    public async Task DiscordOperatorChannelRendersNoDashboardLine()
-    {
-        var store = CollaborationItemStore.ForDirectory(CreateTempDirectory());
-        var channel = new DiscordOperatorChannel(store);
-
-        await channel.SendEscalationAsync(BuildEscalation("inbox-without-dashboard"));
-
-        var content = (await store.GetAttentionQueueAsync()).Single().Body;
-        Assert.DoesNotContain("**Dashboard:**", content, StringComparison.Ordinal);
-        Assert.Contains("**Response:**", content, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "OperatorChannelStore_load_missing_file_returns_null_default")]
@@ -91,59 +67,6 @@ public sealed class OperatorChannelTests : CliCommandTestBase
         var path = Path.Combine(CreateTempDirectory(), "nonexistent.json");
         var catalog = OperatorChannelStore.Load(path);
         Assert.True(catalog.IsNull);
-    }
-
-    [Xunit.Fact(DisplayName = "OperatorChannelFactory_empty_operator_allowlist_logs_loud_startup_warning")]
-    public void OperatorListenEmptyOperatorAllowlistLogsLoudStartupWarning()
-    {
-        var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
-        var catalog = new OperatorChannelCatalog(
-            "discord",
-            OperatorUserIds: []);
-        OperatorChannelStore.Save(workspace.OperatorChannelPath, catalog);
-
-        var result = RunAppCommand(root, "operator-listen");
-
-        Assert.Equal(0, result.ExitCode);
-        Assert.Contains("ERROR", result.Stderr);
-        Assert.Contains("OperatorUserIds", result.Stderr);
-        Assert.Contains("no Discord interactions will be processed", result.Stderr);
-    }
-
-    [Xunit.Fact(DisplayName = "OperatorChannel_set_merge_preserves_progress_and_dead_man_fields")]
-    public void OperatorChannelSetMergePreservesProgressAndDeadManFields()
-    {
-        var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
-        var mutedUntil = DateTimeOffset.Parse("2026-07-26T05:00:00Z");
-        var existing = new OperatorChannelCatalog(
-            "discord",
-            "41",
-            ["old-user"],
-            ProgressThreadId: "progress-thread",
-            ProgressStatusMessageId: "progress-message",
-            ProgressStatusContentHash: "progress-hash",
-            DeadManHeartbeatEnabled: true,
-            DeadManHeartbeatUrl: "https://heartbeat.example");
-        OperatorChannelStore.Save(workspace.OperatorChannelPath, existing);
-
-        var result = RunAppCommand(
-            root,
-            "operator-channel",
-            "set",
-            "discord");
-        var merged = OperatorChannelStore.Load(workspace.OperatorChannelPath);
-
-        Assert.Equal(0, result.ExitCode);
-        Assert.Contains("operatorUserIds=1", result.Stdout);
-        Assert.Equal("41", merged.ForumChannelId);
-        Assert.Equal(["old-user"], merged.OperatorUserIds);
-        Assert.Equal("progress-thread", merged.ProgressThreadId);
-        Assert.Equal("progress-message", merged.ProgressStatusMessageId);
-        Assert.Equal("progress-hash", merged.ProgressStatusContentHash);
-        Assert.True(merged.DeadManHeartbeatEnabled);
-        Assert.Equal("https://heartbeat.example", merged.DeadManHeartbeatUrl);
     }
 
     // ---- NullOperatorChannel ----
@@ -329,367 +252,15 @@ public sealed class OperatorChannelTests : CliCommandTestBase
         Assert.True(actions.Count <= 3);
     }
 
-    // ---- DiscordInteractionHandler (inbound → command mapping) ----
-
-    [Xunit.Fact(DisplayName = "DiscordInteractionHandler_direct_action_maps_to_decision")]
-    public void DiscordInteractionHandlerDirectActionMapsToDecision()
-    {
-        var inboxItemId = "inbox-abc123def456";
-        var actionIndex = 0;
-        var userId = "111222333";
-        var customId = DiscordInteractionHandler.BuildDirectCustomId(inboxItemId, actionIndex);
-        var payload = BuildInteractionPayload(userId, customId);
-
-        var result = DiscordInteractionHandler.Process(payload, [userId]);
-
-        Assert.True(result.ErrorMessage is null);
-        Assert.True(result.Decision is not null);
-        Assert.Equal(inboxItemId, result.Decision!.InboxItemId);
-        Assert.Equal(actionIndex, result.Decision.ActionIndex);
-        Assert.Equal($"discord:{userId}", result.Decision.ActorId);
-        Assert.False(result.RequiresConfirmation);
-    }
-
-    [Xunit.Fact(DisplayName = "DiscordInteractionHandler_confirm_action_returns_requires_confirmation")]
-    public void DiscordInteractionHandlerConfirmActionReturnsRequiresConfirmation()
-    {
-        var inboxItemId = "inbox-abc123def456";
-        var actionIndex = 0;
-        var userId = "111222333";
-        var customId = DiscordInteractionHandler.BuildConfirmCustomId(inboxItemId, actionIndex);
-        var payload = BuildInteractionPayload(userId, customId);
-
-        var result = DiscordInteractionHandler.Process(payload, [userId]);
-
-        Assert.True(result.ErrorMessage is null);
-        Assert.True(result.Decision is null);
-        Assert.True(result.RequiresConfirmation);
-        Assert.True(result.ConfirmationCustomId is not null);
-        Assert.Contains("mcgo-confirmed", result.ConfirmationCustomId!);
-    }
-
-    [Xunit.Fact(DisplayName = "DiscordInteractionHandler_confirmed_action_maps_to_decision")]
-    public void DiscordInteractionHandlerConfirmedActionMapsToDecision()
-    {
-        var inboxItemId = "inbox-abc123def456";
-        var actionIndex = 0;
-        var userId = "111222333";
-        var confirmCustomId = DiscordInteractionHandler.BuildConfirmCustomId(inboxItemId, actionIndex);
-        var confirmPayload = BuildInteractionPayload(userId, confirmCustomId);
-        var confirmResult = DiscordInteractionHandler.Process(confirmPayload, [userId]);
-
-        var confirmedPayload = BuildInteractionPayload(userId, confirmResult.ConfirmationCustomId!);
-        var result = DiscordInteractionHandler.Process(confirmedPayload, [userId]);
-
-        Assert.True(result.ErrorMessage is null);
-        Assert.True(result.Decision is not null);
-        Assert.Equal(actionIndex, result.Decision!.ActionIndex);
-    }
-
-    [Xunit.Fact(DisplayName = "DiscordInteractionHandler_rejects_unauthorized_user")]
-    public void DiscordInteractionHandlerRejectsUnauthorizedUser()
-    {
-        var customId = DiscordInteractionHandler.BuildDirectCustomId("inbox-abc", 0);
-        var payload = BuildInteractionPayload("unauthorized-user-999", customId);
-
-        var result = DiscordInteractionHandler.Process(payload, ["authorized-user-111"]);
-
-        Assert.True(result.ErrorMessage is not null);
-        Assert.Contains("allowlist", result.ErrorMessage!);
-        Assert.True(result.Decision is null);
-    }
-
-    [Xunit.Fact(DisplayName = "DiscordInteractionHandler_rejects_invalid_json")]
-    public void DiscordInteractionHandlerRejectsInvalidJson()
-    {
-        var result = DiscordInteractionHandler.Process("{not valid json", ["user123"]);
-        Assert.True(result.ErrorMessage is not null);
-    }
-
-    // ---- DiscordSignatureVerifier ----
-
-    [Xunit.Fact(DisplayName = "DiscordSignatureVerifier_valid_signature_returns_true")]
-    public void DiscordSignatureVerifierValidSignatureReturnsTrue()
-    {
-        var (publicKey, privateKey) = GenerateEd25519KeyPair();
-        var timestamp = "1234567890";
-        var body = """{"type":1}""";
-        var message = Encoding.UTF8.GetBytes(timestamp + body);
-        var signature = Sign(privateKey, message);
-
-        var result = DiscordSignatureVerifier.Verify(
-            Convert.ToHexString(publicKey).ToLowerInvariant(),
-            timestamp,
-            body,
-            Convert.ToHexString(signature).ToLowerInvariant());
-
-        Assert.True(result);
-    }
-
-    [Xunit.Fact(DisplayName = "DiscordSignatureVerifier_tampered_body_returns_false")]
-    public void DiscordSignatureVerifierTamperedBodyReturnsFalse()
-    {
-        var (publicKey, privateKey) = GenerateEd25519KeyPair();
-        var timestamp = "1234567890";
-        var body = """{"type":1}""";
-        var message = Encoding.UTF8.GetBytes(timestamp + body);
-        var signature = Sign(privateKey, message);
-
-        var result = DiscordSignatureVerifier.Verify(
-            Convert.ToHexString(publicKey).ToLowerInvariant(),
-            timestamp,
-            """{"type":2}""",
-            Convert.ToHexString(signature).ToLowerInvariant());
-
-        Assert.False(result);
-    }
-
-    [Xunit.Fact(DisplayName = "DiscordSignatureVerifier_wrong_key_returns_false")]
-    public void DiscordSignatureVerifierWrongKeyReturnsFalse()
-    {
-        var (_, privateKey) = GenerateEd25519KeyPair();
-        var (wrongPublicKey, _) = GenerateEd25519KeyPair();
-        var timestamp = "1234567890";
-        var body = """{"type":1}""";
-        var message = Encoding.UTF8.GetBytes(timestamp + body);
-        var signature = Sign(privateKey, message);
-
-        var result = DiscordSignatureVerifier.Verify(
-            Convert.ToHexString(wrongPublicKey).ToLowerInvariant(),
-            timestamp,
-            body,
-            Convert.ToHexString(signature).ToLowerInvariant());
-
-        Assert.False(result);
-    }
-
-    [Xunit.Fact(DisplayName = "DiscordSignatureVerifier_invalid_hex_returns_false")]
-    public void DiscordSignatureVerifierInvalidHexReturnsFalse()
-    {
-        var result = DiscordSignatureVerifier.Verify("not-hex", "ts", "body", "also-not-hex");
-        Assert.False(result);
-    }
-
-    // ---- DiscordOperatorChannel (outbound, via collaboration store) ----
-
-    [Xunit.Fact(DisplayName = "DiscordOperatorChannel_send_raises_decision_item")]
-    public async Task DiscordOperatorChannelSendRaisesDecisionItem()
-    {
-        var stateDir = CreateTempDirectory();
-        var store = CollaborationItemStore.ForDirectory(stateDir);
-        var channel = new DiscordOperatorChannel(store);
-        var escalation = BuildEscalation("inbox-101", goalPrefix: "abc123");
-
-        await channel.SendEscalationAsync(escalation);
-
-        var item = (await store.GetAttentionQueueAsync()).Single();
-        Assert.Equal(CollaborationItemType.Decision, item.Type);
-        Assert.Equal(escalation.GoalId, item.GoalId);
-        Assert.Equal(escalation.InboxItemId, item.CorrelationKey);
-        Assert.Equal(escalation.Title, item.Subject);
-        var action = (await store.ListActionsAsync(escalation.InboxItemId)).Single();
-        Assert.Equal("Retry", action.Label);
-        Assert.Equal("next testgoal", action.Command);
-    }
-
-    [Xunit.Fact(DisplayName = "DiscordOperatorChannel_no_action_fallback_binds_cli_ack_command")]
-    public async Task DiscordOperatorChannelNoActionFallbackBindsCliAckCommand()
-    {
-        var stateDir = CreateTempDirectory();
-        var store = CollaborationItemStore.ForDirectory(stateDir);
-        var channel = new DiscordOperatorChannel(store);
-        var escalation = BuildEscalation("inbox-no-action", actions: []);
-
-        await channel.SendEscalationAsync(escalation);
-
-        var action = (await store.ListActionsAsync(escalation.InboxItemId)).Single();
-        Assert.Equal("Resolve", action.Label);
-        Assert.Equal("operator-inbox-ack inbox-no-action", action.Command);
-    }
-
-    [Xunit.Fact(DisplayName = "DiscordOperatorChannel_second_escalation_raises_second_queue_item")]
-    public async Task DiscordOperatorChannelSecondEscalationRaisesSecondQueueItem()
-    {
-        var stateDir = CreateTempDirectory();
-        var store = CollaborationItemStore.ForDirectory(stateDir);
-        var channel = new DiscordOperatorChannel(store);
-        var e1 = BuildEscalation("inbox-201", goalPrefix: "abc123");
-        var e2 = BuildEscalation("inbox-202", goalPrefix: "abc123");
-
-        await channel.SendEscalationAsync(e1);
-        await channel.SendEscalationAsync(e2);
-
-        var items = await store.GetAttentionQueueAsync();
-        Assert.Equal(2, items.Count);
-        foreach (var item in items)
-        {
-            Assert.Equal("goal-test-123", item.GoalId);
-        }
-    }
-
-    [Xunit.Fact(DisplayName = "DiscordOperatorChannel_confirm_action_is_preserved_in_item_body")]
-    public async Task DiscordOperatorChannelConfirmActionIsPreservedInItemBody()
-    {
-        var stateDir = CreateTempDirectory();
-        var store = CollaborationItemStore.ForDirectory(stateDir);
-        var channel = new DiscordOperatorChannel(store);
-        var escalation = new OperatorEscalation(
-            "inbox-301",
-            "goal-id-123",
-            "abc123",
-            "LandingEscalation",
-            "Land required",
-            "Promote to main requested",
-            "escalated at ...",
-            [new OperatorEscalationAction("Promote to Main", "land abc123", RequiresConfirm: true)]);
-
-        await channel.SendEscalationAsync(escalation);
-
-        var item = (await store.GetAttentionQueueAsync()).Single();
-        Assert.Contains("`land abc123`", item.Body);
-        Assert.Contains("**Response:**", item.Body);
-    }
-
-    [Xunit.Fact(DisplayName = "DiscordOperatorChannel_message_includes_goal_reason_command_and_response")]
-    public async Task DiscordOperatorChannelMessageIncludesGoalReasonCommandAndResponse()
-    {
-        var stateDir = CreateTempDirectory();
-        var store = CollaborationItemStore.ForDirectory(stateDir);
-        var channel = new DiscordOperatorChannel(store);
-        var escalation = new OperatorEscalation(
-            "inbox-actionable",
-            "goal-id-abc123456",
-            "abc12345",
-            "AcceptanceGate",
-            "Acceptance blocked for goal",
-            "Goal: Improve escalation content\nReason: Acceptance output tail: test failure",
-            "tail: Xunit failed in OperatorChannelTests",
-            [new OperatorEscalationAction("Accept Goal", "acceptance abc12345 --autonomy supervised-auto", RequiresConfirm: true)]);
-
-        await channel.SendEscalationAsync(escalation);
-
-        var content = (await store.GetAttentionQueueAsync()).Single().Body;
-        Assert.Contains("`abc12345`", content);
-        Assert.Contains("Improve escalation content", content);
-        Assert.Contains("Acceptance output tail: test failure", content);
-        Assert.Contains("`acceptance abc12345 --autonomy supervised-auto`", content);
-        Assert.Contains("**Response:**", content);
-    }
-
-    [Xunit.Fact(DisplayName = "DiscordOperatorChannel_binds_current_goal_state_version_to_actions")]
-    public async Task DiscordOperatorChannelBindsCurrentGoalStateVersionToActions()
-    {
-        var stateDir = CreateTempDirectory();
-        var store = CollaborationItemStore.ForDirectory(stateDir);
-        var channel = new DiscordOperatorChannel(
-            store,
-            (goalId, _) => Task.FromResult<long?>(goalId == "goal-id-abc123456" ? 12 : null));
-        var escalation = new OperatorEscalation(
-            "inbox-versioned",
-            "goal-id-abc123456",
-            "abc12345",
-            "AcceptanceGate",
-            "Acceptance ready",
-            "Goal ready",
-            "evidence",
-            [new OperatorEscalationAction("Accept Goal", "acceptance abc12345 --autonomy supervised-auto", RequiresConfirm: true)]);
-
-        await channel.SendEscalationAsync(escalation);
-
-        var action = (await store.ListActionsAsync("inbox-versioned")).Single();
-        Assert.Equal(12, action.ExpectedGoalStateVersion);
-    }
-
-    [Xunit.Fact(DisplayName = "DiscordOperatorChannel_prefixes_task_scoped_commands_before_persisting")]
-    public async Task DiscordOperatorChannelPrefixesTaskScopedCommandsBeforePersisting()
-    {
-        var stateDir = CreateTempDirectory();
-        var store = CollaborationItemStore.ForDirectory(stateDir);
-        var channel = new DiscordOperatorChannel(store);
-        var escalation = new OperatorEscalation(
-            "inbox-prefixed",
-            "goal-id-abc123456",
-            "abc12345",
-            "FailedTask",
-            "Task action",
-            "summary",
-            "evidence",
-            [
-                new OperatorEscalationAction("Retry", "retry 2 <note> --autonomy safe-auto"),
-                new OperatorEscalationAction("Refresh", "refresh-dispatch 3"),
-                new OperatorEscalationAction("Re-delegate", "re-delegate 4 --autonomy safe-auto")
-            ]);
-
-        await channel.SendEscalationAsync(escalation);
-
-        var commands = (await store.ListActionsAsync("inbox-prefixed"))
-            .Select(action => action.Command)
-            .ToArray();
-        Assert.Equal(
-            [
-                "retry abc12345 2 <note> --autonomy safe-auto",
-                "refresh-dispatch abc12345 3",
-                "re-delegate abc12345 4 --autonomy safe-auto"
-            ],
-            commands);
-    }
-
-    [Xunit.Fact(DisplayName = "DiscordOperatorChannel_preserves_already_goal_scoped_commands")]
-    public async Task DiscordOperatorChannelPreservesAlreadyGoalScopedCommands()
-    {
-        var stateDir = CreateTempDirectory();
-        var store = CollaborationItemStore.ForDirectory(stateDir);
-        var channel = new DiscordOperatorChannel(store);
-        var escalation = new OperatorEscalation(
-            "inbox-already-prefixed",
-            "goal-id-abc123456",
-            "abc12345",
-            "AcceptanceGate",
-            "Acceptance",
-            "summary",
-            "evidence",
-            [new OperatorEscalationAction("Accept", "acceptance abc12345 --autonomy supervised-auto")]);
-
-        await channel.SendEscalationAsync(escalation);
-
-        var action = (await store.ListActionsAsync("inbox-already-prefixed")).Single();
-        Assert.Equal("acceptance abc12345 --autonomy supervised-auto", action.Command);
-    }
-
     // ---- OperatorChannelFactory ----
 
     [Xunit.Fact(DisplayName = "OperatorChannelFactory_returns_null_channel_when_catalog_is_null_type")]
     public void OperatorChannelFactoryReturnsNullChannelWhenCatalogIsNullType()
     {
         var catalog = OperatorChannelCatalog.Default();
-        var channel = OperatorChannelComposition.Create(catalog, "any-token", CreateTempDirectory());
+        var channel = OperatorChannelComposition.Create(catalog, CreateTempDirectory());
         Assert.Equal("null", channel.ChannelType);
         Assert.True(channel is NullOperatorChannel);
-    }
-
-    [Xunit.Fact(DisplayName = "OperatorChannelFactory_returns_null_channel_when_token_missing")]
-    public void OperatorChannelFactoryReturnsNullChannelWhenTokenMissing()
-    {
-        var catalog = new OperatorChannelCatalog("discord", "123456789");
-        var channel = OperatorChannelComposition.Create(catalog, null, CreateTempDirectory());
-        Assert.Equal("null", channel.ChannelType);
-    }
-
-    [Xunit.Fact(DisplayName = "OperatorChannelFactory_returns_null_channel_when_forum_channel_id_missing")]
-    public void OperatorChannelFactoryReturnsNullChannelWhenForumChannelIdMissing()
-    {
-        var catalog = new OperatorChannelCatalog("discord", ForumChannelId: null);
-        var channel = OperatorChannelComposition.Create(catalog, "token", CreateTempDirectory());
-        Assert.Equal("null", channel.ChannelType);
-    }
-
-    [Xunit.Fact(DisplayName = "OperatorChannelFactory_returns_discord_channel_when_fully_configured")]
-    public void OperatorChannelFactoryReturnsDiscordChannelWhenFullyConfigured()
-    {
-        var fakeApi = new FakeDiscordForumApi(nextThreadId: 1UL);
-        var catalog = new OperatorChannelCatalog("discord", "42");
-        var channel = OperatorChannelComposition.CreateWithApi(catalog, fakeApi, CreateTempDirectory());
-        Assert.Equal("discord", channel.ChannelType);
     }
 
     [Xunit.Fact(DisplayName = "DeadManHeartbeatClient_default_options_do_not_send")]
@@ -709,7 +280,6 @@ public sealed class OperatorChannelTests : CliCommandTestBase
         var enabled = OperatorChannelFactory.BuildDeadManHeartbeatOptions(
             new OperatorChannelCatalog(
                 "discord",
-                ForumChannelId: "42",
                 DeadManHeartbeatEnabled: true,
                 DeadManHeartbeatUrl: "https://example.test/deadman"));
 
@@ -718,145 +288,17 @@ public sealed class OperatorChannelTests : CliCommandTestBase
         Assert.Equal(new Uri("https://example.test/deadman"), enabled.Endpoint);
     }
 
-    // ---- OperatorChannelCatalog ForumChannelId / OperatorUserIds roundtrip ----
-
-    [Xunit.Fact(DisplayName = "OperatorChannelStore_roundtrips_discord_catalog_with_forum_channel_id")]
-    public void OperatorChannelStoreRoundtripsDiscordCatalogWithForumChannelId()
-    {
-        var root = CreateTempDirectory();
-        var path = Path.Combine(root, "operator-channel.json");
-        var catalog = new OperatorChannelCatalog(
-            "discord",
-            ForumChannelId: "987654321",
-            OperatorUserIds: ["111", "222"]);
-
-        OperatorChannelStore.Save(path, catalog);
-        var restored = OperatorChannelStore.Load(path);
-
-        Assert.Equal("discord", restored.ChannelType);
-        Assert.Equal("987654321", restored.ForumChannelId);
-        Assert.Equal(2, restored.OperatorUserIds?.Count ?? 0);
-        Assert.False(restored.IsNull);
-    }
-
-    [Xunit.Fact(DisplayName = "OperatorChannelStore_roundtrips_catalog_with_forum_channel_id_X_and_user_ids_A_B")]
-    public void OperatorChannelStoreRoundtripsCatalogWithForumChannelIdXAndUserIdsAB()
-    {
-        var root = CreateTempDirectory();
-        var path = Path.Combine(root, "operator-channel.json");
-        var catalog = new OperatorChannelCatalog("discord", "X", ["A", "B"]);
-
-        OperatorChannelStore.Save(path, catalog);
-        var restored = OperatorChannelStore.Load(path);
-
-        Assert.Equal("X", restored.ForumChannelId);
-        Assert.Equal(2, restored.OperatorUserIds?.Count ?? 0);
-        Assert.True(restored.OperatorUserIds!.Contains("A"));
-        Assert.True(restored.OperatorUserIds!.Contains("B"));
-    }
-
-    [Xunit.Fact(DisplayName = "OperatorChannelCatalog_three_user_ids_from_csv_A_B_C")]
-    public void OperatorChannelCatalogThreeUserIdsFromCsvABC()
-    {
-        var csv = "A,B,C";
-        var userIds = (IReadOnlyList<string>)csv.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        var catalog = new OperatorChannelCatalog("discord", null, userIds);
-
-        Assert.Equal(3, catalog.OperatorUserIds?.Count ?? 0);
-        Assert.True(catalog.OperatorUserIds!.Contains("A"));
-        Assert.True(catalog.OperatorUserIds!.Contains("B"));
-        Assert.True(catalog.OperatorUserIds!.Contains("C"));
-    }
-
-    [Xunit.Fact(DisplayName = "OperatorChannelFactory_SendTestEscalation_null_channel_prints_guidance_and_does_not_throw")]
-    public async Task OperatorChannelFactorySendTestEscalationNullChannelPrintsGuidanceAndDoesNotThrow()
-    {
-        var channel = NullOperatorChannel.Instance;
-        var output = new StringWriter();
-
-        await OperatorChannelFactory.SendTestEscalationAsync(channel, output);
-
-        var text = output.ToString();
-        Assert.Contains("not configured", text);
-        Assert.Contains("MCGO_DISCORD_BOT_TOKEN", text);
-    }
-
-    [Xunit.Fact(DisplayName = "OperatorChannelFactory_SendTestEscalation_configured_channel_raises_queue_item")]
-    public async Task OperatorChannelFactorySendTestEscalationConfiguredChannelRaisesQueueItem()
-    {
-        var fakeApi = new FakeDiscordForumApi(nextThreadId: 100UL);
-        var catalog = new OperatorChannelCatalog("discord", "42");
-        var stateDir = CreateTempDirectory();
-        var channel = OperatorChannelComposition.CreateWithApi(catalog, fakeApi, stateDir);
-        var output = new StringWriter();
-
-        await OperatorChannelFactory.SendTestEscalationAsync(channel, output);
-
-        Assert.Equal(0, fakeApi.SentMessages.Count);
-        var item = (await CollaborationItemStore.ForDirectory(stateDir).GetAttentionQueueAsync()).Single();
-        Assert.Equal(CollaborationItemType.Decision, item.Type);
-        Assert.Equal("test-goal-id", item.GoalId);
-        Assert.True(item.CorrelationKey is not null && item.CorrelationKey.StartsWith("test-", StringComparison.Ordinal));
-    }
-
-    [Xunit.Fact(DisplayName = "OperatorChannel_spine_test_seed_raises_attention_queue_item_with_correlation_key")]
-    public async Task OperatorChannelSpineTestSeedRaisesAttentionQueueItem()
-    {
-        var workspace = BuildTestWorkspace();
-
-        var item = CliCommandHandlers.RaiseOperatorChannelSpineTestItem(workspace.OrchestratorDirectory);
-
-        Assert.Equal(CollaborationItemType.Verify, item.Type);
-        Assert.Equal("operator-channel-test", item.GoalId);
-        Assert.False(string.IsNullOrWhiteSpace(item.CorrelationKey));
-        Assert.True(item.CorrelationKey!.StartsWith("operator-channel-test-spine-", StringComparison.Ordinal));
-
-        var store = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
-        var queue = await store.GetAttentionQueueAsync();
-        var queued = queue.Single();
-        Assert.Equal(item.Id, queued.Id);
-        Assert.Equal(item.CorrelationKey, queued.CorrelationKey);
-        Assert.Equal(CollaborationItemStatus.Raised, queued.Status);
-    }
-
     // ---- Escalation path: SendEscalationAsync called on RecordLandingEscalation ----
 
-    [Xunit.Fact(DisplayName = "RecordLandingEscalation_raises_collaboration_item_when_configured")]
-    public async Task RecordLandingEscalationRaisesCollaborationItemWhenConfigured()
-    {
-        var workspace = BuildTestWorkspace();
-        var goal = BuildTestGoal();
-        var store = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
-        var channel = new DiscordOperatorChannel(store);
-
-        Mcg.AgentOrchestrator.App.Orchestration.OperatorInbox.RecordLandingEscalation(
-            workspace, goal, "conflict on integration", "integration", channel);
-
-        var item = (await store.GetAttentionQueueAsync())
-            .First(item =>
-                item.Type == CollaborationItemType.Decision &&
-                item.GoalId == goal.Id.Value &&
-                item.Body.Contains("conflict on integration", StringComparison.Ordinal) &&
-                item.Body.Contains("**Response:**", StringComparison.Ordinal));
-        Assert.Equal(goal.Id.Value, item.GoalId);
-        Assert.Equal(CollaborationItemType.Decision, item.Type);
-        Assert.Equal(CollaborationItemStatus.Raised, item.Status);
-        Assert.False(string.IsNullOrWhiteSpace(item.CorrelationKey));
-        Assert.Contains("LandingEscalation", item.Body);
-        var action = (await store.ListActionsAsync(item.CorrelationKey!)).Single();
-        Assert.Equal($"land {goal.Id.Value[..8]}", action.Command);
-    }
-
     [Xunit.Fact(DisplayName = "RecordLandingEscalation_conductor_escalation_uses_state_aware_actionable_content")]
-    public async Task RecordLandingEscalationConductorEscalationUsesStateAwareActionableContent()
+    public void RecordLandingEscalationConductorEscalationUsesStateAwareActionableContent()
     {
         var workspace = BuildTestWorkspace();
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal("Test objective", [
             new TaskSpec(TaskId.New(), "Test task", AgentRole.Developer)
         ]);
-        var store = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
-        var channel = new DiscordOperatorChannel(store);
+        var channel = NullOperatorChannel.Instance;
 
         Mcg.AgentOrchestrator.App.Orchestration.OperatorInbox.RecordLandingEscalation(
             workspace,
@@ -864,23 +306,6 @@ public sealed class OperatorChannelTests : CliCommandTestBase
             "Acceptance output tail: Unit test failed",
             "conductor:Verified",
             channel);
-
-        var queued = (await store.GetAttentionQueueAsync())
-            .First(item =>
-                item.Type == CollaborationItemType.Decision &&
-                item.GoalId == goal.Id.Value &&
-                item.Body.Contains("Acceptance output tail: Unit test failed", StringComparison.Ordinal) &&
-                item.Body.Contains("**Response:**", StringComparison.Ordinal));
-        var content = queued.Body;
-        Assert.Equal(goal.Id.Value, queued.GoalId);
-        Assert.Equal(CollaborationItemType.Decision, queued.Type);
-        Assert.Contains(goal.Id.Value[..8], content);
-        Assert.Contains("Acceptance output tail: Unit test failed", content);
-        Assert.Contains($"`acceptance {goal.Id.Value[..8]} --autonomy supervised-auto`", content);
-        Assert.Contains("**Response:**", content);
-        var action = (await store.ListActionsAsync(queued.CorrelationKey!)).Single();
-        Assert.Equal($"acceptance {goal.Id.Value[..8]} --autonomy supervised-auto", action.Command);
-        Assert.True(action.RequiresConfirmation);
 
         var report = Mcg.AgentOrchestrator.App.Orchestration.OperatorInbox.Build(
             kernel,
@@ -1221,76 +646,5 @@ public sealed class OperatorChannelTests : CliCommandTestBase
             acknowledged,
             acknowledged ? DateTimeOffset.UtcNow : null,
             null);
-    }
-
-    private static string BuildInteractionPayload(string userId, string customId, string interactionId = "interaction-001")
-    {
-        return JsonSerializer.Serialize(new
-        {
-            id = interactionId,
-            type = 3,
-            data = new { custom_id = customId, component_type = 2 },
-            member = new { user = new { id = userId } }
-        });
-    }
-
-    private static (byte[] PublicKey, Ed25519PrivateKeyParameters PrivateKey) GenerateEd25519KeyPair()
-    {
-        var generator = new Ed25519KeyPairGenerator();
-        generator.Init(new KeyGenerationParameters(new SecureRandom(), 256));
-        var pair = generator.GenerateKeyPair();
-        var privateKey = (Ed25519PrivateKeyParameters)pair.Private;
-        var publicKey = ((Ed25519PublicKeyParameters)pair.Public).GetEncoded();
-        return (publicKey, privateKey);
-    }
-
-    private static byte[] Sign(Ed25519PrivateKeyParameters privateKey, byte[] message)
-    {
-        var signer = new Ed25519Signer();
-        signer.Init(true, privateKey);
-        signer.BlockUpdate(message, 0, message.Length);
-        return signer.GenerateSignature();
-    }
-
-    private sealed class FakeDiscordForumApi : IDiscordForumApi
-    {
-        private readonly ulong _nextThreadId;
-
-        public FakeDiscordForumApi(ulong nextThreadId) => _nextThreadId = nextThreadId;
-
-        public List<(string Title, string Content)> CreatedThreads { get; } = [];
-        public List<(ulong ThreadId, string Content, IReadOnlyList<DiscordButtonDefinition> Buttons)> SentMessages { get; } = [];
-        public List<(ulong ThreadId, ulong MessageId, string Content, IReadOnlyList<DiscordButtonDefinition> Buttons)> EditedMessages { get; } = [];
-
-        public Task<ulong> CreateThreadAsync(
-            ulong forumChannelId,
-            string title,
-            string initialContent,
-            CancellationToken cancellationToken = default)
-        {
-            CreatedThreads.Add((title, initialContent));
-            return Task.FromResult(_nextThreadId);
-        }
-
-        public Task<ulong> SendMessageAsync(
-            ulong threadId,
-            string content,
-            IReadOnlyList<DiscordButtonDefinition> buttons,
-            CancellationToken cancellationToken = default)
-        {
-            SentMessages.Add((threadId, content, buttons));
-            return Task.FromResult((ulong)SentMessages.Count);
-        }
-
-        public Task EditMessageAsync(
-            ulong threadId,
-            ulong messageId,
-            string content,
-            IReadOnlyList<DiscordButtonDefinition> buttons,
-            CancellationToken cancellationToken = default)
-        {
-            EditedMessages.Add((threadId, messageId, content, buttons));
-            return Task.CompletedTask;
-        }
     }
 }

@@ -42,7 +42,7 @@ public sealed class SharedArchitectureCacheTests
         {
             ready.Signal();
             await release.Task;
-            return cache.GetOrBuild(typeof(ProviderSmokeTester).Assembly, typeof(DiscordDecisionApplier).Assembly);
+            return cache.GetOrBuild(typeof(ProviderSmokeTester).Assembly, typeof(NullOperatorChannel).Assembly);
         })).ToArray();
         bool reachedGate;
         try
@@ -59,7 +59,7 @@ public sealed class SharedArchitectureCacheTests
         Assert.Equal(16, results.Length);
         Assert.All(results, result => Assert.Same(results[0], result));
         Assert.Equal(1, builds);
-        Assert.Equal(1, cache.BuildCount(typeof(ProviderSmokeTester).Assembly, typeof(DiscordDecisionApplier).Assembly));
+        Assert.Equal(1, cache.BuildCount(typeof(ProviderSmokeTester).Assembly, typeof(NullOperatorChannel).Assembly));
     }
 
     [Fact]
@@ -72,7 +72,7 @@ public sealed class SharedArchitectureCacheTests
             return new ArchLoader().LoadAssemblies(assemblies).Build();
         });
         var providers = typeof(ProviderSmokeTester).Assembly;
-        var operatorComms = typeof(DiscordDecisionApplier).Assembly;
+        var operatorComms = typeof(NullOperatorChannel).Assembly;
         var providerModel = cache.GetOrBuild(providers);
         var operatorModel = cache.GetOrBuild(operatorComms);
         var combinedModel = cache.GetOrBuild(providers, operatorComms);
