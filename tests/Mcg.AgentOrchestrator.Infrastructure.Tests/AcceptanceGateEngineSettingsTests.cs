@@ -127,6 +127,7 @@ public sealed class AcceptanceGateEngineSettingsTests
                 "PreReviewFocusedEvidenceVerifierTests",
                 "RealProcessShardAlphaSmokeTests",
                 "RealProcessShardBetaSmokeTests",
+                "RemoteLaneDeadlineTests",
                 "StructuralCoverageVerifierPermitWaitTests",
                 "WorkerDispatchJobAccountingTests"
             ]);

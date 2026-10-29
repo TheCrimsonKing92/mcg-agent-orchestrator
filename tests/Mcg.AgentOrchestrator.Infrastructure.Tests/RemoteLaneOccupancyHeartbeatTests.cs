@@ -252,7 +252,7 @@ public sealed class RemoteLaneOccupancyHeartbeatTests
         {
             Assert.True(Coordinator.IsEligible(Check));
             Assert.Equal(_entry, Coordinator.TryClaimIdleExecutor());
-            _run = Task.Run(() => Coordinator.RunRemoteAsync(Check, _entry, TimeSpan.FromHours(1), _stop.Token));
+            _run = Task.Run(() => Coordinator.RunRemoteAsync(Check, _entry, TimeSpan.FromHours(1), TimeSpan.FromHours(1), _stop.Token));
             await AwaitPollAsync();
         }
         private async Task AwaitPollAsync()
@@ -296,7 +296,7 @@ public sealed class RemoteLaneOccupancyHeartbeatTests
             await Assert.ThrowsAnyAsync<OperationCanceledException>(() => _run!);
         }
         internal Task<RemoteLaneOutcome> RunToExitAsync() => Coordinator.RunRemoteAsync(
-            Check, _entry, TimeSpan.FromHours(1), _stop.Token);
+            Check, _entry, TimeSpan.FromHours(1), TimeSpan.FromHours(1), _stop.Token);
         internal GateHeartbeatSnapshot Snapshot() => JsonSerializer.Deserialize<GateHeartbeatSnapshot>(
             File.ReadAllText(HeartbeatPath), new JsonSerializerOptions(JsonSerializerDefaults.Web))!;
         internal GateHeartbeatStatus[] Running() => GateHeartbeatArtifacts.ReadStableSlots(Storage, Clock.GetUtcNow())

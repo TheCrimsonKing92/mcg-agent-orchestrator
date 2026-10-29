@@ -264,7 +264,7 @@ internal sealed class RemoteLaneCoordinator : IDisposable
             identity.MainSha, identity.ManifestIdentity);
 
     internal async Task<RemoteLaneOutcome> RunRemoteAsync(Check check, RemoteLaneExecutorEntry entry,
-        TimeSpan timeout, CancellationToken cancellationToken)
+        TimeSpan timeout, TimeSpan deadline, CancellationToken cancellationToken)
     {
         var occupancy = Occupancy;
         var request = CreateRequest(check, entry.Id);
@@ -312,7 +312,7 @@ internal sealed class RemoteLaneCoordinator : IDisposable
                 cancellationToken.ThrowIfCancellationRequested();
                 if (handle.NewestHeartbeat is { } newest && newest > heartbeat) heartbeat = newest;
                 var now = _clock.GetUtcNow();
-                if (now - submittedAt > timeout) return await Fallback(RemoteLaneOutcomeCode.LaneTimeout).ConfigureAwait(false);
+                if (now - submittedAt > deadline) return await Fallback(RemoteLaneOutcomeCode.LaneTimeout).ConfigureAwait(false);
                 var heartbeatAge = now - heartbeat;
                 if (heartbeatAge > TimeSpan.FromSeconds(entry.LeaseSeconds))
                 {

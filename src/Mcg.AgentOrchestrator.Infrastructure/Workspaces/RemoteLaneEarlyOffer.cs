@@ -15,7 +15,7 @@ internal sealed class RemoteLaneEarlyOffer(RemoteLaneCoordinator coordinator) : 
     private CancellationTokenSource? _cancellation;
 
     internal sealed record Context(Func<string, bool> Offer, Action<Check, RemoteLaneExecutorEntry> Started,
-        Func<Check, TimeSpan> Timeout, AcceptancePartitionVerdictCache? Cache, TimeProvider Time);
+        Func<Check, TimeSpan> Timeout, Func<Check, TimeSpan> Deadline, AcceptancePartitionVerdictCache? Cache, TimeProvider Time);
     internal sealed record Offered(Task<RemoteLaneOutcome>? Remote, AcceptanceCheckResult? Reused, TimeSpan ReuseElapsed);
 
     internal static RemoteLaneEarlyOffer For(RemoteLaneCoordinator coordinator) => Owners.GetValue(coordinator, value => new(value));
@@ -67,7 +67,7 @@ internal sealed class RemoteLaneEarlyOffer(RemoteLaneCoordinator coordinator) : 
             return new(null, reused, context.Time.GetElapsedTime(reuseStarted));
         }
         context.Started(check, entry);
-        return new(coordinator.RunRemoteAsync(check, entry, context.Timeout(check), token), null, TimeSpan.Zero);
+        return new(coordinator.RunRemoteAsync(check, entry, context.Timeout(check), context.Deadline(check), token), null, TimeSpan.Zero);
     }
 
     internal void Cancel() => _cancellation?.Cancel();

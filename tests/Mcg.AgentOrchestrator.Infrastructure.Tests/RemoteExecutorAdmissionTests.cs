@@ -50,7 +50,7 @@ public sealed class RemoteExecutorAdmissionTests
         var entry = Assert.IsType<RemoteLaneExecutorEntry>(oldAttempt.TryClaimIdleExecutor());
         var release = new TaskCompletionSource<RemoteLaneSubmission>(TaskCreationOptions.RunContinuationsAsynchronously);
         scenario.Executor.Submit = (_, _) => release.Task;
-        var running = oldAttempt.RunRemoteAsync(Scenario.Lane, entry, TimeSpan.FromMinutes(1), default);
+        var running = oldAttempt.RunRemoteAsync(Scenario.Lane, entry, TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(1), default);
         try
         {
             var request = await Event(scenario.Executor.Submitted.Task, "gate submission entered"); // Hang guard: submit entered.

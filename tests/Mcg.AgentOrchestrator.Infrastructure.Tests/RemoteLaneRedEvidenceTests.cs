@@ -282,7 +282,7 @@ public sealed class RemoteLaneRedEvidenceTests : IDisposable
         Assert.True(coordinator.IsEligible(check));
         Assert.Equal(entry, coordinator.TryClaimIdleExecutor());
 
-        var outcome = await coordinator.RunRemoteAsync(check, entry, TimeSpan.FromMinutes(1), CancellationToken.None);
+        var outcome = await coordinator.RunRemoteAsync(check, entry, TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(1), CancellationToken.None);
 
         var request = Assert.Single(fake.Requests);
         Assert.Equal("FullyQualifiedName~RemoteTests", request.Filter);

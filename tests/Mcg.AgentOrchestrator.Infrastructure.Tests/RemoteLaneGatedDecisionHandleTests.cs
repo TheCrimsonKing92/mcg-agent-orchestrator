@@ -103,7 +103,7 @@ public sealed class RemoteLaneGatedDecisionHandleTests
         }
 
         internal Task<RemoteLaneOutcome> Start() => _run = Task.Run(() =>
-            _coordinator.RunRemoteAsync(LaneCheck(), Transport.Entry, TimeSpan.FromMinutes(10), Stop.Token));
+            _coordinator.RunRemoteAsync(LaneCheck(), Transport.Entry, TimeSpan.FromMinutes(10), TimeSpan.FromMinutes(10), Stop.Token));
 
         public async ValueTask DisposeAsync()
         {

@@ -13,7 +13,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteLaneBudget :
         using var scenario = CreateScenario(40);
         var result = await scenario.RunAsync();
         Assert.True(result.Passed, JsonSerializer.Serialize(result.Checks));
-        Assert.Equal(600, scenario.Job.GetProperty("testHostTimeoutSeconds").GetInt32());
+        Assert.Equal(1200, scenario.Job.GetProperty("testHostTimeoutSeconds").GetInt32());
         var lane = Assert.Single(result.Checks!.Where(check => check.Name == Lane(0)));
         Assert.StartsWith("remote-executor=", lane.ResultSummary);
         Assert.DoesNotContain(0, scenario.LocalStarts);
@@ -21,7 +21,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteLaneBudget :
         var budget = Assert.IsType<RemoteLaneTestHostBudgetDecision>(accepted.TestHostBudget);
         Assert.Equal("remote-history", budget.Source);
         Assert.Equal(3, budget.RemoteSamples);
-        Assert.Equal(100, budget.RemoteMedianSeconds);
+        Assert.Equal(400, budget.RemoteMedianSeconds);
         Assert.Equal(2100, budget.HostBudgetSeconds);
         var phases = Assert.IsType<RemoteLanePhaseTimings>(accepted.Phases);
         Assert.Equal(new RemoteLanePhaseTimings(3, 7, 490, 4.2, 0, 118.5, false, 140, 330, 15), phases);
@@ -66,7 +66,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteLaneBudget :
         var root = CreateManifestWorkspace($$"""
             {"version":1,"engine":{
               "maxConcurrentShards":3,
-              "infrastructureTestLanes":{{JsonSerializer.Serialize(Enumerable.Range(0, 3).Select(i => new { name = $"Lane {i}", filter = $"FullyQualifiedName~Lane{i}Tests" }))}},
+              "infrastructureTestLanes":{{JsonSerializer.Serialize(Enumerable.Range(0, 3).Select(i => new { name = $"Lane {i}", filter = $"FullyQualifiedName~Lane{i}Tests", estimatedSerialSeconds = 600 }))}},
               "mtpInvocations":[{
                 "project":"tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
                 "executablePathTemplate":"bin/{projectName}/{configuration}/{projectName}{executableExtension}",
@@ -82,7 +82,10 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteLaneBudget :
             $"public class Lane{i}Tests {{ [Xunit.Fact] public void Executes() {{ }} }}");
         var scenario = new Scenario(this, root);
         TestOverrides.RemoteLaneExecutorConfigurationPathForTests = Path.Combine(root, "executors.json");
-        RemoteLaneOfferSeeding.PrepareFixture(root, TestOverrides);
+        // A 600-second deadline keeps the 495-second phase-accounting timeline on the remote path.
+        TestOverrides.RemoteLaneOfferHistoryPathForTests = Path.Combine(root, "offer-history.jsonl");
+        RemoteLaneOfferSeeding.SeedRemote(TestOverrides.RemoteLaneOfferHistoryPathForTests,
+            Lane(0), "FullyQualifiedName~Lane0Tests", 400);
         File.WriteAllText(TestOverrides.RemoteLaneExecutorConfigurationPathForTests, JsonSerializer.Serialize(new
         {
             executors = new[] { new { id = "fixture-executor", transport = "ssh", runnerAlias = "runner", adminAlias = "admin",

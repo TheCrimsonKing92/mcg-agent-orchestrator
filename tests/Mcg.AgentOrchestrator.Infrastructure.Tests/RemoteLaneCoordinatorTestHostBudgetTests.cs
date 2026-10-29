@@ -86,7 +86,7 @@ public sealed class RemoteLaneCoordinatorTestHostBudgetTests
 
         internal async Task<RemoteLaneRequest> RunAsync()
         {
-            var outcome = await _coordinator.RunRemoteAsync(_check, _entry, Timeout, CancellationToken.None);
+            var outcome = await _coordinator.RunRemoteAsync(_check, _entry, Timeout, Timeout, CancellationToken.None);
             var request = Assert.Single(_executor.Requests);
             Assert.Equal(request, outcome.Request);
             return request;

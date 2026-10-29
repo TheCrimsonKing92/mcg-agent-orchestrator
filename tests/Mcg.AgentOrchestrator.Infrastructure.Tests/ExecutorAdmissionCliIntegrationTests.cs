@@ -19,7 +19,7 @@ public sealed class ExecutorAdmissionCliIntegrationTests
         var entry = Assert.IsType<RemoteLaneExecutorEntry>(owned.TryClaimIdleExecutor());
         var release = new TaskCompletionSource<RemoteLaneSubmission>(TaskCreationOptions.RunContinuationsAsynchronously);
         placement.Executor.Submit = (_, _) => release.Task;
-        var work = owned.RunRemoteAsync(AdmissionScenario.Lane, entry, TimeSpan.FromMinutes(1), default);
+        var work = owned.RunRemoteAsync(AdmissionScenario.Lane, entry, TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(1), default);
         try
         {
             var request = await RemoteExecutorAdmissionTests.Event(placement.Executor.Submitted.Task, "owned integration offer"); // Hang guard: owned offer.
@@ -49,7 +49,7 @@ public sealed class ExecutorAdmissionCliIntegrationTests
             using var future = placement.Coordinator(fixture.Load(), root: fixture.Root);
             var futureEntry = Assert.IsType<RemoteLaneExecutorEntry>(future.TryClaimIdleExecutor());
             placement.Executor.Submit = (offered, _) => Task.FromResult(new RemoteLaneSubmission(placement.CompletedHandle(offered)));
-            Assert.NotNull((await future.RunRemoteAsync(AdmissionScenario.Lane, futureEntry, TimeSpan.FromMinutes(1), default)).Accepted);
+            Assert.NotNull((await future.RunRemoteAsync(AdmissionScenario.Lane, futureEntry, TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(1), default)).Accepted);
             Assert.Equal(2, placement.Executor.Requests.Count);
             var rows = RemoteExecutorHealthLedger.ReadAll(RemoteExecutorHealthLedger.ResolveStorePath(fixture.Root));
             Assert.Equal(2, rows.Count);
