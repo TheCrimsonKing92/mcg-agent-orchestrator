@@ -24,7 +24,7 @@ internal static class OwnerConsoleStageDescriber
                 var dependency = Regex.Match(blocker ?? "",
                     @"^(?:waiting on dependency\s+|dependency escalated:\s*|dependency-terminal-without-landing:\s*)([a-fA-F0-9]{8})");
                 return dependency.Success ? "held: depends on " + dependency.Groups[1].Value :
-                    "held: " + OwnerActivityNarrator.WaitingOn(blocker);
+                    "held: " + OwnerActivityText.WaitingOn(blocker);
             case OwnerConsoleAttention.GateRunning:
                 if (gate is not null) return OwnerConsoleVerifyingGate.Stage(goal, gate, now);
                 var started = OwnerConsoleBoardSortKey.LatestPolicy(goal)?.OccurredAt;

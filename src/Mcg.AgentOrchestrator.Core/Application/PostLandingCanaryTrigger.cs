@@ -123,6 +123,7 @@ public static class AcceptanceEngineSurfaceRegistry
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoPackageFocusedEvidence",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoTestJsonGateReceipt",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/MainBaselineDiscoveryCache",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/ManifestScopedImpactPlan",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/MemberDeclaredTestRemovals",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/MissingAcceptanceManifestException",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/PolicyTestCheckStackDispatch",

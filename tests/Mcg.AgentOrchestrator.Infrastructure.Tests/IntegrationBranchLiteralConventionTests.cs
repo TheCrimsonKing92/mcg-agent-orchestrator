@@ -13,7 +13,7 @@ public sealed class IntegrationBranchLiteralConventionTests
     [
         new("Mcg.AgentOrchestrator.Execution/Processes/TrunkBranchName.cs", "main",
             "Single definition of the default integration branch.", "public const string Default ="),
-        new("Mcg.AgentOrchestrator.App/Console/OwnerActivityNarrator.cs", "main",
+        new("Mcg.AgentOrchestrator.App/Console/OwnerActivityText.cs", "main",
             "Classifies user-facing activity text; does not construct git arguments.", "Contains("),
         new("Mcg.AgentOrchestrator.Infrastructure/Onboarding/GoProjectDiscoveryAdapter.cs", "main",
             "Go executable package name, not a git branch.", "private const string GoExecutablePackage ="),

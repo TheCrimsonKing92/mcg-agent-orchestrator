@@ -41,7 +41,10 @@ public sealed class NonHomeProjectGateCheckSelectionTests
                   "version": 1,
                   "engine": { "enforceStructuralCoverage": false },
                   "checks": [
-                    { "name": "home command", "type": "command", "command": "dotnet", "arguments": ["--info"] }
+                    { "name": "home command", "type": "command", "command": "dotnet", "arguments": ["--info"] },
+                    { "name": "core tests", "type": "dotnet-test",
+                      "project": "tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj",
+                      "arguments": ["--verbosity", "minimal"] }
                   ]
                 }
                 """);

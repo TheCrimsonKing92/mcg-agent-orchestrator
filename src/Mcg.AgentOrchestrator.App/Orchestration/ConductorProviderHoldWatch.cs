@@ -88,13 +88,13 @@ internal sealed class ConductorProviderHoldWatch
                 OwnerProviderHoldNarration.Binding(evt) is not { Length: > 0 } binding) continue;
             if (evt.EventKind == "provider-hold-restored") _announced.Remove(binding);
             else if (evt.EventKind == "provider-hold-placed" &&
-                     TryInstant(OwnerActivityNarrator.Field(evt, "placed_at"), out var placed) &&
-                     OwnerActivityNarrator.Field(evt, "source")?.Split('/') is { Length: 2 } source &&
+                     TryInstant(OwnerEventFields.Field(evt, "placed_at"), out var placed) &&
+                     OwnerEventFields.Field(evt, "source")?.Split('/') is { Length: 2 } source &&
                      source.All(value => !string.IsNullOrWhiteSpace(value)) && !string.IsNullOrWhiteSpace(evt.GoalId))
                 _announced[binding] = new(evt.GoalId, source[1], placed);
             else if (evt.EventKind == "provider-hold-probe" &&
-                     TryInstant(OwnerActivityNarrator.Field(evt, "due"), out var due) &&
-                     int.TryParse(OwnerActivityNarrator.Field(evt, "attempt"), NumberStyles.Integer, CultureInfo.InvariantCulture, out var attempt) && attempt > 0)
+                     TryInstant(OwnerEventFields.Field(evt, "due"), out var due) &&
+                     int.TryParse(OwnerEventFields.Field(evt, "attempt"), NumberStyles.Integer, CultureInfo.InvariantCulture, out var attempt) && attempt > 0)
                 _probes.Add((binding.ToUpperInvariant(), due, attempt));
         }
     }

@@ -8,11 +8,11 @@ internal static class OwnerTestImpactHeadroomNarration
         out string nextStep, out string ownerAction)
     {
         sentence = reason = nextStep = ownerAction = "";
-        var bound = OwnerActivityNarrator.Field(evt, "bound");
+        var bound = OwnerEventFields.Field(evt, "bound");
         if (string.IsNullOrWhiteSpace(bound) ||
-            !int.TryParse(OwnerActivityNarrator.Field(evt, "count"), NumberStyles.Integer,
+            !int.TryParse(OwnerEventFields.Field(evt, "count"), NumberStyles.Integer,
                 CultureInfo.InvariantCulture, out var count) ||
-            !int.TryParse(OwnerActivityNarrator.Field(evt, "cap"), NumberStyles.Integer,
+            !int.TryParse(OwnerEventFields.Field(evt, "cap"), NumberStyles.Integer,
                 CultureInfo.InvariantCulture, out var cap)) return false;
 
         sentence = $"Focused test selection near its limit: {bound} {count.ToString(CultureInfo.InvariantCulture)} of {cap.ToString(CultureInfo.InvariantCulture)}";
