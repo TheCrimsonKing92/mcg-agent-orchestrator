@@ -39,6 +39,8 @@ public sealed class AcceptanceTestClassSourcesMemoTests
     public void DifferentRoot_ReturnsItsOwnTestSources()
     {
         using var fixture = new SourceSnapshotFixture();
+        fixture.Write("config/acceptance-manifest.json",
+            """{"engine":{"laneTestSourceRoots":["tests/Mcg.AgentOrchestrator.Infrastructure.Tests"]}}""");
         const string path = "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/MemoProbe.cs";
         const string text = "public sealed class MemoProbe { [Fact] public void Run() { } }";
         fixture.Write(path, text);
@@ -57,6 +59,8 @@ public sealed class AcceptanceTestClassSourcesMemoTests
     public void MemoizedSource_SnapshotDetectsUnsafeClearClassAndLine()
     {
         using var fixture = new SourceSnapshotFixture();
+        fixture.Write("config/acceptance-manifest.json",
+            """{"engine":{"laneTestSourceRoots":["tests/Mcg.AgentOrchestrator.Infrastructure.Tests"]}}""");
         const string path = "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/UnsafeClearProbe.cs";
         fixture.Write(path, """
             public sealed class UnsafeClearProbe

@@ -9,20 +9,16 @@ internal static class AcceptanceTestInventorySource
     internal static AcceptanceTestInventory Read(string worktreePath, string integrationBranch,
         Func<string, string[], string?> gitText)
     {
-        var classes = AcceptanceTestClassSourceScanner.Scan(worktreePath);
+        var roots = LaneTestSourceRootResolver.Resolve(worktreePath);
+        if (roots.Count == 0)
+            throw new InvalidDataException("Acceptance manifest engine laneTestSourceRoots: the manifest declares no lane test source roots.");
+        var files = LaneTestSourceRootResolver.SourceFiles(worktreePath, roots);
+        var classes = AcceptanceTestClassSourceScanner.Scan(worktreePath, files);
         if (classes.Count == 0) throw new InvalidDataException("Runnable test inventory is empty.");
-        var testRoot = Path.Combine(worktreePath, "tests", "Mcg.AgentOrchestrator.Infrastructure.Tests");
-        if (!Directory.Exists(testRoot)) throw new InvalidDataException("Test source tree is unavailable.");
-        var supportRoot = Path.Combine(worktreePath, "tests", "Mcg.AgentOrchestrator.TestSupport");
-        var candidateSources = Directory.EnumerateFiles(testRoot, "*.cs", SearchOption.AllDirectories)
-            .Concat(Directory.Exists(supportRoot)
-                ? Directory.EnumerateFiles(supportRoot, "*.cs", SearchOption.AllDirectories) : [])
-            .Where(path => !path.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
-                .Any(part => part is "bin" or "obj"))
-            .Order(StringComparer.Ordinal).Select(File.ReadAllText).ToArray();
+        var candidateSources = files.Select(File.ReadAllText).ToArray();
         var mainPaths = gitText(worktreePath,
             ["grep", "-l", "-e", "CollectionDefinition", "-e", "class .*TestCollections", integrationBranch, "--",
-             "tests/Mcg.AgentOrchestrator.Infrastructure.Tests", "tests/Mcg.AgentOrchestrator.TestSupport"]);
+             .. LaneTestSourceRootResolver.GitPathspecs(roots)]);
         if (mainPaths is null) throw new InvalidDataException("Main collection metadata file list is unavailable.");
         var mainSources = mainPaths.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Select(path => path.StartsWith(integrationBranch + ":", StringComparison.Ordinal) ? path[(integrationBranch.Length + 1)..] : path)
