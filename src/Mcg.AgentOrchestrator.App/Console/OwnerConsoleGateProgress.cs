@@ -10,7 +10,8 @@ internal sealed record OwnerConsoleGateLane(string Name, OwnerConsoleGateLaneSta
     string Outcome, string Location, TimeSpan Elapsed, double? MedianSeconds, bool IsEstimate,
     double? QuietSeconds = null, bool IsManifestLane = true,
     string? Target = null, string? HeartbeatPath = null, bool IsAttribution = false,
-    IReadOnlyList<string>? FailingTestNames = null);
+    IReadOnlyList<string>? FailingTestNames = null, int SkippedTestCount = 0,
+    OwnerConsoleGateConfirmation? Confirmation = null);
 internal sealed record OwnerConsoleGateManifestLane(string Name, double EstimatedSerialSeconds);
 internal sealed record OwnerConsoleGateDuration(string LaneName, double DurationSeconds, DateTimeOffset RecordedAt);
 

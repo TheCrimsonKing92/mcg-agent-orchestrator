@@ -28,7 +28,7 @@ public sealed class DeadManHeartbeatClient
 
         using var response = await _http.PostAsJsonAsync(
             _options.Endpoint,
-            new { kind = "operator-listener-heartbeat", ok = true },
+            new { kind = "operator-heartbeat", ok = true },
             cancellationToken);
         return response.IsSuccessStatusCode;
     }

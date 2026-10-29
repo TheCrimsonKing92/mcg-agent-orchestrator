@@ -1423,9 +1423,6 @@ public sealed class GoalRefinementTests
 
         Xunit.Assert.Equal(RefinementOutcome.AwaitingClarification, result.Outcome);
         Xunit.Assert.Equal($"Topic key: {persistedTopicKey}", displayedTopicLine);
-        Xunit.Assert.True(
-            DiscordInteractionHandler.BuildAnswerCustomId(clarification.CorrelationKey!).Length <= 100,
-            "The persisted correlation key must remain safe for a Discord answer custom id.");
         Xunit.Assert.Equal(persistedTopicKey, clarification.Subject);
         Xunit.Assert.DoesNotContain("How are stranded edits preserved?", clarification.Subject, StringComparison.Ordinal);
     }

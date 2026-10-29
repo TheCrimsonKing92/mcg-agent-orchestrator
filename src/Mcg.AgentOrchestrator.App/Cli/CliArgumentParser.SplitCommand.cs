@@ -234,11 +234,6 @@ public static IReadOnlyList<string> SplitCommand(string line)
             "--confirm-goal-abandon");
     }
 
-    if (command.Equals("operator-listen", StringComparison.OrdinalIgnoreCase))
-    {
-        return [command, .. remainder.Split(' ', StringSplitOptions.RemoveEmptyEntries)];
-    }
-
     if (command.Equals("simple-goal", StringComparison.OrdinalIgnoreCase))
     {
         return SplitObjectiveCommandWithFlags(command, remainder);

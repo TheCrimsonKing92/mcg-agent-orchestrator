@@ -169,8 +169,7 @@ internal static class OperatorInbox
             visible);
     }
 
-    // Lightweight acknowledgement without a full kernel load — used by the Discord gateway
-    // listener where we want to ack the inbox item after dispatch without re-loading state.
+    // Lightweight acknowledgement without a full kernel load, for callers that only need to ack an item.
     // If the itemId doesn't match a live inbox item, the record is still stored and silently
     // ignored when the inbox report is next built.
     public static void AppendAcknowledgement(OrchestratorWorkspace workspace, string itemId)

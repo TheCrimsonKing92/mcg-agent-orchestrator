@@ -94,7 +94,6 @@ internal static class OrchestratorArtifactRegistry
         Source("landing-escalations.lock", "App/Orchestration/OperatorInbox.cs"),
         Source("operator-inbox-acks.json", "App/Orchestration/OperatorInbox.cs"),
         Source("ownership-holds.json", "App/Orchestration/OperatorInbox.cs"),
-        Source("discord-collaboration-refs.json", "Infrastructure.OperatorComms/DiscordCollaborationViewService.cs"),
         Source("*.maintenance.lease", "Execution/Persistence/SqliteMaintenanceLease.cs"),
         Source("*.post-landing-canary.lock", "App/Orchestration/PostLandingCanaryCoordinator.cs"),
         new Entry("firewall-rule-removal", "Remove-TestSlotFirewallRules", WriterKind.Source,

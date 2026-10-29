@@ -30,7 +30,7 @@ public static class EngineeringPracticeDefaults
             "Positive-evidence classification",
             "Classify outcomes only from positive provider/fault evidence; add decision-table tests for happy and fault paths.",
             "Verify classification is keyed to positive evidence, not breadcrumbs or absence; missing fault-path decision-table coverage is a finding.",
-            ["classifier", "classification", "fault classifier", "RepositoryChangeClassifier", "DiscordOperatorFaultClassifier", "TaskOutcomeClassifier"],
+            ["classifier", "classification", "fault classifier", "RepositoryChangeClassifier", "TaskOutcomeClassifier"],
             [
                 new EngineeringPracticeProvenance("b0807c0e", "manufactured-failure family"),
                 new EngineeringPracticeProvenance("dc26b35d", "evidence-first publication outcome")
