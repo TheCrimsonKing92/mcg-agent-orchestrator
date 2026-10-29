@@ -3,7 +3,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 using Xunit;
 
 // Parallel-safe: stateless formatting, classification, and guidance; no shared state mutation.
-public sealed class WorkerBuildReceiptStaleClassificationTests : WorkerDispatchTestSupport
+public sealed class StaleBuildReceiptClassificationTests : WorkerDispatchTestSupport
 {
     [Theory]
     [InlineData("worker-build-evidence-missing", true)]
