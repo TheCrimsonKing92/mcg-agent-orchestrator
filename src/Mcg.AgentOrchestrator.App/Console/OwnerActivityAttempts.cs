@@ -7,7 +7,7 @@ internal static class OwnerActivityAttempts
         var item = ordered[index];
         if (item.EventKind != "goal-lifecycle" ||
             Head(item) is not ("TaskDispatched" or "TaskCompleted" or "TaskFailed") ||
-            OwnerActivityNarrator.Field(item, "task") is not { } task) return null;
+            OwnerEventFields.Field(item, "task") is not { } task) return null;
 
         var count = 0;
         for (var previous = 0; previous <= index; previous++)
@@ -15,7 +15,7 @@ internal static class OwnerActivityAttempts
             var candidate = ordered[previous];
             if (candidate.EventKind == "goal-lifecycle" && Head(candidate) == "TaskDispatched" &&
                 Prefix(candidate.GoalId).Equals(Prefix(item.GoalId), StringComparison.OrdinalIgnoreCase) &&
-                string.Equals(OwnerActivityNarrator.Field(candidate, "task"), task, StringComparison.Ordinal))
+                string.Equals(OwnerEventFields.Field(candidate, "task"), task, StringComparison.Ordinal))
                 count++;
         }
         return count == 0 ? null : count;

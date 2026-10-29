@@ -117,8 +117,8 @@ public sealed class OwnerConsoleBoardStatusColumnTests
     }
 
     [Theory]
-    [InlineData("High", true, 70)]
-    [InlineData("Normal", false, 79)]
+    [InlineData("High", true, 68)]
+    [InlineData("Normal", false, 77)]
     public void Board_RemovedStateColumn_AllocatesFreedWidthToTitle(
         string priority, bool visible, int expectedTitleWidth)
     {

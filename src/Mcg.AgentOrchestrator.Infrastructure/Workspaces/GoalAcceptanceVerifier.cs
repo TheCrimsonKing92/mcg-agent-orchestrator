@@ -692,7 +692,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             c.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase) &&
             (string.IsNullOrWhiteSpace(c.Project) || c.Project.EndsWith(".sln", StringComparison.OrdinalIgnoreCase)));
 
-        var scopedChecks = GoalAcceptanceVerifierHomeImpactScope.Applies(executionOwner.ProjectHomeDirectory) ? BuildChangeScopedChecks(worktreePath, solutionCheck, effectiveChecks, changedFiles, policyShardPlan, infrastructureTestLanes) : null;
+        var scopedChecks = GoalAcceptanceVerifierHomeImpactScope.Applies(executionOwner.ProjectHomeDirectory) ? BuildChangeScopedChecks(worktreePath, solutionCheck, effectiveChecks, manifest.Checks, changedFiles, policyShardPlan, infrastructureTestLanes) : null;
         var runSolutionCheck = solutionCheck is not null && scopedChecks is null;
         var deferredChecks = runSolutionCheck
             ? BuildDeferredChecks(solutionCheck, effectiveChecks, worktreePath)
@@ -1718,6 +1718,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         string worktreePath,
         AcceptanceManifestCheck? solutionCheck,
         IReadOnlyList<AcceptanceManifestCheck> allChecks,
+        IReadOnlyList<AcceptanceManifestCheck> manifestChecks,
         IReadOnlyList<string>? changedFiles,
         PolicyShardPlan policyShardPlan,
         IReadOnlyList<AcceptanceTestLane> infrastructureTestLanes)
@@ -1741,10 +1742,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             return null;
         }
 
-        var plan = RepositoryTestImpactPlanner.Plan(summary, worktreePath);
-        if (!plan.RequiresBuild ||
-            plan.RequiresBroadVerification ||
-            plan.Checks.Any(check => check.Command.Count == 0))
+        var plan = ManifestScopedImpactPlan.PlanChangeScoped(summary, worktreePath, manifestChecks);
+        if (plan is null)
         {
             return null;
         }
@@ -1791,7 +1790,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         if (changedFiles is null || changedFiles.Count == 0)
             return manifestChecks.Where(check => !IsSkippedPolicyShardCheck(check, policyShardPlan)).ToArray();
 
-        var requiredPolicyChecks = policyRequiredChecks ?? BuildRequiredPolicyChecks(worktreePath, changedFiles);
+        var requiredPolicyChecks = policyRequiredChecks ?? BuildRequiredPolicyChecks(worktreePath, changedFiles, manifestChecks);
         var plannedChecks = requiredPolicyChecks
             .Where(check => !check.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase) || !policyShardPlan.IsAbsentProject(check.Project))
             .Where(check => !policyShardPlan.ForceFull ||
@@ -1865,7 +1864,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
         // This is the single owner of the environment- and scope-expanded gate plan. Cohort
         // identity, partition-cache identity, and execution all hash or consume this exact plan.
-        var policyRequiredChecks = GoalAcceptanceVerifierHomeImpactScope.GetRequiredChecks(projectHomeDirectory, () => BuildRequiredPolicyChecks(worktreePath, changedFiles));
+        var policyRequiredChecks = GoalAcceptanceVerifierHomeImpactScope.GetRequiredChecks(projectHomeDirectory, () => BuildRequiredPolicyChecks(worktreePath, changedFiles, manifest.Checks));
         var policyEffectiveChecks = BuildPolicyEffectiveChecks(
             worktreePath,
             manifest.Checks,
@@ -1899,7 +1898,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
     private static IReadOnlyList<AcceptanceManifestCheck> BuildRequiredPolicyChecks(
         string worktreePath,
-        IReadOnlyList<string>? changedFiles)
+        IReadOnlyList<string>? changedFiles,
+        IReadOnlyList<AcceptanceManifestCheck> manifestChecks)
     {
         if (changedFiles is null || changedFiles.Count == 0)
             return [];
@@ -1909,7 +1909,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             goalObjective: string.Empty,
             taskDescription: string.Empty,
             verificationPlan: null,
-            changedFiles, RepositoryTestImpactPlanner.Plan(changedFiles, worktreePath));
+            changedFiles, ManifestScopedImpactPlan.Plan(changedFiles, worktreePath, manifestChecks));
         return MapRequiredPolicyChecks(worktreePath, policy);
     }
 

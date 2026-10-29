@@ -26,5 +26,5 @@ internal static class OwnerActivityProgress
     private static bool SameGoal(string? left, string? right) => left is not null && right is not null &&
         left[..Math.Min(8, left.Length)].Equals(right[..Math.Min(8, right.Length)], StringComparison.OrdinalIgnoreCase);
     private static string Head(OwnerConductEvent item) => item.Detail.Split(' ', 2)[0];
-    private static string? Field(OwnerConductEvent item, string name) => OwnerActivityNarrator.Field(item, name);
+    private static string? Field(OwnerConductEvent item, string name) => OwnerEventFields.Field(item, name);
 }

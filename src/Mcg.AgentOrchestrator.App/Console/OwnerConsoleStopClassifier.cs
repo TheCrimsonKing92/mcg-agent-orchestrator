@@ -10,7 +10,7 @@ internal static class OwnerConsoleStopClassifier
         if (index < 0 || ordered[index].EventKind != "loop-stop") return null;
 
         var stop = ordered[index];
-        var reason = OwnerActivityNarrator.Field(stop, "reason");
+        var reason = OwnerEventFields.Field(stop, "reason");
         if (reason is not ("self-relaunch-handoff" or "stop-file" or "stop-after-operator-intent" or
             "stop-while-idle" or "stop-file-during-sleep")) return null;
 

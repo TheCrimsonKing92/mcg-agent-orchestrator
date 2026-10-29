@@ -22,7 +22,7 @@ internal static class OwnerConsolePriorityText
     {
         var matches = events.Where(item => (item.Detail.StartsWith("PRIORITY_DILUTION ", StringComparison.Ordinal) ||
                                            item.Detail.StartsWith("PRIORITY_OVERLAP ", StringComparison.Ordinal)) &&
-                                          OwnerActivityNarrator.Field(item, "goal") == OwnerConsoleViewModelBuilder.Prefix(goal.Id.Value))
+                                          OwnerEventFields.Field(item, "goal") == OwnerConsoleViewModelBuilder.Prefix(goal.Id.Value))
             .OrderByDescending(item => item.Timestamp).ToArray();
         return matches.Length == 0 ? null : matches[0].Detail + (matches.Length > 1 ? $" (+{matches.Length - 1} more)" : "");
     }

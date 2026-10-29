@@ -698,7 +698,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsPolicyShardScope :
             {
               "version": 1,
               "checks": [
-                { "name": "whitespace", "type": "command", "command": "git", "arguments": ["diff", "--check"] }
+                { "name": "whitespace", "type": "command", "command": "git", "arguments": ["diff", "--check"] },
+                { "name": "manifest core smoke", "type": "dotnet-test", "runner": "mtp", "project": "tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj", "arguments": ["--filter", "FullyQualifiedName~ManifestCoreSmokeTests", "--verbosity", "minimal"] }
               ],
               "forbiddenChangedPathGlobs": []
             }
@@ -718,28 +719,29 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsPolicyShardScope :
             calls.Add(args);
             if (IsMtpExecutableCall(args, "Mcg.AgentOrchestrator.Core.Tests"))
             {
-                WriteMtpTrx(args);
+                WriteMtpTrx(args, executedTestCount: 1, ["ManifestCoreSmokeTests.Passed"]);
                 return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Passed! - Failed: 0, Passed: 5, Skipped: 0, Total: 5."));
             }
 
             return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, ""));
         });
 
-        // Core source file -> impact plan requires only "core tests".
+        // The focused declaration enables built-in policy but does not cover the full core shard.
         var result = await verifier.RunAsync(
             root,
             changedFiles: ["src/Mcg.AgentOrchestrator.Core/Application/Foo.cs"]);
 
         Assert.True(result.Passed);
-        // Whitespace git-diff + the injected core shard (dotnet build + MTP executable).
-        Assert.Equal(3, calls.Count);
         Assert.True(calls[0].SequenceEqual(["git", "diff", "--check"]));
-        // Core.Tests is an MTP project, so the injected "core tests" check runs the MTP executable
-        // (preceded by a dotnet build), never the VSTest `dotnet test` runner.
-        Assert.Single(calls, call => IsMtpExecutableCall(call, "Mcg.AgentOrchestrator.Core.Tests"));
+        // Both the manifest smoke and injected full shard run via MTP, never VSTest.
+        var mtpCalls = calls.Where(call => IsMtpExecutableCall(call, "Mcg.AgentOrchestrator.Core.Tests")).ToArray();
+        Assert.Equal(2, mtpCalls.Length);
+        Assert.Single(mtpCalls, call => HasArgumentPair(call, "--filter-class", "*ManifestCoreSmokeTests*"));
+        Assert.Single(mtpCalls, call => !call.Contains("--filter-class"));
         Assert.DoesNotContain(calls, call => call.Length >= 2 && call[0] == "dotnet" && call[1] == "test");
-        Assert.Equal(2, result.Checks!.Count);
+        Assert.Equal(3, result.Checks!.Count);
         Assert.Equal("whitespace", result.Checks[0].Name);
+        Assert.True(result.Checks.Any(c => c.Name == "manifest core smoke" && c.Passed));
         Assert.True(result.Checks.Any(c => c.Name == "core tests" && c.Passed));
         Assert.False(result.Checks.Any(c => c.Name == "infrastructure tests"));
     }
@@ -1075,12 +1077,20 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsPolicyShardScope :
         var root = CreateManifestWorkspace("""
             {
               "version": 1,
-              "checks": [],
+              "checks": [
+                { "name": "manifest core smoke", "type": "dotnet-test", "runner": "vstest", "project": "tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj", "arguments": ["--filter", "FullyQualifiedName~ManifestCoreSmokeTests", "--verbosity", "minimal"] }
+              ],
               "forbiddenChangedPathGlobs": []
             }
             """);
+        var coreTestsProject = Path.Combine(
+            root, "tests", "Mcg.AgentOrchestrator.Core.Tests", "Mcg.AgentOrchestrator.Core.Tests.csproj");
+        Directory.CreateDirectory(Path.GetDirectoryName(coreTestsProject)!);
+        File.WriteAllText(coreTestsProject,
+            "<Project><PropertyGroup><UseMicrosoftTestingPlatformRunner>false</UseMicrosoftTestingPlatformRunner></PropertyGroup></Project>");
         var calls = new List<string[]>();
         var responses = new Queue<GoalAcceptanceVerifier.CommandResult>([
+            new(0, "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."),     // manifest smoke passes
             new(1, "Failed! - Failed: 2, Passed: 3, Skipped: 0, Total: 5.")       // core tests (injected, fails)
         ]);
         var verifier = new GoalAcceptanceVerifier((args, _, _) =>
@@ -1089,14 +1099,17 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsPolicyShardScope :
             return Task.FromResult(responses.Dequeue());
         });
 
-        // Core source file → impact plan requires "core tests", which gets injected and fails
+        // The manifest smoke passes; the missing full core shard gets injected and fails.
         var result = await verifier.RunAsync(
             root,
             changedFiles: ["src/Mcg.AgentOrchestrator.Core/Application/Foo.cs"]);
 
         Assert.False(result.Passed);
         Assert.Equal(1, result.ExitCode);
-        Assert.Single(calls);
+        Assert.Equal(2, calls.Count);
+        Assert.Contains("FullyQualifiedName~ManifestCoreSmokeTests", calls[0]);
+        Assert.DoesNotContain("--filter", calls[1]);
+        Assert.True(result.Checks!.Any(c => c.Name == "manifest core smoke" && c.Passed));
         // "core tests" ran (injected) and failed; "infrastructure tests" was not reached
         Assert.True(result.Checks!.Any(c => c.Name == "core tests" && !c.Passed));
         Assert.False(result.Checks.Any(c => c.Name == "infrastructure tests"));
