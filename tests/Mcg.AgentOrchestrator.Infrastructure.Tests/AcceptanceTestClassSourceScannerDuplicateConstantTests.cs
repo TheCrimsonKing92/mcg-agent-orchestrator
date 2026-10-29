@@ -86,6 +86,13 @@ public sealed class AcceptanceTestClassSourceScannerDuplicateConstantTests
 
         internal TestTree()
         {
+            Directory.CreateDirectory(Path.Combine(Root, "config"));
+            File.WriteAllText(Path.Combine(Root, "config", "acceptance-manifest.json"), """
+                {"engine":{"laneTestSourceRoots":[
+                  "tests/Mcg.AgentOrchestrator.Infrastructure.Tests",
+                  "tests/Mcg.AgentOrchestrator.TestSupport"
+                ]}}
+                """);
             Directory.CreateDirectory(Path.Combine(Root, "tests", "Mcg.AgentOrchestrator.Infrastructure.Tests"));
             Directory.CreateDirectory(Path.Combine(Root, "tests", "Mcg.AgentOrchestrator.TestSupport"));
         }

@@ -199,6 +199,10 @@ public sealed class AcceptanceLaneMembershipTests
         Directory.CreateDirectory(testDirectory);
         try
         {
+            var configDirectory = Directory.CreateDirectory(Path.Combine(scratch, "config"));
+            File.WriteAllText(Path.Combine(configDirectory.FullName, "acceptance-manifest.json"), """
+                {"engine":{"laneTestSourceRoots":["tests/Mcg.AgentOrchestrator.Infrastructure.Tests"]}}
+                """);
             File.WriteAllText(Path.Combine(testDirectory, "QuokkaHarborSerializedFixture.cs"),
                 $"[Xunit.Collection(\"{collection}\")] public class QuokkaHarborSerializedFixture {{ [Xunit.Fact] public void Example() {{ }} }}");
             var className = "QuokkaHarborSerializedFixture";
