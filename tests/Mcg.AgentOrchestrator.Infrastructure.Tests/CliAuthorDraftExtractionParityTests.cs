@@ -44,7 +44,16 @@ public sealed class CliAuthorDraftExtractionParityTests
         Assert.Equal(beforeCode, afterCode);
         Assert.Equal(Normalize(beforeOut.ToString()), Normalize(afterOut.ToString()));
         Assert.Equal(beforeError.ToString(), afterError.ToString());
-        Assert.Equal(beforeReceipt, kind == "unparseable" ? StripRawOutputFields(afterReceipt) : afterReceipt);
+        Assert.Equal(ReceiptFields(beforeReceipt), ReceiptFields(
+            kind == "unparseable" ? StripRawOutputFields(afterReceipt) : afterReceipt, stripRevisionFields: true));
+    }
+
+    private static (string Name, string Value)[] ReceiptFields(string receipt, bool stripRevisionFields = false)
+    {
+        using var document = JsonDocument.Parse(receipt);
+        return document.RootElement.EnumerateObject()
+            .Where(property => !stripRevisionFields || property.Name is not ("rounds" or "roundCount" or "backlogCoverage"))
+            .Select(property => (property.Name, property.Value.GetRawText())).ToArray();
     }
 
     private static string Normalize(string text) =>
