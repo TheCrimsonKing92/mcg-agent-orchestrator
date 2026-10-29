@@ -100,7 +100,7 @@ internal sealed partial class GoalRefinementService
             obligation.Owner is CriterionEvidenceOwner.Acceptance or CriterionEvidenceOwner.Operator &&
             obligation.Provenance.StartsWith("operator mapping by ", StringComparison.Ordinal));
 
-    private static bool CanResolveDeclaredOwnershipQuestion(Goal goal, RefinedSpecOpenQuestion question)
+    internal static bool CanResolveDeclaredOwnershipQuestion(Goal goal, RefinedSpecOpenQuestion question)
     {
         if (question.TopicKey is not { } topic || !topic.StartsWith("ownership-v", StringComparison.Ordinal))
             return true;
