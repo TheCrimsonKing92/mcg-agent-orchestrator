@@ -416,16 +416,29 @@ public sealed class OwnerConsoleGoalChangeSummaryTests
     private static async Task<(string Preview, string Detail)> RenderSelectedGoalAsync(
         TestGoal goal, OwnerGoalChangeSummaryQuery summary)
     {
-        var queries = new Queries(goal);
+        var layoutComplete = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var queries = new Queries(goal, layoutComplete.Task);
         var detailQuery = new OwnerGoalDetailQuery(queries, new EmptyTail(), summary: summary);
         var harness = new OwnerConsoleHarness();
         var dialogs = new Dialogs();
         using var controller = Controller(harness, dialogs, detailQuery);
         using IApplication app = Terminal.Gui.App.Application.Create();
+        Assert.False(app.Initialized);
         using var view = new OwnerConsoleFullScreenView(app, controller, () => Task.CompletedTask);
         view.Render(Model(goal));
-        view.Window.Layout(new Size(100, 40));
-        await view.PreviewLoad.WaitAsync(Token);
+        var previewLoad = view.PreviewLoad;
+        try
+        {
+            // Without a UI dispatcher, publication runs inline on the loader thread.
+            // Hold the query until the initial layout has finished rendering the label.
+            Assert.False(previewLoad.IsCompleted);
+            view.Window.Layout(new Size(100, 40));
+            Assert.Equal("Loading…", view.PreviewText);
+            Assert.Same(previewLoad, view.PreviewLoad);
+            Assert.False(previewLoad.IsCompleted);
+        }
+        finally { layoutComplete.TrySetResult(); }
+        await previewLoad.WaitAsync(Token);
         var preview = view.PreviewText;
         await view.HandleKeyAsync(Key.Tab);
         await view.HandleKeyAsync(Key.Enter);
@@ -827,16 +840,17 @@ public sealed class OwnerConsoleGoalChangeSummaryTests
         public static implicit operator Goal(TestGoal fixture) => fixture._goal;
     }
 
-    private sealed class Queries(TestGoal goal) : IOrchestratorStateQueries
+    private sealed class Queries(TestGoal goal, Task? beforeRead = null) : IOrchestratorStateQueries
     {
         internal TestGoal Goal = goal;
         internal List<string> ReadIds = [];
         internal int MetadataReads;
-        public Task<AgentOrchestratorKernel> LoadGoalsAsync(IReadOnlyCollection<GoalId> ids, CancellationToken cancellationToken = default)
+        public async Task<AgentOrchestratorKernel> LoadGoalsAsync(IReadOnlyCollection<GoalId> ids, CancellationToken cancellationToken = default)
         {
+            if (beforeRead is not null) await beforeRead.WaitAsync(cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
             Assert.Single(ids); Assert.Equal(Goal.Id, ids.Single()); ReadIds.Add(ids.Single().Value);
-            return Task.FromResult(AgentOrchestratorKernel.FromSnapshot(new([Goal.ToSnapshot()], [])));
+            return AgentOrchestratorKernel.FromSnapshot(new([Goal.ToSnapshot()], []));
         }
         public Task<IReadOnlyList<GoalSummary>> ListGoalMetadataAsync(CancellationToken cancellationToken = default)
         { MetadataReads++; throw new InvalidOperationException("Unrelated metadata read"); }
