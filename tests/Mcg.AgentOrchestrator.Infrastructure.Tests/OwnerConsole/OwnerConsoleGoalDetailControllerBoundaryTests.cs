@@ -3,6 +3,8 @@ using System.Text.RegularExpressions;
 using Mcg.AgentOrchestrator.App.OwnerConsole;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
 
 // Parallel-safe: per-test kernel and fakes; source reads use the verified repository root.
 public sealed class OwnerConsoleGoalDetailControllerBoundaryTests
@@ -207,13 +209,10 @@ public sealed class OwnerConsoleGoalDetailControllerBoundaryTests
 
     private static string ExtractComposeGoal(string source)
     {
-        const string signature = "private async Task<OwnerConsoleGoalDialog.Content?> ComposeGoalAsync(";
-        const string nextMethod = "private async Task AnswerAsync";
-        var start = source.IndexOf(signature, StringComparison.Ordinal);
-        Assert.True(start >= 0, "ComposeGoalAsync signature was not found.");
-        var end = source.IndexOf(nextMethod, start, StringComparison.Ordinal);
-        Assert.True(end > start, "AnswerAsync anchor after ComposeGoalAsync was not found.");
-        return source[start..end];
+        var methods = CSharpSyntaxTree.ParseText(source).GetRoot().DescendantNodes()
+            .OfType<MethodDeclarationSyntax>()
+            .Where(method => method.Identifier.ValueText == "ComposeGoalAsync");
+        return Assert.Single(methods).ToString();
     }
 
     private static IReadOnlyList<string> DetailReadViolations(string method)
