@@ -85,7 +85,7 @@ public sealed class AcceptanceHermeticEnvironmentOwnershipTests
         Assert.Equal("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorParallelAcceptanceAttempts.cs", retainedCaller.Path);
         var migratedCallers = callers.Where(match => match.Line.Contains(ownerCall, StringComparison.Ordinal)).ToArray();
         Assert.Contains(migratedCallers, match => match.Path == "src/Mcg.AgentOrchestrator.App/Orchestration/PostLandingCanaryRunner.cs");
-        Assert.Contains(migratedCallers, match => match.Path == "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceCheckProcessInvoker.cs");
+        Assert.Contains(migratedCallers, match => match.Path == "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceShellProcessStartInfo.cs");
 
         var workspaces = Path.Combine(root, "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces");
         Assert.False(File.Exists(Path.Combine(workspaces, "GoalAcceptanceVerifier.HermeticSystemLocations.cs")));
