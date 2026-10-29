@@ -279,6 +279,7 @@ public interface IGoalAcceptanceVerifier
 
 public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 {
+    public CrosswalkExecutableResolver CrosswalkExecutable { get; init; } = new();
     public sealed record StartupContract(
         int ManifestCheckCount,
         IReadOnlyList<string> InfrastructureLaneNames);
@@ -461,6 +462,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     internal GoalAcceptanceVerifier(GoalAcceptanceVerifier source, IAcceptanceRunExecutionContext executionContext)
     {
         _runner = source._runner;
+        CrosswalkExecutable = source.CrosswalkExecutable;
         _storageRoot = source._storageRoot;
         ResolvedMainBaselineDiscoveryCache = source.ResolvedMainBaselineDiscoveryCache;
         _ownerPolicyDecisionStoreDirectory = source._ownerPolicyDecisionStoreDirectory;
@@ -475,6 +477,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     private GoalAcceptanceVerifier(GoalAcceptanceVerifier source, AcceptanceInvocationContext invocationContext)
     {
         _runner = source._runner;
+        CrosswalkExecutable = source.CrosswalkExecutable;
         _storageRoot = source._storageRoot;
         ResolvedMainBaselineDiscoveryCache = source.ResolvedMainBaselineDiscoveryCache;
         _ownerPolicyDecisionStoreDirectory = source._ownerPolicyDecisionStoreDirectory;
@@ -2351,13 +2354,10 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         try
         {
         if (check.Type.Equals("crosswalk-test", StringComparison.OrdinalIgnoreCase))
-            return (await new CrosswalkAcceptanceCheck(
-                _executionContext ?? throw new InvalidOperationException("Crosswalk requires an acceptance execution owner."),
-                _invocationContext ?? throw new InvalidOperationException("Crosswalk requires an owned invocation."),
-                _timeProvider, _requiresTestTelemetryReceipt,
+            return (await CrosswalkAcceptanceCheck.RunOwnedAsync(check, worktreePath,
+                _executionContext, _invocationContext, _timeProvider, CrosswalkExecutable, _requiresTestTelemetryReceipt,
                 arguments => CreateGateHeartbeatContext(check, arguments, worktreePath, goalId, stableSlotIndex, null),
-                RunWithGateHeartbeatAsync).RunAsync(check, worktreePath,
-                    EngineSettings.ResolveCheckTimeout(check.TimeoutMinutes), cancellationToken).ConfigureAwait(false), false);
+                RunWithGateHeartbeatAsync, cancellationToken).ConfigureAwait(false), false);
 
         if (check.Type.Equals("no-op", StringComparison.OrdinalIgnoreCase))
         {

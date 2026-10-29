@@ -17,10 +17,11 @@ internal sealed class CrosswalkAcceptanceFixture : GoalAcceptanceVerifierTestBas
     internal bool TimedOut { get; set; }
     internal bool CaptureLimited { get; set; }
     internal GoalAcceptanceVerifier Verifier { get; }
-    private readonly string? _oldPath, _oldPrefix;
+    internal CrosswalkExecutableResolver Executable { get; }
+    private readonly string? _oldPrefix;
 
     internal CrosswalkAcceptanceFixture(string[]? selectors = null, string? project = null, TimeProvider? clock = null,
-        string type = "crosswalk-test")
+        string type = "crosswalk-test", CrosswalkExecutableResolver? executable = null)
     {
         Root = CreateManifestWorkspace(JsonSerializer.Serialize(new
         {
@@ -31,10 +32,10 @@ internal sealed class CrosswalkAcceptanceFixture : GoalAcceptanceVerifierTestBas
         Prefix = Path.Combine(Root, ".orchestrator", "acceptance-gate-attempts", "crosswalk", "attempt-current");
         Binary = Path.Combine(Root, "crosswalk.exe");
         File.WriteAllText(Binary, "injected process boundary");
-        _oldPath = Environment.GetEnvironmentVariable(CrosswalkClient.PathVariable);
         _oldPrefix = Environment.GetEnvironmentVariable(GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable);
-        Environment.SetEnvironmentVariable(CrosswalkClient.PathVariable, Binary);
         Environment.SetEnvironmentVariable(GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable, Prefix);
+        Executable = executable ?? new CrosswalkExecutableResolver(Binary, Root,
+            (_, _) => Task.FromResult(new WorkerProcessRunResult(0, "test-version", "")));
         TestOverrides.ResolvePartitionVerdictCandidateTreeShaForTests = _ => "candidate-tree";
         TestOverrides.ResolvePartitionVerdictMainShaForTests = _ => "main-tree";
         TestOverrides.ResolvePartitionVerdictVerifyingCommitShaForTests = _ => "candidate-commit";
@@ -46,7 +47,7 @@ internal sealed class CrosswalkAcceptanceFixture : GoalAcceptanceVerifierTestBas
             if (Handler is { } handler) return await handler(command, token);
             return Result(command.Contains("' list '", StringComparison.Ordinal) ? Discovery : Output,
                 command.Contains("' list '", StringComparison.Ordinal) ? 0 : Exit);
-        }, clock ?? TimeProvider.System);
+        }, clock ?? TimeProvider.System) { CrosswalkExecutable = Executable };
     }
 
     internal GoalAcceptanceVerifier.CommandResult Result(string json, int exit = 0) =>
@@ -80,7 +81,6 @@ internal sealed class CrosswalkAcceptanceFixture : GoalAcceptanceVerifierTestBas
 
     public void Dispose()
     {
-        Environment.SetEnvironmentVariable(CrosswalkClient.PathVariable, _oldPath);
         Environment.SetEnvironmentVariable(GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable, _oldPrefix);
         DeleteDirectoryWithRetry(Root);
     }

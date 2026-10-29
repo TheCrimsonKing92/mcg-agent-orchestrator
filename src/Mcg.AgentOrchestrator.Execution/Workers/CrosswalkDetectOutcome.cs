@@ -2,6 +2,7 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 
 internal sealed record CrosswalkDetectOutcome(string Status, CrosswalkDetectResult? Result, string Detail)
 {
+    internal CrosswalkExecutableIdentity? Executable { get; init; }
     internal const string Detected = "detected";
     internal const string NotConfigured = "not-configured";
     internal const string Missing = "missing";

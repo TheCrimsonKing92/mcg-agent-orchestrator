@@ -98,7 +98,7 @@ public static bool ExecuteCommand(
         EventWriter = eventWriter,
         AcceptanceVerifier = acceptanceVerifier ?? new GoalAcceptanceVerifier(
             operationCleanupContext.Hooks.BuildStorageRoot ?? DotnetBuildEnvironmentManager.CaptureStorageRoot(),
-            workspace.OrchestratorDirectory),
+            workspace.OrchestratorDirectory) { CrosswalkExecutable = CrosswalkExecutableComposition.ForProcess },
         RunInjectedAcceptanceVerifierInCurrentProcess = acceptanceVerifier is not null,
         GoalMarkLandedElapsedMilliseconds = goalMarkLandedElapsedMilliseconds,
         StableSlotAcquisitionTimeout = stableSlotAcquisitionTimeout,

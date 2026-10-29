@@ -8,7 +8,7 @@ public static class ProjectStackResolver
     public static Toolchain Resolve(string workingDirectory, string? projectHomeDirectory)
         => Resolve(workingDirectory, projectHomeDirectory, CrosswalkShadowDetect.Shared);
 
-    internal static Toolchain Resolve(string workingDirectory, string? projectHomeDirectory, CrosswalkShadowDetect shadow)
+    internal static Toolchain Resolve(string workingDirectory, string? projectHomeDirectory, CrosswalkShadowDetect? shadow)
     {
         if (!string.IsNullOrWhiteSpace(projectHomeDirectory))
         {
@@ -39,7 +39,8 @@ public static class ProjectStackResolver
             }
         }
 
-        return shadow.Observe(workingDirectory, projectHomeDirectory, TargetToolchainDetector.Detect(workingDirectory));
+        var detected = TargetToolchainDetector.Detect(workingDirectory);
+        return shadow?.Observe(workingDirectory, projectHomeDirectory, detected) ?? detected;
     }
 
     internal static ProjectStack? GuidanceStack(Toolchain toolchain, bool isOrchestratorHome) => toolchain switch
