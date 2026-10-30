@@ -9,7 +9,7 @@ internal sealed class JunitCommandFixture : GoalAcceptanceVerifierTestBase, IDis
 {
     internal static readonly DateTimeOffset Now = new(2026, 10, 30, 12, 0, 0, TimeSpan.Zero);
     internal string Root { get; }
-    internal string ProjectRoot => Path.Combine(Root, Project);
+    internal string ProjectRoot => Path.GetFullPath(Path.Combine(Root, Project));
     internal string Project { get; }
     internal Check Check { get; }
     internal GoalAcceptanceVerifier Verifier { get; }
@@ -63,7 +63,7 @@ internal sealed class JunitCommandFixture : GoalAcceptanceVerifierTestBase, IDis
 
     internal string WriteReport(string path, DateTimeOffset modified, params (string File, string Name, bool Fails)[] tests)
     {
-        var full = Path.Combine(ProjectRoot, path);
+        var full = Path.GetFullPath(Path.Combine(ProjectRoot, path));
         Directory.CreateDirectory(Path.GetDirectoryName(full)!);
         new XDocument(new XElement("testsuite", tests.Select(test => new XElement("testcase",
             new XAttribute("file", test.File), new XAttribute("name", test.Name),

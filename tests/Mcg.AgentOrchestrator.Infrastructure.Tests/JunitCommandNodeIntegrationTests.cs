@@ -11,10 +11,14 @@ public sealed class JunitCommandNodeIntegrationTests : GoalAcceptanceVerifierTes
     {
         var node = FindOnPath(OperatingSystem.IsWindows() ? "node.exe" : "node");
         if (node is null) Assert.Skip("node is absent from PATH; the real JUnit command integration requires node.");
-        // The test assembly redirects MCG_ORCHESTRATOR_DATA for writes. Locate the installed
-        // read-only tool through PATH or the application's canonical installation directory.
+        // The gate redirects USERPROFILE and the assembly redirects MCG_ORCHESTRATOR_DATA.
+        // LOCALAPPDATA is preserved for read-only installed tools by AcceptanceHermeticEnvironment.
+        var localAppData = Environment.GetEnvironmentVariable("LOCALAPPDATA");
+        var installedDataRoot = OperatingSystem.IsWindows() && !string.IsNullOrWhiteSpace(localAppData)
+            ? Path.Combine(localAppData, "Mcg.AgentOrchestrator")
+            : OrchestratorDataRoot.ResolveDefaultDirectory();
         var crosswalk = FindOnPath(OperatingSystem.IsWindows() ? "crosswalk.exe" : "crosswalk") ??
-            Path.Combine(OrchestratorDataRoot.ResolveDefaultDirectory(), "tools", "crosswalk", "crosswalk.exe");
+            Path.Combine(installedDataRoot, "tools", "crosswalk", "crosswalk.exe");
         Assert.True(File.Exists(crosswalk), $"Required crosswalk parser is missing: {crosswalk}");
         var resolver = new CrosswalkExecutableResolver(crosswalk);
         Assert.NotNull(resolver.Resolve().Identity);
