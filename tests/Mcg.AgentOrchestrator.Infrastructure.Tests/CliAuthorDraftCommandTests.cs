@@ -217,7 +217,7 @@ public sealed class CliAuthorDraftCommandTests
 
         Assert.Equal(markdown, File.ReadAllText(Assert.Single(Directory.GetFiles(fixture.Drafts, "*.md"))));
         using var receipt = fixture.Receipt();
-        Assert.Equal(10, receipt.RootElement.GetProperty("checks").GetArrayLength());
+        Assert.Equal(12, receipt.RootElement.GetProperty("checks").GetArrayLength());
         Assert.All(receipt.RootElement.GetProperty("checks").EnumerateArray(),
             check => Assert.True(check.GetProperty("passed").GetBoolean()));
         Assert.Empty(fixture.Error.ToString());

@@ -165,7 +165,9 @@ internal static class AuthorBriefDraftTargetChecks
                 else
                 {
                     section = label.ToLowerInvariant();
-                    sectionLevel = level;
+                    // Only owned sections establish a boundary. A document title must not
+                    // hide the What to build or Scope headings nested beneath it.
+                    sectionLevel = section is "what to build" or "scope" ? level : 0;
                     inScope = false;
                 }
                 continue;

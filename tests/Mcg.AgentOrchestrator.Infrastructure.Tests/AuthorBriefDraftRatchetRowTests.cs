@@ -123,7 +123,7 @@ public sealed class AuthorBriefDraftRatchetRowTests
         }
         finally
         {
-            Directory.Delete(root, recursive: true);
+            SharedTestSupport.RemoveTempDirectory(root);
         }
 
         string Git(params string[] arguments)
