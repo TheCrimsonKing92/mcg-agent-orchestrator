@@ -27,8 +27,8 @@ public static partial class DispatchFailureClassifier
         }
 
         // Stderr is the guard's stream; prefer its first match over stdout evidence.
-        var lines = EnumerateEvidenceLines(verification, includeStandardOutput: false, includeStandardError: true)
-            .Concat(EnumerateEvidenceLines(verification, includeStandardOutput: true, includeStandardError: false));
+        var lines = DispatchEvidenceSummaries.EnumerateEvidenceLines(verification, includeStandardOutput: false, includeStandardError: true)
+            .Concat(DispatchEvidenceSummaries.EnumerateEvidenceLines(verification, includeStandardOutput: true, includeStandardError: false));
         foreach (var line in lines)
         {
             var match = WorkerSandboxRefusalLineRegex().Match(line);
@@ -41,7 +41,7 @@ public static partial class DispatchFailureClassifier
             var path = match.Groups["path"];
             var summary = path.Success
                 ? $"worker sandbox refused: reason={reason} path={path.Value}"
-                : $"worker sandbox refused: reason={reason}; refusal={TruncateEvidence(line)}";
+                : $"worker sandbox refused: reason={reason}; refusal={DispatchEvidenceSummaries.TruncateEvidence(line)}";
             outcome = BuildOutcome(
                 TaskOutcomeRules.WorkerSandboxRefused,
                 task,

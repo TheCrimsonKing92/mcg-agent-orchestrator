@@ -308,7 +308,7 @@ public static class ProviderLimitSignals
     {
         source = "stderr";
         if (ProviderLimitEvidenceParser.TryGetBudgetExhaustionEvidenceLine(
-            EnumerateEvidenceLines(verification, includeStandardOutput: false, includeStandardError: true),
+            DispatchEvidenceSummaries.EnumerateEvidenceLines(verification, includeStandardOutput: false, includeStandardError: true),
             out line))
         {
             return true;
@@ -316,7 +316,7 @@ public static class ProviderLimitSignals
 
         if (ProviderLimitEvidenceParser.TryGetCliCreditExhaustionLine(
             verification.ExitCode,
-            EnumerateEvidenceLines(verification, includeStandardOutput: true, includeStandardError: false),
+            DispatchEvidenceSummaries.EnumerateEvidenceLines(verification, includeStandardOutput: true, includeStandardError: false),
             out line))
         {
             source = "stdout";
