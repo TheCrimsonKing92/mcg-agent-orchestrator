@@ -42,7 +42,7 @@ public sealed class OwnerConsoleBoardSectionTests
             var screen = scene.CaptureBoard();
 
             var header = Assert.Single(screen.Lines.Where(line => line.StartsWith("── ")));
-            Assert.StartsWith("── home · conductor running · 1 active · 0 verified · last landed never ──", header);
+            Assert.StartsWith("── home · conductor running · 1 active · last landed never ──", header);
             AssertHeaderLine(header, scene.View.BoardPane);
             var headerIndex = Array.IndexOf(screen.Lines, header);
             Assert.Contains("11111111", screen.Lines[headerIndex + 1]);
@@ -50,7 +50,9 @@ public sealed class OwnerConsoleBoardSectionTests
             const string footer = "idle: crosswalk, necromancer, pz-item-searcher, schema-drift · stopped: net-health";
             Assert.Equal(footer, Assert.Single(screen.Lines.Where(line => line.StartsWith("idle:"))).TrimEnd());
             Assert.Equal(footer, screen.Lines[^1].TrimEnd());
-            Assert.Equal(scene.View.BoardPane.GetScheme().Highlight, screen.Attributes[headerIndex, 0]);
+            var normal = scene.View.BoardPane.GetScheme().Normal;
+            Assert.Equal(new Terminal.Gui.Drawing.Attribute(normal.Foreground, normal.Background,
+                normal.Style | Terminal.Gui.Drawing.TextStyle.Bold), screen.Attributes[headerIndex, 0]);
         }
         finally { foreach (var lease in leases) lease.Dispose(); }
     }
@@ -260,9 +262,9 @@ public sealed class OwnerConsoleBoardSectionTests
             scene.Model.Board.Select(row => row.Project));
         var headers = scene.Model.Board.Where(row => row.IsDiagnostic).ToArray();
         Assert.Equal(new[] { "home", "alpha", "beta" }, headers.Select(row => row.Project));
-        Assert.Equal("home · conductor stopped · 1 active · 0 verified · last landed never", headers[0].Title);
-        Assert.Equal("alpha · conductor running · 2 active · 1 verified · last landed never", headers[1].Title);
-        Assert.Equal("beta · conductor stopped · 0 active · 0 verified · last landed never", headers[2].Title);
+        Assert.Equal("home · conductor stopped · 1 active · last landed never", headers[0].Title);
+        Assert.Equal("alpha · conductor running · 2 active · 1 waiting for gate · last landed never", headers[1].Title);
+        Assert.Equal("beta · conductor stopped · 0 active · last landed never", headers[2].Title);
         Assert.Equal(new[] { "11111111-home", "22222222-verified", "33333333-active" },
             scene.Model.Board.Where(row => !row.IsDiagnostic).Select(row => row.GoalId));
         Assert.Equal(Columns, scene.View.BoardTable.Columns.Cast<DataColumn>().Select(column => column.ColumnName));
@@ -270,7 +272,7 @@ public sealed class OwnerConsoleBoardSectionTests
         Assert.Equal(5, scene.View.BoardTable.Rows.Count);
         var pane = Assert.IsType<OwnerConsoleBoardPane>(scene.View.BoardPane);
         Assert.Equal(new[] { 0, 2 }, pane.Headers.Keys.Order());
-        Assert.Equal("── home · conductor stopped · 1 active · 0 verified · last landed never ──", pane.Headers[0]);
+        Assert.Equal("── home · conductor stopped · 1 active · last landed never ──", pane.Headers[0]);
         Assert.Equal("stopped: beta", string.Concat(OwnerConsoleBoardSection.Footer(scene.Model).Select(segment => segment.Text)));
         for (var index = 0; index < scene.View.BoardTable.Rows.Count; index++)
         {
@@ -312,7 +314,7 @@ public sealed class OwnerConsoleBoardSectionTests
 
         var header = Assert.Single(scene.Model.Board.Where(row => row.Project == "beta"));
         Assert.True(header.IsDiagnostic);
-        Assert.Equal("beta · conductor idle · 0 active · 0 verified · last landed 2h", header.Title);
+        Assert.Equal("beta · conductor idle · 0 active · last landed 2h", header.Title);
         Assert.Equal("idle: beta", string.Concat(OwnerConsoleBoardSection.Footer(scene.Model).Select(segment => segment.Text)));
         Assert.DoesNotContain(scene.Model.Board, row => row.GoalId == "44444444-landed");
     }
@@ -498,7 +500,7 @@ public sealed class OwnerConsoleBoardSectionTests
         Assert.Equal(new[] { "alpha", "home", "beta" }, scene.Model.BoardScope.Sections);
         Assert.Equal(new[] { "alpha", "home", "beta" },
             scene.Model.Board.Where(row => row.IsDiagnostic).Select(row => row.Project));
-        Assert.Equal("alpha · conductor running · 2 active · 1 verified · last landed 2h", scene.Model.Board[0].Title);
+        Assert.Equal("alpha · conductor running · 2 active · 1 waiting for gate · last landed 2h", scene.Model.Board[0].Title);
         Assert.False(scene.Model.Board[0].Dimmed);
         Assert.Equal(goals, scene.Model.Board.Where(row => row.Project == "alpha" && !row.IsDiagnostic));
         Assert.All(scene.Model.Board.Where(row => row.Project == "alpha"), row => Assert.False(row.IsForeign));
