@@ -180,7 +180,7 @@ public sealed class CliCommandTestsPersistentRunnerCommandsStartupAndMetadata : 
                 Condition: GoalLifecycle.ActiveWithFailedTaskCondition)
         ];
 
-        var output = CaptureConsole(() => ConsoleViews.PrintGoals(summaries));
+        var output = CaptureConsole(() => GoalListTextView.Print(summaries));
 
         Xunit.Assert.Contains("01234567 Active: Build the widget", output);
         Xunit.Assert.Contains("fedcba98 Completed: Ship the gadget", output);

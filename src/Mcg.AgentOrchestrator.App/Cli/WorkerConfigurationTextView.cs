@@ -4,42 +4,8 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Cli;
 
-internal static partial class ConsoleViews
+internal static class WorkerConfigurationTextView
 {
-    public static void PrintGoals(AgentOrchestratorKernel kernel)
-    {
-        foreach (var goal in kernel.Goals.OrderByDescending(goal => goal.Timeline.FirstOrDefault()?.OccurredAt ?? DateTimeOffset.MinValue))
-        {
-            var condition = GoalLifecycle.HasActiveFailedTask(goal)
-                ? $" [{GoalLifecycle.ActiveWithFailedTaskCondition}]"
-                : string.Empty;
-            var priority = goal.Priority == GoalPriority.Normal ? string.Empty : $" [priority={GoalPriorities.Format(goal.Priority)}]";
-            Console.WriteLine($"{goal.Id.Value[..8]} {goal.Status}{condition}{priority}: {OutputTextPreview.CreateSummary(goal.Objective).Text}");
-        }
-    }
-
-    // Metadata-only listing: renders the same line as the kernel overload from GoalSummary rows
-    // (already ordered by the repository) without hydrating any goal snapshot.
-    public static void PrintGoals(IReadOnlyList<GoalSummary> goals)
-    {
-        foreach (var goal in goals)
-        {
-            var prefix = goal.Id.Length >= 8 ? goal.Id[..8] : goal.Id;
-            var condition = string.IsNullOrWhiteSpace(goal.Condition) ? string.Empty : $" [{goal.Condition}]";
-            Console.WriteLine($"{prefix} {goal.Status}{condition}: {OutputTextPreview.CreateSummary(goal.Objective).Text}");
-        }
-    }
-
-    public static void PrintCleanupDebtWarning(IReadOnlyList<GoalWorktreeCleanupDebt> debts)
-    {
-        var escalatedCount = debts.Count(debt => debt.EscalatedAtUtc is not null);
-        if (escalatedCount > 0)
-        {
-            Console.WriteLine(
-                $"WARNING: stale worktree cleanup escalated={escalatedCount} pending={debts.Count}; run cleanup-status.");
-        }
-    }
-
     public static void PrintModelFunctions(ModelFunctionCatalog catalog)
     {
         if (catalog.Bindings.Count == 0)
@@ -63,16 +29,6 @@ internal static partial class ConsoleViews
         {
             Console.WriteLine($"  {profile.Name}: {profile.CommandTemplate}");
         }
-    }
-
-    public static void PrintTenant(OrchestratorWorkspace workspace)
-    {
-        Console.WriteLine($"Tenant: {workspace.TenantName}");
-        Console.WriteLine($"Tenant scoped: {workspace.IsTenantScoped}");
-        Console.WriteLine($"State: {workspace.SqliteStatePath}");
-        Console.WriteLine($"Agents: {workspace.AgentCatalogPath}");
-        Console.WriteLine($"Workers: {workspace.WorkerProfilePath}");
-        Console.WriteLine($"Continuations: {workspace.ContinuationStorePath}");
     }
 
     public static void PrintWorkerProfileChecks(AgentCatalog agents, WorkerProfileCatalog catalog, string? name, Func<string, bool>? commandExists = null)
@@ -102,31 +58,6 @@ internal static partial class ConsoleViews
         }
     }
 
-    public static void PrintArchitecture(DistributedArchitectureReport report)
-    {
-        Console.WriteLine("Architecture:");
-        Console.WriteLine($"  tenant: {report.TenantName} scoped={report.TenantScoped}");
-        Console.WriteLine($"  state: {report.StatePath}");
-        Console.WriteLine($"  agents: {report.AgentCatalogPath}");
-        Console.WriteLine($"  workers: {report.WorkerProfilePath} ({report.UsableWorkerProfileCount}/{report.WorkerProfileCount} usable)");
-        Console.WriteLine($"  execution: {report.ExecutionDirectory}");
-        Console.WriteLine($"  continuations: {report.ContinuationStorePath}");
-        Console.WriteLine($"  providers: {report.ProviderCount}; agents: {report.AgentCount}");
-        Console.WriteLine($"  persistence: {report.Persistence}");
-        Console.WriteLine($"  subscriptions: {report.SubscriptionWorkers}");
-        Console.WriteLine("  state stores:");
-        foreach (var store in report.StateStores)
-        {
-            Console.WriteLine($"    - {store}");
-        }
-
-        Console.WriteLine("  safety gates:");
-        foreach (var gate in report.SafetyGates)
-        {
-            Console.WriteLine($"    - {gate}");
-        }
-    }
-
     public static void PrintAgents(IReadOnlyList<AgentDefinition> agents)
     {
         Console.WriteLine("Agents:");
@@ -152,5 +83,3 @@ internal static partial class ConsoleViews
         }
     }
 }
-
-

@@ -523,7 +523,7 @@ internal static partial class CliCommandHandlers
                 return false;
 
             case "tenant":
-                ConsoleViews.PrintTenant(context.Workspace);
+                WorkspaceConfigurationTextView.PrintTenant(context.Workspace);
                 return false;
 
             case "project":
@@ -556,7 +556,7 @@ internal static partial class CliCommandHandlers
                 return false;
 
             case "architecture":
-                ConsoleViews.PrintArchitecture(BuildCliArchitectureReport(context));
+                WorkspaceConfigurationTextView.PrintArchitecture(BuildCliArchitectureReport(context));
                 return false;
 
             case "provider-smoke":

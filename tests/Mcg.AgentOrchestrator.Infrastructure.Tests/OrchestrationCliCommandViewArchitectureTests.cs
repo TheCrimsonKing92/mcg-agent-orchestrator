@@ -35,7 +35,7 @@ public sealed class OrchestrationCliCommandViewArchitectureTests
         Assert.DoesNotContain(subjectTypes, type => OutermostTypeName(type) == ExemptRootType);
         Assert.All(subjectTypes, type => Assert.Equal(OrchestrationNamespace, type.Namespace.FullName));
         Assert.Contains(forbiddenTypes, type => type.FullName == typeof(RepoProcessCliCommand).FullName);
-        Assert.Contains(forbiddenTypes, type => type.FullName == typeof(ConsoleViews).FullName);
+        Assert.Contains(forbiddenTypes, type => type.FullName == typeof(GoalListTextView).FullName);
         Assert.Contains(forbiddenTypes, type => type.FullName == typeof(CliPersistentStateRunner).FullName);
         Assert.Contains(forbiddenTypes, type => type.FullName == typeof(CliExitException).FullName);
         Assert.Contains(forbiddenTypes, type => type.FullName == typeof(EpicProgressReadModel).FullName);

@@ -11,18 +11,18 @@ private static bool? TryExecuteWorkerCommand(string command, IReadOnlyList<strin
     switch (command)
     {
         case "worker-profiles":
-            ConsoleViews.PrintWorkerProfiles(context.WorkerProfiles);
+            WorkerConfigurationTextView.PrintWorkerProfiles(context.WorkerProfiles);
             return false;
 
         case "worker-profile":
             CliArgumentParser.RequirePartCount(parts, 3, "worker-profile <name> <command-template>");
             context.WorkerProfiles = context.WorkerProfiles.Upsert(new WorkerProfile(parts[1], parts[2]));
             WorkerProfileStore.Save(context.WorkerProfilePath, context.WorkerProfiles);
-            ConsoleViews.PrintWorkerProfiles(context.WorkerProfiles);
+            WorkerConfigurationTextView.PrintWorkerProfiles(context.WorkerProfiles);
             return false;
 
         case "worker-profile-check":
-            ConsoleViews.PrintWorkerProfileChecks(new AgentCatalog(context.Agents), context.WorkerProfiles, parts.Count > 1 ? parts[1] : null);
+            WorkerConfigurationTextView.PrintWorkerProfileChecks(new AgentCatalog(context.Agents), context.WorkerProfiles, parts.Count > 1 ? parts[1] : null);
             return false;
 
         case "worker-profile-export":
@@ -43,7 +43,7 @@ private static bool? TryExecuteWorkerCommand(string command, IReadOnlyList<strin
             };
             WorkerProfileStore.Save(context.WorkerProfilePath, context.WorkerProfiles);
             Console.WriteLine($"Worker profiles imported: {importedProfiles.Profiles.Count} ({mode.ToLowerInvariant()})");
-            ConsoleViews.PrintWorkerProfiles(context.WorkerProfiles);
+            WorkerConfigurationTextView.PrintWorkerProfiles(context.WorkerProfiles);
             return false;
 
         case "worker-dispatch":

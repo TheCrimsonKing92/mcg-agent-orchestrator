@@ -1,4 +1,3 @@
-using System.Reflection;
 using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
@@ -72,9 +71,6 @@ public sealed class GoalsPruneTextViewCharacterizationTests
         var source = File.ReadAllText(Path.Combine(cliRoot, "GoalsPruneTextView.cs"));
         Assert.Contains("internal static class GoalsPruneTextView", source);
         Assert.DoesNotMatch(@"\bpartial\s+class\b", source);
-        var methods = typeof(ConsoleViews).GetMethods(
-            BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.DeclaredOnly);
-        Assert.DoesNotContain(methods, method => method.Name == "PrintGoalsPrunePlan");
     }
 
     [Fact]
@@ -87,7 +83,7 @@ public sealed class GoalsPruneTextViewCharacterizationTests
         var measurements = SourceSizeRatchet.MeasureClasses(VerifiedRepositoryRoot.Find(),
             ["ConsoleViews"], out var violations);
         Assert.Empty(violations);
-        var measured = measurements["ConsoleViews"];
+        var measured = measurements.GetValueOrDefault("ConsoleViews");
         Assert.Equal(measured.TotalLines, ceiling.MaximumTotalLineCount);
         Assert.Equal(measured.PartialFiles, ceiling.MaximumPartialFileCount);
     }

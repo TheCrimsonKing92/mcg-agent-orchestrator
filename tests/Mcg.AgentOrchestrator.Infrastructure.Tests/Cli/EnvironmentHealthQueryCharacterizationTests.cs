@@ -1,4 +1,3 @@
-using System.Reflection;
 using System.Text.RegularExpressions;
 using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.Core;
@@ -16,7 +15,7 @@ public sealed class EnvironmentHealthQueryCharacterizationTests
         var output = AsyncLocalConsoleRouter.Capture(() =>
         {
             var exception = Assert.Throws<KeyNotFoundException>(() =>
-                ConsoleViews.PrintWorkerProfileChecks(new AgentCatalog([]), new WorkerProfileCatalog([]),
+                WorkerConfigurationTextView.PrintWorkerProfileChecks(new AgentCatalog([]), new WorkerProfileCatalog([]),
                     "nope", CommandExists));
             Assert.Equal("Worker profile 'nope' was not found.", exception.Message);
         });
@@ -185,11 +184,6 @@ public sealed class EnvironmentHealthQueryCharacterizationTests
         Assert.Contains("BuildSubscriptionRouteIssues", query);
         Assert.Contains("private static bool RequiresSubscriptionReasoningPlaceholder", query);
 
-        var oldMethods = typeof(ConsoleViews).GetMethods(
-            BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly);
-        foreach (var name in new[] { "BuildSubscriptionRouteIssues", "RequiresSubscriptionReasoningPlaceholder" })
-            Assert.DoesNotContain(oldMethods, method => method.Name == name);
-
         // Use the ratchet's declaration scan, excluding build outputs.
         var partials = Directory.EnumerateFiles(Path.Combine(root, "src"), "*.cs", SearchOption.AllDirectories)
             .Where(path => !Path.GetRelativePath(root, path).Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
@@ -204,7 +198,8 @@ public sealed class EnvironmentHealthQueryCharacterizationTests
             Assert.DoesNotMatch(@"\bstatic\s+\S+\s+(?:BuildSubscriptionRouteIssues|RequiresSubscriptionReasoningPlaceholder)\s*\(", text);
             Assert.DoesNotMatch(@"(?:=>|\breturn)\s*EnvironmentHealthQuery\.", text);
         }
-        Assert.Equal(2, partials.Sum(text => Regex.Matches(text, @"\bEnvironmentHealthQuery\.").Count));
+        var workerView = File.ReadAllText(Path.Combine(root, "src", "Mcg.AgentOrchestrator.App", "Cli", "WorkerConfigurationTextView.cs"));
+        Assert.Equal(2, Regex.Matches(workerView, @"\bEnvironmentHealthQuery\.").Count);
     }
 
     private static void AssertCheck(AgentCatalog agents, WorkerProfileCatalog profiles,
@@ -213,7 +208,7 @@ public sealed class EnvironmentHealthQueryCharacterizationTests
         Exception? exception = null;
         var output = AsyncLocalConsoleRouter.Capture(() =>
         {
-            exception = Record.Exception(() => ConsoleViews.PrintWorkerProfileChecks(agents, profiles, name, CommandExists));
+            exception = Record.Exception(() => WorkerConfigurationTextView.PrintWorkerProfileChecks(agents, profiles, name, CommandExists));
         });
         Assert.Equal(expectedOutput, output);
         if (expectedException is null)

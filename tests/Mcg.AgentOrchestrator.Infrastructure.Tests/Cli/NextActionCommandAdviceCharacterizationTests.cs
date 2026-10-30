@@ -1,4 +1,3 @@
-using System.Reflection;
 using System.Text.RegularExpressions;
 using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.CostControl;
@@ -160,12 +159,6 @@ public sealed class NextActionCommandAdviceCharacterizationTests
         Assert.Contains("internal static class NextActionCommandAdvice", advice);
         Assert.DoesNotMatch(@"\bpartial\s+class\b", advice);
 
-        var oldMethods = typeof(ConsoleViews).GetMethods(
-            BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly);
-        foreach (var name in new[] { "BuildSuggestedCommand", "BuildStageSuggestedCommand",
-                     "BuildRunAssignedTaskCommand", "ResolveAssignedAgent" })
-            Assert.DoesNotContain(oldMethods, method => method.Name == name);
-
         // Match the ratchet's declaration scan, including ConsoleViews.cs and excluding build outputs.
         var partials = Directory.EnumerateFiles(Path.Combine(root, "src"), "*.cs", SearchOption.AllDirectories)
             .Where(path => !Path.GetRelativePath(root, path).Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
@@ -174,7 +167,7 @@ public sealed class NextActionCommandAdviceCharacterizationTests
             .Select(File.ReadAllText)
             .Where(text => Regex.IsMatch(text, @"\bpartial\s+class\s+ConsoleViews\b", RegexOptions.CultureInvariant))
             .ToArray();
-        Assert.NotEmpty(partials);
+        Assert.Empty(partials);
         Assert.True(partials.Length <= 38);
         foreach (var text in partials)
         {

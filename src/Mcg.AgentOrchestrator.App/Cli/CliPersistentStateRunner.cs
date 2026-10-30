@@ -126,11 +126,11 @@ internal static partial class CliPersistentStateRunner
         if (IsMetadataOnlyListing(args))
         {
             var summaries = stateRepository.ListGoalMetadataAsync().GetAwaiter().GetResult();
-            ConsoleViews.PrintGoals(summaries);
+            GoalListTextView.Print(summaries);
             // Cleanup-debt reads use this command's owner: the injected context, else a configured one.
             var debtHooks = (acceptanceCleanupContext ?? WorktreeCleanupContext.Load(
                 attentionStoreDirectory: workspace.OrchestratorDirectory)).Hooks;
-            ConsoleViews.PrintCleanupDebtWarning(
+            GoalListTextView.PrintCleanupDebtWarning(
                 GoalWorktrees.ListCleanupDebt(workspace.ExecutionDirectory, debtHooks));
             return false;
         }

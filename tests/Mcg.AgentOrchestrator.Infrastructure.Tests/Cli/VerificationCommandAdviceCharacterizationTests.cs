@@ -1,4 +1,3 @@
-using System.Reflection;
 using System.Text.RegularExpressions;
 using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.Core;
@@ -90,16 +89,6 @@ public sealed class VerificationCommandAdviceCharacterizationTests
         var advice = File.ReadAllText(advicePath);
         Assert.Contains("internal static class VerificationCommandAdvice", advice);
         Assert.DoesNotMatch(@"\bpartial\s+class\b", advice);
-
-        // A forwarding member with a moved name/signature fails the same absence checks.
-        var oldMethods = typeof(ConsoleViews).GetMethods(
-            BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly);
-        foreach (var name in new[] { "BuildVerificationSuggestedCommand", "BuildHumanInputSuggestedCommand",
-                     "BuildAcceptanceSuggestedCommand" })
-            Assert.DoesNotContain(oldMethods, method => method.Name == name);
-        Assert.DoesNotContain(oldMethods, method => method.Name == "BuildStageSuggestedCommand" &&
-            method.GetParameters()[0].ParameterType == typeof(int));
-        Assert.DoesNotContain(oldMethods, method => method.Name == "BuildStageSuggestedCommand");
 
         foreach (var path in Directory.EnumerateFiles(cliRoot, "*.cs"))
         {

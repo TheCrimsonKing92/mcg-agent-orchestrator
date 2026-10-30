@@ -88,7 +88,7 @@ public sealed class CliGoalsEpicReadOnlyRouteTests : CliTaskQueryTestSupport, ID
             .ListGoalMetadataAsync().GetAwaiter().GetResult()
             .Where(goal => MemberIds.Contains(goal.Id)).ToArray();
         Assert.Equal(2, members.Length);
-        var expected = CaptureConsole(() => ConsoleViews.PrintGoals(members));
+        var expected = CaptureConsole(() => GoalListTextView.Print(members));
         Assert.NotEmpty(expected);
 
         string[][] forms = [["goals", "--epic", "Board"], ["goals", "--epic=Board"]];

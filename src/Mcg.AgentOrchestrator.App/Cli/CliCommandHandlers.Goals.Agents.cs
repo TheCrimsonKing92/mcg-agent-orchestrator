@@ -44,7 +44,7 @@ private static void AddModelFunctionBinding(CliExecutionContext context, IReadOn
 
     var catalog = new ModelFunctionCatalog(bindings);
     ModelFunctionCatalogStore.Save(path, catalog);
-    ConsoleViews.PrintModelFunctions(catalog);
+    WorkerConfigurationTextView.PrintModelFunctions(catalog);
 }
 
 private static AgentDefinition CreateCliAgentDefinition(IReadOnlyList<string> parts)
