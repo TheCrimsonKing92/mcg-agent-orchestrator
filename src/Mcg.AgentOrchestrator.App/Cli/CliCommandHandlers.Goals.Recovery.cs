@@ -122,7 +122,7 @@ private static bool HandleRecover(CliExecutionContext context, IReadOnlyList<str
 
             if (outcome.AutoRequeueDisposition is { ShouldRequeue: true })
             {
-                Console.WriteLine($"recover: reset task {ConsoleViews.GetTaskDisplayNumber(goal, refreshedTask.Id)} to dispatchable.");
+                Console.WriteLine($"recover: reset task {TaskDisplayNumber.Resolve(goal, refreshedTask.Id)} to dispatchable.");
                 alreadyReset.Add(refreshedTask.Id);
                 actions++;
             }
@@ -136,7 +136,7 @@ private static bool HandleRecover(CliExecutionContext context, IReadOnlyList<str
                     note,
                     invalidateDownstream: !HasRunningDownstreamTask(goal, refreshedTask),
                     retryCause: RetryCause.EnvironmentApparatusFailure);
-                Console.WriteLine($"recover: reset task {ConsoleViews.GetTaskDisplayNumber(goal, refreshedTask.Id)} to dispatchable.");
+                Console.WriteLine($"recover: reset task {TaskDisplayNumber.Resolve(goal, refreshedTask.Id)} to dispatchable.");
                 alreadyReset.Add(refreshedTask.Id);
                 actions++;
             }
@@ -159,7 +159,7 @@ private static bool HandleRecover(CliExecutionContext context, IReadOnlyList<str
                 task.Id,
                 note,
                 RetryCause.EnvironmentApparatusFailure);
-            Console.WriteLine($"recover: requeued interrupted task {ConsoleViews.GetTaskDisplayNumber(goal, task.Id)} to dispatchable.");
+            Console.WriteLine($"recover: requeued interrupted task {TaskDisplayNumber.Resolve(goal, task.Id)} to dispatchable.");
             alreadyReset.Add(task.Id);
             actions++;
             continue;
@@ -178,7 +178,7 @@ private static bool HandleRecover(CliExecutionContext context, IReadOnlyList<str
             retryCause: RetryCause.EnvironmentApparatusFailure,
             invalidateDownstream: !HasRunningDownstreamTask(goal, task),
             retryRoundKind: null);
-        Console.WriteLine($"recover: reset task {ConsoleViews.GetTaskDisplayNumber(goal, task.Id)} to dispatchable.");
+        Console.WriteLine($"recover: reset task {TaskDisplayNumber.Resolve(goal, task.Id)} to dispatchable.");
         alreadyReset.Add(task.Id);
         actions++;
     }
@@ -216,7 +216,7 @@ private static bool HandleRecover(CliExecutionContext context, IReadOnlyList<str
             $"recover: re-derived lifecycle state for {task.RequiredRole} task {task.Id.Value[..8]} (Assigned, dispatchable, earlier stages Completed); {note}",
             invalidateDownstream: !HasRunningDownstreamTask(goal, task),
             retryCause: RetryCause.EnvironmentApparatusFailure);
-        Console.WriteLine($"recover: task {ConsoleViews.GetTaskDisplayNumber(goal, task.Id)} {task.RequiredRole} is assigned and dispatchable but has no dispatch record; lifecycle/task desync detected, lifecycle state re-derived. Re-run 'conduct {goal.Id.Value[..8]}' or restart the conductor loop to unblock.");
+        Console.WriteLine($"recover: task {TaskDisplayNumber.Resolve(goal, task.Id)} {task.RequiredRole} is assigned and dispatchable but has no dispatch record; lifecycle/task desync detected, lifecycle state re-derived. Re-run 'conduct {goal.Id.Value[..8]}' or restart the conductor loop to unblock.");
         actions++;
     }
 
@@ -254,7 +254,7 @@ private static void PrintRecoverDispatchRecovery(TaskSpec task, Goal goal, Dispa
         ? string.Empty
         : $" blocker='{decision.Blocker}'";
     Console.WriteLine(
-        $"recover: task {ConsoleViews.GetTaskDisplayNumber(goal, task.Id)} recovery action='{decision.ActionName}' evidence='{decision.EvidencePath}' reason='{decision.Reason}'{blocker}.");
+        $"recover: task {TaskDisplayNumber.Resolve(goal, task.Id)} recovery action='{decision.ActionName}' evidence='{decision.EvidencePath}' reason='{decision.Reason}'{blocker}.");
 }
 
 private static bool HasRunningDownstreamTask(Goal goal, TaskSpec task) =>
@@ -323,7 +323,7 @@ private static void AutoVerifyFromGitEvidence(CliExecutionContext context, Goal 
             goal.Id,
             task.Id,
             ManualVerificationRecorder.Create(true, note, worktree, DateTimeOffset.UtcNow));
-        Console.WriteLine($"Auto-verified task {ConsoleViews.GetTaskDisplayNumber(goal, task.Id)} from git ground truth.");
+        Console.WriteLine($"Auto-verified task {TaskDisplayNumber.Resolve(goal, task.Id)} from git ground truth.");
     }
 }
 

@@ -19,7 +19,7 @@ public static void PrintProcessBatchResult(Goal goal, ProcessBatchExecutionResul
         var status = process?.IsRunning is true
             ? $"running pid={process.ProcessId}"
             : $"exit={process?.ExitCode?.ToString() ?? "n/a"}";
-        Console.WriteLine($"  Task {GetTaskDisplayNumber(goal, task.Id)} {status}");
+        Console.WriteLine($"  Task {TaskDisplayNumber.Resolve(goal, task.Id)} {status}");
     }
 
     if (result.StartFailures is { Count: > 0 })
@@ -27,7 +27,7 @@ public static void PrintProcessBatchResult(Goal goal, ProcessBatchExecutionResul
         Console.WriteLine("Start failures:");
         foreach (var failure in result.StartFailures)
         {
-            Console.WriteLine($"  Task {GetTaskDisplayNumber(goal, failure.TaskId)}: {OutputTextPreview.CreateTimeline(failure.Reason).Text}");
+            Console.WriteLine($"  Task {TaskDisplayNumber.Resolve(goal, failure.TaskId)}: {OutputTextPreview.CreateTimeline(failure.Reason).Text}");
         }
     }
 
@@ -39,7 +39,7 @@ public static void PrintProcessBatchResult(Goal goal, ProcessBatchExecutionResul
         Console.WriteLine("Skipped:");
         foreach (var item in skipped)
         {
-            Console.WriteLine($"  Task {GetTaskDisplayNumber(goal, item.TaskId)}: {OutputTextPreview.CreateTimeline(item.Reason).Text}");
+            Console.WriteLine($"  Task {TaskDisplayNumber.Resolve(goal, item.TaskId)}: {OutputTextPreview.CreateTimeline(item.Reason).Text}");
         }
     }
 
@@ -51,7 +51,7 @@ public static void PrintSubscriptionStartResult(Goal goal, SubscriptionStartResu
     Console.WriteLine();
     foreach (var dispatchResult in result.Dispatches)
     {
-        Console.WriteLine($"Task {GetTaskDisplayNumber(goal, dispatchResult.Task.Id)} profile {dispatchResult.Task.LastDispatch?.WorkerName}: {dispatchResult.PromptPath}");
+        Console.WriteLine($"Task {TaskDisplayNumber.Resolve(goal, dispatchResult.Task.Id)} profile {dispatchResult.Task.LastDispatch?.WorkerName}: {dispatchResult.PromptPath}");
     }
 
     Console.WriteLine($"Subscription dispatches created: {result.Dispatches.Count}");
@@ -61,7 +61,7 @@ public static void PrintSubscriptionStartResult(Goal goal, SubscriptionStartResu
         foreach (var decision in result.ParallelPlan.Decisions)
         {
             var task = goal.Tasks.FirstOrDefault(candidate => candidate.Id.Value.Equals(decision.IntentId, StringComparison.OrdinalIgnoreCase));
-            var taskLabel = task is null ? decision.IntentId : GetTaskDisplayNumber(goal, task.Id).ToString();
+            var taskLabel = task is null ? decision.IntentId : TaskDisplayNumber.Resolve(goal, task.Id).ToString();
             var batch = decision.BatchNumber is null ? "n/a" : decision.BatchNumber.Value.ToString();
             Console.WriteLine($"  Task {taskLabel}: {decision.Disposition} batch={batch} - {OutputTextPreview.CreateTimeline(string.Join("; ", decision.Reasons)).Text}");
         }

@@ -556,7 +556,7 @@ private static bool? TryExecuteTaskCommand(string command, IReadOnlyList<string>
 
         case "verifications":
             var verificationsTarget = ResolveCommandTaskTarget(parts, context, "verifications <task-number>|<goal-prefix> <task-number>|--goal <goal-prefix> <task-number>");
-            ConsoleViews.PrintVerificationHistory(verificationsTarget.Task);
+            VerificationHistoryTextView.Print(verificationsTarget.Task);
             return false;
 
         case "progress":

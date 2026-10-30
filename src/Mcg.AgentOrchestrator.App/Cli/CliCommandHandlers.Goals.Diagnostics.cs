@@ -48,7 +48,7 @@ private static void PrintBoundedGoalDiagnostics(CliExecutionContext context)
         foreach (var dispatch in dispatches)
         {
             var task = goal.Tasks.First(candidate => candidate.Id == dispatch.TaskId);
-            Console.WriteLine($"  Task {ConsoleViews.GetTaskDisplayNumber(goal, task.Id)} {dispatch.Role} status={dispatch.TaskStatus} state={dispatch.State} command='{dispatch.NextSafeCommand}' reason='{OutputTextPreview.CreateTimeline(dispatch.Reason).Text}'");
+            Console.WriteLine($"  Task {TaskDisplayNumber.Resolve(goal, task.Id)} {dispatch.Role} status={dispatch.TaskStatus} state={dispatch.State} command='{dispatch.NextSafeCommand}' reason='{OutputTextPreview.CreateTimeline(dispatch.Reason).Text}'");
             if (dispatch.DispatchState is { } dispatchState)
             {
                 ConsoleViews.PrintDispatchState(dispatchState, "    ");
@@ -112,7 +112,7 @@ private static void PrintNextFullDetail(CliExecutionContext context, AutonomyPol
     ModelOutcomeBoundModels.Print(context.Kernel.BuildModelOutcomeScorecard(), context.Workspace);
     LoopHealthReportTextView.Print(context.Kernel.BuildLoopHealthReport(null));
     FailureTriageTextView.PrintFailureTriageReport(FailureTriagePlanner.Build(context.Kernel, goal, context.Agents, context.Workspace.ExecutionDirectory, context.Workspace.IntegrationBranch, policy));
-    ConsoleViews.PrintGoalRecoveryReport(GoalRecoveryPlanner.Build(
+    GoalRecoveryReportTextView.Print(GoalRecoveryPlanner.Build(
         context.Kernel, goal, context.Workspace.ExecutionDirectory, context.Workspace.IntegrationBranch, cleanupHooks: context.CleanupContext.Hooks, targetHome: context.TargetHome));
     GoalSupervisorTextView.PrintGoalSupervisorPlan(GoalSupervisor.Build(context.Kernel, goal, context.Agents, context.Workspace.ExecutionDirectory, context.Workspace.IntegrationBranch, policy));
     OperatorInboxTextView.PrintOperatorInbox(OperatorInbox.Build(context.Kernel, context.Agents, context.WorkerProfiles, context.Workspace, goal.Id.Value[..8], includeAcknowledged: false));

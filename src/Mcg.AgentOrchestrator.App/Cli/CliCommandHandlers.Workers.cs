@@ -126,7 +126,7 @@ private static bool? TryExecuteWorkerCommand(string command, IReadOnlyList<strin
                 catch (InvalidOperationException profileEx)
                 {
                     throw new InvalidOperationException(
-                        $"Goal '{context.CurrentGoal.Id.Value[..8]}' task {ConsoleViews.GetTaskDisplayNumber(context.CurrentGoal, profileTask.Id)}: {profileEx.Message}", profileEx);
+                        $"Goal '{context.CurrentGoal.Id.Value[..8]}' task {TaskDisplayNumber.Resolve(context.CurrentGoal, profileTask.Id)}: {profileEx.Message}", profileEx);
                 }
             }
 
@@ -149,7 +149,7 @@ private static bool? TryExecuteWorkerCommand(string command, IReadOnlyList<strin
                 var dispatched = new GoalDispatchOperations().ProfileDispatchReadyTasks(context.Kernel, context.Workspace, context.CurrentGoal, readyProfile, context.Agents, context.Providers);
                 foreach (var dispatchResult in dispatched)
                 {
-                    Console.WriteLine($"Task {ConsoleViews.GetTaskDisplayNumber(context.CurrentGoal, dispatchResult.Task.Id)} prompt: {dispatchResult.PromptPath}");
+                    Console.WriteLine($"Task {TaskDisplayNumber.Resolve(context.CurrentGoal, dispatchResult.Task.Id)} prompt: {dispatchResult.PromptPath}");
                 }
 
                 Console.WriteLine($"Profile dispatches created: {dispatched.Count}");
@@ -194,7 +194,7 @@ private static bool? TryExecuteWorkerCommand(string command, IReadOnlyList<strin
             catch (InvalidOperationException subscriptionEx)
             {
                 throw new InvalidOperationException(
-                    $"Goal '{context.CurrentGoal!.Id.Value[..8]}' task {ConsoleViews.GetTaskDisplayNumber(context.CurrentGoal!, subscriptionTask.Id)}: {subscriptionEx.Message}", subscriptionEx);
+                    $"Goal '{context.CurrentGoal!.Id.Value[..8]}' task {TaskDisplayNumber.Resolve(context.CurrentGoal!, subscriptionTask.Id)}: {subscriptionEx.Message}", subscriptionEx);
             }
 
         case "subscription-dispatch-ready":
@@ -204,7 +204,7 @@ private static bool? TryExecuteWorkerCommand(string command, IReadOnlyList<strin
             ReadyBlockedDiagnosticsEmitter.Emit(subscriptionDispatches.Blocked);
             foreach (var dispatchResult in subscriptionDispatches.Dispatches)
             {
-                Console.WriteLine($"Task {ConsoleViews.GetTaskDisplayNumber(context.CurrentGoal, dispatchResult.Task.Id)} profile {dispatchResult.Task.LastDispatch?.WorkerName}: {dispatchResult.PromptPath}");
+                Console.WriteLine($"Task {TaskDisplayNumber.Resolve(context.CurrentGoal, dispatchResult.Task.Id)} profile {dispatchResult.Task.LastDispatch?.WorkerName}: {dispatchResult.PromptPath}");
             }
 
             Console.WriteLine($"Subscription dispatches created: {subscriptionDispatches.Dispatches.Count}");

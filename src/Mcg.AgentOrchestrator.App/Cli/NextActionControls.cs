@@ -17,7 +17,7 @@ public static class NextActionControls
         IReadOnlyList<AgentConfigurationValidation>? agents = null,
         IReadOnlyList<AgentDefinition>? agentDefinitions = null)
     {
-        int? taskNumber = item.TaskId is null ? null : GetTaskDisplayNumber(goal, item.TaskId);
+        int? taskNumber = item.TaskId is null ? null : TaskDisplayNumber.Resolve(goal, item.TaskId);
 
         return item.Kind switch
         {
@@ -41,11 +41,6 @@ public static class NextActionControls
                 new NextActionControl(),
             _ => null
         };
-    }
-
-    private static int GetTaskDisplayNumber(Goal goal, TaskId taskId)
-    {
-        return TaskDisplayNumber.Resolve(goal, taskId);
     }
 
     public static bool CanRunApiExplicitly(

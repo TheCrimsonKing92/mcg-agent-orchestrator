@@ -3,9 +3,9 @@ using Mcg.AgentOrchestrator.App.Rendering;
 
 namespace Mcg.AgentOrchestrator.App.Cli;
 
-internal static partial class ConsoleViews
+internal static class AcceptanceEvidenceBundleTextView
 {
-public static void PrintAcceptanceEvidenceBundle(GoalAcceptanceEvidenceBundle bundle)
+public static void Print(GoalAcceptanceEvidenceBundle bundle)
 {
     Console.WriteLine();
     Console.WriteLine($"Acceptance evidence bundle: {(bundle.Passed ? "passed" : "blocked")}");

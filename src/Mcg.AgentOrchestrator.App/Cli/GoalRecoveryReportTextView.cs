@@ -3,9 +3,9 @@ using Mcg.AgentOrchestrator.App.Rendering;
 
 namespace Mcg.AgentOrchestrator.App.Cli;
 
-internal static partial class ConsoleViews
+internal static class GoalRecoveryReportTextView
 {
-public static void PrintGoalRecoveryReport(GoalRecoveryReport report)
+public static void Print(GoalRecoveryReport report)
 {
     Console.WriteLine();
     Console.WriteLine($"Goal recovery {report.GoalId.Value[..8]} {report.Status}: {OutputTextPreview.CreateSummary(report.Objective).Text}");

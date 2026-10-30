@@ -4,9 +4,9 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Cli;
 
-internal static partial class ConsoleViews
+internal static class VerificationHistoryTextView
 {
-public static void PrintVerificationHistory(TaskSpec task)
+public static void Print(TaskSpec task)
 {
     if (task.VerificationHistory.Count == 0)
     {
@@ -33,10 +33,6 @@ public static void PrintVerificationHistory(TaskSpec task)
     }
 }
 
-public static int GetTaskDisplayNumber(Goal goal, TaskId taskId)
-{
-    return TaskDisplayNumber.Resolve(goal, taskId);
-}
 }
 
 

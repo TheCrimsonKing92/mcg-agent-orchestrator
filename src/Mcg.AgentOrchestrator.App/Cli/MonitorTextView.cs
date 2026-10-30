@@ -1,7 +1,6 @@
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.App.Rendering;
 using Mcg.AgentOrchestrator.Infrastructure;
-using static Mcg.AgentOrchestrator.App.Cli.ConsoleViews;
 
 namespace Mcg.AgentOrchestrator.App.Cli;
 
@@ -63,7 +62,7 @@ public static void PrintAcceptanceSummary(Goal goal, GoalAcceptanceSummary summa
         Console.WriteLine("Blockers:");
         foreach (var blocker in summary.Blockers)
         {
-            int? taskNumber = blocker.TaskId is null ? null : GetTaskDisplayNumber(goal, blocker.TaskId);
+            int? taskNumber = blocker.TaskId is null ? null : TaskDisplayNumber.Resolve(goal, blocker.TaskId);
             var scope = taskNumber is null ? "goal" : $"task {taskNumber}";
             Console.WriteLine($"  {blocker.Kind} ({scope}): {OutputTextPreview.CreateTimeline(blocker.Message).Text}");
             Console.WriteLine($"     action: {OutputTextPreview.CreateTimeline(blocker.SuggestedAction).Text}");

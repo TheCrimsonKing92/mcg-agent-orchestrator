@@ -415,7 +415,7 @@ internal static bool RunAcceptanceWorkspaceMergeCore(CliExecutionContext context
         verification,
         skipVerify,
         context.Workspace.ExecutionDirectory);
-    ConsoleViews.PrintAcceptanceEvidenceBundle(evidence);
+    AcceptanceEvidenceBundleTextView.Print(evidence);
 
     if (!evidence.Passed)
     {
