@@ -3,7 +3,7 @@ using Mcg.AgentOrchestrator.App.Orchestration;
 
 namespace Mcg.AgentOrchestrator.App.Cli;
 
-internal static partial class ConsoleViews
+internal static class GoalScopeCollisionReportTextView
 {
     private static readonly JsonSerializerOptions GoalScopeCollisionJsonOptions = new()
     {
@@ -11,7 +11,7 @@ internal static partial class ConsoleViews
         WriteIndented = false
     };
 
-    public static void PrintGoalScopeCollisionReport(
+    public static void Print(
         GoalScopeCollisionReport report,
         string? intakeItemId = null,
         string? heading = null)

@@ -2,9 +2,9 @@ using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.App.Cli;
 
-internal static partial class ConsoleViews
+internal static class ProvenanceReportTextView
 {
-    public static void PrintProvenanceReport(ProvenanceReportSnapshot snapshot)
+    public static void Print(ProvenanceReportSnapshot snapshot)
     {
         Console.WriteLine();
         Console.WriteLine($"Provenance audit ({snapshot.CompletedGoalCount} completed goal(s)):");

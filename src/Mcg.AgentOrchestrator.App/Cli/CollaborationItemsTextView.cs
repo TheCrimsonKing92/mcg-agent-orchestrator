@@ -2,19 +2,14 @@ using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.App.Cli;
 
-internal static partial class ConsoleViews
+internal static class CollaborationItemsTextView
 {
-    public static void PrintHumanWaits(
-        IReadOnlyList<HumanInputRequest> requests, DateTimeOffset now,
-        bool includeHistory = false, IReadOnlyCollection<Goal>? goals = null) =>
-        HumanWaitsTextView.Print(requests, now, includeHistory, goals);
-
     public static void PrintAttentionQueue(IReadOnlyList<CollaborationItem> items)
     {
-        PrintCollaborationItems(items, includeHistory: false);
+        Print(items, includeHistory: false);
     }
 
-    public static void PrintCollaborationItems(
+    public static void Print(
         IReadOnlyList<CollaborationItem> items,
         bool includeHistory,
         Func<CollaborationItem, string?>? itemId = null)
