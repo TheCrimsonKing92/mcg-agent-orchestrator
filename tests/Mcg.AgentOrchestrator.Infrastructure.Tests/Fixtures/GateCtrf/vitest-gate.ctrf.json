@@ -1,0 +1,16 @@
+{
+  "reportFormat": "CTRF",
+  "results": {
+    "tool": { "name": "vitest" },
+    "tests": [
+      { "testId": "src/game/engine.test.ts::engine > starts", "name": "starts", "status": "passed", "suite": ["src/game/engine.test.ts", "engine"] },
+      { "testId": "src/game/engine.test.ts::engine > moves", "name": "moves", "status": "passed", "suite": ["src/game/engine.test.ts", "engine"] },
+      { "testId": "src/game/engine.test.ts::engine > stops", "name": "stops", "status": "passed", "suite": ["src/game/engine.test.ts", "engine"] },
+      { "testId": "src/ui/a.test.ts::suite > does a thing", "name": "does a thing", "status": "passed", "suite": ["src/ui/a.test.ts", "suite"] },
+      { "testId": "src/game/broken.test.ts::suite > works", "name": "works", "status": "passed" },
+      { "testId": "src/game/broken.test.ts::suite > breaks", "name": "breaks", "status": "failed" },
+      { "testId": "src/game/skipped.test.ts::suite > skips", "name": "skips", "status": "skipped" },
+      { "testId": "src/game/skipped.test.ts::suite > waits", "name": "waits", "status": "pending" }
+    ]
+  }
+}
