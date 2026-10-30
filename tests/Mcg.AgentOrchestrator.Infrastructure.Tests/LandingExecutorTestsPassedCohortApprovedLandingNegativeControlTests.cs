@@ -2,6 +2,7 @@ using System.Text.Json;
 using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
 using static Mcg.AgentOrchestrator.Infrastructure.Tests.LandingExecutorTestsDenylistOwnerHold;
 using static Mcg.AgentOrchestrator.Infrastructure.Tests.LandingExecutorTestsLandingDenylist;
@@ -21,6 +22,14 @@ public sealed class LandingExecutorTestsPassedCohortApprovedLandingNegativeContr
         if (protectedButApproved)
             Approve(scenario.Workspace, scenario.Goals[1], scenario.CandidateRevisions[1]);
         Assert.Empty(decisions.GetAttentionQueueAsync().GetAwaiter().GetResult());
+
+        // The receipt must be selectable by production admission, including its resource rules.
+        var candidates = scenario.Goals.Select(goal => new ConductorSpeculativeAcceptanceCandidate(
+            goal.Id, scenario.Driver.ProjectGroupedAdmissionCandidate(
+                goal, ConductorAutonomyPolicy.Permissive, scenario.Kernel))).ToArray();
+        var selection = Assert.Single(scenario.Driver.FindLandablePassedCohortSelections(candidates));
+        Assert.Equal(scenario.Receipt.Identity.Value,
+            scenario.Driver.ReadCurrentPassedCohortReceipt(selection)!.Identity.Value);
 
         var progress = scenario.Tick(events: new ConductEventLogWriter(scenario.Workspace.ConductEventsLogPath));
 

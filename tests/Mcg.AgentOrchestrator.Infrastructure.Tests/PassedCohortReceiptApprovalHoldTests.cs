@@ -172,7 +172,7 @@ public sealed class PassedCohortReceiptApprovalHoldTests : AcceptanceCohortWorkf
             CandidateRevisions =
             [
                 CreateWorktreeCandidate(Repo, Goals[0].Id,
-                    protectedMemberIndex == 0 ? Protected : "tests/ApprovalFirst.cs", "protected"),
+                    protectedMemberIndex == 0 ? Protected : "src/Mcg.AgentOrchestrator.Infrastructure/ApprovalFirst.cs", "protected"),
                 CreateWorktreeCandidate(Repo, Goals[1].Id,
                     protectedMemberIndex == 1 ? Protected : "tests/ApprovalPartner.cs", "ordinary")
             ];
