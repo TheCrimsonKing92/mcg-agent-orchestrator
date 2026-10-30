@@ -120,23 +120,17 @@ internal static class CrosswalkFocusedEvidence
     }
 
     internal static string[] ExpandSelectors(IReadOnlyList<string> selectors, IReadOnlyList<string> discoveredIds)
-    {
-        var normalized = selectors.Select(NormalizeSelector).ToHashSet(StringComparer.Ordinal);
-        // Preserve discovery order and execute the union once. Invocation and batching belong to the gate.
-        return discoveredIds.Where(id => normalized.Contains(NormalizeSelector(id)) ||
-                normalized.Contains(FileSelector(id)))
-            .Distinct(StringComparer.Ordinal).ToArray();
-    }
+        => CrosswalkSelectorResolution.Resolve(selectors, discoveredIds).Selected;
 
     internal static SelectionGrade Grade(IEnumerable<TestResult> records, string selection)
     {
-        var selector = NormalizeSelector(selection);
+        var materialized = records.ToArray();
+        var selected = CrosswalkSelectorResolution.Resolve([selection], materialized.Select(record => record.Id).ToArray())
+            .Selected.ToHashSet(StringComparer.Ordinal);
         var passed = false;
-        foreach (var record in records)
+        foreach (var record in materialized)
         {
-            if (!string.Equals(selector, NormalizeSelector(record.Id), StringComparison.Ordinal) &&
-                !string.Equals(selector, FileSelector(record.Id), StringComparison.Ordinal))
-                continue;
+            if (!selected.Contains(record.Id)) continue;
             if (record.Status is TestResultStatus.Failed or TestResultStatus.Error)
                 return SelectionGrade.Failed;
             passed |= record.Status == TestResultStatus.Passed;
@@ -157,14 +151,14 @@ internal static class CrosswalkFocusedEvidence
             .Distinct().ToArray();
     }
 
-    private static string FileSelector(string id)
+    internal static string FileSelector(string id)
     {
         var normalized = NormalizeSelector(id);
         var separator = normalized.IndexOf("::", StringComparison.Ordinal);
         return separator < 0 ? normalized : normalized[..separator];
     }
 
-    private static string NormalizeSelector(string selector)
+    internal static string NormalizeSelector(string selector)
     {
         var trimmed = selector.Trim();
         var separator = trimmed.IndexOf("::", StringComparison.Ordinal);

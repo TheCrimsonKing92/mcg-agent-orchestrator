@@ -42,6 +42,7 @@ internal sealed class CrosswalkAcceptanceCheck(
         var diagnostics = new List<CrosswalkInvocationDiagnostic>();
         var stderr = new List<string>();
         var selected = Array.Empty<string>();
+        var refusals = Array.Empty<string>();
         IReadOnlyList<TestResult> records = [];
         string[] paths = [];
         Mcg.AgentOrchestrator.Core.AcceptanceCohortCheckEvidence? cohortEvidence = null;
@@ -78,15 +79,23 @@ internal sealed class CrosswalkAcceptanceCheck(
             if (diagnostics.Count > 0 || Expired()) return Finish();
             var ids = list.Result.Select(test => test.Id).ToArray();
             discovered = ids.Length;
-            if (ids.Length == 0)
+            var focusedSelection = CrosswalkFocusedEvidence.IsEvidenceCheck(check) && check.Arguments.Count > 0;
+            if (ids.Length == 0 && !focusedSelection)
                 diagnostics.Add(new(CrosswalkDiagnosticCategory.EmptyDiscovery, "Crosswalk discovered no tests."));
             else if (ids.Any(string.IsNullOrWhiteSpace) || ids.Distinct(StringComparer.Ordinal).Count() != ids.Length)
                 diagnostics.Add(new(CrosswalkDiagnosticCategory.MalformedResults, "Discovery IDs must be nonblank and unique."));
             if (diagnostics.Count > 0) return Finish();
 
-            selected = CrosswalkFocusedEvidence.IsEvidenceCheck(check)
-                ? CrosswalkFocusedEvidence.ExpandSelectors(check.Arguments, ids)
-                : check.Arguments.Count == 0 ? ids : check.Arguments.ToArray();
+            if (focusedSelection)
+            {
+                var resolution = CrosswalkSelectorResolution.Resolve(check.Arguments, ids);
+                selected = resolution.Selected;
+                refusals = resolution.Refused.Select(selector => CrosswalkSelectorResolution.RefusalDetail(selector, resolution.DiscoveredFiles)).ToArray();
+                diagnostics.AddRange(refusals.Select(detail => new CrosswalkInvocationDiagnostic(CrosswalkDiagnosticCategory.InvalidSelection, detail)));
+                if (selected.Length == 0) return Finish();
+            }
+            else
+                selected = check.Arguments.Count == 0 ? ids : check.Arguments.ToArray();
             var known = ids.ToHashSet(StringComparer.Ordinal);
             if (selected.Length == 0 || selected.Any(string.IsNullOrWhiteSpace) || selected.Distinct(StringComparer.Ordinal).Count() != selected.Length ||
                 selected.Any(id => !known.Contains(id)))
@@ -182,7 +191,8 @@ internal sealed class CrosswalkAcceptanceCheck(
                 passed ? null : string.Join("; ", diagnostics.Select(d => $"{d.Category}: {d.Detail}")),
                 ArtifactsPath: paths.FirstOrDefault() is { } path ? Path.GetDirectoryName(path) : null,
                 DurationMilliseconds: (long)timeProvider.GetElapsedTime(started).TotalMilliseconds,
-                ResultSummary: $"crosswalk: selected={selected.Length} results={records.Count}", Advisory: check.Advisory,
+                ResultSummary: $"crosswalk: selected={selected.Length} results={records.Count}" +
+                    (refusals.Length == 0 ? "" : "; " + string.Join("; ", refusals)), Advisory: check.Advisory,
                 TestResultAttemptId: owner.RunId, TestResultRunOrdinal: invocation.Ordinal,
                 FailureClassification: passed ? null : $"crosswalk-{diagnostics.FirstOrDefault()?.Category}",
                 FailingTestIdentities: records.Where(r => r.Status is TestResultStatus.Failed or TestResultStatus.Error).Select(r => r.Id).ToArray(),
