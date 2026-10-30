@@ -7,6 +7,8 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal static class ProspectiveEvidenceGateResolver
 {
+    private static readonly JsonSerializerOptions CheckJsonOptions = new(JsonSerializerDefaults.Web);
+
     internal static ProspectiveEvidenceGateResolution Resolve(
         AgentOrchestratorKernel kernel,
         Goal goal,
@@ -112,6 +114,7 @@ internal static class ProspectiveEvidenceGateResolver
     {
         if (string.IsNullOrWhiteSpace(candidateSha)) return [];
         var attempts = new List<GateAttempt>();
+        var manifests = new Dictionary<string, IReadOnlyList<GoalAcceptanceVerifier.AcceptanceManifestCheck>>(StringComparer.OrdinalIgnoreCase);
         try
         {
             var directory = Path.Combine(orchestratorDirectory, "acceptance-gate-attempts", goalId.Value);
@@ -156,7 +159,8 @@ internal static class ProspectiveEvidenceGateResolver
                         results = [];
                     }
                     attempts.Add(new(id, completedAt, paths, results,
-                        root.TryGetProperty("briefVersion", out var brief) && brief.TryGetInt32(out var version) ? version : null));
+                        root.TryGetProperty("briefVersion", out var brief) && brief.TryGetInt32(out var version) ? version : null,
+                        ReadCheckOutcomes(root, metadataPath, orchestratorDirectory, manifests)));
                 }
                 catch (Exception)
                 {
@@ -173,12 +177,80 @@ internal static class ProspectiveEvidenceGateResolver
             .ThenBy(attempt => attempt.Id, StringComparer.Ordinal).ToArray();
     }
 
+    private static GateCheckOutcomes? ReadCheckOutcomes(
+        JsonElement metadata, string metadataPath, string orchestratorDirectory,
+        Dictionary<string, IReadOnlyList<GoalAcceptanceVerifier.AcceptanceManifestCheck>> manifests)
+    {
+        IReadOnlyList<GoalAcceptanceVerifier.AcceptanceManifestCheck> declared;
+        try
+        {
+            var manifestPath = AcceptanceManifestLocator.Resolve(
+                GetString(metadata, "executionDirectory") ?? orchestratorDirectory, orchestratorDirectory);
+            if (!manifests.TryGetValue(manifestPath, out declared!))
+            {
+                using var manifest = JsonDocument.Parse(File.ReadAllText(manifestPath));
+                declared = manifest.RootElement.TryGetProperty("checks", out var checks)
+                    ? checks.Deserialize<GoalAcceptanceVerifier.AcceptanceManifestCheck[]>(CheckJsonOptions) ?? [] : [];
+                manifests[manifestPath] = declared;
+            }
+        }
+        catch (Exception)
+        {
+            // Without declarations, check selectors retain the test-result path.
+            return null;
+        }
+
+        var explicitOutcomes = new Dictionary<string, bool>(StringComparer.Ordinal);
+        try
+        {
+            var resultPath = GetString(metadata, "resultPath") ?? $"{GetString(metadata, "attemptId")}.result.json";
+            resultPath = Path.GetFullPath(resultPath, Path.GetDirectoryName(metadataPath)!);
+            using var result = JsonDocument.Parse(File.ReadAllText(resultPath));
+            var root = result.RootElement;
+            if (GetString(root, "kind") != "accepted" || !root.TryGetProperty("acceptance", out var acceptance) ||
+                acceptance.ValueKind != JsonValueKind.Object)
+                return new(declared, explicitOutcomes, false);
+
+            if (acceptance.TryGetProperty("unmetCriteria", out var criteria) && criteria.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var criterion in criteria.EnumerateArray())
+                {
+                    if (GetString(criterion, "name") is not { } name ||
+                        !criterion.TryGetProperty("passed", out var passed) ||
+                        passed.ValueKind is not (JsonValueKind.True or JsonValueKind.False)) continue;
+                    // Conflicting explicit records cannot erase a failure.
+                    explicitOutcomes[name] = passed.GetBoolean() &&
+                        (!explicitOutcomes.TryGetValue(name, out var previous) || previous);
+                }
+            }
+            var noFailedChecks = false;
+            if (acceptance.TryGetProperty("failedChecks", out var failures) && failures.ValueKind == JsonValueKind.Array)
+            {
+                noFailedChecks = failures.GetArrayLength() == 0;
+                foreach (var failure in failures.EnumerateArray())
+                    if (failure.GetString() is { } name) explicitOutcomes[name] = false;
+            }
+            return new(declared, explicitOutcomes,
+                acceptance.TryGetProperty("passed", out var accepted) && accepted.ValueKind == JsonValueKind.True && noFailedChecks);
+        }
+        catch (Exception)
+        {
+            // Missing or malformed results carry declarations but establish no outcomes.
+            return new(declared, new Dictionary<string, bool>(StringComparer.Ordinal), false);
+        }
+    }
+
     private static string? GetString(JsonElement root, string name) =>
         root.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String
             ? value.GetString() : null;
 
     internal sealed record GateAttempt(
-        string Id, DateTimeOffset CompletedAt, IReadOnlyList<string> Paths, IReadOnlyList<TestResult> Results, int? BriefVersion = null);
+        string Id, DateTimeOffset CompletedAt, IReadOnlyList<string> Paths, IReadOnlyList<TestResult> Results,
+        int? BriefVersion = null, GateCheckOutcomes? Checks = null);
+
+    internal sealed record GateCheckOutcomes(
+        IReadOnlyList<GoalAcceptanceVerifier.AcceptanceManifestCheck> Declared,
+        IReadOnlyDictionary<string, bool> Explicit, bool PassedWithNoFailedChecks);
 }
 
 internal sealed record ProspectiveEvidenceGateResolution(
