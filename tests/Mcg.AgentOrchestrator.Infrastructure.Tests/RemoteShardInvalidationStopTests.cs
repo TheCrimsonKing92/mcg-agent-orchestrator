@@ -16,7 +16,8 @@ public sealed class RemoteShardInvalidationStopTests
         var root = CreateManifestWorkspace("""{"version":1,"checks":[],"forbiddenChangedPathGlobs":[]}""");
         // A single offloaded lane leaves no local check monitor that could mask the remote-wait defect.
         ConfigureWorkspace(root, 1, 3, remote: true);
-        var storageRoot = new DotnetBuildStorageRoot(Path.Combine(root, "build-storage"));
+        // Use the collection fixture's run-isolated root so slot identity is covered by its proof.
+        var storageRoot = DotnetBuildEnvironmentManager.CaptureStorageRoot();
         TestOverrides.BuildStorageRootForTests = storageRoot;
         TestOverrides.ResolveShardCoreBudgetForTests = () => 3;
         TestOverrides.RemoteLaneEarlyOfferDisabledForTests = true;
@@ -50,7 +51,7 @@ public sealed class RemoteShardInvalidationStopTests
             acquireStableSlotLease: (_, _) =>
             {
                 var lease = DotnetBuildEnvironmentManager.AcquireFirstAvailableStableSlotExecutionLock(
-                    TimeSpan.FromSeconds(30), storageRoot: storageRoot);
+                    TimeSpan.FromSeconds(30));
                 Assert.True(lease.IsExecutionLockHeld);
                 slotAcquired.TrySetResult(lease);
                 return lease;
