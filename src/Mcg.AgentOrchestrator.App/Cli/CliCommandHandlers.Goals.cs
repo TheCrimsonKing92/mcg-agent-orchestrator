@@ -1706,10 +1706,8 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 using var loopWakeSignal = watchInterval is not null
                     ? new FileSystemWatcherConductorWakeSignal(context.Workspace.LogDirectory)
                     : null;
-                var supervisorRestageSetting = Environment.GetEnvironmentVariable("MCG_ORCHESTRATOR_MAX_DURATION_RESTAGE");
-                var delegateSelfRelaunchToSupervisor = supervisedChild &&
-                    !string.Equals(supervisorRestageSetting, "false", StringComparison.OrdinalIgnoreCase) &&
-                    !string.Equals(supervisorRestageSetting, "0", StringComparison.OrdinalIgnoreCase);
+                var supervisorSetup = ConductorSupervisorLoopSetup.Create(supervisedChild,
+                    context.Workspace, GetFlagValue(parts, "--home-build-blocked-commit"));
                 var conductorOutputLogPath = Environment.GetEnvironmentVariable(
                     ConductorContinuitySupervisor.StdoutLogPathEnvironmentVariable);
                 var conductorDiagnosticPath = string.IsNullOrWhiteSpace(conductorOutputLogPath)
@@ -1741,12 +1739,14 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                         operatorIntents: operatorIntents,
                         progressiveReviewGlances: ProgressiveReviewGlanceCoordinator.CreateDefault(context.Workspace, context.WorkerProfiles),
                         progressiveReviewSteering: ProgressiveReviewSteeringCoordinator.CreateDefault(context.Workspace, context.Agents, context.WorkerProfiles, context.Providers),
-                        selfRelaunch: selfRelaunch is null ? null : delegateSelfRelaunchToSupervisor
+                        selfRelaunch: selfRelaunch is null ? null : supervisorSetup.DelegateSelfRelaunchToSupervisor
                                 ? SupervisedSelfRelaunchGuard.ForWorkspace(context.Workspace)
                                 : selfRelaunch,
                         selfRelaunchEnabled: ConductorBatchLoop.ResolveSelfRelaunchEnabled(
                             Environment.GetEnvironmentVariable(ConductorBatchLoop.SelfRelaunchEnabledEnvironmentVariable),
                             Console.Error.WriteLine),
+                        homeBuildAdoption: supervisorSetup.HomeBuildAdoption,
+                        homeBuildRelaunch: supervisorSetup.HomeBuildAdoption is null ? null : SupervisedSelfRelaunchGuard.ForWorkspace(context.Workspace),
                         postLandingCanary: postLandingCanary,
                         goalReloadObservation: resolveGoalReloadObservation,
                         prepareOperatorIntentTarget: (loopKernel, goalId) => OperatorIntentTargetPreparation.PrepareOperatorIntentTarget(
@@ -1756,7 +1756,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                             readAdoptionCensus: WorkerAdoptionCensus.CreateDefault(context.Workspace.SqliteStatePath),
                             adoptInheritedWorkers: WorkerAdoptionTransfer.CreateDefault(context.Workspace.SqliteStatePath,
                                 goalIds => context.ReloadKernel(goalIds))),
-                        blockedRecheckHeartbeatInterval: reconcileSweepOptions.HeartbeatInterval, countLiveGroupedGates: () => loopDriver.CountLiveGroupedGateAttempts(relaunchBlockingOnly: true),
+                        blockedRecheckHeartbeatInterval: reconcileSweepOptions.HeartbeatInterval, countLiveGroupedGates: () => loopDriver.CountLiveGroupedGateAttempts(relaunchBlockingOnly: supervisorSetup.HomeBuildAdoption is null),
                         workspace: context.Workspace).WithSteward(ConductorStewardHost.CreateDefault(context.Workspace, () => ResolveConductorPolicy(loopPolicyName, context.Workspace.OrchestratorDirectory).Policy))
                         .WithUnintendedExitDiagnostics(conductorDiagnosticPath, conductorOutputLogPath)
                         .WithJudgePanel(ConductorJudgePanelHost.CreateDefault(context.Workspace))
@@ -1788,7 +1788,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                         ConductorContinuityExitArtifact.Write(
                             continuityExitArtifactPath,
                             ConductorContinuityExitArtifactFactory.FromLoopSummary(
-                                loopSummary, delegateSelfRelaunchToSupervisor));
+                                loopSummary, supervisorSetup.DelegateSelfRelaunchToSupervisor));
                     }
                     Console.WriteLine($"Conduct --loop complete: ticks={loopSummary.Ticks} advanced={loopSummary.Advanced} held={loopSummary.Held} escalated={loopSummary.Escalated} retried={loopSummary.Retried}{(loopSummary.StopRequested ? " (stopped)" : "")}");
                     return loopSummary.Escalated == 0;

@@ -59,7 +59,8 @@ internal sealed partial record ConductorSuccessorStagingOptions(
 
 internal sealed record ConductorSelfRelaunchRequest(
     string GoalId,
-    int Tick);
+    int Tick,
+    HomeBuildAdoptionRecord? HomeBuildTarget = null);
 
 internal sealed record ConductorPreparedSuccessor(
     string RunDirectory,
