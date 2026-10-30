@@ -32,7 +32,11 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
                 !IsStoppableSupersededGateAttempt(current))
                 return false;
 
-            WriteAttemptFile(current with { SupersedingMainHeadSha = supersedingMainHeadSha });
+            WriteAttemptFile(current with
+            {
+                SupersedingMainHeadSha = supersedingMainHeadSha,
+                InvalidatedAt = current.InvalidatedAt ?? _utcNow()
+            });
             return true;
         }
     }
