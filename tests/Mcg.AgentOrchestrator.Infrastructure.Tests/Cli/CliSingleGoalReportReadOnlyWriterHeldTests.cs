@@ -24,7 +24,7 @@ public sealed class CliSingleGoalReportReadOnlyWriterHeldTests : CliTaskQueryTes
             {
                 Xunit.Assert.False(WorkerProfileDispatcher.IsTaskRetryDeferred(
                     task, DateTimeOffset.Parse("2026-09-24T00:00:00+00:00"), out _));
-                Xunit.Assert.False(DispatchFailureClassifier.TryGetProviderSubscriptionCooldown(
+                Xunit.Assert.False(ProviderLimitSignals.TryGetProviderSubscriptionCooldown(
                     goal, task.Id, "OpenAI", DateTimeOffset.Parse("2026-09-24T00:00:00+00:00"), out _));
             });
             await new SqliteOrchestratorStateRepository(workspace.SqliteStatePath).SaveAsync(kernel);

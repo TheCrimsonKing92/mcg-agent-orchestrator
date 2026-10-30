@@ -716,11 +716,11 @@ public sealed class DispatchExecutionTests
         kernel.BuildGoalEvidenceSummary(goal.Id).Tasks.Single(item => item.TaskId == task.Id).Message,
         StringComparison.Ordinal);
 
-    Assert.True(DispatchFailureClassifier.TryGetSubscriptionLimitRetryAfter(task, out var retryAfter));
+    Assert.True(ProviderLimitSignals.TryGetSubscriptionLimitRetryAfter(task, out var retryAfter));
     Assert.Equal(new DateTimeOffset(2026, 06, 01, 16, 58, 00, TimeSpan.Zero), retryAfter);
     Assert.Equal(retryAfter, task.SubscriptionRetryAfter);
-    Assert.True(DispatchFailureClassifier.IsSubscriptionRetryDeferred(task, new DateTimeOffset(2026, 06, 01, 16, 57, 00, TimeSpan.Zero), out retryAfter));
-    Assert.False(DispatchFailureClassifier.IsSubscriptionRetryDeferred(task, new DateTimeOffset(2026, 06, 01, 16, 59, 00, TimeSpan.Zero), out _));
+    Assert.True(ProviderLimitSignals.IsSubscriptionRetryDeferred(task, new DateTimeOffset(2026, 06, 01, 16, 57, 00, TimeSpan.Zero), out retryAfter));
+    Assert.False(ProviderLimitSignals.IsSubscriptionRetryDeferred(task, new DateTimeOffset(2026, 06, 01, 16, 59, 00, TimeSpan.Zero), out _));
 
     var restored = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot(), clock);
     var restoredTask = restored.GetTask(goal.Id, task.Id);
@@ -729,10 +729,10 @@ public sealed class DispatchExecutionTests
     kernel.RetryTask(goal.Id, task.Id, "Retry after provider window.");
     Assert.Equal<DateTimeOffset?>(null, task.SubscriptionRetryAfter);
     Assert.Single(task.VerificationHistory);
-    Assert.False(DispatchFailureClassifier.TryGetSubscriptionLimitRetryAfter(task, out _));
+    Assert.False(ProviderLimitSignals.TryGetSubscriptionLimitRetryAfter(task, out _));
 
     var restoredAfterRetry = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot(), clock);
-    Assert.False(DispatchFailureClassifier.TryGetSubscriptionLimitRetryAfter(
+    Assert.False(ProviderLimitSignals.TryGetSubscriptionLimitRetryAfter(
         restoredAfterRetry.GetTask(goal.Id, task.Id),
         out _));
 }
@@ -742,7 +742,7 @@ public sealed class DispatchExecutionTests
 {
     var completedAt = DateTimeOffset.Parse("2026-08-08T17:30:31Z");
 
-    Assert.True(DispatchFailureClassifier.TryGetSubscriptionLimitRetryAfter(
+    Assert.True(ProviderLimitSignals.TryGetSubscriptionLimitRetryAfter(
         SubscriptionLimitVerification("codex exec", completedAt),
         out var retryAfter));
 
@@ -754,7 +754,7 @@ public sealed class DispatchExecutionTests
     [Xunit.InlineData("2026-08-08T18:30:00Z", "2026-08-09T16:58:00Z")]
     public void BareClockRetryTimePreservesUnambiguousDayReference(string completedAtText, string expectedRetryAfterText)
 {
-    Assert.True(DispatchFailureClassifier.TryGetSubscriptionLimitRetryAfter(
+    Assert.True(ProviderLimitSignals.TryGetSubscriptionLimitRetryAfter(
         SubscriptionLimitVerification("codex exec", DateTimeOffset.Parse(completedAtText)),
         out var retryAfter));
 
@@ -794,7 +794,7 @@ public sealed class DispatchExecutionTests
     Assert.Equal(ProviderFailureKind.RateLimit, task.LastVerification!.ProviderFailureKind);
     Assert.False(DispatchFailureClassifier.HasRecoverableSubscriptionLimitHistory(task));
     Assert.Equal(0, DispatchFailureClassifier.CountRecoverableSubscriptionLimitFailures(task));
-    Assert.False(DispatchFailureClassifier.TryGetSubscriptionLimitRetryAfter(task, out _));
+    Assert.False(ProviderLimitSignals.TryGetSubscriptionLimitRetryAfter(task, out _));
     Assert.Contains(goal.Timeline, evt =>
         evt.TaskId == task.Id &&
         evt.Kind == ProgressKind.TaskFailed);
@@ -3138,7 +3138,7 @@ public sealed class DispatchExecutionTests
 
     Assert.Equal(WorkTaskStatus.Assigned, task.Status);
     Assert.True(task.LastVerification is null);
-    Assert.True(DispatchFailureClassifier.TryGetSubscriptionLimitRetryAfter(task, out var retryAfter));
+    Assert.True(ProviderLimitSignals.TryGetSubscriptionLimitRetryAfter(task, out var retryAfter));
     Assert.Equal(new DateTimeOffset(2026, 06, 01, 16, 58, 00, TimeSpan.Zero), retryAfter);
 }
 
@@ -3172,7 +3172,7 @@ public sealed class DispatchExecutionTests
         task.LastVerification);
     Assert.Equal<DateTimeOffset?>(null, task.SubscriptionRetryAfter);
     Assert.False(DispatchFailureClassifier.IsRecoverableSubscriptionLimitFailure(verification));
-    Assert.False(DispatchFailureClassifier.TryGetSubscriptionLimitRetryAfter(verification, out _));
+    Assert.False(ProviderLimitSignals.TryGetSubscriptionLimitRetryAfter(verification, out _));
     Assert.Contains(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskFailed);
 }
 
@@ -3210,7 +3210,7 @@ public sealed class DispatchExecutionTests
     Assert.True(task.LastVerification is null);
     Assert.Equal(3, DispatchFailureClassifier.CountRecoverableSubscriptionLimitFailures(task));
     Assert.True(task.SubscriptionRetryAfter is not null);
-    Assert.True(DispatchFailureClassifier.RequiresSubscriptionLimitReview(task));
+    Assert.True(ProviderLimitSignals.RequiresSubscriptionLimitReview(task));
     Assert.Contains(goal.Timeline, evt =>
         evt.TaskId == task.Id &&
         evt.Kind == ProgressKind.TaskRetried &&
@@ -3235,7 +3235,7 @@ public sealed class DispatchExecutionTests
         WorkerProviderKind: ProviderKind.OpenAICodexCli));
     kernel.RecordDispatchExecutionResult(goal.Id, task.Id, SubscriptionLimitVerification("codex exec attempt 1", clock.UtcNow));
 
-    Assert.False(DispatchFailureClassifier.RequiresSubscriptionLimitReview(task));
+    Assert.False(ProviderLimitSignals.RequiresSubscriptionLimitReview(task));
 
     kernel.RetryTask(goal.Id, task.Id, "Manual retry after attempt 1.");
     clock.Advance();
@@ -3248,12 +3248,12 @@ public sealed class DispatchExecutionTests
     kernel.RecordDispatchExecutionResult(goal.Id, task.Id, SubscriptionLimitVerification("codex exec attempt 2", clock.UtcNow));
 
     Assert.Equal(DispatchFailureClassifier.RecoverableSubscriptionLimitReviewThreshold, DispatchFailureClassifier.CountRecoverableSubscriptionLimitFailures(task));
-    Assert.True(DispatchFailureClassifier.RequiresSubscriptionLimitReview(task));
+    Assert.True(ProviderLimitSignals.RequiresSubscriptionLimitReview(task));
     Assert.Equal(WorkTaskStatus.Assigned, task.Status);
 
     kernel.AcknowledgeSubscriptionLimitReview(goal.Id, task.Id, "Reviewed profile and will retry after the provider window.");
 
-    Assert.False(DispatchFailureClassifier.RequiresSubscriptionLimitReview(task));
+    Assert.False(ProviderLimitSignals.RequiresSubscriptionLimitReview(task));
     Assert.Equal(2, task.SubscriptionLimitReviewedFailureCount);
     Assert.Equal("Reviewed profile and will retry after the provider window.", task.SubscriptionLimitReviewNote);
     Assert.Contains(goal.Timeline, evt =>
@@ -3265,7 +3265,7 @@ public sealed class DispatchExecutionTests
     var restoredTask = restored.GetTask(goal.Id, task.Id);
     Assert.Equal(2, restoredTask.SubscriptionLimitReviewedFailureCount);
     Assert.Equal("Reviewed profile and will retry after the provider window.", restoredTask.SubscriptionLimitReviewNote);
-    Assert.False(DispatchFailureClassifier.RequiresSubscriptionLimitReview(restoredTask));
+    Assert.False(ProviderLimitSignals.RequiresSubscriptionLimitReview(restoredTask));
 }
     [Xunit.Fact(DisplayName = "Subscription_retry_after_snapshot_metadata_does_not_require_reparsing_provider_text")]
     public void SubscriptionRetryAfterSnapshotMetadataDoesNotRequireReparsingProviderText()
@@ -3307,9 +3307,9 @@ public sealed class DispatchExecutionTests
     var kernel = AgentOrchestratorKernel.FromSnapshot(snapshot, new FakeClock());
     var task = kernel.GetTask(new GoalId("goal-a"), new TaskId("task-a"));
 
-    Assert.True(DispatchFailureClassifier.TryGetSubscriptionLimitRetryAfter(task, out var storedRetryAfter));
+    Assert.True(ProviderLimitSignals.TryGetSubscriptionLimitRetryAfter(task, out var storedRetryAfter));
     Assert.Equal(retryAfter, storedRetryAfter);
-    Assert.True(DispatchFailureClassifier.IsSubscriptionRetryDeferred(task, retryAfter.AddMinutes(-1), out storedRetryAfter));
+    Assert.True(ProviderLimitSignals.IsSubscriptionRetryDeferred(task, retryAfter.AddMinutes(-1), out storedRetryAfter));
     Assert.Equal(retryAfter, storedRetryAfter);
 
     kernel.RecordTaskDispatch(new GoalId("goal-a"), new TaskId("task-a"), new TaskDispatchRecord("codex-cli", "codex exec", "C:\\repo", retryAfter));

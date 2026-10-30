@@ -317,9 +317,9 @@ public static class SubscriptionPlanBuilder
             var effectiveNow = now ?? DateTimeOffset.UtcNow;
             var retryDeferred = WorkerProfileDispatcher.IsTaskRetryDeferred(task, effectiveNow, out var retryAfter);
             var recoverableLimitFailures = DispatchFailureClassifier.CountRecoverableSubscriptionLimitFailures(task);
-            var requiresLimitReview = !retryDeferred && DispatchFailureClassifier.RequiresSubscriptionLimitReview(task);
+            var requiresLimitReview = !retryDeferred && ProviderLimitSignals.RequiresSubscriptionLimitReview(task);
             var dispatchProviderName = ResolveDispatchProviderName(effectiveProviderName, profileName);
-            var providerCoolingDown = DispatchFailureClassifier.TryGetProviderSubscriptionCooldown(
+            var providerCoolingDown = ProviderLimitSignals.TryGetProviderSubscriptionCooldown(
                 goal,
                 task.Id,
                 dispatchProviderName,
@@ -329,7 +329,7 @@ public static class SubscriptionPlanBuilder
                 profile,
                 sandboxOptions,
                 claudeAuthProbe);
-            var providerBindingHeld = DispatchFailureClassifier.TryGetProviderBudgetExhaustionHold(
+            var providerBindingHeld = ProviderLimitSignals.TryGetProviderBudgetExhaustionHold(
                 providerHoldScope ?? [goal],
                 dispatchProviderName,
                 providerCredentialBinding,

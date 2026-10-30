@@ -18,7 +18,7 @@ public sealed class CliProviderRefusalClassificationTests
         var outcome = DispatchFailureClassifier.Classify(CliTask(), verification);
 
         Assert.Equal(DispatchOutcomeKind.RecoverableSubscriptionLimit, outcome.Kind);
-        Assert.True(DispatchFailureClassifier.TryGetSubscriptionLimitRetryAfter(verification, out var reset));
+        Assert.True(ProviderLimitSignals.TryGetSubscriptionLimitRetryAfter(verification, out var reset));
         Assert.Equal(ParseUtc(expectedReset), reset);
     }
 
@@ -35,7 +35,7 @@ public sealed class CliProviderRefusalClassificationTests
 
         Assert.Equal(DispatchOutcomeKind.RecoverableSubscriptionLimit,
             DispatchFailureClassifier.Classify(CliTask(), verification).Kind);
-        Assert.False(DispatchFailureClassifier.TryGetSubscriptionLimitRetryAfter(verification, out _));
+        Assert.False(ProviderLimitSignals.TryGetSubscriptionLimitRetryAfter(verification, out _));
     }
 
     [Fact]
@@ -47,7 +47,7 @@ public sealed class CliProviderRefusalClassificationTests
 
         Assert.Equal(DispatchOutcomeKind.RecoverableSubscriptionLimit,
             DispatchFailureClassifier.Classify(CliTask(), verification).Kind);
-        Assert.False(DispatchFailureClassifier.TryGetSubscriptionLimitRetryAfter(verification, out _));
+        Assert.False(ProviderLimitSignals.TryGetSubscriptionLimitRetryAfter(verification, out _));
     }
 
     [Fact]
@@ -150,7 +150,7 @@ public sealed class CliProviderRefusalClassificationTests
 
         Assert.Equal(DispatchOutcomeKind.RecoverableSubscriptionLimit,
             DispatchFailureClassifier.Classify(CliTask("codex-cli", ProviderKind.OpenAICodexCli), verification).Kind);
-        Assert.True(DispatchFailureClassifier.TryGetSubscriptionLimitRetryAfter(verification, out var reset));
+        Assert.True(ProviderLimitSignals.TryGetSubscriptionLimitRetryAfter(verification, out var reset));
         Assert.Equal(ParseUtc("2026-10-05T16:58:00Z"), reset);
     }
 

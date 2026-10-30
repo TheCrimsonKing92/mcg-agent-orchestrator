@@ -225,7 +225,7 @@ public sealed partial class BackgroundDispatchRunner
              intentReference.DispatchedAt != dispatch.DispatchedAt))
             throw new InvalidOperationException("Task intent admission does not identify the current dispatch preparation.");
 
-        if (DispatchFailureClassifier.IsSubscriptionRetryDeferred(task, _clock.UtcNow, out var retryAfter))
+        if (ProviderLimitSignals.IsSubscriptionRetryDeferred(task, _clock.UtcNow, out var retryAfter))
         {
             throw new InvalidOperationException($"Task '{taskId}' hit a recoverable subscription usage limit; retry after {retryAfter:u}.");
         }

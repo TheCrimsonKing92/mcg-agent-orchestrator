@@ -77,7 +77,7 @@ public sealed class ProviderUsageSelfHealScenarioTests
         Assert.Equal(3, scenario.PrimaryDispatches()); // Incident and two probes, through restoration.
         scenario.At("2026-10-21T02:04:00Z");
         scenario.Finish(restored, 0, "Success", "");
-        Assert.False(DispatchFailureClassifier.TryGetProviderBudgetExhaustionHold(scenario.Kernel.Goals, "xAI", null, out _));
+        Assert.False(ProviderLimitSignals.TryGetProviderBudgetExhaustionHold(scenario.Kernel.Goals, "xAI", null, out _));
         var normal = scenario.NewGoal();
         scenario.Tick(normal);
         scenario.AssertPrimary(normal, probe: false);
@@ -271,7 +271,7 @@ public sealed class ProviderUsageSelfHealScenarioTests
         {
             get
             {
-                Assert.True(DispatchFailureClassifier.TryGetProviderBudgetExhaustionHold(Kernel.Goals, "xAI", null, out var hold));
+                Assert.True(ProviderLimitSignals.TryGetProviderBudgetExhaustionHold(Kernel.Goals, "xAI", null, out var hold));
                 return hold;
             }
         }

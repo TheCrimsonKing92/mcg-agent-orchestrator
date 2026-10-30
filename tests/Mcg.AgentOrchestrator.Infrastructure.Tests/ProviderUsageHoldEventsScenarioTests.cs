@@ -189,7 +189,7 @@ public sealed class ProviderUsageHoldEventsScenarioTests
         {
             get
             {
-                Assert.True(DispatchFailureClassifier.TryGetProviderBudgetExhaustionHold(Kernel.Goals, "xAI", null, out var hold));
+                Assert.True(ProviderLimitSignals.TryGetProviderBudgetExhaustionHold(Kernel.Goals, "xAI", null, out var hold));
                 return hold;
             }
         }

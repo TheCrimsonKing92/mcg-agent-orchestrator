@@ -180,7 +180,7 @@ public sealed class ProviderResetHoldLookupWorkCountTests
             foreach (var dispatch in Kernel.Goals.SelectMany(goal => goal.Tasks).SelectMany(task => task.DispatchHistory))
             {
                 var provider = dispatch.ProviderName ?? dispatch.WorkerName;
-                if (!DispatchFailureClassifier.TryGetProviderBudgetExhaustionHold(Kernel.Goals,
+                if (!ProviderLimitSignals.TryGetProviderBudgetExhaustionHold(Kernel.Goals,
                         provider, dispatch.ClaudeCredentialSourceDirectory, out var hold)) continue;
                 if (provider.Equals(target, StringComparison.OrdinalIgnoreCase) || hold.BindingKey.Equals(target, StringComparison.OrdinalIgnoreCase))
                     holds.TryAdd(hold.BindingKey, hold);

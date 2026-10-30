@@ -174,7 +174,7 @@ public sealed class ProviderBudgetHoldScheduleTests
         fixture.Kernel.ReportTaskProgress(source.Id, source.Tasks.Single().Id, WorkTaskStatus.Failed, "Exhausted.");
         fixture.Clock.UtcNow = Start.AddMinutes(2);
         fixture.Kernel.RetryTask(source.Id, source.Tasks.Single().Id, "Operator replenished balance.", RetryCause.ProviderBudgetRecovery);
-        Assert.False(DispatchFailureClassifier.TryGetProviderBudgetExhaustionHold(fixture.Kernel.Goals, "xAI", null, out _));
+        Assert.False(ProviderLimitSignals.TryGetProviderBudgetExhaustionHold(fixture.Kernel.Goals, "xAI", null, out _));
         fixture.Exhaust(fixture.NewGoal(), Start.AddMinutes(3));
         Assert.Equal(1, fixture.Schedule().Attempt);
         Assert.Equal(Start.AddMinutes(34), fixture.Schedule().NextProbeAt);
@@ -230,7 +230,7 @@ public sealed class ProviderBudgetHoldScheduleTests
         }
         internal ProviderBudgetHoldSchedule Schedule()
         {
-            Assert.True(DispatchFailureClassifier.TryGetProviderBudgetExhaustionHold(Kernel.Goals, "xAI", null, out var hold));
+            Assert.True(ProviderLimitSignals.TryGetProviderBudgetExhaustionHold(Kernel.Goals, "xAI", null, out var hold));
             return ProviderBudgetHoldSchedules.Evaluate(Kernel.Goals, hold, Clock.UtcNow);
         }
         internal static AgentDefinition Agent(string id, string provider) => new(new(id), id, AgentRole.Tester,

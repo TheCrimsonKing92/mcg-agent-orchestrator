@@ -70,13 +70,13 @@ public sealed class ProviderHoldAcrossRestartScenarioTests : CliCommandTestBase
         Assert.Equal(target.Tasks.Single().Id, Assert.Single(scenario.ProbeNotes()).TaskId);
         scenario.Clock.UtcNow = schedule.NextProbeAt.AddMinutes(2);
         scenario.Finish(target, 0, "Success", "");
-        Assert.False(DispatchFailureClassifier.TryGetProviderBudgetExhaustionHold(restarted.ProviderHoldScope, "xAI", null, out _));
+        Assert.False(ProviderLimitSignals.TryGetProviderBudgetExhaustionHold(restarted.ProviderHoldScope, "xAI", null, out _));
 
         scenario.Complete(target);
         Assert.Equal(GoalStatus.Completed, scenario.Stored(target).Status);
         Assert.Equal(1, restarted.EvictTerminalGoalAggregates([target.Id]));
         Assert.Empty(restarted.ProviderHoldHistory.Retained);
-        Assert.False(DispatchFailureClassifier.TryGetProviderBudgetExhaustionHold(restarted.ProviderHoldScope, "xAI", null, out _));
+        Assert.False(ProviderLimitSignals.TryGetProviderBudgetExhaustionHold(restarted.ProviderHoldScope, "xAI", null, out _));
         Assert.Empty(scenario.Escalations);
     }
 
@@ -100,8 +100,8 @@ public sealed class ProviderHoldAcrossRestartScenarioTests : CliCommandTestBase
         Assert.Equal(1, scenario.Kernel.EvictTerminalGoalAggregates([clearing.Id]));
         Assert.Equal(clearing.Id, Assert.Single(scenario.Kernel.ProviderHoldHistory.Retained).Id);
         Assert.Equal(GoalStatus.Active, scenario.Current(active).Status);
-        Assert.False(DispatchFailureClassifier.TryGetProviderBudgetExhaustionHold(scenario.Kernel.ProviderHoldScope, "xAI", null, out _));
-        Assert.True(DispatchFailureClassifier.TryGetProviderBudgetExhaustionHold(scenario.Kernel.Goals, "xAI", null, out _));
+        Assert.False(ProviderLimitSignals.TryGetProviderBudgetExhaustionHold(scenario.Kernel.ProviderHoldScope, "xAI", null, out _));
+        Assert.True(ProviderLimitSignals.TryGetProviderBudgetExhaustionHold(scenario.Kernel.Goals, "xAI", null, out _));
         scenario.Complete(active);
         Assert.Equal(1, scenario.Kernel.EvictTerminalGoalAggregates([active.Id]));
         Assert.Empty(scenario.Kernel.ProviderHoldHistory.Retained);
@@ -302,7 +302,7 @@ public sealed class ProviderHoldAcrossRestartScenarioTests : CliCommandTestBase
         {
             get
             {
-                Assert.True(DispatchFailureClassifier.TryGetProviderBudgetExhaustionHold(Kernel.ProviderHoldScope, "xAI", null, out var hold));
+                Assert.True(ProviderLimitSignals.TryGetProviderBudgetExhaustionHold(Kernel.ProviderHoldScope, "xAI", null, out var hold));
                 return hold;
             }
         }

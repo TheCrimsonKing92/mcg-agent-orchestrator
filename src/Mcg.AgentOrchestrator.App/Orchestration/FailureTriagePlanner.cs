@@ -145,7 +145,7 @@ public static class FailureTriagePlanner
             return;
         }
 
-        if (DispatchFailureClassifier.IsSubscriptionRetryDeferred(task, now, out var retryAfter))
+        if (ProviderLimitSignals.IsSubscriptionRetryDeferred(task, now, out var retryAfter))
         {
             items.Add(Item(
                 task,
@@ -161,7 +161,7 @@ public static class FailureTriagePlanner
             return;
         }
 
-        if (DispatchFailureClassifier.RequiresSubscriptionLimitReview(task))
+        if (ProviderLimitSignals.RequiresSubscriptionLimitReview(task))
         {
             items.Add(Item(
                 task,

@@ -80,7 +80,7 @@ public sealed class ProviderHoldHistory
 
     private static (string BindingKey, GoalId GoalId, TaskId TaskId, DateTimeOffset PlacedAt)? Answer(
         IReadOnlyCollection<Goal> scope, string provider, string? credential) =>
-        DispatchFailureClassifier.TryGetProviderBudgetExhaustionHold(scope, provider, credential, out var hold)
+        ProviderLimitSignals.TryGetProviderBudgetExhaustionHold(scope, provider, credential, out var hold)
             ? (hold.BindingKey, hold.SourceGoalId, hold.SourceTaskId, hold.PlacedAt)
             : null;
 }

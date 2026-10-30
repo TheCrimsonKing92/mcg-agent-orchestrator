@@ -27,7 +27,7 @@ public sealed class ProviderHoldAgentSubstitutionTests
         var source = scenario.NewGoal();
         scenario.Kernel.ReassignTaskAgent(source.Id, source.Tasks.Single().Id, held);
         scenario.Exhaust(source, held);
-        Assert.True(DispatchFailureClassifier.TryGetProviderBudgetExhaustionHold(scenario.Kernel.Goals,
+        Assert.True(ProviderLimitSignals.TryGetProviderBudgetExhaustionHold(scenario.Kernel.Goals,
             "OpenAI", null, out _));
         var first = Scenario.Agent("first", "Ollama", "codex-oss-cli", "qwen3-coder");
         var second = first with { Id = new AgentId("second") };
@@ -142,7 +142,7 @@ public sealed class ProviderHoldAgentSubstitutionTests
         {
             get
             {
-                Assert.True(DispatchFailureClassifier.TryGetProviderBudgetExhaustionHold(
+                Assert.True(ProviderLimitSignals.TryGetProviderBudgetExhaustionHold(
                     Kernel.Goals, "xAI", null, out var hold));
                 return hold;
             }
