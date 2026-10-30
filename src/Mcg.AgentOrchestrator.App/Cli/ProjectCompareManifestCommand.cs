@@ -30,7 +30,8 @@ internal static class ProjectCompareManifestCommand
                 ? new OrchestratorProject(OrchestratorWorkspace.DefaultProjectName, Path.GetFullPath(defaultRootDirectory))
                 : registry.GetRequiredProject(name);
         var root = rootOverride ?? project.RootDirectory;
-        var adapter = ProjectDiscoveryAdapterSelector.Select(root, RepositorySourceInventory.ExcludedDirectoryNames);
+        var adapter = ProjectDiscoveryAdapterSelector.Select(root, CrosswalkExecutableComposition.ForOnboarding(),
+            RepositorySourceInventory.ExcludedDirectoryNames);
         var model = adapter.Discover(root,
             RepositorySourceInventory.ExcludedDirectoryNames, null, UnitCommandKinds.None);
         string? answerDirectory = null;

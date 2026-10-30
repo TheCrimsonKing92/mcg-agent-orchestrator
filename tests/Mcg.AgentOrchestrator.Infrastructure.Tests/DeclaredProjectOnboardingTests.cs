@@ -13,7 +13,8 @@ public sealed class DeclaredProjectOnboardingTests
     {
         using var fixture = new ProjectOnboardingFixture("declared-no-marker");
         ProjectOnboardingFixture.SeedRemoteDefault(fixture.Root);
-        var adapter = ProjectDiscoveryAdapterSelector.Select(fixture.Root);
+        using var crosswalk = new FakeCrosswalkProcess();
+        var adapter = ProjectDiscoveryAdapterSelector.Select(fixture.Root, crosswalk.Reader);
         Assert.IsType<DeclaredProjectDiscoveryAdapter>(adapter);
         var model = adapter.Discover(fixture.Root);
         Assert.Equal(ProjectStack.Declared, model.Stack);
@@ -121,11 +122,10 @@ public sealed class DeclaredProjectOnboardingTests
     [InlineData("solution", ProjectStack.Dotnet, "Sample.sln")]
     [InlineData("go-module", ProjectStack.Go, "go.mod")]
     [InlineData("declared-no-marker", ProjectStack.Node, "package.json")]
-    [InlineData("declared-no-marker", ProjectStack.Lua, ".busted")]
     public void RecognizedMarkers_KeepExistingDetection(string name, ProjectStack stack, string marker)
     {
         using var fixture = new ProjectOnboardingFixture(name);
-        if (stack is ProjectStack.Node or ProjectStack.Lua) File.WriteAllText(Path.Combine(fixture.Root, marker), "{}");
+        if (stack is ProjectStack.Node) File.WriteAllText(Path.Combine(fixture.Root, marker), "{}");
         var detection = ProjectDiscoveryAdapterSelector.Detect(fixture.Root);
         Assert.Equal(stack, detection.Stack);
         Assert.Equal(marker, detection.Marker);

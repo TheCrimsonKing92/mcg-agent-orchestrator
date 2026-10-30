@@ -13,6 +13,10 @@ public sealed class DeclaredProjectDiscoveryAdapter : IProjectDiscoveryAdapter
     public const string BuildCheckName = "declared-build";
     public const string TestCheckName = "declared-test";
 
+    private readonly IReadOnlyList<EnvironmentNeed> _facts;
+
+    public DeclaredProjectDiscoveryAdapter(IReadOnlyList<EnvironmentNeed>? facts = null) => _facts = facts?.ToArray() ?? [];
+
     public ProjectModel Discover(string repositoryRoot, IReadOnlyCollection<string>? excludedDirectoryNames = null,
         IUnitCommandMeasurer? measurer = null, UnitCommandKinds measuredKinds = UnitCommandKinds.All)
     {
@@ -32,7 +36,7 @@ public sealed class DeclaredProjectDiscoveryAdapter : IProjectDiscoveryAdapter
                 $"Confirm that '{learned.Branch.Value}' is the integration branch learned from the checked-out branch hint.",
                 learned.Branch.Source, questions);
         return new(ProjectModel.CurrentSchemaVersion, ".", [], [], [],
-            questions.OrderBy(question => question.FactKey, StringComparer.Ordinal).ToArray(), [], [], [], [],
+            questions.OrderBy(question => question.FactKey, StringComparer.Ordinal).ToArray(), [], _facts, [], [],
             learned.Branch, ProjectStack.Declared);
     }
 
