@@ -5,6 +5,7 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 /// <summary>Selects discovery from repository declarations without executing tools.</summary>
 public static class ProjectDiscoveryAdapterSelector
 {
+    internal const string NoMarkerRefusal = "No stack marker found; looked for root go.mod, package.json, *.sln, *.slnx, and *.csproj, *.fsproj, *.vbproj below the root.";
     // crosswalk 1fac141, detect/detect.go detectLua: on-disk source denominator.
     private const string CrosswalkSourceExtensions =
         "lua go js jsx ts tsx c h cc cpp cxx hpp hxx cs fs fsx vb py pyw rs java kt kts swift m mm rb php pl pm r scala ex exs erl hrl clj cljs cljc dart groovy sql vue svelte asm s el vim sh bash zsh fish ps1 bat cmd";
@@ -56,6 +57,7 @@ public static class ProjectDiscoveryAdapterSelector
             ProjectStack.Dotnet => new DotnetProjectDiscoveryAdapter(),
             ProjectStack.Node => new NodeProjectDiscoveryAdapter(),
             ProjectStack.Lua => new LuaProjectDiscoveryAdapter(),
+            null when detection.Refusal == NoMarkerRefusal => new DeclaredProjectDiscoveryAdapter(),
             ProjectStack.Go when GoModReader.Read(Path.Combine(repositoryRoot, "go.mod")).Path is not null => new GoProjectDiscoveryAdapter(),
             ProjectStack.Go => throw new InvalidOperationException(
                 $"No discovery adapter is available for stack 'go' (marker {detection.Marker})."),
@@ -75,7 +77,7 @@ public static class ProjectDiscoveryAdapterSelector
         var sourceFiles = files.Where(file => SourceExtensions.Contains(Path.GetExtension(file).TrimStart('.'))).ToArray();
         var luaCount = sourceFiles.Count(file => Path.GetExtension(file).Equals(".lua", StringComparison.OrdinalIgnoreCase));
         return luaCount > sourceFiles.Length / 2 ? new(ProjectStack.Lua, "lua-majority", null)
-            : new(null, null, "No stack marker found; looked for root go.mod, package.json, *.sln, *.slnx, and *.csproj, *.fsproj, *.vbproj below the root.");
+            : new(null, null, NoMarkerRefusal);
     }
 
     private static List<string> ProjectMarkers(string root, HashSet<string> exclusions)

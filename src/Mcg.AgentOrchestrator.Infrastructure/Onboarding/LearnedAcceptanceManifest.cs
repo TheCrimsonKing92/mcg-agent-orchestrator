@@ -18,9 +18,11 @@ public static class LearnedAcceptanceManifest
         var isGo = model.Stack == ProjectStack.Go;
         var isNode = model.Stack == ProjectStack.Node;
         var isLua = model.Stack == ProjectStack.Lua;
-        var isDotnet = !isGo && !isNode && !isLua;
+        var isDeclared = model.Stack == ProjectStack.Declared;
+        var isDotnet = !isGo && !isNode && !isLua && !isDeclared;
         var nodeChecks = isNode ? NodeVerificationChecks.For(model) : default;
         var luaChecks = isLua ? LuaProjectDiscoveryAdapter.For(model, applied) : default;
+        var declaredChecks = isDeclared ? DeclaredProjectDiscoveryAdapter.For(model, applied) : default;
         var checkNames = isDotnet ? LearnedCheckNames.Assign(checks.Select(check => check.ProjectPath).ToArray()) : default;
         var learned = LearnedEngineSettingsDeriver.Derive(model);
         var settings = OwnerAnsweredEngineSettings.Overlay(learned, applied);
@@ -39,6 +41,8 @@ public static class LearnedAcceptanceManifest
             blockers.AddRange(nodeChecks.Blockers);
         if (isLua)
             blockers.AddRange(luaChecks.Blockers);
+        if (isDeclared)
+            blockers.AddRange(declaredChecks.Blockers);
         if (isDotnet)
             foreach (var check in checks.Where(check => check.Runner == "mtp"))
                 if (mtpLayoutRefusals?.TryGetValue(check.ProjectPath, out var reason) == true)
@@ -51,7 +55,12 @@ public static class LearnedAcceptanceManifest
             return new(null, blockers.AsReadOnly(), questions.AsReadOnly());
 
         var emittedChecks = new JsonArray();
-        if (isGo)
+        if (isDeclared)
+        {
+            foreach (var check in declaredChecks.Checks)
+                emittedChecks.Add(DeclaredProjectDiscoveryAdapter.Emit(check));
+        }
+        else if (isGo)
         {
             foreach (var check in GoVerificationChecks.Entries)
                 emittedChecks.Add(new JsonObject
