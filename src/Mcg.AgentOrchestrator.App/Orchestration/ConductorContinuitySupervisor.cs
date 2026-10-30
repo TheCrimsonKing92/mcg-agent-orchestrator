@@ -261,6 +261,7 @@ internal sealed partial class ConductorContinuitySupervisor(
                 successor.RunDirectoryLease?.Dispose();
                 pendingSuccessor = successor = null;
                 TryAppendConductEvent("LOOP_HANDOFF_SKIPPED reason=home-adoption-no-longer-eligible");
+                if (appliedUpgrade is not null && !CanRestore(0, stdoutPath, stderrPath)) return 1;
             }
             if (successor is not null)
             {

@@ -7,8 +7,10 @@ public sealed class ProjectConductorHomeBuildRelaunchTests : ConductorBatchLoopT
 {
     public ProjectConductorHomeBuildRelaunchTests(ITestOutputHelper output) : base(output) { }
 
-    [Xunit.Fact]
-    public void IdleFirstTickSchedulesExactHomeBuildAndCarriesItThroughExitArtifact()
+    [Xunit.Theory]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public void IdleFirstTickSchedulesExactHomeBuildAndCarriesItThroughExitArtifact(bool delegateRelaunch)
     {
         using var fixture = new HomeBuildAdoptionFixture();
         ConductorSelfRelaunchRequest? handedOff = null;
@@ -23,7 +25,7 @@ public sealed class ProjectConductorHomeBuildRelaunchTests : ConductorBatchLoopT
         Assert.Contains($"reason=home-build-adopted commit={fixture.Candidate.AdoptedCommit}", text, StringComparison.Ordinal);
         Assert.Equal(fixture.Candidate, handedOff!.HomeBuildTarget);
         Assert.Equal(1, handedOff.Tick);
-        var artifact = ConductorContinuityExitArtifactFactory.FromLoopSummary(summary!, true);
+        var artifact = ConductorContinuityExitArtifactFactory.FromLoopSummary(summary!, delegateRelaunch);
         Assert.True(artifact.RestartRequested);
         Assert.Equal(fixture.Candidate, artifact.HomeBuildTarget);
     }
