@@ -819,6 +819,8 @@ internal sealed partial class GoalDispatchOperations
             completionBuildEvidence: new CompletionBuildEvidenceCoordinator(workspace.SqliteStatePath, workspace.ExecutionDirectory))
         {
             WorkerBuildInvocations = new WorkerBuildInvocationOperations(workspace.SqliteStatePath, workspace.ExecutionDirectory),
+            DeclaredToolHomes = () => AcceptanceGateEngineSettings.Load(
+                workspace.RootDirectory, workspace.ProjectHomeDirectoryOrNull).DeclaredToolHomes,
             OperatorIntents = SqliteOperatorIntentStore.ForDirectories(workspace.OrchestratorDirectory, workspace.LogDirectory)
         };
         StaleDispatchProcessReconciler.Reconcile(

@@ -610,11 +610,8 @@ public static class DispatchProcessHost
         ClaudeCredentialResolver? claudeCredentialResolver = null,
         Action<string>? seedCodexAuth = null)
     {
-        startInfo.Environment.Remove("CODEX_HOME");
-        startInfo.Environment.Remove("CLAUDE_CONFIG_DIR");
-        startInfo.Environment.Remove("GROK_HOME");
-        startInfo.Environment.Remove("HERMES_HOME");
-        startInfo.Environment.Remove(HarnessHookRootContract.EnvironmentVariableName);
+        foreach (var name in WorkerProviderHomeEnvironment.Names)
+            startInfo.Environment.Remove(name);
 
         var hookRoot = HarnessHookRootContract.Apply(startInfo);
         var hookDiagnostic = HarnessHookRootContract.DescribeUnsupported(hookRoot);
