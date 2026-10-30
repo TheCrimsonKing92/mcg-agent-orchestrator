@@ -109,21 +109,33 @@ public sealed class WorkerBuildRequestRecoveryTests(ITestOutputHelper output)
         var invocation = await fixture.RunHelper(i =>
         {
             if (i.Phase != cancelAt || intake is not null) return;
-            void Enqueue()
+            void ApplyIntent()
             {
                 var store = new SqliteOperatorIntentStore(fixture.Reference.Admission!.StorePath, fixture.Root);
-                store.EnqueueAsync(new OperatorIntentRecord(Guid.NewGuid().ToString("N"), Guid.NewGuid().ToString("N"),
+                var intent = store.EnqueueAsync(new OperatorIntentRecord(Guid.NewGuid().ToString("N"), Guid.NewGuid().ToString("N"),
                     OperatorIntentVerbs.CancelDispatch, fixture.GoalId.Value, fixture.TaskId.Value, "{}", [],
                     "fixture", "test", "local-process", DateTimeOffset.UtcNow)).GetAwaiter().GetResult();
+                // Intake alone now defers a running dispatch. Resolve the intent through the
+                // store lifecycle so this test still exercises Applied-intent cancellation.
+                const string owner = "recovery-test";
+                var claimed = store.ClaimNextAsync(fixture.GoalId.Value, owner).GetAwaiter().GetResult();
+                Assert.Equal(intent.Id, claimed?.Id);
+                store.CompleteAsync(intent.Id, owner, OperatorIntentStatus.Applied, "applied", DateTimeOffset.UtcNow)
+                    .GetAwaiter().GetResult();
             }
-            if (started) intake = Task.Run(Enqueue); // the resume callback still owns the task admission mutex
-            else { Enqueue(); intake = Task.CompletedTask; }
+            if (started) intake = Task.Run(ApplyIntent); // the resume callback still owns the task admission mutex
+            else { ApplyIntent(); intake = Task.CompletedTask; }
         });
         Assert.NotNull(intake);
         await intake.WaitAsync(TimeSpan.FromSeconds(30));
         Assert.Equal(WorkerBuildOutcome.Cancelled, invocation.Outcome);
         Assert.Equal(started, invocation.Observations.Any(o => o.Phase == WorkerBuildPhase.CompilerStarted));
         Assert.True(invocation.CustodyReleased);
+        var authority = new SqliteOperatorIntentStore(fixture.Reference.Admission!.StorePath, fixture.Root);
+        var suppression = Assert.IsType<TaskIntentSuppressionReceipt>(
+            authority.GetSuppression("worker-build-lifetime:" + invocation.Id));
+        Assert.Equal(OperatorIntentStatus.Applied.ToString(), suppression.IntentStatus);
+        Assert.Equal("task-admission-version-changed", suppression.Reason);
     }
 
     [Theory]

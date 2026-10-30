@@ -1,5 +1,4 @@
 using System.Collections.Immutable;
-using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 
@@ -11,10 +10,15 @@ internal sealed record OwnerConsoleBoardSection(string Project, OwnerConsoleBoar
         bool conductorLive, DateTimeOffset? lastLanded, DateTimeOffset now)
     {
         var active = goals.Count(row => !row.Dimmed);
-        var verified = goals.Count(row => row.State == nameof(GoalStatus.Verified));
+        var inGate = goals.Count(row => row.SortKey.Rank == OwnerConsoleAttention.GateRunning);
+        var waitingForGate = goals.Count(row => row.SortKey.Rank == OwnerConsoleAttention.WaitingForGate);
         var conductor = !conductorLive ? "stopped" : active > 0 ? "running" : "idle";
         var age = lastLanded is { } at ? OwnerConsoleBoardRenderer.Age(now - at) : "never";
-        var title = $"{project} · conductor {conductor} · {active} active · {verified} verified · last landed {age}";
+        var parts = new List<string> { project, $"conductor {conductor}", $"{active} active" };
+        if (inGate > 0) parts.Add($"{inGate} in gate");
+        if (waitingForGate > 0) parts.Add($"{waitingForGate} waiting for gate");
+        parts.Add($"last landed {age}");
+        var title = string.Join(" · ", parts);
         return new(project, new("", "", title, conductor, "", null, "") { Project = project, IsDiagnostic = true }, goals);
     }
 
