@@ -209,7 +209,7 @@ internal sealed class CrosswalkAcceptanceCheck(
 
     private static StringComparison CrosswalkPathComparison => OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
 
-    private static string ResolveCrosswalkProjectRoot(string worktreePath, string? project)
+    internal static string ResolveCrosswalkProjectRoot(string worktreePath, string? project)
     {
         if (!string.IsNullOrEmpty(project) && (Path.IsPathRooted(project) || project.Contains(':')))
             throw new IOException("Crosswalk Project must be repository-relative.");

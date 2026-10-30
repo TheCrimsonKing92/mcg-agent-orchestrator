@@ -38,6 +38,12 @@ public static class OwnerAnswerValidator
             return value;
         }
 
+        if (factKey is DeclaredProjectDiscoveryAdapter.BuildQuestion or DeclaredProjectDiscoveryAdapter.TestQuestion)
+            return string.Join(" ", DeclaredCommandLine.Parse(value));
+
+        if (factKey == DeclaredProjectDiscoveryAdapter.ReportsQuestion)
+            return string.Join(",", DeclaredCommandLine.ParseReports(value));
+
         if (factKey.StartsWith("commands/", StringComparison.Ordinal) &&
             factKey.EndsWith("/test", StringComparison.Ordinal) &&
             factKey.Length > "commands/".Length + "/test".Length)
@@ -54,6 +60,6 @@ public static class OwnerAnswerValidator
             throw new ArgumentException($"{factKey} requires yes or no with no surrounding whitespace.");
         }
 
-        throw new ArgumentException($"{factKey} has no answer rule in this slice. Known keys: {DefaultTimeoutKey}, {BuildServerShutdownKey}, {DiscoveryKey}, {DotnetSdkKey}, commands/<unit>/test, commands/<unit>/timeoutMinutes, {LuaProjectDiscoveryAdapter.FrameworkQuestion}, {LuaProjectDiscoveryAdapter.InstallQuestion}.");
+        throw new ArgumentException($"{factKey} has no answer rule in this slice. Known keys: {DefaultTimeoutKey}, {BuildServerShutdownKey}, {DiscoveryKey}, {DotnetSdkKey}, commands/<unit>/test, commands/<unit>/timeoutMinutes, {LuaProjectDiscoveryAdapter.FrameworkQuestion}, {LuaProjectDiscoveryAdapter.InstallQuestion}, {DeclaredProjectDiscoveryAdapter.BuildQuestion}, {DeclaredProjectDiscoveryAdapter.TestQuestion}, {DeclaredProjectDiscoveryAdapter.ReportsQuestion}.");
     }
 }

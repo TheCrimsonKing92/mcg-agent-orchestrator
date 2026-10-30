@@ -30,6 +30,7 @@ internal static class GateCheckSelectorMatcher
     internal static bool IsTestResultProducing(AcceptanceManifestCheck check) =>
         string.Equals(check.Type, "dotnet-test", StringComparison.OrdinalIgnoreCase) ||
         string.Equals(check.Type, "crosswalk-test", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(check.Type, "junit-command", StringComparison.OrdinalIgnoreCase) ||
         GoPackageFocusedEvidence.IsGoTestCommand(check);
 
     internal static Outcome Grade(string selector, ProspectiveEvidenceGateResolver.GateCheckOutcomes? outcomes)

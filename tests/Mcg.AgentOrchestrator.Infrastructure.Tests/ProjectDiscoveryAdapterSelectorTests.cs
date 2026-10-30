@@ -131,7 +131,6 @@ public sealed class ProjectDiscoveryAdapterSelectorTests
 
     [Theory]
     [InlineData("go.mod", "go.mod")]
-    [InlineData("", "No stack marker")]
     [InlineData("ambiguous", "Root.sln")]
     public void Select_UnsupportedOrRefusedStack_ThrowsWithDetectionReason(string setup, string reason)
     {
@@ -145,6 +144,14 @@ public sealed class ProjectDiscoveryAdapterSelectorTests
 
         Assert.Contains("No discovery adapter is available", exception.Message);
         Assert.Contains(reason, exception.Message);
+    }
+
+    [Fact]
+    public void Select_NoMarker_ReturnsDeclaredAdapter()
+    {
+        using var root = new TemporaryRoot();
+        Assert.IsType<DeclaredProjectDiscoveryAdapter>(ProjectDiscoveryAdapterSelector.Select(root.Path));
+        AssertNoMarker(ProjectDiscoveryAdapterSelector.Detect(root.Path));
     }
 
     [Theory]
