@@ -1,9 +1,19 @@
 using System.Text.Json;
+using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal static class ProspectiveEvidenceCtrfRows
 {
+    internal static IReadOnlySet<string> FileExtensions(IEnumerable<ProspectiveEvidenceTrxRows.Row> rows) =>
+        rows.Select(row => row.FileIdentity).OfType<string>().Select(Path.GetExtension)
+            .Where(extension => extension.Length > 0).ToHashSet(StringComparer.Ordinal);
+
+    internal static bool MatchesSuite(string selector, ProspectiveEvidenceTrxRows.Row row,
+        IReadOnlySet<string> extensions, IReadOnlyList<string> variants) =>
+        row.FileIdentity is not null &&
+        CrosswalkSelectorResolution.MatchesSuite(selector, row.FullIdentity, extensions, variants);
+
     internal static IReadOnlyList<ProspectiveEvidenceTrxRows.Row>? TryRead(string path)
     {
         using var reader = File.OpenText(path);

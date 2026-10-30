@@ -57,13 +57,19 @@ internal static class ProspectiveEvidenceTrxRows
         }
     }
 
-    internal static Row[] Match(string selector, IEnumerable<Row> rows) =>
-        rows.Where(row => ProspectiveEvidenceGateResolver.Matches(selector, row.FullIdentity) ||
+    internal static Row[] Match(string selector, IEnumerable<Row> rows)
+    {
+        var materialized = rows as Row[] ?? rows.ToArray();
+        var extensions = ProspectiveEvidenceCtrfRows.FileExtensions(materialized);
+        var variants = CrosswalkSelectorResolution.SuiteVariants(selector);
+        return materialized.Where(row => ProspectiveEvidenceGateResolver.Matches(selector, row.FullIdentity) ||
             ProspectiveEvidenceGateResolver.Matches(selector, row.ShortIdentity) ||
             (row.AliasIdentity is not null && ProspectiveEvidenceGateResolver.Matches(selector, row.AliasIdentity)) ||
             (row.BareIdentity is not null && ProspectiveEvidenceGateResolver.Matches(selector, row.BareIdentity)) ||
             (row.FileIdentity is not null && string.Equals(selector.Replace('\\', '/'), row.FileIdentity,
-                StringComparison.Ordinal))).ToArray();
+                StringComparison.Ordinal)) ||
+            ProspectiveEvidenceCtrfRows.MatchesSuite(selector, row, extensions, variants)).ToArray();
+    }
 
     internal static IReadOnlyList<string>? AmbiguousClassNames(IEnumerable<Row> matches)
     {
