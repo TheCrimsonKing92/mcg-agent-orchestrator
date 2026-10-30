@@ -57,18 +57,10 @@ public static class TaskIntentAdmission
 
     // A dispatch-scoped action is not another worker launch. The same task mutex linearizes it
     // against intent intake, and the canonical prepared revision must still authorize the action.
-    internal static void ExecuteAuthorized(TaskIntentAdmissionReference reference, string decisionKey, Action action)
-        => Serialize(reference.StorePath, reference.GoalId, null, () =>
-           Serialize(reference.StorePath, reference.GoalId, reference.TaskId, () =>
-        {
-            var store = SqliteOperatorIntentStore.OpenAdmissionAuthority(reference.StorePath);
-            // The caller already owns this worker/job. Compatible graph repair preserves its
-            // build actions; task-intent revision/holds still authorize every action.
-            var denial = store.RecordSuppression(reference, decisionKey, includeGraphRepair: false);
-            if (denial is not null) throw new TaskIntentDispatchSuppressedException(denial);
-            action();
-            return true;
-        }));
+    internal static void ExecuteAuthorized(TaskIntentAdmissionReference reference, string decisionKey, Action action,
+        Action<TaskIntentAdmissionEvent>? observe = null)
+        => new RunningDispatchIntentWait(TimeProvider.System, Thread.Sleep, observe)
+            .Execute(reference, decisionKey, action);
 
     internal static Process Launch(TaskIntentAdmissionReference reference, string decisionKey, Func<Process> start,
         Func<Process, SpawnProcessIdentityReadResult>? readIdentity)
@@ -265,6 +257,13 @@ public sealed partial class SqliteOperatorIntentStore
     // Called under the task mutex. Terminal intent rows remain the source for obsolete-version receipts.
     public TaskIntentSuppressionReceipt? RecordSuppression(TaskIntentAdmissionReference reference, string decisionKey,
         bool validateCommittedGraph = false, bool includeGraphRepair = true)
+        => EvaluateAdmission(reference, decisionKey, validateCommittedGraph, includeGraphRepair, running: false).Suppression;
+
+    internal TaskIntentAdmissionEvaluation EvaluateRunningAdmission(TaskIntentAdmissionReference reference, string decisionKey)
+        => EvaluateAdmission(reference, decisionKey, validateCommittedGraph: false, includeGraphRepair: false, running: true);
+
+    private TaskIntentAdmissionEvaluation EvaluateAdmission(TaskIntentAdmissionReference reference, string decisionKey,
+        bool validateCommittedGraph, bool includeGraphRepair, bool running)
     {
         EnsureWritable();
         ValidateAdmissionReference(reference);
@@ -275,21 +274,48 @@ public sealed partial class SqliteOperatorIntentStore
         using var cmd = conn.CreateCommand();
         cmd.Transaction = tx;
         cmd.CommandText = """
-            SELECT a.revision, i.id, i.verb, i.status
-            FROM task_intent_admission a JOIN operator_intents i ON i.goal_id = a.goal_id AND i.task_id = a.task_id
+            WITH task_intents AS (
+                SELECT id, verb, status, outcome, created_at,
+                    ROW_NUMBER() OVER (ORDER BY rowid DESC) AS reverse_revision,
+                    COUNT(*) OVER () AS intent_count
+                FROM operator_intents WHERE goal_id = $goal AND task_id = $task)
+            SELECT a.revision, i.id, i.verb, i.status, i.outcome
+            FROM task_intent_admission a CROSS JOIN task_intents i
             WHERE a.goal_id = $goal AND a.task_id = $task
-              AND (i.status IN ('Pending', 'Claimed') OR (a.revision <> $version AND i.id = a.latest_intent_id))
-            ORDER BY CASE WHEN i.status IN ('Pending', 'Claimed') THEN 0 ELSE 1 END, i.created_at, i.id LIMIT 1;
+              AND (i.status IN ('Pending', 'Claimed') OR
+                  (a.revision <> $version AND i.status IN ('Applied', 'Rejected') AND
+                   (a.revision <> i.intent_count OR a.revision < $version OR i.reverse_revision <= a.revision - $version)))
+            ORDER BY i.created_at, i.id;
             """;
         BindTarget(cmd, reference.GoalId, reference.TaskId);
         cmd.Parameters.AddWithValue("$version", reference.Version);
-        TaskIntentSuppressionReceipt? receipt = null;
+        // Enqueue advances the revision before the outcome is known. Inspect the whole
+        // post-preparation window so a later rejection cannot hide an earlier Applied intent.
+        // If legacy bookkeeping differs from the inbox count, retain every Applied barrier.
+        TaskIntentSuppressionReceipt? pending = null, applied = null;
+        var rejected = new List<TaskIntentAdmissionEvent>();
         using (var reader = cmd.ExecuteReader())
         {
-            if (reader.Read()) receipt = new(decisionKey, reference.GoalId, reference.TaskId,
-                reader.GetString(1), reader.GetString(2), reference.Version, reader.GetInt64(0), reader.GetString(3),
-                reader.GetString(3) is "Pending" or "Claimed" ? "pending-task-intent" : "task-admission-version-changed");
+            while (reader.Read())
+            {
+                var status = reader.GetString(3);
+                if (status == "Rejected")
+                {
+                    rejected.Add(new("continued", reference.GoalId, reference.TaskId, reference.Version,
+                        reference.DispatchedAt, reader.GetString(1), status,
+                        reader.IsDBNull(4) ? null : reader.GetString(4), 0));
+                    continue;
+                }
+                var candidate = new TaskIntentSuppressionReceipt(decisionKey, reference.GoalId, reference.TaskId,
+                    reader.GetString(1), reader.GetString(2), reference.Version, reader.GetInt64(0), status,
+                    status is "Pending" or "Claimed" ? "pending-task-intent" : "task-admission-version-changed");
+                if (status is "Pending" or "Claimed") pending ??= candidate;
+                else applied ??= candidate;
+            }
         }
+        // Running checks wait on unresolved intents, but an independent Applied change
+        // remains dispositive even while a later intent is unresolved.
+        var receipt = running ? applied : pending ?? applied;
         if (includeGraphRepair)
             receipt ??= ReadGraphSuppression(conn, tx, reference, decisionKey, validateCommittedGraph);
         if (receipt is not null)
@@ -308,7 +334,7 @@ public sealed partial class SqliteOperatorIntentStore
             insert.ExecuteNonQuery();
         }
         tx.Commit();
-        return receipt;
+        return new(receipt, pending, rejected);
     }
 
     public TaskIntentSuppressionReceipt? GetSuppression(string decisionKey)
