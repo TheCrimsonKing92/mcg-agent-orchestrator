@@ -13,7 +13,8 @@ public sealed class RemoteShardInvalidationStopTests
     [Fact]
     public async Task RemoteShardInvalidationExitsOwnedAttemptAndReleasesLeases()
     {
-        var root = CreateManifestWorkspace("""{"version":1,"checks":[],"forbiddenChangedPathGlobs":[]}""");
+        var scenario = new Scenario();
+        var root = scenario.Root;
         // A single offloaded lane leaves no local check monitor that could mask the remote-wait defect.
         ConfigureWorkspace(root, 1, 3, remote: true);
         // Use the collection fixture's run-isolated root so slot identity is covered by its proof.
@@ -97,8 +98,7 @@ public sealed class RemoteShardInvalidationStopTests
                 try
                 {
                     await Event(handle.Polled.Task, "remote shard polled without a result");
-                    var hostRoot = AcceptancePartitionVerdictCache.ResolveHostStateRoot(root);
-                    Assert.True(RemoteExecutorOccupancy.IsOccupied(hostRoot, executorId));
+                    Assert.True(RemoteExecutorOccupancy.IsOccupied(scenario.HostRoot, executorId));
                     var slotLease = await slotAcquired.Task;
                     var custodyPath = Path.Combine(slotLease.Environment.ArtifactsPath, AcceptanceAttemptArtifactCustody.MarkerFileName);
                     // Prebuild releases the build permit before remote waits; artifact custody lasts until teardown.
@@ -118,8 +118,8 @@ public sealed class RemoteShardInvalidationStopTests
                     Assert.True(handle.IsAbandoned);
                     Assert.Single(remote.Requests);
                     Assert.Empty(localStarts);
-                    Assert.False(RemoteExecutorOccupancy.IsOccupied(hostRoot, executorId));
-                    using var nextClaim = RemoteExecutorOccupancy.TryClaimExclusive(hostRoot, executorId);
+                    Assert.False(RemoteExecutorOccupancy.IsOccupied(scenario.HostRoot, executorId));
+                    using var nextClaim = RemoteExecutorOccupancy.TryClaimExclusive(scenario.HostRoot, executorId);
                     Assert.NotNull(nextClaim);
                     Assert.False(File.Exists(custodyPath));
                     Assert.False(slotLease.IsExecutionLockHeld);
@@ -150,6 +150,17 @@ public sealed class RemoteShardInvalidationStopTests
         {
             ResetPartitionVerdictKeyHooks();
             DeleteDirectoryWithRetry(root);
+        }
+    }
+
+    private sealed class Scenario
+    {
+        internal string Root { get; }
+        internal string HostRoot => AcceptancePartitionVerdictCache.ResolveHostStateRoot(Root);
+
+        internal Scenario()
+        {
+            Root = CreateManifestWorkspace("""{"version":1,"checks":[],"forbiddenChangedPathGlobs":[]}""");
         }
     }
 
