@@ -21,15 +21,14 @@ public sealed class OwnerConsoleProjectScopeBoardTests
         using var scene = new Scene(projects, projects.Home);
         await scene.RefreshAsync();
 
-        Assert.Equal(new[] { "beta", "alpha", "home" }, scene.Model.Board.Select(row => row.Project));
-        Assert.Equal(new[] { OwnerConsoleAttention.Held, OwnerConsoleAttention.WaitingForGate,
-            OwnerConsoleAttention.WorkerRunning }, scene.Model.Board.Select(row => row.SortKey.Rank));
-        Assert.Equal(new[] { "33333333-beta", "22222222-alpha", "11111111-home" },
-            scene.Model.Board.Select(row => row.GoalId));
-        Assert.All(scene.Model.Board, row => Assert.Equal(row.Project != "home", row.IsForeign));
-        Assert.Equal(new[] { "PROJECT" }.Concat(LegacyColumns), Columns(scene.View));
-        Assert.Equal(new[] { "beta", "alpha", "home" },
-            scene.View.BoardTable.Rows.Cast<DataRow>().Select(row => (string)row["PROJECT"]));
+        Assert.Equal(new[] { "home", "home", "alpha", "alpha", "beta", "beta" }, scene.Model.Board.Select(row => row.Project));
+        var goals = scene.Model.Board.Where(row => !row.IsDiagnostic).ToArray();
+        Assert.Equal(new[] { OwnerConsoleAttention.WorkerRunning, OwnerConsoleAttention.WaitingForGate,
+            OwnerConsoleAttention.Held }, goals.Select(row => row.SortKey.Rank));
+        Assert.Equal(new[] { "11111111-home", "22222222-alpha", "33333333-beta" }, goals.Select(row => row.GoalId));
+        Assert.All(goals, row => Assert.Equal(row.Project != "home", row.IsForeign));
+        Assert.Equal(LegacyColumns, Columns(scene.View));
+        Assert.All(scene.Model.Board.Where(row => row.IsDiagnostic), row => Assert.StartsWith(row.Project, row.Title));
         Assert.Equal(Columns(scene.View), scene.View.BoardPane.Table!.ColumnNames);
         Assert.True(scene.View.BoardPane.Style.GetOrCreateColumnStyle(0).Visible);
         Assert.Equal("Owner console - all projects | decisions and activity: home", scene.View.Window.Title);
@@ -54,8 +53,8 @@ public sealed class OwnerConsoleProjectScopeBoardTests
         Assert.Equal(refreshes, scene.Refreshes);
 
         await scene.CommandAsync("scope all");
-        Assert.Equal(3, scene.Model.Board.Length);
-        Assert.Equal(new[] { "PROJECT" }.Concat(LegacyColumns), Columns(scene.View));
+        Assert.Equal(6, scene.Model.Board.Length);
+        Assert.Equal(LegacyColumns, Columns(scene.View));
         Assert.Equal(Columns(scene.View), scene.View.BoardPane.Table!.ColumnNames);
         Assert.Equal("Owner console - all projects | decisions and activity: home", scene.View.Window.Title);
         var previous = scene.Model;
@@ -76,8 +75,8 @@ public sealed class OwnerConsoleProjectScopeBoardTests
         using var scene = new Scene(projects, projects.Home);
         await scene.RefreshAsync();
 
-        Assert.Equal(new[] { "alpha", "home", "beta" }, scene.Model.Board.Select(row => row.Project));
-        var diagnostic = Assert.Single(scene.Model.Board.Where(row => row.IsDiagnostic));
+        Assert.Equal(new[] { "home", "home", "alpha", "alpha", "beta" }, scene.Model.Board.Select(row => row.Project));
+        var diagnostic = Assert.Single(scene.Model.Board.Where(row => row.IsDiagnostic && row.Dimmed));
         Assert.Equal("beta", diagnostic.Project);
         Assert.True(diagnostic.Dimmed);
         Assert.Empty(diagnostic.GoalId);
@@ -86,18 +85,18 @@ public sealed class OwnerConsoleProjectScopeBoardTests
         Assert.DoesNotContain(scene.Model.Board, row => row.Project == "beta" && !row.IsDiagnostic);
         var colorArgs = (RowColorGetterArgs)Activator.CreateInstance(typeof(RowColorGetterArgs),
             BindingFlags.Instance | BindingFlags.NonPublic, null,
-            [scene.View.BoardPane.Table!, 2], null)!;
+            [scene.View.BoardPane.Table!, 4], null)!;
         var color = scene.View.BoardPane.Style.RowColorGetter!(colorArgs);
         Assert.NotNull(color);
         Assert.Equal(scene.View.BoardPane.GetScheme().Disabled, color.Normal);
 
         await scene.FocusBoardAsync();
         await scene.View.HandleKeyAsync(Key.End);
-        Assert.Equal("beta", scene.View.SelectedProject);
-        Assert.Null(scene.View.SelectedGoalId);
-        Assert.Equal(diagnostic.Title, scene.View.PreviewText);
+        Assert.Equal("alpha", scene.View.SelectedProject);
+        Assert.Equal("22222222-alpha", scene.View.SelectedGoalId);
+        Assert.Equal(OwnerConsoleBoardSource.ForeignRowMessage(scene.Model.Board[3]), scene.View.PreviewText);
         await scene.View.HandleKeyAsync(Key.Enter);
-        Assert.Contains("beta: state read failed:", scene.View.NoticeText);
+        Assert.Contains("belongs to alpha", scene.View.NoticeText);
         Assert.Empty(scene.Dialogs.Texts);
     }
 
@@ -140,19 +139,19 @@ public sealed class OwnerConsoleProjectScopeBoardTests
         await scene.RefreshAsync();
         Assert.Equal(2, scene.Model.Board.Count(row => row.GoalId == "11111111-home"));
         await scene.FocusBoardAsync();
-        await scene.View.HandleKeyAsync(Key.CursorDown); // beta -> alpha, before home with the same id.
+        await scene.View.HandleKeyAsync(Key.CursorDown); // home -> alpha, skipping alpha's header.
         Assert.Equal("alpha", scene.View.SelectedProject);
         Assert.Equal("11111111-home", scene.View.SelectedGoalId);
         const string refusal = "11111111 belongs to alpha. Detail and actions for other projects arrive in a later slice; open it with --project=alpha console.";
         Assert.Equal(refusal, scene.View.PreviewText);
         scene.Harness.State.Calls.Clear();
 
-        // Reordering moves the colliding home row ahead of alpha: restoration must use both keys.
+        // Simulate the post-compose re-sort: restoration must retain both identity keys.
         var board = scene.Model.Board;
-        scene.View.Render(scene.Model with { Board = [board[2], board[0], board[1]] });
+        scene.View.Render(scene.Model with { Board = [.. board.Reverse()] });
         Assert.Equal("alpha", scene.View.SelectedProject);
         Assert.Equal("11111111-home", scene.View.SelectedGoalId);
-        Assert.Equal(2, scene.View.BoardPane.Value!.SelectedCell.Y);
+        Assert.Equal(3, scene.View.BoardPane.Value!.SelectedCell.Y);
         if (command == "enter") await scene.View.HandleKeyAsync(Key.Enter);
         else await scene.CommandAsync(command);
 
@@ -177,8 +176,8 @@ public sealed class OwnerConsoleProjectScopeBoardTests
 
         Assert.Equal(label, scene.Model.BoardScope!.Label);
         Assert.Equal(projectCount, scene.Model.BoardScope.ProjectCount);
-        Assert.Equal(projectCount, scene.Model.Board.Length);
-        Assert.Contains("PROJECT", Columns(scene.View));
+        Assert.Equal(projectCount * 2, scene.Model.Board.Length);
+        Assert.DoesNotContain("PROJECT", Columns(scene.View));
         Assert.Equal($"Owner console - {label} | decisions and activity: home", scene.View.Window.Title);
     }
 

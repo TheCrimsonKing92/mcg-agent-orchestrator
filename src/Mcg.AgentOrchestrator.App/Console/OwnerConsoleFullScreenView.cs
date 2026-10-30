@@ -217,6 +217,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
         _rendering = true;
         try
         {
+            model = OwnerConsoleBoardSection.Arrange(model);
             _controller.Apply(model);
             if (model.BoardScope is { } scope) Window.Title = $"Owner console - {OwnerConsoleProjectLabel.ForScope(scope)}";
             _refreshedAt = _clock.GetUtcNow();
@@ -487,7 +488,8 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
         {
             key.Handled = true;
             if (ActionRunning || target < 0) return;
-            if (pane == OwnerConsolePane.Board) SelectBoard(target);
+            if (pane == OwnerConsolePane.Board) SelectBoard(target, direction:
+                key == Key.Home ? 1 : key == Key.End ? -1 : Math.Sign(target - current));
             else if (pane == OwnerConsolePane.Activity) { _activity.SelectedItem = target; _activity.EnsureSelectedItemVisible(); }
             else { _controller.SelectIndex(target); _decisions.SelectedItem = target; _decisions.EnsureSelectedItemVisible(); }
             RenderHints();
@@ -501,7 +503,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
             // existing headless decision-navigation contract while a fake dialog is pending.
             if (ActionRunning && pane != OwnerConsolePane.Decisions) return;
             var delta = key == Key.CursorUp ? -1 : 1;
-            if (pane == OwnerConsolePane.Board) SelectBoard(_selectedBoardIndex + delta);
+            if (pane == OwnerConsolePane.Board) SelectBoard(_selectedBoardIndex + delta, direction: delta);
             else if (pane == OwnerConsolePane.Activity)
             {
                 if (ActivityLines.Count > 0)
@@ -688,15 +690,16 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
         : OwnerConsoleKeyHints.Hint(FocusedPane,
             _controller.SelectedDecision is { } decision && OwnerConsoleScreenController.AnswersInConsole(decision), _activityPane.Following);
 
-    private void SelectBoard(int index, bool refresh = false)
+    private void SelectBoard(int index, bool refresh = false, int direction = 0)
     {
         using var trace = _diagnostics?.Begin("select-board", TraceState);
         if (_controller.Model is not { Board.Length: > 0 } model)
         { _selectedBoardIndex = -1; SelectedGoalId = null; SelectedProject = null; _summary.Select(null); RenderPreview(); return; }
-        _selectedBoardIndex = Math.Clamp(index, 0, model.Board.Length - 1);
+        var selectable = OwnerConsoleBoardSection.NearestGoal(model.Board, model.BoardScope, index, direction);
+        _selectedBoardIndex = selectable < 0 ? 0 : selectable;
         var row = model.Board[_selectedBoardIndex];
         SelectedGoalId = row.IsDiagnostic ? null : row.GoalId;
-        SelectedProject = row.Project;
+        SelectedProject = selectable < 0 ? null : row.Project;
         _summary.Select(row.IsForeign || row.IsDiagnostic ? null : SelectedGoalId, refresh);
         RenderPreview();
         if (_board.Value?.SelectedCell.Y != _selectedBoardIndex)
