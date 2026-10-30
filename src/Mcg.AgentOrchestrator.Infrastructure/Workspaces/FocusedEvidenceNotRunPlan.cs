@@ -27,21 +27,32 @@ internal sealed record FocusedEvidenceNotRunPlan(IReadOnlyList<FocusedEvidenceNo
         foreach (var check in planned)
         {
             var recorded = results.Where(result => result.Name == check.Name).ToArray();
-            if (recorded.Length > 0 && recorded.All(result => result.ExecutedTestCount is > 0))
+            var crosswalk = CrosswalkFocusedEvidence.IsEvidenceCheck(check);
+            if (!crosswalk && recorded.Length > 0 && recorded.All(result => result.ExecutedTestCount is > 0))
             {
                 stoppedAfterFailure |= !continueAfterFailure && recorded.Any(result => !result.Passed);
                 continue;
             }
             var selections = coverage.TargetToChecks
                 .Where(target => target.CheckNames.Contains(check.Name, StringComparer.Ordinal))
-                .Select(target => target.Target.Split(':', 2, StringSplitOptions.TrimEntries))
+                .Select(target => crosswalk
+                    ? CrosswalkFocusedEvidence.SplitTarget(check, target.Target)
+                    : target.Target.Split(':', 2, StringSplitOptions.TrimEntries))
                 .Where(parts => parts.Length == 2)
                 .Select(parts => new FindingEvidenceSelection(parts[0], parts[1])).ToArray();
+            var undemonstrated = crosswalk
+                ? CrosswalkFocusedEvidence.UndemonstratedSelections(check, recorded, selections) : null;
+            if (crosswalk && recorded.Length > 0 && recorded.All(result => result.ExecutedTestCount is > 0) &&
+                undemonstrated!.Count == 0)
+            {
+                stoppedAfterFailure |= !continueAfterFailure && recorded.Any(result => !result.Passed);
+                continue;
+            }
             var reason = recorded.Length > 0 ? ExecutionNotDemonstrated
                 : stoppedAfterFailure ? ApparatusStoppedAfterFailure : NoResultRecorded;
-            missing.Add(new(check.Name, $"not-run:{reason}", selections,
+            missing.Add(new(check.Name, $"not-run:{reason}", crosswalk ? undemonstrated! : selections,
                 GoPackageFocusedEvidence.IsEvidenceCheck(check)
-                    ? GoPackageFocusedEvidence.UndemonstratedSelections(check, recorded, selections) : null));
+                    ? GoPackageFocusedEvidence.UndemonstratedSelections(check, recorded, selections) : undemonstrated));
             stoppedAfterFailure |= !continueAfterFailure && recorded.Any(result => !result.Passed);
         }
         return new(missing, results.SelectMany(result => result.SkippedTestIdentities ?? [])

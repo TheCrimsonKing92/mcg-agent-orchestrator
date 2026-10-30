@@ -24,6 +24,9 @@ internal static partial class FocusedEvidenceRequestResolver
         if (GoPackageFocusedEvidence.Applies(engineSettings))
             return GoPackageFocusedEvidence.TryBuild(request, engineSettings, worktreePath,
                 out checks, out coverage, out rejection);
+        if (CrosswalkFocusedEvidence.Applies(engineSettings))
+            return CrosswalkFocusedEvidence.TryBuild(request, engineSettings, worktreePath,
+                out checks, out coverage, out rejection);
         checks = [];
         coverage = new FocusedEvidenceCoverage(TargetToChecks: []);
         rejection = new FocusedEvidenceRejection(FocusedEvidenceRejectionCode.EmptyRequest, request, "empty evidence request");
@@ -442,6 +445,8 @@ internal static partial class FocusedEvidenceRequestResolver
         AcceptanceGateEngineSettings? engineSettings,
         out string project)
     {
+        if (CrosswalkFocusedEvidence.Applies(engineSettings))
+            return CrosswalkFocusedEvidence.TryResolveProject(alias, engineSettings, out project);
         var normalized = alias.Replace('\\', '/').Trim();
         project = normalized switch
         {
