@@ -299,7 +299,7 @@ public static partial class DispatchFailureClassifier
     {
         return failureKind switch
         {
-            ProviderFailureKind.RateLimit => WithClassifierReceipt(
+            ProviderFailureKind.RateLimit => DispatchClassifierReceipt.WithClassifierReceipt(
                 TaskOutcomeRules.ProviderRateLimit,
                 new DispatchOutcome(
                 DispatchOutcomeKind.RecoverableSubscriptionLimit,
@@ -310,7 +310,7 @@ public static partial class DispatchFailureClassifier
                 RecoveryRecommendation.AutoRetry,
                 evidenceSummary),
                 exitCode),
-            ProviderFailureKind.BudgetExhausted => WithClassifierReceipt(
+            ProviderFailureKind.BudgetExhausted => DispatchClassifierReceipt.WithClassifierReceipt(
                 TaskOutcomeRules.ProviderBudgetExhausted,
                 new DispatchOutcome(
                 DispatchOutcomeKind.ProviderBudgetExhausted,
@@ -321,7 +321,7 @@ public static partial class DispatchFailureClassifier
                 RecoveryRecommendation.OperatorNeeded,
                 evidenceSummary),
                 exitCode),
-            ProviderFailureKind.Connectivity => WithClassifierReceipt(
+            ProviderFailureKind.Connectivity => DispatchClassifierReceipt.WithClassifierReceipt(
                 TaskOutcomeRules.ProviderConnectivity,
                 new DispatchOutcome(
                 DispatchOutcomeKind.ProviderConnectivity,
@@ -332,7 +332,7 @@ public static partial class DispatchFailureClassifier
                 RecoveryRecommendation.AutoRetry,
                 evidenceSummary),
                 exitCode),
-            ProviderFailureKind.Sandbox1312 => WithClassifierReceipt(
+            ProviderFailureKind.Sandbox1312 => DispatchClassifierReceipt.WithClassifierReceipt(
                 TaskOutcomeRules.ProviderSandboxLaunch1312,
                 new DispatchOutcome(
                 DispatchOutcomeKind.LaunchFailure,
@@ -343,7 +343,7 @@ public static partial class DispatchFailureClassifier
                 RecoveryRecommendation.AutoRetry,
                 evidenceSummary),
                 exitCode),
-            _ => WithClassifierReceipt(
+            _ => DispatchClassifierReceipt.WithClassifierReceipt(
                 TaskOutcomeRules.ProviderUnknown,
                 new DispatchOutcome(
                 DispatchOutcomeKind.UnknownFailure,
@@ -1342,210 +1342,13 @@ public static partial class DispatchFailureClassifier
             : rule.Class;
         return (outcome with { OutcomeClass = outcomeClass }) with
         {
-            ClassifierReceipt = AppendEvidenceReceipt(
-                BuildClassifierReceipt(rule, outcomeClass, task, verification, workerResultPresent, hasCommittedChanges, outcome.Kind),
+            ClassifierReceipt = DispatchClassifierReceipt.AppendEvidenceReceipt(
+                DispatchClassifierReceipt.BuildClassifierReceipt(rule, outcomeClass, task, verification, workerResultPresent, hasCommittedChanges, outcome.Kind),
                 outcome)
         };
     }
 
-    private static DispatchOutcome WithClassifierReceipt(TaskOutcomeRule rule, DispatchOutcome outcome, int exitCode) =>
-        (outcome with { OutcomeClass = rule.Class }) with
-        {
-            ClassifierReceipt = AppendEvidenceReceipt(
-                $"CLASSIFIER rule={rule.Token}; outcome_class={TaskOutcomeClassifier.FormatClass(rule.Class)}; " +
-                $"exit_code={exitCode}; exit_artifact=direct-provider-failure; " +
-                "stdout_bytes=unknown; stderr_bytes=unknown; heartbeat_stdout_bytes=unknown; " +
-                $"worker_result=absent; commit=none; verdict={outcome.Kind}",
-                outcome)
-        };
-
-    private static string AppendEvidenceReceipt(string receipt, DispatchOutcome outcome)
-    {
-        if (string.IsNullOrWhiteSpace(outcome.EvidenceSummary))
-        {
-            return receipt;
-        }
-
-        return $"{receipt}; evidence={SanitizeReceiptValue(outcome.EvidenceSummary, maxLength: 240)}";
-    }
-
-    private static string BuildClassifierReceipt(
-        TaskOutcomeRule rule,
-        TaskOutcomeClass outcomeClass,
-        TaskSpec task,
-        TaskVerificationRecord verification,
-        bool workerResultPresent,
-        bool hasCommittedChanges,
-        DispatchOutcomeKind verdict)
-    {
-        var stdoutBytes = GetOutputByteCount(verification.StandardOutputPath, verification.StandardOutput);
-        var stderrBytes = GetOutputByteCount(verification.StandardErrorPath, verification.StandardError);
-        var heartbeat = verification.HeartbeatStandardOutputBytes is { } heartbeatBytes
-            ? heartbeatBytes.ToString(System.Globalization.CultureInfo.InvariantCulture)
-            : "unknown";
-        var workerResult = DescribeWorkerResult(verification, workerResultPresent);
-        var commitProvenance = DescribeCommitProvenance(task, verification, hasCommittedChanges);
-        var duration = verification.DispatchStartedAt is { } startedAt
-            ? Math.Max(0, (long)(verification.CompletedAt - startedAt).TotalMilliseconds)
-                .ToString(System.Globalization.CultureInfo.InvariantCulture)
-            : "unknown";
-
-        var childExitCode = verification.ChildExitCode?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown";
-        var rootExitCode = (verification.ObservedRootExitCode ?? verification.ExitCode)
-            .ToString(System.Globalization.CultureInfo.InvariantCulture);
-        var reconciliationOrigin = string.IsNullOrWhiteSpace(verification.ReconciliationOriginRule)
-            ? string.Empty
-            : $"; origin_rule={SanitizeReceiptValue(verification.ReconciliationOriginRule)}";
-
-        return $"CLASSIFIER rule={rule.Token}; outcome_class={TaskOutcomeClassifier.FormatClass(outcomeClass)}{reconciliationOrigin}; " +
-            $"exit_code={verification.ExitCode}; root_exit_code={rootExitCode}; " +
-            $"child_exit_code={childExitCode}; exit_artifact=verification-record; " +
-            $"stdout_bytes={stdoutBytes}; stderr_bytes={stderrBytes}; heartbeat_stdout_bytes={heartbeat}; " +
-            $"duration_ms={duration}; worker_result={workerResult}; commit={commitProvenance}; verdict={verdict}";
-    }
-
-    private static long GetOutputByteCount(string? path, string output)
-    {
-        if (!string.IsNullOrWhiteSpace(path) && File.Exists(path))
-        {
-            return new FileInfo(path).Length;
-        }
-
-        return Encoding.UTF8.GetByteCount(output);
-    }
-
-    private static string DescribeWorkerResult(TaskVerificationRecord verification, bool workerResultPresent)
-    {
-        if (TryGetWorkerResultBlockersValue(verification, out var blockers))
-        {
-            return $"present(blockers={SanitizeReceiptValue(blockers)})";
-        }
-
-        if (workerResultPresent ||
-            verification.StandardOutput.Contains("WORKER_RESULT", StringComparison.OrdinalIgnoreCase) ||
-            verification.StandardError.Contains("WORKER_RESULT", StringComparison.OrdinalIgnoreCase))
-        {
-            return WorkerResultBlockers.TryFindBlocker(verification, out var blocker)
-                ? $"present(blockers={SanitizeReceiptValue(blocker)})"
-                : "present(blockers=absent)";
-        }
-
-        return "absent";
-    }
-
-    private static bool TryGetWorkerResultBlockersValue(TaskVerificationRecord verification, out string blockers)
-    {
-        return TryGetWorkerResultFieldValue(verification, "blockers", out blockers);
-    }
-
-    private static bool TryGetWorkerResultFieldValue(
-        TaskVerificationRecord verification,
-        string fieldName,
-        out string value) =>
-        TryGetWorkerResultFieldValue(
-            DispatchEvidenceSummaries.EnumerateEvidenceLines(verification, includeStandardOutput: true, includeStandardError: true),
-            fieldName,
-            out value);
-
-    private static bool TryGetWorkerResultFieldValue(
-        IEnumerable<string> evidenceLines,
-        string fieldName,
-        out string value)
-    {
-        value = string.Empty;
-        var inBlock = false;
-        string? latestValue = null;
-
-        foreach (var rawLine in evidenceLines)
-        {
-            var line = rawLine.Trim();
-            if (IsWorkerResultOpener(line))
-            {
-                inBlock = true;
-                latestValue = null;
-                continue;
-            }
-
-            if (IsWorkerResultEndMarker(line))
-            {
-                if (inBlock && latestValue is not null)
-                {
-                    value = latestValue;
-                    return true;
-                }
-
-                inBlock = false;
-                continue;
-            }
-
-            if (!inBlock)
-            {
-                continue;
-            }
-
-            var sep = line.IndexOf(':', StringComparison.Ordinal);
-            if (sep <= 0)
-            {
-                continue;
-            }
-
-            var key = NormalizeWorkerResultMarker(line[..sep]).TrimStart('-', ' ').Trim();
-            if (string.Equals(key, fieldName, StringComparison.OrdinalIgnoreCase))
-            {
-                latestValue = line[(sep + 1)..].Trim();
-            }
-        }
-
-        if (inBlock && latestValue is not null)
-        {
-            value = latestValue;
-            return true;
-        }
-
-        return false;
-    }
-
-    private static string DescribeCommitProvenance(TaskSpec task, TaskVerificationRecord verification, bool hasCommittedChanges)
-    {
-        if (HasDispatchResultCommitEvidence(task))
-        {
-            return "orchestrator";
-        }
-
-        return hasCommittedChanges || verification.HasCommittedChanges ? "worker" : "none";
-    }
-
-    private static bool IsNoWorkerResultBlockersValue(string value)
-    {
-        if (string.IsNullOrWhiteSpace(value))
-        {
-            return true;
-        }
-
-        if (value.StartsWith('<') && value.EndsWith('>'))
-        {
-            return true;
-        }
-
-        return value.Equals("none", StringComparison.OrdinalIgnoreCase) ||
-            value.StartsWith("none ", StringComparison.OrdinalIgnoreCase) ||
-            value.StartsWith("none-", StringComparison.OrdinalIgnoreCase) ||
-            value.StartsWith("none.", StringComparison.OrdinalIgnoreCase) ||
-            value.StartsWith("none:", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static string SanitizeReceiptValue(string value, int maxLength = 80)
-    {
-        var sanitized = value
-            .Replace("\r", " ", StringComparison.Ordinal)
-            .Replace("\n", " ", StringComparison.Ordinal)
-            .Replace(";", ",", StringComparison.Ordinal)
-            .Trim();
-
-        return sanitized.Length > maxLength ? sanitized[..maxLength] : sanitized;
-    }
-
-    private static bool HasDispatchResultCommitEvidence(TaskSpec task)
+    internal static bool HasDispatchResultCommitEvidence(TaskSpec task)
     {
         if (task.LastDispatch is not { } dispatch ||
             string.IsNullOrWhiteSpace(dispatch.BaseCommit) ||
@@ -1758,8 +1561,8 @@ public static partial class DispatchFailureClassifier
         out string commitSha)
     {
         commitSha = string.Empty;
-        if (!TryGetWorkerResultFieldValue(verification, "commit", out var commitValue) ||
-            IsNoWorkerResultBlockersValue(commitValue))
+        if (!DispatchClassifierReceipt.TryGetWorkerResultFieldValue(verification, "commit", out var commitValue) ||
+            DispatchClassifierReceipt.IsNoWorkerResultBlockersValue(commitValue))
         {
             return false;
         }
@@ -1802,8 +1605,8 @@ public static partial class DispatchFailureClassifier
         var retainedLines = evidenceLines.ToArray();
         return (WorkerResultBlockers.TryGetTestsStatus(string.Join('\n', retainedLines), out var testsStatus) &&
                 testsStatus == WorkerResultBlockers.TestsStatus.Deferred) ||
-            (TryGetWorkerResultFieldValue(retainedLines, "deferrals", out var deferrals) &&
-             !IsNoWorkerResultBlockersValue(deferrals));
+            (DispatchClassifierReceipt.TryGetWorkerResultFieldValue(retainedLines, "deferrals", out var deferrals) &&
+             !DispatchClassifierReceipt.IsNoWorkerResultBlockersValue(deferrals));
     }
 
     private static bool HasGreenCommittedWorkerResultEvidence(
@@ -2427,19 +2230,19 @@ public static partial class DispatchFailureClassifier
         line.StartsWith("Planner durable receipt failed revalidation:", StringComparison.OrdinalIgnoreCase) ||
         line.StartsWith("Planner output contract could not persist the accepted plan:", StringComparison.OrdinalIgnoreCase);
 
-    private static bool IsWorkerResultOpener(string line)
+    internal static bool IsWorkerResultOpener(string line)
     {
         var normalized = NormalizeWorkerResultMarker(line).TrimEnd(':').Trim();
         return string.Equals(normalized, "WORKER_RESULT", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static bool IsWorkerResultEndMarker(string line)
+    internal static bool IsWorkerResultEndMarker(string line)
     {
         var normalized = NormalizeWorkerResultMarker(line);
         return string.Equals(normalized, "END_WORKER_RESULT", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static string NormalizeWorkerResultMarker(string text)
+    internal static string NormalizeWorkerResultMarker(string text)
     {
         var trimmed = text.Trim();
         var buffer = new char[trimmed.Length];
