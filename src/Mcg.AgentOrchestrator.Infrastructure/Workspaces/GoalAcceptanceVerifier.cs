@@ -700,6 +700,14 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             ? BuildDeferredChecks(solutionCheck, effectiveChecks, worktreePath)
             : [];
 
+        AcceptanceGateLanePlanPublisher.Publish(AcceptanceGateLanePlanPublisher.Classify(
+            executionOwner.Identity.AttemptId, effectivePlan.CandidateLanes, infrastructureTestLanes,
+            manifest.Checks, policyRequiredChecks, policyShardPlan, effectivePlan.DotnetShardDisposition,
+            effectivePlan.SemanticDeduplications, effectivePlan.Checks, effectiveChecks,
+            scopedChecks is null ? effectiveChecks : effectiveChecks.Where(check =>
+                !check.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase) || scopedChecks.Any(scoped => scoped.Name == check.Name)).ToArray()),
+            AcceptanceAttemptResultsPrefix, goalId, EmitGateProgress, _timeProvider);
+
         if (scopedChecks is not null)
         {
             var scopedNames = scopedChecks.Select(c => c.Name).ToHashSet(StringComparer.Ordinal);
@@ -1859,8 +1867,9 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             };
         }
 
+        var candidateLanes = ResolveOwnedCollectionLanes(engineSettings, worktreePath);
         var infrastructureTestLanes = SelectInfrastructureTestLanes(
-            ResolveOwnedCollectionLanes(engineSettings, worktreePath),
+            candidateLanes,
             changedFiles,
             policyShardPlan);
 
@@ -1889,6 +1898,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         return new EffectiveGatePlan(
             manifest,
             semanticDeduplication.Checks,
+            candidateLanes,
             infrastructureTestLanes,
             policyShardPlan,
             policyRequiredChecks,
@@ -4334,6 +4344,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     private sealed record EffectiveGatePlan(
         AcceptanceManifest Manifest,
         IReadOnlyList<AcceptanceManifestCheck> Checks,
+        IReadOnlyList<AcceptanceTestLane> CandidateLanes,
         IReadOnlyList<AcceptanceTestLane> InfrastructureTestLanes,
         PolicyShardPlan PolicyShardPlan,
         IReadOnlyList<AcceptanceManifestCheck> PolicyRequiredChecks,

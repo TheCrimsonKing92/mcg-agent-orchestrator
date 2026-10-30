@@ -36,7 +36,7 @@ internal sealed class OwnerConsoleGateProgressLoader(string logPath, string mani
                 Math.Min(maxConcurrentShards, coreBudget ?? Math.Max(1, Environment.ProcessorCount / 2)), owners);
             var gate = OwnerConsoleGateProgress.Build(now, events, lanes, history,
                 id => titles.FirstOrDefault(pair => pair.Key.StartsWith(id, StringComparison.Ordinal)).Value,
-                capacity: capacity.LocalBudget, executors: executors);
+                capacity: capacity.LocalBudget, executors: executors, planReader: new OwnerConsoleGateLanePlanReader());
             var evidence = _conductTail.Select("host-evidence", OwnerConsoleHostEvidenceRuns.Parse, 1_048_576).ToArray();
             return gate with
             {

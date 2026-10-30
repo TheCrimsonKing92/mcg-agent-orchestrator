@@ -1,13 +1,14 @@
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
-// Isolated database and worktree per test, without environment mutation or shared database state.
-public sealed class WorkerBuildScopeDispatchPersistenceTests
+// Class-owned template; isolated database and worktree copies without environment mutation.
+public sealed class WorkerBuildScopeDispatchPersistenceTests(WorkerBuildScopeDispatchFixtureTemplate template)
+    : IClassFixture<WorkerBuildScopeDispatchFixtureTemplate>
 {
     [Fact]
     public async Task SqliteReloadRetainsScopeForCompletionAfterSuccessorPreparation()
     {
-        using var fixture = new WorkerBuildScopeDispatchFixture();
+        using var fixture = template.Copy();
         var database = Path.Combine(fixture.Main, "scope-state.db");
         _ = StateDbMigrations.EnsureUpToDate(database);
         var identity = fixture.Predecessor.LastDispatch!.WorkerBuildScope;
