@@ -15,6 +15,7 @@ internal static class ImpactReplay
         var unreplayable = new List<ImpactReplayDiagnostic>();
         var cleanupErrors = new List<string>();
         var records = new List<ImpactReplayAttemptRecord>();
+        var unmappedClasses = new List<ImpactReplayUnmappedTestClasses.Occurrence>();
         var gainedAttempts = 0;
         IReadOnlyList<AcceptanceLaneFlakeRow> flakeRows;
         try
@@ -68,16 +69,22 @@ internal static class ImpactReplay
                 var augmented = ImpactReplayChangedTestClassSelection.Read(checkout, changedFiles, selection.TestClassNames);
                 var selectedLanes = new HashSet<string>(attemptFloor, StringComparer.Ordinal);
                 var unmapped = false;
+                var attemptUnmappedClasses = new List<ImpactReplayUnmappedTestClasses.Occurrence>();
                 foreach (var simpleName in augmented.Classes)
                 {
                     var matches = classes.Where(item => item.FullName.Split('.', '+').Last() == simpleName).ToArray();
                     if (matches.Length == 0) unmapped = true;
+                    var singleMatchHasLane = false;
                     foreach (var item in matches)
                     {
                         var memberships = AcceptanceLaneMembership.LanesIncluding(lanes, item.FullName);
                         if (memberships.Count == 0) unmapped = true;
                         selectedLanes.UnionWith(memberships.Select(lane => lane.Name));
+                        if (matches.Length == 1) singleMatchHasLane = memberships.Count > 0;
                     }
+                    var diagnostic = ImpactReplayUnmappedTestClasses.Classify(attempt.AttemptId, simpleName,
+                        matches.Select(item => item.FullName).ToArray(), singleMatchHasLane);
+                    if (diagnostic is not null) attemptUnmappedClasses.Add(diagnostic);
                 }
                 var resolved = selection.Outcome == ReverseDependencySelectionOutcome.Resolved && !unmapped && augmented.AbandonReason is null;
                 var ran = evidence.LaneOutcomes.Select(item => item.Lane).Order(StringComparer.Ordinal).ToArray();
@@ -99,6 +106,7 @@ internal static class ImpactReplay
                     lanes.Where(lane => skippedLanes.Contains(lane.Name, StringComparer.Ordinal)).Sum(lane => lane.EstimatedSerialSeconds),
                     evidence.LaneOutcomes, failures,
                     warnings.Count == 0, warnings));
+                unmappedClasses.AddRange(attemptUnmappedClasses);
                 if (augmented.Gained) gainedAttempts++;
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or ArgumentException or InvalidOperationException or InvalidDataException)
@@ -119,7 +127,8 @@ internal static class ImpactReplay
                 }
             }
         }
-        return new(floor is null ? "default" : "override", floorNames.ToArray(), records, skipped, unreplayable, cleanupErrors, gainedAttempts);
+        return new(floor is null ? "default" : "override", floorNames.ToArray(), records, skipped, unreplayable, cleanupErrors, gainedAttempts,
+            ImpactReplayUnmappedTestClasses.Aggregate(unmappedClasses));
     }
 
     private static bool IsDefaultFloor(string name) =>

@@ -10,7 +10,8 @@ internal static class ImpactReplayReportWriter
     {
         Directory.CreateDirectory(outputDirectory);
         File.WriteAllText(Path.Combine(outputDirectory, "impact-replay.json"),
-            JsonSerializer.Serialize(report, new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true }));
+            JsonSerializer.Serialize(report with { UnmappedTestClasses = report.UnmappedTestClasses ?? ImpactReplayUnmappedTestClasses.Empty },
+                new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true }));
         File.WriteAllText(Path.Combine(outputDirectory, "impact-replay.md"), Render(report));
     }
 
@@ -87,6 +88,21 @@ internal static class ImpactReplayReportWriter
             if (nonCSharp.Length > 0) text.AppendLine($"- {Cell(attempt.AttemptId)}: non-C# changes: {Cell(string.Join(", ", nonCSharp))}");
         }
         foreach (var error in report.CleanupErrors) text.AppendLine($"- {Cell(error)}");
+        var unmapped = report.UnmappedTestClasses ?? ImpactReplayUnmappedTestClasses.Empty;
+        text.AppendLine();
+        text.AppendLine("## Unmapped test classes");
+        text.AppendLine();
+        foreach (var reason in new[] { ImpactReplayUnmappedTestClasses.NotScanned, ImpactReplayUnmappedTestClasses.NoLane, ImpactReplayUnmappedTestClasses.Ambiguous })
+            text.AppendLine($"- {reason}: {unmapped.CountsByReason[reason]}");
+        text.AppendLine();
+        if (unmapped.TopClasses.Count == 0) text.AppendLine("No unmapped test classes were found.");
+        else
+        {
+            text.AppendLine("| Class | Reason | Attempts | Full names |");
+            text.AppendLine("| --- | --- | --- | --- |");
+            foreach (var item in unmapped.TopClasses)
+                text.AppendLine($"| {Cell(item.Class)} | {Cell(item.Reason)} | {item.Attempts} | {Cell(string.Join(", ", item.FullNames))} |");
+        }
         return text.ToString();
     }
 
