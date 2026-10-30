@@ -33,7 +33,7 @@ private static void PrintBoundedGoalDiagnostics(CliExecutionContext context)
         pendingHumanInputCount: context.Kernel.BuildHumanInputWorklist(goal.Id).OpenCount,
         verificationSatisfied,
         commandLineSnapshot: processSnapshot);
-    ConsoleViews.PrintOperatorDisposition(disposition);
+    NextActionsTextView.PrintOperatorDisposition(disposition);
 
     Console.WriteLine("Dispatches:");
     var dispatches = disposition.Dispatches
@@ -51,7 +51,7 @@ private static void PrintBoundedGoalDiagnostics(CliExecutionContext context)
             Console.WriteLine($"  Task {TaskDisplayNumber.Resolve(goal, task.Id)} {dispatch.Role} status={dispatch.TaskStatus} state={dispatch.State} command='{dispatch.NextSafeCommand}' reason='{OutputTextPreview.CreateTimeline(dispatch.Reason).Text}'");
             if (dispatch.DispatchState is { } dispatchState)
             {
-                ConsoleViews.PrintDispatchState(dispatchState, "    ");
+                DispatchResultTextView.PrintDispatchState(dispatchState, "    ");
             }
         }
     }

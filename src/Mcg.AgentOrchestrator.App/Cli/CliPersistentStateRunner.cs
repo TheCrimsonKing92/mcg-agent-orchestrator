@@ -2372,7 +2372,7 @@ internal static partial class CliPersistentStateRunner
                 var refreshGoal = ResolveDispatchCommandGoal(args, kernel, currentGoal, "refresh-dispatches [goal-prefix|--goal <goal-prefix>]");
                 currentGoal = refreshGoal;
                 var refreshed = new GoalDispatchOperations().RefreshDispatches(kernel, refreshGoal, runner);
-                ConsoleViews.PrintProcessBatchResult(refreshGoal, refreshed);
+                DispatchResultTextView.PrintProcessBatchResult(refreshGoal, refreshed);
                 break;
 
             default:
