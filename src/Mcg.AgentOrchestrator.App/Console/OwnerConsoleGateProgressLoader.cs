@@ -25,7 +25,7 @@ internal sealed class OwnerConsoleGateProgressLoader(string logPath, string mani
                 shards.ValueKind == JsonValueKind.Number && shards.TryGetInt32(out var value) && value > 0 ? value : 1;
             var executors = executorConfigPath is null ? Array.Empty<OwnerConsoleGateExecutorSlots>() :
                 RemoteLaneExecutorConfiguration.LoadExecutors(executorConfigPath)
-                    .Select(executor => new OwnerConsoleGateExecutorSlots(executor.Id, executor.Slots)).ToArray();
+                    .Select(executor => new OwnerConsoleGateExecutorSlots(executor.Id, executor.Slots, executor.AdmissionEnabled)).ToArray();
             var lanes = engine.GetProperty("infrastructureTestLanes").EnumerateArray()
                 .Select(lane => new OwnerConsoleGateManifestLane(lane.GetProperty("name").GetString()!,
                     lane.GetProperty("estimatedSerialSeconds").GetDouble())).ToArray();
@@ -36,7 +36,7 @@ internal sealed class OwnerConsoleGateProgressLoader(string logPath, string mani
                 Math.Min(maxConcurrentShards, coreBudget ?? Math.Max(1, Environment.ProcessorCount / 2)), owners);
             var gate = OwnerConsoleGateProgress.Build(now, events, lanes, history,
                 id => titles.FirstOrDefault(pair => pair.Key.StartsWith(id, StringComparison.Ordinal)).Value,
-                capacity: capacity.LocalBudget);
+                capacity: capacity.LocalBudget, executors: executors);
             var evidence = _conductTail.Select("host-evidence", OwnerConsoleHostEvidenceRuns.Parse, 1_048_576).ToArray();
             return gate with
             {
