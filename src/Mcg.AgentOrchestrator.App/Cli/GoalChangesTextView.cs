@@ -4,9 +4,9 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Cli;
 
-internal static partial class ConsoleViews
+internal static class GoalChangesTextView
 {
-    public static void PrintGoalChanges(GoalChangesReport report)
+    public static void Print(GoalChangesReport report)
     {
         Console.WriteLine();
         Console.WriteLine($"goal-changes {report.GoalPrefix} ({report.GoalStatus})");
@@ -51,7 +51,7 @@ internal static partial class ConsoleViews
         }
     }
 
-    public static void PrintGoalChangesFlat(GoalChangesReport report)
+    public static void PrintFlat(GoalChangesReport report)
     {
         var allFiles = report.Entries
             .SelectMany(e => e.Files)
@@ -61,7 +61,7 @@ internal static partial class ConsoleViews
             Console.WriteLine(file);
     }
 
-    public static void PrintGoalChangesJson(GoalChangesReport report)
+    public static void PrintJson(GoalChangesReport report)
     {
         var options = new JsonSerializerOptions { WriteIndented = true };
         Console.WriteLine(JsonSerializer.Serialize(report, options));

@@ -111,7 +111,7 @@ private static bool HandleGoalPlan(CliExecutionContext context, IReadOnlyList<st
     }
 
     var plan = GoalDependencyPlanner.Build(intake);
-    ConsoleViews.PrintGoalDependencyPlan(plan);
+    GoalDependencyPlanTextView.Print(plan);
     var lifecycleCandidates = plan.Nodes
         .SelectMany(node => GoalScopeCollisionAdvisor.SelectComparisonCandidates(
             context.Kernel.Goals,

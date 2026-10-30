@@ -2,9 +2,9 @@ using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.App.Cli;
 
-internal static partial class ConsoleViews
+internal static class LoopHealthReportTextView
 {
-    public static void PrintLoopHealthReport(LoopHealthSnapshot snapshot)
+    public static void Print(LoopHealthSnapshot snapshot)
     {
         var windowLabel = snapshot.GoalCount == 1 ? "1 goal" : $"{snapshot.GoalCount} goals";
         Console.WriteLine();

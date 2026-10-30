@@ -1,12 +1,13 @@
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.App.Rendering;
 using Mcg.AgentOrchestrator.Infrastructure;
+using static Mcg.AgentOrchestrator.App.Cli.ConsoleViews;
 
 namespace Mcg.AgentOrchestrator.App.Cli;
 
-internal static partial class ConsoleViews
+internal static class MonitorTextView
 {
-public static void PrintMonitor(GoalMonitor monitor, string? statusText = null)
+public static void Print(GoalMonitor monitor, string? statusText = null)
 {
     Console.WriteLine();
     Console.WriteLine($"Goal {monitor.GoalId.Value[..8]} {statusText ?? monitor.Status.ToString()}: {OutputTextPreview.CreateSummary(monitor.Objective).Text}");
@@ -83,5 +84,4 @@ public static void PrintAcceptanceSummary(Goal goal, GoalAcceptanceSummary summa
     Console.WriteLine();
 }
 }
-
 
