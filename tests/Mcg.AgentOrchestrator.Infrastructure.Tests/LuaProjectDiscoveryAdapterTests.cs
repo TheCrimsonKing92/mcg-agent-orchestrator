@@ -69,6 +69,10 @@ public sealed class LuaProjectDiscoveryAdapterTests
         var framework = Assert.Single(model.EnvironmentNeeds, need => need.Name == "lua-test-framework").Value;
         Assert.Equal("undetermined", framework.Value);
         Assert.Equal(FactConfidence.Low, framework.Confidence);
+        Assert.Null(framework.Source.Path);
+        Assert.Null(framework.Source.Line);
+        Assert.False(string.IsNullOrWhiteSpace(framework.Source.MeasurementReference));
+        Assert.Equal(framework.Source, question.Source);
         Assert.Equal("crosswalk-test .", Assert.Single(model.EnvironmentNeeds, need => need.Name == "lua-test-command").Value.Value);
         Assert.DoesNotContain(model.EnvironmentNeeds, need => need.Name == "lua-install-command");
     }

@@ -21,7 +21,8 @@ public sealed class LuaProjectDiscoveryAdapter : IProjectDiscoveryAdapter
         var files = RepositoryFiles(root, excludedDirectoryNames);
         var questions = new List<ProjectOwnerQuestion>();
         var evidence = BustedEvidence(files);
-        var source = new FactSource(evidence ?? ".", 1);
+        var source = evidence is not null ? new FactSource(evidence, 1)
+            : new FactSource(measurementReference: "discovery:lua:busted-evidence");
         var framework = evidence is not null ? new ProjectFact<string>("busted", source, FactConfidence.High)
             : Fact("undetermined", FactConfidence.Low, source, FrameworkQuestion, FrameworkQuestionText, questions);
         var needs = new List<EnvironmentNeed>
