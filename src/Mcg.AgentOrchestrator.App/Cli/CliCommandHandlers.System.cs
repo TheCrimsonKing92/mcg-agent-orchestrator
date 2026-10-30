@@ -617,7 +617,7 @@ internal static partial class CliCommandHandlers
             case "durations":
             {
                 var since = CliSinceArgument.ParseOptional(GetFlagValue(parts, "--since"));
-                ConsoleViews.PrintTaskDurationStats(
+                TaskDurationStatsTextView.Print(
                     context.Kernel.BuildTaskDurationStats(HasCliConfirmation(parts, "--by-model"), since),
                     since,
                     context.Kernel.BuildTaskDurationTrend(since));
@@ -627,7 +627,7 @@ internal static partial class CliCommandHandlers
             case "dispatch-value":
             {
                 var since = CliSinceArgument.ParseOptional(GetFlagValue(parts, "--since"));
-                ConsoleViews.PrintDispatchValueReport(context.Kernel.BuildDispatchValueReport(since));
+                GoalTimingTextView.PrintDispatchValueReport(context.Kernel.BuildDispatchValueReport(since));
                 return false;
             }
 
