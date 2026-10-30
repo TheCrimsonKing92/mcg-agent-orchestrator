@@ -10,6 +10,46 @@ public sealed class GateStatusRemoteWaitTests
     private static readonly TimeProvider Clock = new FixedTimeProvider();
 
     [Fact]
+    public void Print_TwoGateStatuses_PreservesExactText()
+    {
+        var running = new GateHeartbeatSnapshot("abcdef12abcdef12", "verification-check",
+            "First gate", 0, 111, 222, "running", Now.AddSeconds(-31),
+            Now.AddSeconds(-1), Now.AddSeconds(-10), 12, 3, 15);
+        var stalled = new GateHeartbeatSnapshot("0123456789abcdef", "verification-check",
+            "Second gate", 1, 333, 444, "running", Now.AddSeconds(-31),
+            Now.AddSeconds(-1), Now.AddMinutes(-11), 16, 4, 20);
+        GateHeartbeatStatus[] statuses =
+        [
+            new(0, "first-heartbeat.json", true, null, running,
+                TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(10)),
+            new(1, "second-heartbeat.json", true, null, stalled,
+                TimeSpan.FromSeconds(1), TimeSpan.FromMinutes(11))
+        ];
+
+        var actual = CaptureConsole(() => GateStatusTextView.Print(statuses, Now));
+
+        Assert.Equal(string.Join(Environment.NewLine,
+            "Gate status:",
+            "slot-0: goal=abcdef12 phase=verification-check state=running elapsed=30s target=\"First gate\" child_pid=222 heartbeat_age=1s idle_for=10s output_bytes=15 heartbeat=first-heartbeat.json verdict=RUNNING",
+            "slot-1: goal=01234567 phase=verification-check state=running elapsed=30s target=\"Second gate\" child_pid=444 heartbeat_age=1s idle_for=11m output_bytes=20 heartbeat=second-heartbeat.json verdict=STALLED",
+            "host: verdict=STALLED running=1 stalled=1 slots=2; covers per-goal and cohort gates alike",
+            ""), actual);
+    }
+
+    [Fact]
+    public void ExtractedOwner_LeavesNoPartialFileOrConsoleViewsForwarder()
+    {
+        var cliRoot = Path.Combine(VerifiedRepositoryRoot.Find(), "src", "Mcg.AgentOrchestrator.App", "Cli");
+        Assert.False(File.Exists(Path.Combine(cliRoot, "ConsoleViews.GateStatus.cs")));
+        var methods = typeof(ConsoleViews).GetMethods(System.Reflection.BindingFlags.Public |
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static |
+            System.Reflection.BindingFlags.DeclaredOnly);
+        Assert.DoesNotContain(methods, method => method.Name == "PrintGateStatus");
+        Assert.DoesNotContain(Directory.EnumerateFiles(cliRoot, "*.cs"), path =>
+            File.ReadAllText(path).Contains("ConsoleViews.PrintGateStatus", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void Render_OnlyRemoteWait_ShowsRemoteHostInTextAndJson()
     {
         var hostLine = HostLine([], 1);
