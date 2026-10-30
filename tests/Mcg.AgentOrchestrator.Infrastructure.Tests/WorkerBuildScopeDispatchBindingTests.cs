@@ -2,8 +2,9 @@ using System.Text.Json;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
-// Git state belongs exclusively to each fixture; these tests never change process environment.
-public sealed class WorkerBuildScopeDispatchBindingTests
+// Class-owned template; each invocation owns an isolated copy and never changes process environment.
+public sealed class WorkerBuildScopeDispatchBindingTests(WorkerBuildScopeDispatchFixtureTemplate template)
+    : IClassFixture<WorkerBuildScopeDispatchFixtureTemplate>
 {
     [Theory]
     [InlineData("goal")]
@@ -27,7 +28,7 @@ public sealed class WorkerBuildScopeDispatchBindingTests
     [InlineData("contents-baseline")]
     public void ForeignOrCorruptDispatchAuthorityFailsClosed(string scenario)
     {
-        using var fixture = new WorkerBuildScopeDispatchFixture();
+        using var fixture = template.Copy();
         fixture.Prepare(fixture.Successor);
         var context = fixture.Context();
         var dispatch = context.Dispatch;
@@ -88,7 +89,7 @@ public sealed class WorkerBuildScopeDispatchBindingTests
     [InlineData("untracked")]
     public void ChangedRequiredInputsCannotReusePredecessorReceipt(string change)
     {
-        using var fixture = new WorkerBuildScopeDispatchFixture();
+        using var fixture = template.Copy();
         fixture.Prepare(fixture.Successor);
         WorkerBuildScopeDispatchFixture.Write(fixture.Root, change == "untracked" ? "Core/New.cs" : "Core/Core.cs",
             "public class ChangedInput { }");
@@ -105,7 +106,7 @@ public sealed class WorkerBuildScopeDispatchBindingTests
     [InlineData(true)]
     public void MatchingCandidateWithIncompleteProjectCoverageFailsClosed(bool staged)
     {
-        using var fixture = new WorkerBuildScopeDispatchFixture();
+        using var fixture = template.Copy();
         fixture.Prepare(fixture.Successor);
         WorkerBuildScopeDispatchFixture.Write(fixture.Root, "Other/Other.csproj", "<Project />");
         WorkerBuildScopeDispatchFixture.Write(fixture.Root, "Other/Other.cs", "public class Other { }");
@@ -125,7 +126,7 @@ public sealed class WorkerBuildScopeDispatchBindingTests
     [Fact]
     public void CurrentWorkerCannotNarrowPinnedScopeToCertifyIncompleteBuild()
     {
-        using var fixture = new WorkerBuildScopeDispatchFixture();
+        using var fixture = template.Copy();
         fixture.Prepare(fixture.Successor);
         var path = WorkerBuildProjectScope.MetadataPath(fixture.Root);
         var metadata = JsonSerializer.Deserialize<WorkerBuildProjectScope.Metadata>(File.ReadAllBytes(path))!;
@@ -149,7 +150,7 @@ public sealed class WorkerBuildScopeDispatchBindingTests
     [Fact]
     public void LegacyRecordOnlyAcceptsItsStillProvableCurrentScope()
     {
-        using var fixture = new WorkerBuildScopeDispatchFixture();
+        using var fixture = template.Copy();
         var dispatch = fixture.Predecessor.LastDispatch!;
         var identity = dispatch.WorkerBuildScope!;
         var legacy = fixture.Context() with { Dispatch = dispatch with
@@ -164,7 +165,7 @@ public sealed class WorkerBuildScopeDispatchBindingTests
     [Fact]
     public void MissingRetainedAndCurrentContentsCannotCertifyLegacyDispatch()
     {
-        using var fixture = new WorkerBuildScopeDispatchFixture();
+        using var fixture = template.Copy();
         var dispatch = fixture.Predecessor.LastDispatch!;
         var identity = dispatch.WorkerBuildScope!;
         var legacy = fixture.Context() with { Dispatch = dispatch with
@@ -193,7 +194,7 @@ public sealed class WorkerBuildScopeDispatchBindingTests
     [Fact]
     public void ScopeWithoutCapturedAuthorityCannotCertifyTrackedCompletion()
     {
-        using var fixture = new WorkerBuildScopeDispatchFixture();
+        using var fixture = template.Copy();
         var unbound = fixture.Context() with { Dispatch = fixture.Predecessor.LastDispatch! with { WorkerBuildScope = null } };
         Assert.Throws<IOException>(() => unbound.Resolve(fixture.Root, []));
         Assert.Equal("scope-invalid", WorkerBuildReceipt.Evaluate(fixture.ReceiptPath, fixture.Root, null, unbound).Reason);
