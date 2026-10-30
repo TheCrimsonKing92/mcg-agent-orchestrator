@@ -121,6 +121,10 @@ public sealed record MergeTrainReceipt(
     bool ValidForLanding = false)
 {
     public IReadOnlyList<AcceptanceCohortEvidenceArtifact> GateEvidenceArtifacts { get; init; } = [];
+    public MergeTrainRecheckProvenance? Recheck { get; init; }
+    public string? GateAttemptId { get; init; }
+    // Null distinguishes legacy receipts from a gate that recorded check coverage.
+    public IReadOnlyList<MergeTrainFailedCheckEvidence>? FailedCheckEvidence { get; init; }
 
     public bool HasAuthoritativeLandingEvidence =>
         Outcome == MergeTrainGateOutcome.Passed &&
