@@ -33,7 +33,7 @@ private static bool HandleAcceptAlias(IReadOnlyList<string> parts, CliExecutionC
     context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, goalPart);
     EnsurePolicyAllows(context, context.CurrentGoal, policy, AutonomyAction.Acceptance, "accept");
     AutoVerifyFromGitEvidence(context, context.CurrentGoal);
-    ConsoleViews.PrintAcceptanceSummary(
+    MonitorTextView.PrintAcceptanceSummary(
         context.CurrentGoal,
         GoalAcceptanceStatusProjector.Build(context.Kernel, context.CurrentGoal, context.Workspace.ExecutionDirectory, context.Workspace.IntegrationBranch));
     if (!RunAcceptanceWorkspaceMerge(context, skipVerify))

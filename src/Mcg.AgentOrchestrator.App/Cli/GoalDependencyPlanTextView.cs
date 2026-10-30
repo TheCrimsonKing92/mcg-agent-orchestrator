@@ -2,9 +2,9 @@ using Mcg.AgentOrchestrator.App.Orchestration;
 
 namespace Mcg.AgentOrchestrator.App.Cli;
 
-internal static partial class ConsoleViews
+internal static class GoalDependencyPlanTextView
 {
-public static void PrintGoalDependencyPlan(GoalDependencyPlan plan)
+public static void Print(GoalDependencyPlan plan)
 {
     Console.WriteLine();
     Console.WriteLine($"Goal plan: {plan.Nodes.Count} node(s), {plan.Edges.Count} dependency edge(s)");

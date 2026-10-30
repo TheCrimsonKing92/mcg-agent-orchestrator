@@ -931,7 +931,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
 
         case "monitor":
             context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, parts.Count > 1 ? parts[1] : null);
-            ConsoleViews.PrintMonitor(
+            MonitorTextView.Print(
                 context.Kernel.BuildMonitor(context.CurrentGoal.Id),
                 ResolveGoalStatusText(context.Workspace, context.CurrentGoal));
             return false;
@@ -1132,7 +1132,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 CleanupGoalWorkspaceAfterMerge(context, context.CurrentGoal, acceptancePolicy, keepWorkspace);
             }
 
-            ConsoleViews.PrintAcceptanceSummary(
+            MonitorTextView.PrintAcceptanceSummary(
                 context.CurrentGoal,
                 GoalAcceptanceStatusProjector.Build(context.Kernel, context.CurrentGoal, context.Workspace.ExecutionDirectory, context.Workspace.IntegrationBranch));
             return false;
@@ -1159,11 +1159,11 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             var changesWorktree = context.Worktrees.TryResolve(context.Workspace.ExecutionDirectory, context.CurrentGoal.Id);
             var changesReport = GoalChangesReader.Build(context.CurrentGoal, changesWorktree, changesCommitted, changesWorking, changesRoleFilter, changesTaskFilter);
             if (changesJson)
-                ConsoleViews.PrintGoalChangesJson(changesReport);
+                GoalChangesTextView.PrintJson(changesReport);
             else if (changesFlat)
-                ConsoleViews.PrintGoalChangesFlat(changesReport);
+                GoalChangesTextView.PrintFlat(changesReport);
             else
-                ConsoleViews.PrintGoalChanges(changesReport);
+                GoalChangesTextView.Print(changesReport);
             return false;
         }
 

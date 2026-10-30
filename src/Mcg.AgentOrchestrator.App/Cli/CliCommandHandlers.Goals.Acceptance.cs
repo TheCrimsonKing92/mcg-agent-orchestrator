@@ -918,7 +918,7 @@ private static void RecordAcceptanceGuardAbort(
         $"detail=\"{EscapeBlockerDetail(detail)}\" action=\"Quiesce conductor mutations for this goal before another landing attempt; do not use a bare retry while the goal is changing.\"");
     var projectionKernel = context.ReloadKernel([goal.Id.Value]);
     var projectionGoal = projectionKernel.Goals.FirstOrDefault(candidate => candidate.Id == goal.Id) ?? goal;
-    ConsoleViews.PrintAcceptanceSummary(
+    MonitorTextView.PrintAcceptanceSummary(
         projectionGoal,
         GoalAcceptanceStatusProjector.Build(projectionKernel, projectionGoal, context.Workspace.ExecutionDirectory, context.Workspace.IntegrationBranch));
 }
