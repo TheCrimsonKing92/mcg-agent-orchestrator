@@ -57,7 +57,14 @@ internal static class AcceptanceGateLanePlanPublisher
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
         }
         var now = clock.GetUtcNow();
-        emit(new(goalId?.Value, "lane-plan", plan.FormatEventTarget(), null, null, null,
-            now, now, now, TimeSpan.Zero, 0, path));
+        try
+        {
+            emit(new(goalId?.Value, "lane-plan", plan.FormatEventTarget(), null, null, null,
+                now, now, now, TimeSpan.Zero, 0, path));
+        }
+        catch
+        {
+            // Instrumentation must not replace a gate verdict, fault, or cancellation.
+        }
     }
 }

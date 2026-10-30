@@ -84,6 +84,27 @@ public sealed class AcceptanceGateLanePlanTests : IDisposable
         Assert.False(File.Exists(events[0].HeartbeatPath));
     }
 
+    [Fact]
+    public void ObserverFaultDoesNotEscapeOrPreventTheArtifact()
+    {
+        var plan = new AcceptanceGateLanePlan(AcceptanceGateLanePlan.CurrentSchemaVersion, "attempt", ["Console"], []);
+        Directory.CreateDirectory(_root);
+        var prefix = Path.Combine(_root, "attempt");
+        var events = new List<AcceptanceGateProgress>();
+
+        var exception = Record.Exception(() => AcceptanceGateLanePlanPublisher.Publish(plan, prefix, null, item =>
+        {
+            events.Add(item);
+            throw new InvalidOperationException("observer fault must be swallowed");
+        }, TimeProvider.System));
+
+        Assert.Null(exception);
+        var emitted = Assert.Single(events);
+        Assert.Equal("lane-plan", emitted.Phase);
+        Assert.Equal(plan.FormatEventTarget(), emitted.CurrentTarget);
+        Assert.Equal(plan.ToJson(), File.ReadAllText(prefix + AcceptanceGateLanePlan.ArtifactSuffix));
+    }
+
     private static Check BroadCheck() => new() { Name = "infrastructure tests", Type = "dotnet-test", Project = InfrastructureTestsProject };
     private static Check LaneCheck(AcceptanceTestLane lane) => new()
     {
