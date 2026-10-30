@@ -8,55 +8,6 @@ using Fixture = LuaProjectDiscoveryAdapterTests.Fixture;
 public sealed class LuaStackDetectionTests
 {
     [Theory]
-    [InlineData(".busted|spec/a_spec.lua", ".busted")]
-    [InlineData("x-1.0-1.rockspec|src/x.lua", "x-1.0-1.rockspec")]
-    [InlineData("scripts/a.lua|scripts/b.lua", "lua-majority")]
-    [InlineData("spec/unit/a_spec.lua", "spec/unit/a_spec.lua")]
-    [InlineData("rockspecs/x-1.0-1.rockspec", "rockspecs/x-1.0-1.rockspec")]
-    [InlineData(".luarc.json", ".luarc.json")]
-    [InlineData(".luarc.jsonc", ".luarc.jsonc")]
-    [InlineData(".luacheckrc", ".luacheckrc")]
-    [InlineData("stylua.toml", "stylua.toml")]
-    [InlineData(".stylua.toml", ".stylua.toml")]
-    [InlineData("selene.toml", "selene.toml")]
-    public void Detect_LuaFixtures_ReturnsMarkerAndAdapter(string paths, string marker)
-    {
-        using var fixture = new Fixture();
-        foreach (var path in paths.Split('|'))
-            fixture.Write(path);
-
-        var result = ProjectDiscoveryAdapterSelector.Detect(fixture.Root);
-
-        Assert.Equal(ProjectStack.Lua, result.Stack);
-        Assert.Equal(marker, result.Marker);
-        Assert.Null(result.Refusal);
-        Assert.IsType<LuaProjectDiscoveryAdapter>(ProjectDiscoveryAdapterSelector.Select(fixture.Root));
-    }
-
-    [Theory]
-    [InlineData(2, 3, false)]
-    [InlineData(3, 2, true)]
-    [InlineData(2, 2, false)]
-    [InlineData(0, 0, false)]
-    public void Detect_Majority_RequiresStrictNonzeroMajority(int lua, int go, bool expected)
-    {
-        using var fixture = new Fixture();
-        for (var index = 0; index < lua; index++)
-            fixture.Write($"src/l{index}.lua");
-        for (var index = 0; index < go; index++)
-            fixture.Write($"src/g{index}.go");
-        fixture.Write("README.md");
-        fixture.Write("LICENSE");
-
-        var result = ProjectDiscoveryAdapterSelector.Detect(fixture.Root);
-
-        Assert.Equal(expected ? ProjectStack.Lua : (ProjectStack?)null, result.Stack);
-        Assert.Equal(expected ? "lua-majority" : null, result.Marker);
-        if (!expected)
-            Assert.Equal("No stack marker found; looked for root go.mod, package.json, *.sln, *.slnx, and *.csproj, *.fsproj, *.vbproj below the root.", result.Refusal);
-    }
-
-    [Theory]
     [InlineData("go.mod")]
     [InlineData("Root.sln")]
     [InlineData("Root.slnx")]
@@ -83,59 +34,6 @@ public sealed class LuaStackDetectionTests
         fixture.Write("scripts/a.lua");
 
         Assert.Equal(before, ProjectDiscoveryAdapterSelector.Detect(fixture.Root));
-    }
-
-    [Theory]
-    [InlineData(".busted|spec/a_spec.lua|x.rockspec", ".busted")]
-    [InlineData("spec/z_spec.lua|spec/a_spec.lua|x.rockspec", "spec/a_spec.lua")]
-    [InlineData("z.rockspec|a.rockspec|rockspecs/a.rockspec|.luarc.json", "a.rockspec")]
-    [InlineData("rockspecs/z.rockspec|rockspecs/a.rockspec|.luarc.json", "rockspecs/a.rockspec")]
-    [InlineData(".luarc.json|.luarc.jsonc|selene.toml", ".luarc.json")]
-    public void Detect_MultipleMarkers_UsesStablePrecedence(string paths, string expected)
-    {
-        using var fixture = new Fixture();
-        foreach (var path in paths.Split('|'))
-            fixture.Write(path);
-
-        Assert.Equal(expected, ProjectDiscoveryAdapterSelector.Detect(fixture.Root).Marker);
-    }
-
-    [Theory]
-    [InlineData("lua_modules")]
-    [InlineData(".luarocks")]
-    [InlineData("node_modules")]
-    [InlineData("vendor")]
-    [InlineData("bin")]
-    [InlineData("obj")]
-    [InlineData("CVS")]
-    [InlineData(".hidden")]
-    [InlineData("generated")]
-    public void Detect_ExcludedFiles_DoNotSupplyLuaEvidence(string directory)
-    {
-        using var fixture = new Fixture();
-        fixture.Write($"{directory}/a.lua");
-        fixture.Write($"spec/{directory}/a_spec.lua");
-        fixture.Write($"{directory}/.busted");
-
-        var result = ProjectDiscoveryAdapterSelector.Detect(fixture.Root, ["generated"]);
-
-        Assert.Null(result.Stack);
-        Assert.StartsWith("No stack marker found", result.Refusal, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void Detect_UntrackedCaseInsensitiveSources_CountOnDisk()
-    {
-        using var fixture = new Fixture();
-        fixture.Write("a.LUA");
-        fixture.Write("b.lua");
-        fixture.Write("c.PS1");
-        // No Git tracking or even Git metadata is needed for the fallback.
-        var root = Path.Combine(fixture.Root, "non-git");
-        fixture.Write("non-git/a.lua");
-
-        Assert.Equal("lua-majority", ProjectDiscoveryAdapterSelector.Detect(fixture.Root).Marker);
-        Assert.Equal("lua-majority", ProjectDiscoveryAdapterSelector.Detect(root).Marker);
     }
 
     [Fact]

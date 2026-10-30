@@ -17,7 +17,8 @@ public sealed class NodeStackSelectionTests
         Assert.Equal(ProjectStack.Node, detection.Stack);
         Assert.Equal("package.json", detection.Marker);
         Assert.Null(detection.Refusal);
-        Assert.IsType<NodeProjectDiscoveryAdapter>(ProjectDiscoveryAdapterSelector.Select(fixture.Root));
+        using var crosswalk = new FakeCrosswalkProcess();
+        Assert.IsType<NodeProjectDiscoveryAdapter>(ProjectDiscoveryAdapterSelector.Select(fixture.Root, crosswalk.Reader));
     }
 
     [Fact]
@@ -48,7 +49,8 @@ public sealed class NodeStackSelectionTests
         Assert.StartsWith("Ambiguous stack markers", detection.Refusal, StringComparison.Ordinal);
         Assert.Contains("package.json", detection.Refusal, StringComparison.Ordinal);
         Assert.Contains(marker, detection.Refusal, StringComparison.Ordinal);
-        var refusal = Assert.Throws<InvalidOperationException>(() => ProjectDiscoveryAdapterSelector.Select(fixture.Root));
+        using var crosswalk = new FakeCrosswalkProcess();
+        var refusal = Assert.Throws<InvalidOperationException>(() => ProjectDiscoveryAdapterSelector.Select(fixture.Root, crosswalk.Reader));
         Assert.Contains(detection.Refusal, refusal.Message, StringComparison.Ordinal);
     }
 

@@ -38,7 +38,8 @@ public sealed class JunitCommandNodeIntegrationTests : GoalAcceptanceVerifierTes
             Directory.CreateDirectory(Path.Combine(root, ".git"));
             Directory.CreateDirectory(Path.Combine(root, "reports"));
             Assert.False(File.Exists(Path.Combine(root, "package.json")));
-            Assert.IsType<DeclaredProjectDiscoveryAdapter>(ProjectDiscoveryAdapterSelector.Select(root));
+            using var fakeCrosswalk = new FakeCrosswalkProcess();
+            Assert.IsType<DeclaredProjectDiscoveryAdapter>(ProjectDiscoveryAdapterSelector.Select(root, fakeCrosswalk.Reader));
             var check = new Check { Name = "declared-test", Type = "junit-command", Command = node,
                 Arguments = ["--test", "--test-reporter=junit", "--test-reporter-destination=reports/junit.xml"],
                 Reports = ["reports/*.xml"], TimeoutMinutes = 3 };

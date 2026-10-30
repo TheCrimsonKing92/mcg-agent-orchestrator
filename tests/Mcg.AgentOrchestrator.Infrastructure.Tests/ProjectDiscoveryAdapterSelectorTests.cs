@@ -140,7 +140,8 @@ public sealed class ProjectDiscoveryAdapterSelectorTests
         if (setup == "ambiguous")
             root.Write("Root.sln");
 
-        var exception = Assert.Throws<InvalidOperationException>(() => ProjectDiscoveryAdapterSelector.Select(root.Path));
+        using var crosswalk = new FakeCrosswalkProcess();
+        var exception = Assert.Throws<InvalidOperationException>(() => ProjectDiscoveryAdapterSelector.Select(root.Path, crosswalk.Reader));
 
         Assert.Contains("No discovery adapter is available", exception.Message);
         Assert.Contains(reason, exception.Message);
@@ -150,7 +151,8 @@ public sealed class ProjectDiscoveryAdapterSelectorTests
     public void Select_NoMarker_ReturnsDeclaredAdapter()
     {
         using var root = new TemporaryRoot();
-        Assert.IsType<DeclaredProjectDiscoveryAdapter>(ProjectDiscoveryAdapterSelector.Select(root.Path));
+        using var crosswalk = new FakeCrosswalkProcess();
+        Assert.IsType<DeclaredProjectDiscoveryAdapter>(ProjectDiscoveryAdapterSelector.Select(root.Path, crosswalk.Reader));
         AssertNoMarker(ProjectDiscoveryAdapterSelector.Detect(root.Path));
     }
 
@@ -163,7 +165,8 @@ public sealed class ProjectDiscoveryAdapterSelectorTests
         using var fixture = new ProjectOnboardingFixture(fixtureName);
         var exclusions = RepositorySourceInventory.ExcludedDirectoryNames;
 
-        var adapter = ProjectDiscoveryAdapterSelector.Select(fixture.Root, exclusions);
+        using var crosswalk = new FakeCrosswalkProcess();
+        var adapter = ProjectDiscoveryAdapterSelector.Select(fixture.Root, crosswalk.Reader, exclusions);
         var selected = adapter.Discover(fixture.Root, exclusions, null, UnitCommandKinds.None);
         var direct = new DotnetProjectDiscoveryAdapter().Discover(fixture.Root, exclusions, null, UnitCommandKinds.None);
 

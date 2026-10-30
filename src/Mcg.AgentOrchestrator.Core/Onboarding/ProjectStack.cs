@@ -14,5 +14,7 @@ public enum ProjectStack
     [JsonStringEnumMemberName("lua")]
     Lua,
     [JsonStringEnumMemberName("declared")]
-    Declared
+    Declared,
+    [JsonStringEnumMemberName("crosswalk")]
+    Crosswalk
 }
