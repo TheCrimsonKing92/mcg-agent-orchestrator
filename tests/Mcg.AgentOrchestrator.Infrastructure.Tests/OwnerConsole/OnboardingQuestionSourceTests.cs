@@ -82,8 +82,8 @@ public sealed class OnboardingQuestionSourceTests
         const string oldKey = "commands/removed/test";
         OnboardingConsoleFixture.Store(project, OnboardingConsoleFixture.Model(OnboardingConsoleFixture.TestKey));
         OwnerAnswerFile.Write(project.OrchestratorDirectory,
-            [new(OnboardingConsoleFixture.TestKey, "npm test", null, fixture.Clock.GetUtcNow()),
-             new(oldKey, "MTP", null, fixture.Clock.GetUtcNow())]);
+            [new(OnboardingConsoleFixture.TestKey, "npm test", null, fixture.Clock.GetUtcNow().ToUniversalTime()),
+             new(oldKey, "MTP", null, fixture.Clock.GetUtcNow().ToUniversalTime())]);
         OnboardingConsoleFixture.InstallManifest(project);
         fixture.StartConductor(project);
         Assert.False(OnboardingConsoleFixture.Read(project).IsOnboarding);
@@ -121,7 +121,7 @@ public sealed class OnboardingQuestionSourceTests
         var project = fixture.Register("replace");
         OnboardingConsoleFixture.Store(project, OnboardingConsoleFixture.Model(OnboardingConsoleFixture.TestKey));
         OwnerAnswerFile.Write(project.OrchestratorDirectory,
-            [new(OnboardingConsoleFixture.TestKey, "npm test | tee", null, fixture.Clock.GetUtcNow())]);
+            [new(OnboardingConsoleFixture.TestKey, "npm test | tee", null, fixture.Clock.GetUtcNow().ToUniversalTime())]);
         var harness = new OwnerConsoleHarness(fixture.Clock);
         var source = new OnboardingQuestionSource(harness.Questions,
             () => [OnboardingConsoleFixture.Describe(project)], fixture.Clock);

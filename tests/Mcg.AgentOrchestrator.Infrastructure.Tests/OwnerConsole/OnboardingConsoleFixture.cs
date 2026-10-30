@@ -44,7 +44,7 @@ internal sealed class OnboardingConsoleFixture : IDisposable
 
     internal void AnswerAll(OrchestratorWorkspace workspace, params string[] keys) =>
         OwnerAnswerFile.Write(workspace.OrchestratorDirectory,
-            keys.Select(key => new OwnerAnswer(key, "npm test", null, Clock.GetUtcNow())).ToArray());
+            keys.Select(key => new OwnerAnswer(key, "npm test", null, Clock.GetUtcNow().ToUniversalTime())).ToArray());
 
     internal static void InstallManifest(OrchestratorWorkspace workspace) =>
         File.WriteAllText(Path.Combine(workspace.OrchestratorDirectory, "acceptance-manifest.json"),
@@ -66,7 +66,16 @@ internal sealed class OnboardingConsoleFixture : IDisposable
     internal static Dictionary<string, string> Snapshot(OrchestratorWorkspace workspace) =>
         Directory.EnumerateFiles(workspace.OrchestratorDirectory, "*", SearchOption.AllDirectories)
             .ToDictionary(path => Path.GetRelativePath(workspace.OrchestratorDirectory, path),
-                path => Convert.ToBase64String(File.ReadAllBytes(path)), StringComparer.Ordinal);
+                ReadShared, StringComparer.Ordinal);
+
+    private static string ReadShared(string path)
+    {
+        // The fixture's live lease holds a read/write handle that permits shared readers.
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        using var bytes = new MemoryStream();
+        stream.CopyTo(bytes);
+        return Convert.ToBase64String(bytes.ToArray());
+    }
 
     public void Dispose()
     {

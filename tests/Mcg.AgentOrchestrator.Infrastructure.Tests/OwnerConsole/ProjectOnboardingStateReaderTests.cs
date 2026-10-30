@@ -43,7 +43,7 @@ public sealed class ProjectOnboardingStateReaderTests
         var project = fixture.Register("conduct-tail");
         OnboardingConsoleFixture.Store(project, OnboardingConsoleFixture.Model(OnboardingConsoleFixture.TestKey));
         OwnerAnswerFile.Write(project.OrchestratorDirectory,
-            [new("environment/obsolete", "old", null, fixture.Clock.GetUtcNow())]);
+            [new("environment/obsolete", "old", null, fixture.Clock.GetUtcNow().ToUniversalTime())]);
         var state = OnboardingConsoleFixture.Read(project);
         Assert.Equal(1, state.OpenQuestionCount);
         Assert.Single(state.StaleAnswers);

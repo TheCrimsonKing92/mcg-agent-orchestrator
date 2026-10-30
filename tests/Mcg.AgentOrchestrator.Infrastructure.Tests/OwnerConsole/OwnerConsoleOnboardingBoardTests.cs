@@ -30,7 +30,8 @@ public sealed class OwnerConsoleOnboardingBoardTests
         var source = new OwnerConsoleBoardSource("running", OwnerConsoleProjectScope.All,
             () => [OnboardingConsoleFixture.Describe(onboarding), OnboardingConsoleFixture.Describe(running)], fixture.Clock);
         var builder = new OwnerConsoleViewModelBuilder(harness.State, harness.Questions, harness.Liveness, new Epics(), fixture.Clock);
-        var model = builder.WithDecisions(await source.ComposeAsync(await builder.BuildBoardAsync(), TestContext.Current.CancellationToken), [], 0);
+        var model = OwnerConsoleBoardSection.Arrange(builder.WithDecisions(
+            await source.ComposeAsync(await builder.BuildBoardAsync(), TestContext.Current.CancellationToken), [], 0));
         var header = Assert.Single(model.Board.Where(row => row.Project == "conduct-tail"));
         Assert.True(header.IsDiagnostic);
         Assert.Equal("onboarding", header.State);
