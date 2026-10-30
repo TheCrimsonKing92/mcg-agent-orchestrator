@@ -12,5 +12,6 @@ internal static class ConductorContinuityExitArtifactFactory
             RestartRequested: string.Equals(summary.StopReason, "max-duration", StringComparison.Ordinal) ||
                 delegateSelfRelaunchToSupervisor && string.Equals(
                     summary.StopReason, "self-relaunch-handoff", StringComparison.Ordinal),
-            LandedGoals: summary.LandedGoals);
+            LandedGoals: summary.LandedGoals,
+            HomeBuildTarget: summary.HomeBuildTarget);
 }

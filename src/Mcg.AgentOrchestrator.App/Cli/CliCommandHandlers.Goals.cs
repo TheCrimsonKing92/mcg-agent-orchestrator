@@ -1710,6 +1710,11 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 var delegateSelfRelaunchToSupervisor = supervisedChild &&
                     !string.Equals(supervisorRestageSetting, "false", StringComparison.OrdinalIgnoreCase) &&
                     !string.Equals(supervisorRestageSetting, "0", StringComparison.OrdinalIgnoreCase);
+                var conductorHome = OrchestratorHome.ResolveForProcess();
+                var homeBuildAdoption = supervisedChild && conductorHome.SourceRootDirectory is { } homeRoot &&
+                    !conductorHome.IsHome(context.Workspace)
+                    ? new HomeBuildAdoptionDetector(homeRoot, SystemConductorSupervisorHandoffSeam.ReadOwnBuild(),
+                        GetFlagValue(parts, "--home-build-blocked-commit"), diagnostic: Console.WriteLine) : null;
                 var conductorOutputLogPath = Environment.GetEnvironmentVariable(
                     ConductorContinuitySupervisor.StdoutLogPathEnvironmentVariable);
                 var conductorDiagnosticPath = string.IsNullOrWhiteSpace(conductorOutputLogPath)
@@ -1747,6 +1752,8 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                         selfRelaunchEnabled: ConductorBatchLoop.ResolveSelfRelaunchEnabled(
                             Environment.GetEnvironmentVariable(ConductorBatchLoop.SelfRelaunchEnabledEnvironmentVariable),
                             Console.Error.WriteLine),
+                        homeBuildAdoption: homeBuildAdoption,
+                        homeBuildRelaunch: homeBuildAdoption is null ? null : SupervisedSelfRelaunchGuard.ForWorkspace(context.Workspace),
                         postLandingCanary: postLandingCanary,
                         goalReloadObservation: resolveGoalReloadObservation,
                         prepareOperatorIntentTarget: (loopKernel, goalId) => OperatorIntentTargetPreparation.PrepareOperatorIntentTarget(
@@ -1756,7 +1763,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                             readAdoptionCensus: WorkerAdoptionCensus.CreateDefault(context.Workspace.SqliteStatePath),
                             adoptInheritedWorkers: WorkerAdoptionTransfer.CreateDefault(context.Workspace.SqliteStatePath,
                                 goalIds => context.ReloadKernel(goalIds))),
-                        blockedRecheckHeartbeatInterval: reconcileSweepOptions.HeartbeatInterval, countLiveGroupedGates: () => loopDriver.CountLiveGroupedGateAttempts(relaunchBlockingOnly: true),
+                        blockedRecheckHeartbeatInterval: reconcileSweepOptions.HeartbeatInterval, countLiveGroupedGates: () => loopDriver.CountLiveGroupedGateAttempts(relaunchBlockingOnly: homeBuildAdoption is null),
                         workspace: context.Workspace).WithSteward(ConductorStewardHost.CreateDefault(context.Workspace, () => ResolveConductorPolicy(loopPolicyName, context.Workspace.OrchestratorDirectory).Policy))
                         .WithUnintendedExitDiagnostics(conductorDiagnosticPath, conductorOutputLogPath)
                         .WithJudgePanel(ConductorJudgePanelHost.CreateDefault(context.Workspace))
