@@ -16,6 +16,7 @@ internal sealed class CrosswalkSelectorResolution
         var files = discoveredIds.Select(CrosswalkFocusedEvidence.FileSelector).Distinct(StringComparer.Ordinal).ToArray();
         // Discovery owns the file vocabulary; a dotted suite such as PZISCollectionUtils.Set is still a suite.
         var extensions = files.Select(Path.GetExtension).Where(extension => extension.Length > 0).ToHashSet(StringComparer.Ordinal);
+        var suiteVariants = normalized.ToDictionary(selector => selector, SuiteVariants, StringComparer.Ordinal);
         var matched = new HashSet<string>(StringComparer.Ordinal);
         var selected = new List<string>();
         foreach (var id in discoveredIds)
@@ -23,7 +24,7 @@ internal sealed class CrosswalkSelectorResolution
             var include = false;
             foreach (var selector in normalized)
             {
-                if (!Matches(selector, id, extensions)) continue;
+                if (!Matches(selector, id, extensions, suiteVariants[selector])) continue;
                 matched.Add(selector);
                 include = true;
             }
@@ -37,7 +38,7 @@ internal sealed class CrosswalkSelectorResolution
         };
     }
 
-    private static bool Matches(string selector, string id, IReadOnlySet<string> extensions)
+    private static bool Matches(string selector, string id, IReadOnlySet<string> extensions, IReadOnlyList<string> variants)
     {
         var normalizedId = CrosswalkFocusedEvidence.NormalizeSelector(id);
         if (selector.Contains("::", StringComparison.Ordinal))
@@ -47,11 +48,49 @@ internal sealed class CrosswalkSelectorResolution
             return string.Equals(selector, CrosswalkFocusedEvidence.FileSelector(id), StringComparison.Ordinal);
         // Preserve file equality even for extensionless, root-level discovered files.
         if (string.Equals(selector, CrosswalkFocusedEvidence.FileSelector(id), StringComparison.Ordinal)) return true;
+        return MatchesSuite(selector, id, extensions, variants);
+    }
+
+    internal static bool MatchesSuite(
+        string selector, string id, IReadOnlySet<string> extensions, IReadOnlyList<string>? variants = null)
+    {
+        selector = CrosswalkFocusedEvidence.NormalizeSelector(selector);
+        if (selector.Contains("::", StringComparison.Ordinal) || selector.Contains('/') ||
+            extensions.Contains(Path.GetExtension(selector)) ||
+            string.Equals(selector, CrosswalkFocusedEvidence.FileSelector(id), StringComparison.Ordinal)) return false;
+        var normalizedId = CrosswalkFocusedEvidence.NormalizeSelector(id);
         var separator = normalizedId.IndexOf("::", StringComparison.Ordinal);
         if (separator < 0) return false;
         var name = normalizedId[(separator + 2)..];
-        return string.Equals(selector, name, StringComparison.Ordinal) || name.StartsWith(selector + " ", StringComparison.Ordinal);
+        return (variants ?? SuiteVariants(selector)).Any(variant =>
+            string.Equals(variant, name, StringComparison.Ordinal) || name.StartsWith(variant + " ", StringComparison.Ordinal));
     }
+
+    // Callers matching multiple rows prepare the bounded variants once per selector.
+    internal static string[] SuiteVariants(string selector)
+    {
+        selector = CrosswalkFocusedEvidence.NormalizeSelector(selector);
+        var dots = new List<int>();
+        for (var index = 1; index < selector.Length - 1; index++)
+        {
+            if (selector[index] != '.' || !IsIdentifier(selector[index - 1]) || !IsIdentifier(selector[index + 1])) continue;
+            dots.Add(index);
+            if (dots.Count > 8) return [selector];
+        }
+
+        var variants = new string[1 << dots.Count];
+        variants[0] = selector;
+        for (var mask = 1; mask < variants.Length; mask++)
+        {
+            var characters = selector.ToCharArray();
+            for (var bit = 0; bit < dots.Count; bit++)
+                if ((mask & (1 << bit)) != 0) characters[dots[bit]] = ' ';
+            variants[mask] = new string(characters);
+        }
+        return variants;
+    }
+
+    private static bool IsIdentifier(char character) => char.IsLetterOrDigit(character) || character == '_';
 
     internal static string RefusalDetail(string selector, IReadOnlyList<string> files) =>
         $"selector matched no discovered test: {selector}; discovered test files: {string.Join(", ", files)}";
