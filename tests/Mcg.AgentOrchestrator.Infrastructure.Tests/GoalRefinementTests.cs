@@ -3266,7 +3266,7 @@ public sealed class GoalScopeCollisionConsoleViewTests
             [conflictingGoal]);
 
         var output = AsyncLocalConsoleRouter.Capture(() =>
-            ConsoleViews.PrintGoalScopeCollisionReport(report, "backlog-123", "Feature heading"));
+            GoalScopeCollisionReportTextView.Print(report, "backlog-123", "Feature heading"));
 
         Xunit.Assert.Contains("Scope collision advisory:", output, StringComparison.Ordinal);
         Xunit.Assert.Contains("item=backlog-123", output, StringComparison.Ordinal);
@@ -3291,7 +3291,7 @@ public sealed class GoalScopeCollisionConsoleViewTests
         var report = GoalScopeCollisionAdvisor.Build(["No paths declared."], []);
 
         var output = AsyncLocalConsoleRouter.Capture(() =>
-            ConsoleViews.PrintGoalScopeCollisionReport(report));
+            GoalScopeCollisionReportTextView.Print(report));
 
         Xunit.Assert.Contains("insufficient-evidence", output, StringComparison.Ordinal);
         Xunit.Assert.DoesNotContain("no-overlap-detected", output, StringComparison.Ordinal);

@@ -2,9 +2,9 @@ using Mcg.AgentOrchestrator.App.Orchestration;
 
 namespace Mcg.AgentOrchestrator.App.Cli;
 
-internal static partial class ConsoleViews
+internal static class BacklogIntakePlanTextView
 {
-public static void PrintBacklogIntakePlan(BacklogIntakePlan plan)
+public static void Print(BacklogIntakePlan plan)
 {
     Console.WriteLine();
     if (plan.SelectionCriterion is not null)
