@@ -28,6 +28,7 @@ public static class ProjectStackResolver
                             ProjectStack.Go => Toolchain.Go,
                             ProjectStack.Node => Toolchain.Node,
                             ProjectStack.Dotnet => Toolchain.Dotnet,
+                            ProjectStack.Lua => Toolchain.Unknown,
                             _ => throw new InvalidOperationException($"No toolchain mapping for declared stack {stack}.")
                         };
                 }
