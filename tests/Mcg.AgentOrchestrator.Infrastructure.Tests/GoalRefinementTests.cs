@@ -1168,7 +1168,7 @@ public sealed class GoalRefinementTests
             "Update docs/operator-runbook.md after git fetch and rebase onto origin/main.",
             simple: false);
 
-        var output = AsyncLocalConsoleRouter.Capture(() => ConsoleViews.PrintGoalObjectivePlan(plan));
+        var output = AsyncLocalConsoleRouter.Capture(() => GoalObjectivePlanTextView.PrintGoalObjectivePlan(plan));
 
         Xunit.Assert.Empty(kernel.Goals);
         Xunit.Assert.Contains("\"capabilityWarnings\"", output, StringComparison.Ordinal);
@@ -1185,7 +1185,7 @@ public sealed class GoalRefinementTests
             "Update docs/operator-runbook.md after gh pr checkout 123 and compare https://github.com/example/repo.",
             simple: false);
 
-        var output = AsyncLocalConsoleRouter.Capture(() => ConsoleViews.PrintGoalObjectivePlan(plan));
+        var output = AsyncLocalConsoleRouter.Capture(() => GoalObjectivePlanTextView.PrintGoalObjectivePlan(plan));
 
         Xunit.Assert.Empty(kernel.Goals);
         Xunit.Assert.Contains("\"capabilityWarnings\"", output, StringComparison.Ordinal);

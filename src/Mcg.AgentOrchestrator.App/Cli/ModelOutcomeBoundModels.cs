@@ -51,6 +51,6 @@ internal static class ModelOutcomeBoundModels
     public static void Print(IReadOnlyList<ModelOutcomeRecord> records, OrchestratorWorkspace workspace)
     {
         var boundModels = Load(workspace.AgentCatalogPath, workspace.ModelFunctionCatalogPath);
-        ConsoleViews.PrintModelOutcomeScorecard(ModelOutcomeScorecard.ApplyBoundModels(records, boundModels), boundModels);
+        ModelOutcomeScorecardTextView.PrintModelOutcomeScorecard(ModelOutcomeScorecard.ApplyBoundModels(records, boundModels), boundModels);
     }
 }

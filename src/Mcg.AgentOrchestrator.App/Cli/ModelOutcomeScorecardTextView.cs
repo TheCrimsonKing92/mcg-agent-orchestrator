@@ -2,7 +2,7 @@ using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.App.Cli;
 
-internal static partial class ConsoleViews
+internal static class ModelOutcomeScorecardTextView
 {
     public static void PrintModelOutcomeScorecard(IReadOnlyList<ModelOutcomeRecord> records, BoundModelSet? boundModels)
     {

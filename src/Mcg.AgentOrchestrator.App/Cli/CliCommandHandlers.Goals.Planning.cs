@@ -46,7 +46,7 @@ private static bool HandleOperatorIntentTemplate(CliExecutionContext context, IR
     Console.WriteLine(createSimpleGoal ? "Created simple goal from intent template." : "Created goal from intent template.");
     if (goalObjectivePlan is not null)
     {
-        ConsoleViews.PrintGoalObjectivePlan(goalObjectivePlan);
+        GoalObjectivePlanTextView.PrintGoalObjectivePlan(goalObjectivePlan);
     }
     GoalTextView.PrintGoal(context.CurrentGoal);
     return true;
@@ -163,7 +163,7 @@ private static bool HandleGoalPlan(CliExecutionContext context, IReadOnlyList<st
             : $"Created goal {context.CurrentGoal.Id.Value[..8]} from plan node {node.Id}.");
         if (nodeObjectivePlan is not null)
         {
-            ConsoleViews.PrintGoalObjectivePlan(nodeObjectivePlan);
+            GoalObjectivePlanTextView.PrintGoalObjectivePlan(nodeObjectivePlan);
         }
     }
 
@@ -251,7 +251,7 @@ private static bool HandlePlan(CliExecutionContext context, IReadOnlyList<string
             context.Kernel.BuildTaskDurationStats(), GoalIntakeTargetStack.For(context.Workspace))
         : BuildGoalObjectivePlan(context, direction, simple: true);
     GoalObjectivePlanner.ThrowIfBlocked(objPlan);
-    ConsoleViews.PrintGoalObjectivePlan(objPlan);
+    GoalObjectivePlanTextView.PrintGoalObjectivePlan(objPlan);
 
     Console.WriteLine($"Running planner decomposition ({PlanSampleCount} samples)...");
     var catalog = ModelFunctionCatalogStore.Load(context.Workspace.ModelFunctionCatalogPath);
@@ -282,7 +282,7 @@ private static bool HandlePlan(CliExecutionContext context, IReadOnlyList<string
     }
 
     var dagPlan = GoalDagDecompositionPlanner.SelectBestOfN(candidates);
-    ConsoleViews.PrintGoalDagPlan(dagPlan, sliceBatch);
+    GoalDagPlanTextView.PrintGoalDagPlan(dagPlan, sliceBatch);
 
     if (!confirmPlan)
         return false;

@@ -109,7 +109,7 @@ public sealed class ReconcileSweepPendingGateEscalationTests : IDisposable
             TerminalGoalRemedy.Acceptance(goalId, prefix,
                 hasGateArtifact ? new TerminalGoalGateArtifact("gate-1", "candidate-sha", "gate-passed") : null));
 
-        var output = CaptureConsole(() => ConsoleViews.PrintTerminalGoalSweep(Sweep(blocker)));
+        var output = CaptureConsole(() => TerminalGoalSweepTextView.PrintTerminalGoalSweep(Sweep(blocker)));
 
         var expected = $"SWEEP_BLOCKER goal={prefix} kind=completed-branch-unmerged evidence=\"e\" command=\"acceptance {prefix}\"";
         Xunit.Assert.Equal(expected + (hasGateArtifact ? "" : " owner=acceptance-queue") + Environment.NewLine, output);

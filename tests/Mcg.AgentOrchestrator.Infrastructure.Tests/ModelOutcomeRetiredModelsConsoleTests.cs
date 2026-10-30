@@ -11,7 +11,7 @@ public sealed class ModelOutcomeRetiredModelsConsoleTests
         var bound = BoundModelSet.Available(["OpenAI/GPT-6.1-SOL", "claude-opus-5-5"]);
         var records = ModelOutcomeScorecard.Build(Rows(), bound);
 
-        var output = CaptureConsole(() => ConsoleViews.PrintModelOutcomeScorecard(records, bound));
+        var output = CaptureConsole(() => ModelOutcomeScorecardTextView.PrintModelOutcomeScorecard(records, bound));
         var lines = Lines(output);
 
         Assert.Contains("Model outcome scorecard (3 model(s)):", output);
@@ -35,7 +35,7 @@ public sealed class ModelOutcomeRetiredModelsConsoleTests
         var retired = ModelOutcomeScorecard.Build(Rows(), BoundModelSet.Available([]));
         var records = ModelOutcomeScorecard.ApplyBoundModels(retired, unavailable);
 
-        var output = CaptureConsole(() => ConsoleViews.PrintModelOutcomeScorecard(records, unavailable));
+        var output = CaptureConsole(() => ModelOutcomeScorecardTextView.PrintModelOutcomeScorecard(records, unavailable));
         var lines = Lines(output);
 
         Assert.Contains(lines, line => line.StartsWith("  Anthropic/gpt-6.1-sol lane=", StringComparison.Ordinal));
@@ -61,7 +61,7 @@ public sealed class ModelOutcomeRetiredModelsConsoleTests
         var bound = BoundModelSet.Available(["model"]);
         var records = ModelOutcomeScorecard.Build(rows, bound);
 
-        var output = CaptureConsole(() => ConsoleViews.PrintModelOutcomeScorecard(records, bound));
+        var output = CaptureConsole(() => ModelOutcomeScorecardTextView.PrintModelOutcomeScorecard(records, bound));
 
         Assert.Contains("classMismatchFailed=3 classMismatchRules=committed-worker-result-evidence=2,none=1", output);
         Assert.Contains("    reason: Mixed outcomes. Class-mismatch failures: 3.", Lines(output));
@@ -75,7 +75,7 @@ public sealed class ModelOutcomeRetiredModelsConsoleTests
         var bound = BoundModelSet.Available(["gpt-6.1-sol", "claude-opus-5-5", "gpt-5.5"]); // Deliberate historical alias is explicitly bound for this fixture.
         var records = ModelOutcomeScorecard.Build(Rows(), bound);
 
-        var output = CaptureConsole(() => ConsoleViews.PrintModelOutcomeScorecard(records, bound));
+        var output = CaptureConsole(() => ModelOutcomeScorecardTextView.PrintModelOutcomeScorecard(records, bound));
 
         Assert.Equal(3, Lines(output).Count(line => line.Contains("classMismatchFailed=0 classMismatchRules= ")));
         Assert.All(records, record => Assert.Contains($"    reason: {record.Reason}", Lines(output)));
@@ -89,7 +89,7 @@ public sealed class ModelOutcomeRetiredModelsConsoleTests
         var bound = BoundModelSet.Available([]);
         var records = ModelOutcomeScorecard.Build(Rows(), bound);
 
-        var output = CaptureConsole(() => ConsoleViews.PrintModelOutcomeScorecard(records, bound));
+        var output = CaptureConsole(() => ModelOutcomeScorecardTextView.PrintModelOutcomeScorecard(records, bound));
 
         Assert.Equal("  Retired models: Anthropic/claude-opus-5-5 lane=claude-cli completed=2 failed=0; " +
             "Anthropic/gpt-6.1-sol lane=codex-cli completed=2 failed=0; " +
@@ -102,7 +102,7 @@ public sealed class ModelOutcomeRetiredModelsConsoleTests
     [Fact]
     public void EmptyHistoryStillExplainsUnavailableCatalogs()
     {
-        var output = CaptureConsole(() => ConsoleViews.PrintModelOutcomeScorecard([], BoundModelSet.Unavailable("agents.json missing")));
+        var output = CaptureConsole(() => ModelOutcomeScorecardTextView.PrintModelOutcomeScorecard([], BoundModelSet.Unavailable("agents.json missing")));
 
         Assert.Contains("No completed or failed dispatches with model selection found.", output);
         Assert.Single(Lines(output).Where(line => line.Contains("Bound model set unavailable (agents.json missing)")));

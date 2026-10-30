@@ -948,7 +948,7 @@ internal static partial class CliPersistentStateRunner
                     sweep = sweep with { ExcludedGoalCount = sweep.ExcludedGoalCount + metadataOnlyExcludedGoalCount };
                 }
 
-                heartbeat.Run(ConductorStartupHeartbeat.Phases.SweepSurfacing, () => { ConsoleViews.PrintTerminalGoalSweep(sweep, includeBlockers: ConductLoopWillExitBeforeFirstTick(args, workspace.ConductorStopFilePath));
+                heartbeat.Run(ConductorStartupHeartbeat.Phases.SweepSurfacing, () => { TerminalGoalSweepTextView.PrintTerminalGoalSweep(sweep, includeBlockers: ConductLoopWillExitBeforeFirstTick(args, workspace.ConductorStopFilePath));
                     TerminalGoalSweepAttention.Surface(sweepKernel, sweep, workspace.OrchestratorDirectory, watchGoalId); });
                 heartbeat.Run(ConductorStartupHeartbeat.Phases.SweepPersistence, () => {
                     PersistSweepChanges(sweepKernel, sweepCheckpoint, workspace.OrchestratorDirectory);
@@ -2502,7 +2502,7 @@ internal static partial class CliPersistentStateRunner
             orchestratorDirectory: workspace.OrchestratorDirectory);
         var targetSweepTimelineEnd = TerminalGoalSweepLifecycleEvents.Capture(kernel);
         reconcileStarted.Stop();
-        ConsoleViews.PrintTerminalGoalSweep(targetSweep);
+        TerminalGoalSweepTextView.PrintTerminalGoalSweep(targetSweep);
         TerminalGoalSweepAttention.Surface(kernel, targetSweep, workspace.OrchestratorDirectory, goalId);
         phaseTimings.Record(
             "reconcile-sweep",
