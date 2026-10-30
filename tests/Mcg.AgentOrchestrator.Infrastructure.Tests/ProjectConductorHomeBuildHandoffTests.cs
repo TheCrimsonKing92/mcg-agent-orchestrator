@@ -110,13 +110,18 @@ public sealed class ProjectConductorHomeBuildHandoffTests
             return Task.FromResult(new ConductorSupervisorProcessResult(0, 102));
         });
         var retryDelay = TimeSpan.FromSeconds(60);
+        var readinessTimeout = TimeSpan.FromMinutes(5);
         var supervisor = new ConductorContinuitySupervisor(host, new RecordingEvents(),
             homeBuildFollower: new HomeBuildFollowerSuccessorSource(fixture.Root),
             schemaUpgrade: upgrade,
             inspectStores: () => [new("fixture", database, 1, 1)],
             successorExitRetryDelay: retryDelay,
-            delay: (duration, _) =>
+            readinessTimeout: readinessTimeout,
+            delay: (duration, token) =>
             {
+                // The readiness deadline shares this seam with the retry delay.
+                // The scripted exit decides readiness; cancellation releases its timer.
+                if (duration == readinessTimeout) return Task.Delay(Timeout.InfiniteTimeSpan, token);
                 Assert.Equal(retryDelay, duration);
                 retryCalls++;
                 Assert.Contains(lines, line => line.StartsWith("LOOP_HANDOFF_RETRY_SCHEDULED ", StringComparison.Ordinal));
