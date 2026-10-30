@@ -83,7 +83,7 @@ internal static class GateTestObligationEvaluator
     private static IEnumerable<Source> ReadSources(
         string orchestratorDirectory, GoalId goalId, string? sha, string? carriedFrom = null) =>
         ProspectiveEvidenceGateResolver.ReadAttempts(orchestratorDirectory, goalId, sha)
-            .Select(attempt => new Source(attempt.Id, attempt.CompletedAt, attempt.Paths, attempt.BriefVersion, carriedFrom))
+            .Select(attempt => new Source(attempt.Id, attempt.CompletedAt, attempt.Paths, attempt.BriefVersion, carriedFrom, attempt.Checks))
             .Concat(GroupedGateReceiptTrxEvidence.ReadPassedReceipts(orchestratorDirectory, goalId, sha)
                 .Select(receipt => new Source(receipt.ReceiptId, receipt.CompletedAt, receipt.TrxPaths, receipt.BriefVersion, carriedFrom)));
 
@@ -157,12 +157,34 @@ internal static class GateTestObligationEvaluator
         {
             if (obligation.PlannerIdentity is not null && source.BriefVersion != obligation.PlannerIdentity.BriefVersion) continue;
             var evidence = GroupedGateReceiptTrxEvidence.Evaluate(
-                obligation.Selectors, source.Paths, orchestratorDirectory);
+                obligation.Selectors, source.Paths, orchestratorDirectory).ToArray();
+            var pending = new HashSet<string>(StringComparer.Ordinal);
+            for (var index = 0; index < evidence.Length; index++)
+            {
+                var selector = evidence[index].Selector;
+                switch (GateCheckSelectorMatcher.Grade(selector, source.Checks))
+                {
+                    case GateCheckSelectorMatcher.Outcome.Satisfied:
+                        evidence[index] = new(selector, 1, 0, 0, 0, true);
+                        break;
+                    case GateCheckSelectorMatcher.Outcome.Failed:
+                        evidence[index] = new(selector, 0, 1, 0, 0, false);
+                        break;
+                    case GateCheckSelectorMatcher.Outcome.Pending:
+                        evidence[index] = new(selector, 0, 0, 0, 0, false);
+                        pending.Add(selector);
+                        break;
+                }
+            }
             if (evidence.All(item => item.Satisfied))
                 return new(obligation, Outcome.Satisfied, obligation.Selectors, source.Id);
             if (newest is not null) continue;
 
-            newest = Grade(obligation, source.Id, evidence);
+            // Pending check evidence is not an unmatched test selector. Failures and
+            // unmatched row selectors still use the existing grading and precedence.
+            newest = Grade(obligation, source.Id, evidence.Where(item => !pending.Contains(item.Selector)).ToArray());
+            if (pending.Count > 0 && newest.Outcome == Outcome.Satisfied)
+                newest = new(obligation, Outcome.Pending, obligation.Selectors.Where(pending.Contains).ToArray(), source.Id);
         }
         return newest ?? new(obligation, Outcome.Pending, obligation.Selectors, null);
     }
@@ -190,5 +212,6 @@ internal static class GateTestObligationEvaluator
     }
 
     internal sealed record Source(
-        string Id, DateTimeOffset CompletedAt, IReadOnlyList<string> Paths, int? BriefVersion, string? CarriedFrom = null);
+        string Id, DateTimeOffset CompletedAt, IReadOnlyList<string> Paths, int? BriefVersion, string? CarriedFrom = null,
+        ProspectiveEvidenceGateResolver.GateCheckOutcomes? Checks = null);
 }
