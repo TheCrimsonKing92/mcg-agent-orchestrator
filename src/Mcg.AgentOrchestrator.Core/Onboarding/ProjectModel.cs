@@ -14,7 +14,8 @@ public sealed record ProjectModel(
     IReadOnlyList<UnitMeasurement> Measurements,
     IReadOnlyList<SharedStateHazard> Hazards,
     ProjectFact<string>? IntegrationBranch = null,
-    ProjectStack Stack = ProjectStack.Dotnet)
+    ProjectStack Stack = ProjectStack.Dotnet,
+    DeliveryProbeRecord? DeliveryProbe = null)
 {
     public const int CurrentSchemaVersion = 4;
 }

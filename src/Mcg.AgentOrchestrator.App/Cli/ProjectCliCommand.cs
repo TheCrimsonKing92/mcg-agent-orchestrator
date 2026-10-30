@@ -16,7 +16,8 @@ internal static class ProjectCliCommand
         string? activeProjectOverride,
         TextWriter? discoveryOutput = null,
         Func<IUnitCommandMeasurer>? measurerFactory = null,
-        Func<DefaultStateMover>? defaultStateMoverFactory = null)
+        Func<DefaultStateMover>? defaultStateMoverFactory = null,
+        Func<IPullRequestRequirementProbe>? pullRequestProbeFactory = null)
     {
         var subcommand = parts.Count > 1 ? parts[1].ToLowerInvariant() : "show";
         switch (subcommand)
@@ -48,7 +49,8 @@ internal static class ProjectCliCommand
                 return 0;
 
             case "discover":
-                Discover(parts, registry, defaultRootDirectory, activeProjectOverride, discoveryOutput ?? Console.Out, measurerFactory);
+                Discover(parts, registry, defaultRootDirectory, activeProjectOverride, discoveryOutput ?? Console.Out, measurerFactory,
+                    pullRequestProbeFactory);
                 return 0;
 
             case "answer":
@@ -83,7 +85,8 @@ internal static class ProjectCliCommand
         string defaultRootDirectory,
         string? activeProjectOverride,
         TextWriter output,
-        Func<IUnitCommandMeasurer>? measurerFactory)
+        Func<IUnitCommandMeasurer>? measurerFactory,
+        Func<IPullRequestRequirementProbe>? pullRequestProbeFactory)
     {
         var (rootOverride, measuredKinds) = ParseDiscoveryOptions(parts);
 
@@ -101,6 +104,17 @@ internal static class ProjectCliCommand
             : measurerFactory() ?? throw new InvalidOperationException("The measurement factory returned no measurer.");
         var model = adapter.Discover(rootOverride ?? project.RootDirectory, RepositorySourceInventory.ExcludedDirectoryNames,
             measurer, measuredKinds ?? UnitCommandKinds.None);
+        PullRequestRequirement deliveryProbe;
+        try
+        {
+            var probe = pullRequestProbeFactory?.Invoke() ?? new GitHubPullRequestRequirementProbe(new ForgeProcessRunner());
+            deliveryProbe = probe.Probe(rootOverride ?? project.RootDirectory, project.IntegrationBranch);
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            deliveryProbe = PullRequestRequirement.Unknown($"forge probe failed: {exception.Message}");
+        }
+        model = DeliveryOwnerQuestion.Apply(model, deliveryProbe, project.IntegrationBranch, project.DeliveryAnswer is not null);
         Directory.CreateDirectory(workspaceDirectory);
         var modelPath = Path.Combine(workspaceDirectory, "project-model.json");
         var temporaryPath = Path.Combine(workspaceDirectory, $".project-model-{Guid.NewGuid():N}.tmp");
@@ -125,7 +139,8 @@ internal static class ProjectCliCommand
         var (answers, answerError) = ProjectAnswerCommand.ReadAnswersForOutput(workspaceDirectory);
         var applied = answers.Count == 0 ? null : OwnerAnswerApplier.Apply(model, answers);
         foreach (var question in applied?.OpenQuestions ?? model.OwnerQuestions)
-            output.WriteLine($"Owner question: {question.Question}");
+            output.WriteLine($"Owner question: {question.Question}" +
+                (question.SuggestedValue is null ? "" : $" (suggested: {question.SuggestedValue})"));
         if (applied is not null)
             ProjectAnswerCommand.WriteAnswerLines(output, applied);
         if (answerError is not null)
@@ -670,6 +685,7 @@ internal static class ProjectCliCommand
         Console.WriteLine($"Integration branch: {project.IntegrationBranch}");
         Console.WriteLine($"Integration branch source: {project.IntegrationBranchSource}");
         if (project.IntegrationBranchNote is not null) Console.WriteLine(project.IntegrationBranchNote);
+        ProjectDeliveryShow.Write(project, defaultRootDirectory, registry.DataRootDirectory, Console.Out);
         Console.WriteLine($"Active: {project.Name.Equals(active.Name, StringComparison.OrdinalIgnoreCase)}");
         Console.WriteLine($"Root: {project.RootDirectory}");
         Console.WriteLine($"Workspace: {workspace.OrchestratorDirectory}");

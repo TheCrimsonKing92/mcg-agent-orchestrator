@@ -216,6 +216,7 @@ public sealed class ProjectUseLearnedBranchCliTests : CliCommandTestBase
         else Assert.Null(project.IntegrationBranchNote);
         Assert.Equal(new[]
         {
+            "Delivery: direct (source: default)", "Delivery decider: unset (repository owner)", "Delivery probe: not recorded",
             "Active: False", $"Root: {ProjectRoot}", $"Workspace: {project.ResolveWorkspace().OrchestratorDirectory}",
             $"State: {project.ResolveWorkspace().SqliteStatePath}", $"Backlog: {project.ResolveWorkspace().BacklogStorePath}",
             $"Registry: {registry.RegistryPath}", $"Selection: {registry.CurrentProjectPath}"
@@ -232,7 +233,10 @@ public sealed class ProjectUseLearnedBranchCliTests : CliCommandTestBase
         var lines = Lines(output);
         Assert.Equal("Integration branch: main", lines[1]);
         Assert.Equal("Integration branch source: Default", lines[2]);
-        Assert.Equal("Active: True", lines[3]);
+        Assert.Equal("Delivery: direct (source: default)", lines[3]);
+        Assert.Equal("Delivery decider: unset (repository owner)", lines[4]);
+        Assert.Equal("Delivery probe: not recorded", lines[5]);
+        Assert.Equal("Active: True", lines[6]);
     }
 
     private OrchestratorProjectRegistry CreateProject(string? storedBranch = null)
