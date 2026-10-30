@@ -325,46 +325,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     internal const int MaxFailureAttributionFocusedEvidenceIdentities = FocusedEvidenceShortTimeoutTargetLimit;
     public const string AcceptanceAttemptTrxPrefixVariable = "MCG_ACCEPTANCE_GATE_ATTEMPT_TRX_PREFIX";
 
-    public static StartupContract ValidateStartupContract(string repositoryRoot, string? projectHomeDirectory = null)
-    {
-        var manifest = AcceptanceManifest.Load(repositoryRoot, changedFiles: null, projectHomeDirectory);
-        if (manifest.Checks.Count == 0)
-        {
-            throw new InvalidOperationException("Acceptance manifest loaded without any checks.");
-        }
-        foreach (var check in manifest.Checks)
-        {
-            var type = check.Type.Trim().ToLowerInvariant();
-            if (type == "command")
-            {
-                _ = BuildCommandArguments(check);
-            }
-            else if (type == "dotnet-test")
-            {
-                _ = BuildDotnetTestArguments(check);
-            }
-            else if (type == "junit-command")
-            {
-                JunitCommandCheckDefinition.Validate(check);
-            }
-            else if (type is not ("crosswalk-test" or "no-op" or "grep-absent" or "grep-present" or "file-exists" or "command-exit"))
-            {
-                throw new InvalidOperationException(
-                    $"Acceptance manifest check '{check.Name}' has unsupported type '{check.Type}'.");
-            }
-        }
-
-        var laneNames = AcceptanceGateEngineSettings.Load(repositoryRoot, projectHomeDirectory)
-            .InfrastructureTestLanes
-            .Select(lane => lane.Name)
-            .ToArray();
-        if (laneNames.Length == 0 || laneNames.Any(string.IsNullOrWhiteSpace))
-        {
-            throw new InvalidOperationException("Acceptance infrastructure lanes could not be enumerated.");
-        }
-
-        return new StartupContract(manifest.Checks.Count, laneNames);
-    }
+    public static StartupContract ValidateStartupContract(string repositoryRoot, string? projectHomeDirectory = null) =>
+        AcceptanceStartupContractValidator.Validate(repositoryRoot, projectHomeDirectory, BuildCommandArguments);
     private readonly Func<string[], string, TimeSpan, CancellationToken, Task<CommandResult>> _runner;
     private readonly DotnetBuildStorageRoot _storageRoot;
     internal MainBaselineDiscoveryCache? ResolvedMainBaselineDiscoveryCache { get; }
