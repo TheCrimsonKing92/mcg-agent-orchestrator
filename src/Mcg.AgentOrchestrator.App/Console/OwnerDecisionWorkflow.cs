@@ -26,6 +26,12 @@ internal sealed class OwnerDecisionWorkflow(IOwnerQuestionSource questions, IOwn
         OwnerConsoleScreenOperation? operation, CancellationToken cancellationToken, Action<string>? notice = null)
     {
         if (decision is null) return;
+        if (decision.Kind == OwnerQuestionKind.Onboarding)
+        {
+            await new OwnerOnboardingDecisionFlow(questions, dialogs).RunAsync(decision, accept,
+                operation, cancellationToken, notice);
+            return;
+        }
         if (decision.Kind == OwnerQuestionKind.ExperimentReading)
         {
             await new OwnerExperimentDecisionFlow(questions, answers, dialogs, tracking)

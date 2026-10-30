@@ -2,13 +2,17 @@ using System.Collections.Immutable;
 
 namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 
-// Section metadata stays in the model; only goal-bearing sections occupy scrolling board rows.
+// Goal-bearing and onboarding sections occupy scrolling board rows.
 internal sealed record OwnerConsoleBoardSection(string Project, OwnerConsoleBoardRow Header,
     ImmutableArray<OwnerConsoleBoardRow> Goals)
 {
     internal static OwnerConsoleBoardSection Create(string project, ImmutableArray<OwnerConsoleBoardRow> goals,
-        bool conductorLive, DateTimeOffset? lastLanded, DateTimeOffset now)
+        bool conductorLive, DateTimeOffset? lastLanded, DateTimeOffset now, ProjectOnboardingState? onboarding = null)
     {
+        if (onboarding is { IsOnboarding: true })
+            return new(project, new("", "", $"{project} · onboarding · {onboarding.Stack} · {onboarding.Progress}",
+                "onboarding", "", null, "", Dimmed: onboarding.Unavailable is not null)
+                { Project = project, IsDiagnostic = true }, goals);
         var active = goals.Count(row => !row.Dimmed);
         var inGate = goals.Count(row => row.SortKey.Rank == OwnerConsoleAttention.GateRunning);
         var waitingForGate = goals.Count(row => row.SortKey.Rank == OwnerConsoleAttention.WaitingForGate);
@@ -23,16 +27,16 @@ internal sealed record OwnerConsoleBoardSection(string Project, OwnerConsoleBoar
     }
 
     internal static ImmutableArray<OwnerConsoleBoardRow> Flatten(IEnumerable<OwnerConsoleBoardSection> sections) =>
-        sections.OrderBy(section => section.Goals.IsEmpty)
+        sections.OrderBy(section => section.Goals.IsEmpty && section.Header.State != "onboarding")
             .SelectMany(section => section.Goals.Prepend(section.Header)).ToImmutableArray();
 
     // WithDecisions updates goal ranks after source composition. Restore section boundaries at the view seam.
     internal static OwnerConsoleViewModel Arrange(OwnerConsoleViewModel model)
     {
-        if (model.BoardScope is not { ProjectCount: > 1, Sections: { } projects }) return model;
+        if (model.BoardScope is not { Sections: { } projects }) return model;
         var groups = model.Board.ToLookup(row => row.Project, StringComparer.OrdinalIgnoreCase);
         var order = projects.Concat(model.Board.Select(row => row.Project)).Distinct(StringComparer.OrdinalIgnoreCase);
-        return model with { Board = order.OrderBy(project => !groups[project].Any(row => !row.IsDiagnostic))
+        return model with { Board = order.OrderBy(project => !groups[project].Any(row => !row.IsDiagnostic || row.State == "onboarding"))
             .SelectMany(project => groups[project]
             .OrderBy(row => row.IsDiagnostic ? 0 : 1)).ToImmutableArray() };
     }
@@ -42,7 +46,7 @@ internal sealed record OwnerConsoleBoardSection(string Project, OwnerConsoleBoar
     {
         if (!sectioned) return board.Count;
         for (var index = board.Count - 1; index >= 0; index--)
-            if (!board[index].IsDiagnostic) return index + 1;
+            if (!board[index].IsDiagnostic || board[index].State == "onboarding") return index + 1;
         return 0;
     }
 
@@ -53,7 +57,7 @@ internal sealed record OwnerConsoleBoardSection(string Project, OwnerConsoleBoar
         if (model.BoardScope is not { ProjectCount: > 1 }) return [];
         var goals = model.Board.Where(row => !row.IsDiagnostic).Select(row => row.Project)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var empty = model.Board.Where(row => row.IsDiagnostic && !goals.Contains(row.Project)).ToArray();
+        var empty = model.Board.Where(row => row.IsDiagnostic && row.State != "onboarding" && !goals.Contains(row.Project)).ToArray();
         var segments = new List<(string Text, bool Dimmed)>();
         foreach (var state in new[] { "running", "idle", "stopped", "unreadable" })
         {
@@ -71,7 +75,7 @@ internal sealed record OwnerConsoleBoardSection(string Project, OwnerConsoleBoar
     }
 
     internal static bool IsHeader(OwnerConsoleBoardRow row, OwnerConsoleBoardScope? scope) =>
-        scope is { ProjectCount: > 1 } && row.IsDiagnostic;
+        scope is not null && (scope.ProjectCount > 1 || row.State == "onboarding") && row.IsDiagnostic;
 
     internal static int NearestGoal(ImmutableArray<OwnerConsoleBoardRow> board,
         OwnerConsoleBoardScope? scope, int index, int direction)

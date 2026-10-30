@@ -627,8 +627,15 @@ public sealed class OwnerConsoleBoardSectionTests
             var root = Path.Combine(_root, "repos", name);
             Directory.CreateDirectory(root);
             var project = Registry.CreateProject(name, root, integrationBranch: "main");
-            return OrchestratorWorkspace.ForProject(project.Name, root,
+            var workspace = OrchestratorWorkspace.ForProject(project.Name, root,
                 integrationBranch: project.IntegrationBranch, dataRootDirectory: Registry.DataRootDirectory);
+            // These scenes exercise ordinary conductor headers after onboarding is complete.
+            Directory.CreateDirectory(workspace.OrchestratorDirectory);
+            File.WriteAllText(Path.Combine(workspace.OrchestratorDirectory, "project-model.json"),
+                ProjectModelJson.Serialize(new(ProjectModel.CurrentSchemaVersion, ".", [], [], [], [], [], [], [], [])));
+            File.WriteAllText(Path.Combine(workspace.OrchestratorDirectory, "acceptance-manifest.json"), "{}");
+            new ConductEventLogWriter(workspace.ConductEventsLogPath).Append("loop-start", null, "fixture conductor started");
+            return workspace;
         }
 
         internal async Task AddGoalAsync(OrchestratorWorkspace workspace, string id, GoalStatus status)

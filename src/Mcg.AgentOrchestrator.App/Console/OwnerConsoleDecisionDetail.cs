@@ -45,7 +45,8 @@ internal sealed class OwnerConsoleDecisionDetail : IDisposable
                     else banner = _failure is not null ? "No longer open (resolution unavailable: " + _failure + ")" :
                         _reading ? "No longer open; reading how it was resolved…" : "No longer open";
                 }
-                return new(text, banner, _notice, _open, _open && !string.IsNullOrWhiteSpace(_decision.ProposedDefault));
+                return new(text, banner, _notice, _open && _decision.CanAnswer,
+                    _open && !string.IsNullOrWhiteSpace(_decision.ProposedDefault));
             }
         }
     }
