@@ -263,7 +263,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
         }
         _boardFooter.SetNeedsDraw();
         OwnerConsoleBoardRenderer.Render(BoardTable, _board, model.Board, _board.Viewport.Width, _boardTitleWidth,
-            model.BoardScope is { ProjectCount: > 1 });
+            model.BoardScope is { Sections: not null });
         RenderPreview();
     }
 

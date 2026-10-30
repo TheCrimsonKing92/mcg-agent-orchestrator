@@ -5,7 +5,8 @@ using Mcg.AgentOrchestrator.Infrastructure;
 namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 
 internal sealed record OwnerConsoleBoardProject(string Name, string StatePath, string PortfolioPath,
-    string? Error = null, string? OrchestratorDirectory = null);
+    string? Error = null, string? OrchestratorDirectory = null, string? ConductEventsLogPath = null,
+    bool DeliveryAnswered = false);
 internal sealed record OwnerConsoleBoardScope(string Label, int ProjectCount, string? DisclosureWorkspace,
     IReadOnlyList<string>? Sections = null);
 internal sealed record OwnerConsoleScopeCommandResult(string Message, bool Success, bool Changed);
@@ -23,6 +24,7 @@ internal sealed class OwnerConsoleBoardSource(string launchProject, OwnerConsole
         new(OwnerConsoleProjectLabel.ForWorkspace(workspace), OwnerConsoleProjectScope.ForLaunch(workspace), () =>
         {
             var projects = new List<OwnerConsoleBoardProject>();
+            var registered = registry.ListProjects();
             OwnerConsoleBoardProject Describe(string name, Func<OrchestratorWorkspace> resolve)
             {
                 try
@@ -30,13 +32,15 @@ internal sealed class OwnerConsoleBoardSource(string launchProject, OwnerConsole
                     var target = name.Equals(OwnerConsoleProjectLabel.ForWorkspace(workspace), StringComparison.OrdinalIgnoreCase)
                         ? workspace : resolve();
                     return new(name, target.SqliteStatePath, target.PortfolioStorePath,
-                        OrchestratorDirectory: target.OrchestratorDirectory);
+                        OrchestratorDirectory: target.OrchestratorDirectory, ConductEventsLogPath: target.ConductEventsLogPath,
+                        DeliveryAnswered: registered.FirstOrDefault(project =>
+                            project.Name.Equals(name, StringComparison.OrdinalIgnoreCase))?.DeliveryAnswer is not null);
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 { return new(name, "", "", ex.Message); }
             }
             projects.Add(Describe("home", () => OrchestratorWorkspace.ForDirectory(repositoryRoot, null, workspace.TenantName, registry)));
-            foreach (var project in registry.ListProjects())
+            foreach (var project in registered)
             {
                 if (project.Name.Equals("home", StringComparison.OrdinalIgnoreCase)) continue;
                 projects.Add(Describe(project.Name, () => OrchestratorWorkspace.ForProject(project.Name,
@@ -45,7 +49,16 @@ internal sealed class OwnerConsoleBoardSource(string launchProject, OwnerConsole
             }
             return projects;
         }, clock, new(OwnerConsoleProjectLabel.ForWorkspace(workspace), workspace.SqliteStatePath,
-            workspace.PortfolioStorePath, OrchestratorDirectory: workspace.OrchestratorDirectory));
+            workspace.PortfolioStorePath, OrchestratorDirectory: workspace.OrchestratorDirectory,
+            ConductEventsLogPath: workspace.ConductEventsLogPath));
+
+    internal IReadOnlyList<OwnerConsoleBoardProject> InScopeProjects()
+    {
+        OwnerConsoleProjectScope scope;
+        lock (_sync) scope = _scope;
+        return Ordered(catalog()).Where(project => scope.IsAll ||
+            scope.Names.Contains(project.Name, StringComparer.OrdinalIgnoreCase)).ToArray();
+    }
 
     internal OwnerConsoleScopeCommandResult HandleScope(string? argument)
     {
@@ -79,6 +92,7 @@ internal sealed class OwnerConsoleBoardSource(string launchProject, OwnerConsole
             projects.FirstOrDefault(project => project.Name.Equals(name, StringComparison.OrdinalIgnoreCase)) ??
             (name.Equals(launchProject, StringComparison.OrdinalIgnoreCase) ? launchWorkspace : null);
         var stores = new Dictionary<string, SqliteOrchestratorStateRepository>(StringComparer.OrdinalIgnoreCase);
+        var onboarding = new Dictionary<string, ProjectOnboardingState>(StringComparer.OrdinalIgnoreCase);
         try
         {
             projects = Ordered(catalog()).ToArray();
@@ -90,9 +104,14 @@ internal sealed class OwnerConsoleBoardSource(string launchProject, OwnerConsole
                 try
                 {
                     if (project?.Error is { } error) throw new IOException(error);
+                    if (project is not null && !name.Equals("home", StringComparison.OrdinalIgnoreCase))
+                        onboarding[name] = ProjectOnboardingStateReader.Read(name, project.OrchestratorDirectory ??
+                            Path.GetDirectoryName(project.PortfolioPath)!, project.ConductEventsLogPath, project.DeliveryAnswered);
                     // GetAttributes distinguishes confirmed absence from inaccessible state.
                     if (project is null || !Exists(project.StatePath))
                     {
+                        if (onboarding.TryGetValue(name, out var progress) && progress.IsOnboarding)
+                        { resolved.Add(name); continue; }
                         if (scope.IsAll && !name.Equals("home", StringComparison.OrdinalIgnoreCase)) continue;
                         if (!isOwn) throw new FileNotFoundException("state database was not found");
                     }
@@ -126,7 +145,8 @@ internal sealed class OwnerConsoleBoardSource(string launchProject, OwnerConsole
         var projectCount = resolved.Distinct(StringComparer.OrdinalIgnoreCase).Count();
         IReadOnlyList<string>? sectionOrder = null;
         ImmutableArray<OwnerConsoleBoardRow> sectionRows = [];
-        if (projectCount > 1)
+        var sectioned = projectCount > 1 || onboarding.Values.Any(state => state.IsOnboarding);
+        if (sectioned)
         {
             sectionOrder = resolved.Where(name => name.Equals(launchProject, StringComparison.OrdinalIgnoreCase))
                 .Concat(projects.Select(project => project.Name)
@@ -153,7 +173,8 @@ internal sealed class OwnerConsoleBoardSource(string launchProject, OwnerConsole
                     var live = new ConductorLeaseLiveness(project.OrchestratorDirectory ??
                         Path.GetDirectoryName(project.PortfolioPath)!).IsRunning();
                     sections.Add(OwnerConsoleBoardSection.Create(name, projectRows.OrderBy(row => row.SortKey)
-                        .ThenBy(row => row.GoalId, StringComparer.Ordinal).ToImmutableArray(), live, landed, now));
+                        .ThenBy(row => row.GoalId, StringComparer.Ordinal).ToImmutableArray(), live, landed, now,
+                        onboarding.GetValueOrDefault(name)));
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 { sections.Add(new(name, Diagnostic(name, ex), [])); }
@@ -162,7 +183,7 @@ internal sealed class OwnerConsoleBoardSource(string launchProject, OwnerConsole
         }
         return own with
         {
-            Board = projectCount > 1 ? sectionRows : rows.OrderBy(row => row.IsDiagnostic).ThenBy(row => row.SortKey)
+            Board = sectioned ? sectionRows : rows.OrderBy(row => row.IsDiagnostic).ThenBy(row => row.SortKey)
                 .ThenBy(row => row.Project, StringComparer.OrdinalIgnoreCase).ThenBy(row => row.GoalId, StringComparer.Ordinal).ToImmutableArray(),
             BoardScope = new(scope.Label, projectCount,
                 resolved.Any(name => !name.Equals(launchProject, StringComparison.OrdinalIgnoreCase)) ? launchProject : null,
