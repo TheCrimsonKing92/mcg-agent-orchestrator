@@ -78,7 +78,7 @@ internal static class SourceSizeRatchet
             // Goal 78053cf4 capture custody collaborator measured at 378 lines.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.CaptureCustody.cs", 332),
             // Goal c60a7cb5 split focused-evidence request resolution into its own type.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.FocusedEvidenceRequestResolver.cs", 692),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.FocusedEvidenceRequestResolver.cs", 678),
             // Goal 40cc558d keeps direct SDK selection, bounded missing-executable fallback, and pipe recustody at the capture lifecycle boundary; measured candidate is 635 lines.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.ProcessRunner.cs", 192),
             // Goal e3bb2a77 extracted acceptance child invocation into its own owner.
