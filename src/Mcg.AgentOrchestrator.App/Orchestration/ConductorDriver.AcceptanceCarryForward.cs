@@ -7,7 +7,7 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 internal sealed partial class ConductorDriver
 {
     private const string AcceptanceMainAdvanceOperation = "conductor:acceptance-main-advance";
-    private const string AcceptanceMainAdvanceCarryOperation = "conductor:acceptance-main-advance-carry";
+    internal const string AcceptanceMainAdvanceCarryOperation = "conductor:acceptance-main-advance-carry";
 
     private ConductorAdvanceResult? RebaseBeforeAcceptance(
         Goal goal,

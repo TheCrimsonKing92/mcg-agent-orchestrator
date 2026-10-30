@@ -88,7 +88,7 @@ internal static class MergeTrainReproductionAttribution
             return ReadResults(interpreted.TestResultPaths);
         };
 
-    private static RunResult? ReadResults(IReadOnlyList<string> paths)
+    internal static RunResult? ReadResults(IReadOnlyList<string> paths)
     {
         if (paths.Count == 0) return null;
         var executed = new HashSet<string>(StringComparer.Ordinal);

@@ -5,13 +5,15 @@ using Mcg.AgentOrchestrator.Infrastructure;
 namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 
 internal sealed record OwnerConsoleBoardProject(string Name, string StatePath, string PortfolioPath,
-    string? Error = null);
-internal sealed record OwnerConsoleBoardScope(string Label, int ProjectCount, string? DisclosureWorkspace);
+    string? Error = null, string? OrchestratorDirectory = null);
+internal sealed record OwnerConsoleBoardScope(string Label, int ProjectCount, string? DisclosureWorkspace,
+    IReadOnlyList<string>? Sections = null);
 internal sealed record OwnerConsoleScopeCommandResult(string Message, bool Success, bool Changed);
 
 // Owns BOARD-only reads. Foreign builders and their goal-id caches never escape a refresh.
 internal sealed class OwnerConsoleBoardSource(string launchProject, OwnerConsoleProjectScope initialScope,
-    Func<IReadOnlyList<OwnerConsoleBoardProject>> catalog, TimeProvider clock)
+    Func<IReadOnlyList<OwnerConsoleBoardProject>> catalog, TimeProvider clock,
+    OwnerConsoleBoardProject? launchWorkspace = null)
 {
     private readonly object _sync = new();
     private OwnerConsoleProjectScope _scope = initialScope;
@@ -27,7 +29,8 @@ internal sealed class OwnerConsoleBoardSource(string launchProject, OwnerConsole
                 {
                     var target = name.Equals(OwnerConsoleProjectLabel.ForWorkspace(workspace), StringComparison.OrdinalIgnoreCase)
                         ? workspace : resolve();
-                    return new(name, target.SqliteStatePath, target.PortfolioStorePath);
+                    return new(name, target.SqliteStatePath, target.PortfolioStorePath,
+                        OrchestratorDirectory: target.OrchestratorDirectory);
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 { return new(name, "", "", ex.Message); }
@@ -41,7 +44,8 @@ internal sealed class OwnerConsoleBoardSource(string launchProject, OwnerConsole
                     dataRootDirectory: registry.DataRootDirectory)));
             }
             return projects;
-        }, clock);
+        }, clock, new(OwnerConsoleProjectLabel.ForWorkspace(workspace), workspace.SqliteStatePath,
+            workspace.PortfolioStorePath, OrchestratorDirectory: workspace.OrchestratorDirectory));
 
     internal OwnerConsoleScopeCommandResult HandleScope(string? argument)
     {
@@ -70,13 +74,18 @@ internal sealed class OwnerConsoleBoardSource(string launchProject, OwnerConsole
         lock (_sync) scope = _scope;
         var rows = new List<OwnerConsoleBoardRow>();
         var resolved = new List<string>();
+        OwnerConsoleBoardProject[] projects = [];
+        OwnerConsoleBoardProject? FindProject(string name) =>
+            projects.FirstOrDefault(project => project.Name.Equals(name, StringComparison.OrdinalIgnoreCase)) ??
+            (name.Equals(launchProject, StringComparison.OrdinalIgnoreCase) ? launchWorkspace : null);
+        var stores = new Dictionary<string, SqliteOrchestratorStateRepository>(StringComparer.OrdinalIgnoreCase);
         try
         {
-            var projects = Ordered(catalog()).ToArray();
+            projects = Ordered(catalog()).ToArray();
             foreach (var name in scope.IsAll ? projects.Select(project => project.Name) : scope.Names)
             {
                 token.ThrowIfCancellationRequested();
-                var project = projects.FirstOrDefault(project => project.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+                var project = FindProject(name);
                 var isOwn = name.Equals(launchProject, StringComparison.OrdinalIgnoreCase);
                 try
                 {
@@ -97,6 +106,7 @@ internal sealed class OwnerConsoleBoardSource(string launchProject, OwnerConsole
                             new ReadOnlyEpics(project.PortfolioPath), clock);
                         var model = await builder.BuildBoardAsync(token);
                         rows.AddRange(model.Board.Select(row => row with { Project = name, IsForeign = true }));
+                        stores[name] = state;
                     }
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
@@ -113,12 +123,50 @@ internal sealed class OwnerConsoleBoardSource(string launchProject, OwnerConsole
             rows.Add(Diagnostic("registry", ex));
         }
         token.ThrowIfCancellationRequested();
+        var projectCount = resolved.Distinct(StringComparer.OrdinalIgnoreCase).Count();
+        IReadOnlyList<string>? sectionOrder = null;
+        ImmutableArray<OwnerConsoleBoardRow> sectionRows = [];
+        if (projectCount > 1)
+        {
+            sectionOrder = resolved.Where(name => name.Equals(launchProject, StringComparison.OrdinalIgnoreCase))
+                .Concat(projects.Select(project => project.Name)
+                    .Where(name => resolved.Contains(name, StringComparer.OrdinalIgnoreCase)))
+                .Concat(resolved).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            var sections = new List<OwnerConsoleBoardSection>();
+            var now = clock.GetUtcNow();
+            foreach (var name in sectionOrder)
+            {
+                var projectRows = rows.Where(row => row.Project.Equals(name, StringComparison.OrdinalIgnoreCase)).ToArray();
+                if (projectRows.FirstOrDefault(row => row.IsDiagnostic) is { } diagnostic)
+                {
+                    sections.Add(new(name, diagnostic, []));
+                    continue;
+                }
+                try
+                {
+                    var project = FindProject(name) ?? throw new IOException("state database was not found");
+                    DateTimeOffset? landed = null;
+                    if (!stores.TryGetValue(name, out var state) && Exists(project.StatePath))
+                        state = SqliteOrchestratorStateRepository.OpenReadOnly(project.StatePath);
+                    if (state is not null)
+                        landed = (await state.ListGoalMetadataAsync(token)).Select(goal => goal.PromotionFact?.PromotedAt).Max();
+                    var live = new ConductorLeaseLiveness(project.OrchestratorDirectory ??
+                        Path.GetDirectoryName(project.PortfolioPath)!).IsRunning();
+                    sections.Add(OwnerConsoleBoardSection.Create(name, projectRows.OrderBy(row => row.SortKey)
+                        .ThenBy(row => row.GoalId, StringComparer.Ordinal).ToImmutableArray(), live, landed, now));
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                { sections.Add(new(name, Diagnostic(name, ex), [])); }
+            }
+            sectionRows = OwnerConsoleBoardSection.Flatten(sections);
+        }
         return own with
         {
-            Board = rows.OrderBy(row => row.IsDiagnostic).ThenBy(row => row.SortKey)
+            Board = projectCount > 1 ? sectionRows : rows.OrderBy(row => row.IsDiagnostic).ThenBy(row => row.SortKey)
                 .ThenBy(row => row.Project, StringComparer.OrdinalIgnoreCase).ThenBy(row => row.GoalId, StringComparer.Ordinal).ToImmutableArray(),
-            BoardScope = new(scope.Label, resolved.Distinct(StringComparer.OrdinalIgnoreCase).Count(),
-                resolved.Any(name => !name.Equals(launchProject, StringComparison.OrdinalIgnoreCase)) ? launchProject : null)
+            BoardScope = new(scope.Label, projectCount,
+                resolved.Any(name => !name.Equals(launchProject, StringComparison.OrdinalIgnoreCase)) ? launchProject : null,
+                sectionOrder)
         };
     }
 
@@ -127,8 +175,7 @@ internal sealed class OwnerConsoleBoardSource(string launchProject, OwnerConsole
 
     private static IEnumerable<OwnerConsoleBoardProject> Ordered(IReadOnlyList<OwnerConsoleBoardProject> projects) =>
         projects.DistinctBy(project => project.Name, StringComparer.OrdinalIgnoreCase)
-            .OrderBy(project => project.Name.Equals("home", StringComparison.OrdinalIgnoreCase) ? 0 : 1)
-            .ThenBy(project => project.Name, StringComparer.OrdinalIgnoreCase);
+            .OrderBy(project => project.Name.Equals("home", StringComparison.OrdinalIgnoreCase) ? 0 : 1);
 
     private static bool Exists(string path)
     {

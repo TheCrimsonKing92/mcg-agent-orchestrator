@@ -29,7 +29,10 @@ internal static partial class PreReviewFocusedRequestSplitter
             return true;
         }
 
-        var clauses = filterText.Split('|');
+        var text = PreReviewPositiveUnionNormalizer.TryFlatten(filterText, out var flattened)
+            ? flattened
+            : filterText;
+        var clauses = text.Split('|');
         if (!IsPositiveDisjunction(clauses) ||
             clauses.Any(clause => MeasuredExpressionLength(clause) > MaxFocusedEvidenceFilterLength))
         {
@@ -39,9 +42,9 @@ internal static partial class PreReviewFocusedRequestSplitter
 
         // The broker counts the optional separator space before normalizing the filter. At the exact
         // boundary, omit that space so it cannot split here and then repack the same canonical filter.
-        if (filterText.Length <= MaxFocusedEvidenceFilterLength)
+        if (text.Length <= MaxFocusedEvidenceFilterLength)
         {
-            items = [$"{alias}:{filterText}"];
+            items = [$"{alias}:{text}"];
             return true;
         }
 
@@ -65,9 +68,10 @@ internal static partial class PreReviewFocusedRequestSplitter
         return splitItems.Count > 1;
     }
 
+    internal static bool IsPositiveClause(string clause) => PositiveClausePattern().IsMatch(clause);
+
     private static bool IsPositiveDisjunction(IReadOnlyList<string> clauses) =>
-        clauses.Count > 1 &&
-        clauses.All(clause => PositiveClausePattern().IsMatch(clause));
+        clauses.Count > 0 && clauses.All(IsPositiveClause);
 
     private static int MeasuredExpressionLength(string filterText) => 1 + filterText.Length;
 

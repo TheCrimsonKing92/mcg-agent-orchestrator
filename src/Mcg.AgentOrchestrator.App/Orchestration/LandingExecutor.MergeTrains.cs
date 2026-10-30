@@ -30,6 +30,9 @@ internal static partial class LandingExecutor
         {
             throw new InvalidOperationException("Only an exact passing merge train receipt can authorize landing.");
         }
+        if (MergeTrainFocusedRecheckReceiptAcceptance.IsComposite(receipt) &&
+            !MergeTrainFocusedRecheckReceiptAcceptance.Accepts(receipt, store))
+            throw new InvalidOperationException("Merge train focused recheck receipt has invalid composite evidence.");
 
         var executionDirectory = workspace.ExecutionDirectory;
         var blockReason = mutationBlocker?.Invoke();
