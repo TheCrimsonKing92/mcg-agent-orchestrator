@@ -29,7 +29,8 @@ internal static class OwnerConsoleGateWhereLine
             $" owner: {capacity.Owners.ForRunningLanes(lanes)}";
         foreach (var executor in capacity.Executors)
             if (configured.Add(executor.Id))
-                groups.Add(Occupancy(executor.Id, running.GetValueOrDefault(executor.Id), executor.Slots) +
+                groups.Add((executor.Enabled ? Occupancy(executor.Id, running.GetValueOrDefault(executor.Id), executor.Slots) :
+                    $"{executor.Id} disabled") +
                     Owner(runningLanes.Where(row => row.Location == executor.Id)));
         groups.AddRange(running.Where(pair => !IsLocal(pair.Key) && !configured.Contains(pair.Key))
             .OrderBy(pair => pair.Key, StringComparer.Ordinal).Select(pair => $"{pair.Key} {pair.Value} running" +
