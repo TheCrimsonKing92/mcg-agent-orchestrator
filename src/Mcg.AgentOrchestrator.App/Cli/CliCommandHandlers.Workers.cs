@@ -274,7 +274,7 @@ private static bool? TryExecuteWorkerCommand(string command, IReadOnlyList<strin
                     context.Agents,
                     context.WorkerProfiles,
                     context.Providers);
-                ConsoleViews.PrintSubscriptionStartResult(goal, result);
+                DispatchResultTextView.PrintSubscriptionStartResult(goal, result);
                 startedAny |= result.Dispatches.Count > 0 || result.Processes.Tasks.Count > 0;
                 crossGoalStartFailures.AddRange(
                     (result.Processes.StartFailures ?? [])
@@ -346,7 +346,7 @@ private static bool? TryExecuteWorkerCommand(string command, IReadOnlyList<strin
                 HasCliConfirmation(parts, SubscriptionPromptCostGuard.CliConfirmationFlag));
             var subscriptionStart = new GoalDispatchOperations().StartSubscriptionReadyTasks(context.Kernel, context.Workspace, context.CurrentGoal, context.Agents, context.WorkerProfiles, context.Providers);
             ReadyBlockedDiagnosticsEmitter.Emit(subscriptionStart.BlockedDiagnostics);
-            ConsoleViews.PrintSubscriptionStartResult(context.CurrentGoal, subscriptionStart);
+            DispatchResultTextView.PrintSubscriptionStartResult(context.CurrentGoal, subscriptionStart);
             if (subscriptionStart.Processes.StartFailures?.FirstOrDefault() is { } subscriptionStartFailure)
             {
                 context.FailAfterCommit(subscriptionStartFailure.Reason);
@@ -425,7 +425,7 @@ private static bool? TryExecuteWorkerCommand(string command, IReadOnlyList<strin
                 context.WorkerProfiles,
                 context.Providers,
                 refreshBeforeStart: false);
-            ConsoleViews.PrintProcessBatchResult(context.CurrentGoal, started);
+            DispatchResultTextView.PrintProcessBatchResult(context.CurrentGoal, started);
             if (started.StartFailures?.FirstOrDefault() is { } batchStartFailure)
             {
                 context.FailAfterCommit(batchStartFailure.Reason);
@@ -450,7 +450,7 @@ private static bool? TryExecuteWorkerCommand(string command, IReadOnlyList<strin
             EnsurePolicyAllows(context, context.CurrentGoal, refreshBatchPolicy, AutonomyAction.Refresh, "refresh-dispatches");
             var refreshed = new GoalDispatchOperations().RefreshDispatches(context.Kernel, context.CurrentGoal,
                 OperatorCancelAwareDispatchRunner.ForWorkspace(context.Workspace));
-            ConsoleViews.PrintProcessBatchResult(context.CurrentGoal, refreshed);
+            DispatchResultTextView.PrintProcessBatchResult(context.CurrentGoal, refreshed);
             return refreshed.Tasks.Count > 0;
 
         case "logs":

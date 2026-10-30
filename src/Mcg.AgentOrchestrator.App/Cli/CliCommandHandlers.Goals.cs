@@ -1261,7 +1261,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 context.Workspace.ExecutionDirectory,
                 context.Workspace.IntegrationBranch,
                 nextPolicy);
-            ConsoleViews.PrintNextActions(context.CurrentGoal, context.Kernel.BuildNextActions(context.CurrentGoal.Id),
+            NextActionsTextView.Print(context.CurrentGoal, context.Kernel.BuildNextActions(context.CurrentGoal.Id),
                 context.WorkerProfiles, context.Agents, nextHealth, diagnosticsClock: context.DiagnosticsClock);
             return nextChanged;
         }

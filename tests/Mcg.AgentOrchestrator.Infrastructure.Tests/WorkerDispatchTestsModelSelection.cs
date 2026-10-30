@@ -1925,12 +1925,12 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
         @"Advance(?:Goal)?UntilBlockedAsync\s*\([^)]*WorkerProfileCatalog\?\s+\w+\s*=\s*null",
         RegexOptions.Singleline | RegexOptions.CultureInvariant);
     var catalogAwareDefaultParameterPattern = new Regex(
-        @"(?:NextActionControls\.Build|ToNextActionsDto|ToNextActionDto|ToNextActionControlDto|ToGoalWorkSummaryDto|ToTaskWorkContextDto|GoalTranscriptRenderer\.Render|PrintNextActions)\s*\([^)]*WorkerProfileCatalog\?\s+\w+\s*=\s*null",
+        @"(?:NextActionControls\.Build|ToNextActionsDto|ToNextActionDto|ToNextActionControlDto|ToGoalWorkSummaryDto|ToTaskWorkContextDto|GoalTranscriptRenderer\.Render|Print)\s*\([^)]*WorkerProfileCatalog\?\s+\w+\s*=\s*null",
         RegexOptions.Singleline | RegexOptions.CultureInvariant);
     var catalogAwareDeclarations = new (string RelativePath, string MethodName)[]
     {
         (Path.Combine("Mcg.AgentOrchestrator.App", "Cli", "NextActionControls.cs"), "Build"),
-        (Path.Combine("Mcg.AgentOrchestrator.App", "Cli", "ConsoleViews.DispatchAndNextActions.cs"), "PrintNextActions")
+        (Path.Combine("Mcg.AgentOrchestrator.App", "Cli", "NextActionsTextView.cs"), "Print")
     };
 
     foreach (var path in Directory.EnumerateFiles(srcRoot, "*.cs", SearchOption.AllDirectories))

@@ -21,7 +21,7 @@ public sealed class ConsoleNextActionsProcessSnapshotTests : CliCommandTestBase
         var actions = kernel.BuildNextActions(goal.Id);
         var calls = 0;
 
-        var output = CaptureConsole(() => ConsoleViews.PrintNextActions(
+        var output = CaptureConsole(() => NextActionsTextView.Print(
             goal,
             actions,
             WorkerProfileCatalog.Default(),
