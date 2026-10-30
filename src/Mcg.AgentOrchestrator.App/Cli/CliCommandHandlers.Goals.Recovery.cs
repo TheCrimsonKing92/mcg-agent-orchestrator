@@ -41,7 +41,7 @@ private static bool HandleRecover(CliExecutionContext context, IReadOnlyList<str
         goal.Id,
         cleanupHooks: context.CleanupContext.Hooks,
         orchestratorDirectory: context.Workspace.OrchestratorDirectory);
-    ConsoleViews.PrintTerminalGoalSweep(sweep);
+    TerminalGoalSweepTextView.PrintTerminalGoalSweep(sweep);
     TerminalGoalSweepAttention.Surface(context.Kernel, sweep, context.Workspace.OrchestratorDirectory, goal.Id);
     goal = context.Kernel.GetGoal(goal.Id);
     context.CurrentGoal = goal;

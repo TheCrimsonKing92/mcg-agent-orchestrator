@@ -20,7 +20,7 @@ private static void PrintBoundedGoalDiagnostics(CliExecutionContext context)
     Console.WriteLine("Mode: bounded; skipped deep readiness, subscription prompt estimation, recovery planning, supervisor planning, inbox scan, and dispatch worktree git inspection.");
 
     var diagnosticsSweep = TerminalGoalSweep.Diagnose(context.Kernel, context.Workspace.ExecutionDirectory, context.Workspace.IntegrationBranch, goal.Id);
-    ConsoleViews.PrintTerminalGoalSweep(diagnosticsSweep, includeRepairs: false);
+    TerminalGoalSweepTextView.PrintTerminalGoalSweep(diagnosticsSweep, includeRepairs: false);
     if (!context.IsReadOnlyQuery)
         TerminalGoalSweepAttention.Surface(context.Kernel, diagnosticsSweep, context.Workspace.OrchestratorDirectory, goal.Id);
 

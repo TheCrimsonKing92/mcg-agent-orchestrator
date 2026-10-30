@@ -2,7 +2,7 @@ using Mcg.AgentOrchestrator.App.Orchestration;
 
 namespace Mcg.AgentOrchestrator.App.Cli;
 
-internal static partial class ConsoleViews
+internal static class GoalDagPlanTextView
 {
     public static void PrintGoalDagPlan(GoalDagPlan plan, bool sliceBatch = false)
     {

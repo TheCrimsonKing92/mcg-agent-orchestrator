@@ -2,7 +2,7 @@ using Mcg.AgentOrchestrator.App.Orchestration;
 
 namespace Mcg.AgentOrchestrator.App.Cli;
 
-internal static partial class ConsoleViews
+internal static class TerminalGoalSweepTextView
 {
     public static void PrintTerminalGoalSweep(
         TerminalGoalSweepResult result,

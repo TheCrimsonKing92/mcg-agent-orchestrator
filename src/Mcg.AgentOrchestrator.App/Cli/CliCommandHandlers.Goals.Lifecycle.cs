@@ -42,7 +42,7 @@ private static void HandleLifecycleGoal(CliExecutionContext context, IReadOnlyLi
 
     var objectivePlan = BuildGoalObjectivePlan(context, objective, simple);
     GoalObjectivePlanner.ThrowIfBlocked(objectivePlan);
-    ConsoleViews.PrintGoalObjectivePlan(objectivePlan);
+    GoalObjectivePlanTextView.PrintGoalObjectivePlan(objectivePlan);
     var sourceBacklogLink = ResolveSourceBacklogItemLink(context, parts, objective);
     PrintClosedSourceBacklogWarning(sourceBacklogLink);
 
@@ -345,7 +345,7 @@ private static void EnsureLifecycleParallelGateAllowsStart(CliExecutionContext c
         return;
     }
 
-    ConsoleViews.PrintCrossGoalSubscriptionStartPlan(plan);
+    CrossGoalStartPlanTextView.PrintCrossGoalSubscriptionStartPlan(plan);
     if (decision.Disposition == ParallelExecutionDisposition.Concurrent && decision.BatchNumber == 1)
     {
         return;
