@@ -121,7 +121,7 @@ public sealed class ProviderSignInFailoverTests
                 "", ProviderSignInFailoverScenarioTests.SignInError, _clock.UtcNow, DispatchStartedAt: _clock.UtcNow));
             Kernel.ReportTaskProgress(Goal.Id, task.Id, WorkTaskStatus.Failed, "Fixture sign-in failure.");
             Kernel.EscalateTaskFailure(Goal.Id, task.Id, "Fixture sign-in failure.");
-            Assert.True(DispatchFailureClassifier.HasRecoverableProviderAuthenticationFailure(task));
+            Assert.True(ProviderFailureSignals.HasRecoverableProviderAuthenticationFailure(task));
         }
 
         internal FailedGoalRecoveryDecision Decision(string evidence = "failed-terminal-fallthrough") => new(

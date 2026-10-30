@@ -63,7 +63,7 @@ internal static class VerificationFindingEvidencePolicy
         if (task.RequiredRole is not (AgentRole.Tester or AgentRole.Reviewer) ||
             !verification.WorkerResultPresent || !verification.Succeeded ||
             verification.ProviderFailureKind != ProviderFailureKind.Unknown ||
-            DispatchFailureClassifier.IsProviderInterruptionFailure(verification)) return false;
+            ProviderFailureSignals.IsProviderInterruptionFailure(verification)) return false;
         if (WorkerResultBlockers.TryFindCriteriaVerdicts(verification, out var verdicts, out _) &&
             verdicts.Any(item => item.Verdict == "not-met" && goal.RefinedSpec is { } spec &&
                 item.CriterionIndex >= 0 && item.CriterionIndex < spec.AcceptanceCriteria.Count &&

@@ -380,9 +380,9 @@ internal static class RunGoalService
 
     private static bool TryGetAutomaticFailoverEvidence(TaskSpec task, DateTimeOffset now, out AutomaticFailoverEvidence evidence)
     {
-        if (DispatchFailureClassifier.HasRecoverableProviderConnectivityFailure(task))
+        if (ProviderFailureSignals.HasRecoverableProviderConnectivityFailure(task))
         {
-            var count = DispatchFailureClassifier.CountRecoverableProviderConnectivityFailures(task);
+            var count = ProviderFailureSignals.CountRecoverableProviderConnectivityFailures(task);
             evidence = new AutomaticFailoverEvidence(
                 $"recoverable provider connectivity evidence ({count} failure(s))",
                 count);
@@ -406,17 +406,17 @@ internal static class RunGoalService
             return true;
         }
 
-        if (DispatchFailureClassifier.HasProviderNeutralProgressStallFailure(task))
+        if (ProviderFailureSignals.HasProviderNeutralProgressStallFailure(task))
         {
             evidence = new AutomaticFailoverEvidence(
                 "provider-neutral heartbeat/progress stall evidence",
-                task.VerificationHistory.Count(DispatchFailureClassifier.IsProviderNeutralProgressStallFailure));
+                task.VerificationHistory.Count(ProviderFailureSignals.IsProviderNeutralProgressStallFailure));
             return true;
         }
 
-        if (DispatchFailureClassifier.HasRecoverableProviderModelRejectionFailure(task))
+        if (ProviderFailureSignals.HasRecoverableProviderModelRejectionFailure(task))
         {
-            var count = DispatchFailureClassifier.CountRecoverableProviderModelRejectionFailures(task);
+            var count = ProviderFailureSignals.CountRecoverableProviderModelRejectionFailures(task);
             evidence = new AutomaticFailoverEvidence(
                 $"recoverable provider model rejection evidence ({count} failure(s))",
                 count);

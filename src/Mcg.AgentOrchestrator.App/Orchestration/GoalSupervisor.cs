@@ -201,8 +201,8 @@ public static class GoalSupervisor
             return;
         }
 
-        if (DispatchFailureClassifier.HasProviderNeutralProgressStallFailure(task) ||
-            DispatchFailureClassifier.HasRecoverableProviderConnectivityFailure(task))
+        if (ProviderFailureSignals.HasProviderNeutralProgressStallFailure(task) ||
+            ProviderFailureSignals.HasRecoverableProviderConnectivityFailure(task))
         {
             var hasAlternate = HasAlternateAgent(task, agents);
             var allows = policy.Allows(AutonomyAction.ProviderFailover);

@@ -1881,7 +1881,7 @@ public sealed class DispatchOutcomeClassifyTests
             SimpleTask(AgentRole.Planner),
             verification);
 
-        Xunit.Assert.True(DispatchFailureClassifier.IsRecoverableProviderModelRejectionFailure(verification));
+        Xunit.Assert.True(ProviderFailureSignals.IsRecoverableProviderModelRejectionFailure(verification));
         Xunit.Assert.Equal(DispatchOutcomeKind.ProviderModelRejection, outcome.Kind);
         Xunit.Assert.Equal(RecoveryRecommendation.OperatorNeeded, outcome.RecoveryRecommendation);
     }
@@ -1895,7 +1895,7 @@ public sealed class DispatchOutcomeClassifyTests
             "Diagnostic text may quote 'Planner output contract failed: missing required evidence'.\n" +
             "Error: unknown model 'claude-xxx-4-99'. Model not supported.");
 
-        Xunit.Assert.True(DispatchFailureClassifier.IsRecoverableProviderModelRejectionFailure(verification));
+        Xunit.Assert.True(ProviderFailureSignals.IsRecoverableProviderModelRejectionFailure(verification));
     }
 
     [Xunit.Fact(DisplayName = "Classify honors independent provider rejection beside authoritative Planner contract diagnostic")]
@@ -2115,8 +2115,8 @@ public sealed class DispatchOutcomeClassifyTests
 
         Xunit.Assert.Equal(WorkTaskStatus.Failed, task.Status);
         Xunit.Assert.NotNull(task.LastVerification);
-        Xunit.Assert.True(DispatchFailureClassifier.IsRecoverableProviderModelRejectionFailure(task.LastVerification));
-        Xunit.Assert.True(DispatchFailureClassifier.HasRecoverableProviderModelRejectionFailure(task));
+        Xunit.Assert.True(ProviderFailureSignals.IsRecoverableProviderModelRejectionFailure(task.LastVerification));
+        Xunit.Assert.True(ProviderFailureSignals.HasRecoverableProviderModelRejectionFailure(task));
     }
 
     [Xunit.Fact]
@@ -2130,8 +2130,8 @@ public sealed class DispatchOutcomeClassifyTests
                 "Planner output contract failed: missing required evidence. Retry Planner for contract repair."));
 
         Xunit.Assert.Single(task.VerificationHistory);
-        Xunit.Assert.True(DispatchFailureClassifier.IsRecoverableProviderModelRejectionFailure(task.VerificationHistory[0]));
-        Xunit.Assert.Equal(1, DispatchFailureClassifier.CountRecoverableProviderModelRejectionFailures(task));
+        Xunit.Assert.True(ProviderFailureSignals.IsRecoverableProviderModelRejectionFailure(task.VerificationHistory[0]));
+        Xunit.Assert.Equal(1, ProviderFailureSignals.CountRecoverableProviderModelRejectionFailures(task));
     }
 
     [Xunit.Fact(DisplayName = "Classify reads log path for verification evidence outside retained excerpt")]

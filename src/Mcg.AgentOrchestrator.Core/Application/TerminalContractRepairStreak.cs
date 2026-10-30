@@ -7,7 +7,7 @@ internal static class TerminalContractRepairStreak
 
     internal static bool IsStreakRecord(TaskVerificationRecord record) =>
         record.CompletionVerdictRule == TaskOutcomeRules.VerificationTerminalContractIncomplete.Token ||
-        DispatchFailureClassifier.IsProviderInterruptionFailure(record) ||
+        ProviderFailureSignals.IsProviderInterruptionFailure(record) ||
         (WorkerResultBlockers.TryGetTestsStatus(record, out var status) &&
          status == WorkerResultBlockers.TestsStatus.Inconclusive);
 
