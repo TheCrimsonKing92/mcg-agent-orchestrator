@@ -22,6 +22,7 @@ internal static class OwnerConsoleGateFormatter
 
     internal static string LaneLine(OwnerConsoleGateLane lane)
     {
+        if (lane.State == OwnerConsoleGateLaneState.Skipped) return $"- {lane.Name} skipped: {lane.SkipReason}";
         var marker = Marker(lane);
         var median = lane.MedianSeconds is { } seconds ? $"{seconds:0.#}s" + (lane.IsEstimate ? " estimate" : "") : "?";
         var quiet = lane.State == OwnerConsoleGateLaneState.Running && lane.QuietSeconds is > 300
@@ -34,6 +35,7 @@ internal static class OwnerConsoleGateFormatter
     internal static char Marker(OwnerConsoleGateLane lane) => lane.State switch
     {
         OwnerConsoleGateLaneState.Running => '>', OwnerConsoleGateLaneState.Queued => '.',
+        OwnerConsoleGateLaneState.Skipped => '-',
         OwnerConsoleGateLaneState.Cached => '=', OwnerConsoleGateLaneState.Done => lane.Outcome switch
         { "passed" => '+', "failed" => 'x', _ => '*' },
         _ => throw new ArgumentOutOfRangeException(nameof(lane))

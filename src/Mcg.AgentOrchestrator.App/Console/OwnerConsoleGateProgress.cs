@@ -4,14 +4,14 @@ using System.Text.RegularExpressions;
 
 namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 
-internal enum OwnerConsoleGateLaneState { Queued, Running, Done, Cached }
+internal enum OwnerConsoleGateLaneState { Queued, Running, Done, Cached, Skipped }
 internal sealed record OwnerConsoleGateMember(string Id, string Title);
 internal sealed record OwnerConsoleGateLane(string Name, OwnerConsoleGateLaneState State,
     string Outcome, string Location, TimeSpan Elapsed, double? MedianSeconds, bool IsEstimate,
     double? QuietSeconds = null, bool IsManifestLane = true,
     string? Target = null, string? HeartbeatPath = null, bool IsAttribution = false,
     IReadOnlyList<string>? FailingTestNames = null, int SkippedTestCount = 0,
-    OwnerConsoleGateConfirmation? Confirmation = null);
+    OwnerConsoleGateConfirmation? Confirmation = null, string? SkipReason = null);
 internal sealed record OwnerConsoleGateManifestLane(string Name, double EstimatedSerialSeconds);
 internal sealed record OwnerConsoleGateDuration(string LaneName, double DurationSeconds, DateTimeOffset RecordedAt);
 
@@ -24,7 +24,8 @@ internal sealed record OwnerConsoleGateProgress(bool Live, string Kind,
     IReadOnlyList<OwnerConsoleHostActivity>? HostActivity = null,
     OwnerConsoleGateCapacity? Capacity = null,
     IReadOnlyList<OwnerConsoleGateEnd>? Ended = null,
-    IReadOnlyList<OwnerConsoleEvidenceAttemptEnd>? EvidenceEnded = null)
+    IReadOnlyList<OwnerConsoleEvidenceAttemptEnd>? EvidenceEnded = null,
+    bool? LanePlanAvailable = null)
 {
     internal bool Failing => Lanes.Any(lane => !lane.IsAttribution &&
         lane.State == OwnerConsoleGateLaneState.Done && lane.Outcome == "failed");
@@ -46,7 +47,8 @@ internal sealed record OwnerConsoleGateProgress(bool Live, string Kind,
         IReadOnlyList<OwnerConsoleGateManifestLane> manifest, IEnumerable<OwnerConsoleGateDuration> durations,
         Func<string, string?>? title = null, IReadOnlyDictionary<string, double>? quietSeconds = null,
         OwnerConsoleGateLaneResolver? lanes = null, int? capacity = null,
-        IReadOnlyList<OwnerConsoleGateExecutorSlots>? executors = null)
+        IReadOnlyList<OwnerConsoleGateExecutorSlots>? executors = null,
+        OwnerConsoleGateLanePlanReader? planReader = null)
     {
         var parsed = events.OrderBy(item => item.Timestamp).Select(item => new Observation(item, Tokens(item.Detail))).ToArray();
         var breakdownConcurrency = BreakdownConcurrency(parsed) ?? Math.Max(1, capacity ?? 1);
@@ -119,6 +121,12 @@ internal sealed record OwnerConsoleGateProgress(bool Live, string Kind,
 
         OwnerConsoleGateProgress Snapshot(Gate gate)
         {
+            var currentAttempt = gate.Events.Select(item => AttemptFromHeartbeat(item.Get("heartbeat")))
+                .Where(id => id.Length > 0).OrderBy(id => id.Substring(14, 17), StringComparer.Ordinal).LastOrDefault() ?? "";
+            var planEvent = gate.Events.LastOrDefault(item => item.Get("phase") == "lane-plan" &&
+                AttemptFromHeartbeat(item.Get("heartbeat")) == currentAttempt);
+            var plan = planEvent is null ? null : planReader?.Read(planEvent.Get("heartbeat"), currentAttempt);
+            var skipped = plan?.Skipped.ToDictionary(row => row.Name, row => row.Reason, StringComparer.Ordinal);
             var attempts = gate.Events.Select(item => AttemptFromHeartbeat(item.Get("heartbeat")))
                 .Where(id => id.Length > 0).ToHashSet(StringComparer.OrdinalIgnoreCase);
             // Legacy receipts and gates without attempt evidence retain interval/goal binding.
@@ -149,6 +157,9 @@ internal sealed record OwnerConsoleGateProgress(bool Live, string Kind,
                 var samples = samplesByLane.GetValueOrDefault(name) ?? [];
                 double? median = samples.Length == 0 ? lane?.EstimatedSerialSeconds :
                     (samples[(samples.Length - 1) / 2] + samples[samples.Length / 2]) / 2;
+                if (skipped?.TryGetValue(name, out var reason) == true)
+                    return new OwnerConsoleGateLane(name, OwnerConsoleGateLaneState.Skipped, "skipped", "",
+                        TimeSpan.Zero, median, samples.Length == 0, IsManifestLane: lane is not null, SkipReason: reason);
                 var observations = observationsByLane[name].ToArray();
                 var latest = observations.LastOrDefault();
                 var remoteLane = remoteByLane[name].ToArray();
@@ -187,7 +198,8 @@ internal sealed record OwnerConsoleGateProgress(bool Live, string Kind,
                     latest?.Get("target"), observations.LastOrDefault(item => AttemptFromHeartbeat(item.Get("heartbeat")).Length > 0)?.Get("heartbeat"),
                     IsAttributionTarget(latest?.Get("target") ?? name));
             }).ToArray();
-            var counted = rows.Where(row => row.IsManifestLane || row.MedianSeconds is not null).ToArray();
+            var counted = rows.Where(row => row.State != OwnerConsoleGateLaneState.Skipped &&
+                (row.IsManifestLane || row.MedianSeconds is not null)).ToArray();
             var total = counted.Sum(row => row.MedianSeconds ?? 0);
             var done = counted.Where(IsDone).ToArray();
             var unfinished = counted.Where(row => !IsDone(row)).ToArray();
@@ -200,14 +212,16 @@ internal sealed record OwnerConsoleGateProgress(bool Live, string Kind,
             // the model's fractional remaining time and never imply unfinished work is done.
             var fraction = total > 0
                 ? denominator > 0 ? gateElapsed.TotalSeconds / denominator : unfinished.Length == 0 ? 1 : 0
-                : 0;
+                : plan is not null && unfinished.Length == 0 ? 1 : 0;
             fraction = double.IsFinite(fraction) ? Math.Clamp(fraction, 0, 1) : 0;
             if (unfinished.Length > 0) fraction = Math.Min(fraction, 0.99);
             var kind = gate.Events.Any(item => item.Get("train").Length > 0 || item.Get("scope") == "merge-train") ? "train" :
                 gate.Members.Length > 1 ? "cohort" : "solo";
             return new(true, kind, gate.Members.Select(id => new OwnerConsoleGateMember(id, title?.Invoke(id) ?? "")).ToArray(),
                 gate.Start, gateElapsed, rows, fraction,
-                (int)remaining, done.Count(row => row.IsManifestLane), manifest.Count);
+                (int)remaining, done.Count(row => row.IsManifestLane),
+                rows.Count(row => row.IsManifestLane && row.State != OwnerConsoleGateLaneState.Skipped),
+                LanePlanAvailable: planReader is null ? null : plan is not null);
         }
     }
 
