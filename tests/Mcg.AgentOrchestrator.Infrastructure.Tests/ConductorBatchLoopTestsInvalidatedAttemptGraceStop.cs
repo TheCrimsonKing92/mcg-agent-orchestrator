@@ -7,7 +7,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 public sealed class ConductorBatchLoopTestsInvalidatedAttemptGraceStop(ITestOutputHelper output)
     : ConductorBatchLoopTests(output)
 {
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Trait("Category", "CrossTick")]
     public void LiveInvalidatedOwnerPastGraceIsStoppedOnceAndRegatedNextTick()
     {
@@ -45,7 +45,7 @@ public sealed class ConductorBatchLoopTestsInvalidatedAttemptGraceStop(ITestOutp
         Assert.Single(fixture.StopEvents);
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Trait("Category", "CrossTick")]
     public void InvalidatedOwnerExitingWithinGraceIsNeverStopped()
     {
@@ -65,7 +65,7 @@ public sealed class ConductorBatchLoopTestsInvalidatedAttemptGraceStop(ITestOutp
         Assert.Empty(fixture.StopEvents);
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Trait("Category", "CrossTick")]
     public void LiveNonInvalidatedAttemptIsNeverStopped()
     {
