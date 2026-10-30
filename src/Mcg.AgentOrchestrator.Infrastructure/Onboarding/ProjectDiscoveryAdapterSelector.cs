@@ -5,6 +5,11 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 /// <summary>Selects discovery from repository declarations without executing tools.</summary>
 public static class ProjectDiscoveryAdapterSelector
 {
+    // crosswalk 1fac141, detect/detect.go detectLua: on-disk source denominator.
+    private const string CrosswalkSourceExtensions =
+        "lua go js jsx ts tsx c h cc cpp cxx hpp hxx cs fs fsx vb py pyw rs java kt kts swift m mm rb php pl pm r scala ex exs erl hrl clj cljs cljc dart groovy sql vue svelte asm s el vim sh bash zsh fish ps1 bat cmd";
+    private static readonly HashSet<string> SourceExtensions = new(CrosswalkSourceExtensions.Split(' '), StringComparer.OrdinalIgnoreCase);
+
     public sealed record Detection(ProjectStack? Stack, string? Marker, string? Refusal);
 
     public static Detection Detect(string repositoryRoot, IReadOnlyCollection<string>? excludedDirectoryNames = null)
@@ -40,7 +45,7 @@ public static class ProjectDiscoveryAdapterSelector
             return marker is null ? new(ProjectStack.Node, "package.json", null)
                 : new(null, null, $"Ambiguous stack markers: package.json and {marker}.");
         return marker is not null ? new(ProjectStack.Dotnet, marker, null)
-            : new(null, null, "No stack marker found; looked for root go.mod, package.json, *.sln, *.slnx, and *.csproj, *.fsproj, *.vbproj below the root.");
+            : DetectLua(root, exclusions);
     }
 
     public static IProjectDiscoveryAdapter Select(string repositoryRoot, IReadOnlyCollection<string>? excludedDirectoryNames = null)
@@ -50,11 +55,27 @@ public static class ProjectDiscoveryAdapterSelector
         {
             ProjectStack.Dotnet => new DotnetProjectDiscoveryAdapter(),
             ProjectStack.Node => new NodeProjectDiscoveryAdapter(),
+            ProjectStack.Lua => new LuaProjectDiscoveryAdapter(),
             ProjectStack.Go when GoModReader.Read(Path.Combine(repositoryRoot, "go.mod")).Path is not null => new GoProjectDiscoveryAdapter(),
             ProjectStack.Go => throw new InvalidOperationException(
                 $"No discovery adapter is available for stack 'go' (marker {detection.Marker})."),
             _ => throw new InvalidOperationException($"No discovery adapter is available for this repository: {detection.Refusal}")
         };
+    }
+
+    private static Detection DetectLua(string root, HashSet<string> exclusions)
+    {
+        var files = LuaProjectDiscoveryAdapter.RepositoryFiles(root, exclusions);
+        var marker = LuaProjectDiscoveryAdapter.BustedEvidence(files) ?? LuaProjectDiscoveryAdapter.Rockspec(files);
+        foreach (var name in new[] { ".luarc.json", ".luarc.jsonc", ".luacheckrc", "stylua.toml", ".stylua.toml", "selene.toml" })
+            marker ??= files.FirstOrDefault(file => file.Equals(name, StringComparison.OrdinalIgnoreCase));
+        if (marker is not null)
+            return new(ProjectStack.Lua, marker, null);
+
+        var sourceFiles = files.Where(file => SourceExtensions.Contains(Path.GetExtension(file).TrimStart('.'))).ToArray();
+        var luaCount = sourceFiles.Count(file => Path.GetExtension(file).Equals(".lua", StringComparison.OrdinalIgnoreCase));
+        return luaCount > sourceFiles.Length / 2 ? new(ProjectStack.Lua, "lua-majority", null)
+            : new(null, null, "No stack marker found; looked for root go.mod, package.json, *.sln, *.slnx, and *.csproj, *.fsproj, *.vbproj below the root.");
     }
 
     private static List<string> ProjectMarkers(string root, HashSet<string> exclusions)
