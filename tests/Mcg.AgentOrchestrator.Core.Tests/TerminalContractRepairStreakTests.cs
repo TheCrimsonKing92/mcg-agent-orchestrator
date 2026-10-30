@@ -80,7 +80,7 @@ public sealed class TerminalContractRepairStreakTests
         }
         var expected = task.VerificationHistory.Reverse().TakeWhile(record =>
             record.CompletionVerdictRule == TaskOutcomeRules.VerificationTerminalContractIncomplete.Token ||
-            DispatchFailureClassifier.IsProviderInterruptionFailure(record) ||
+            ProviderFailureSignals.IsProviderInterruptionFailure(record) ||
             (WorkerResultBlockers.TryGetTestsStatus(record, out var status) &&
              status == WorkerResultBlockers.TestsStatus.Inconclusive)).Count();
         Assert.Equal(expected, TerminalContractRepairStreak.Count([], task));

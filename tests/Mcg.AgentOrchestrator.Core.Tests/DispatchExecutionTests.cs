@@ -829,7 +829,7 @@ public sealed class DispatchExecutionTests
 
     Assert.Equal(WorkTaskStatus.Assigned, task.Status);
     Assert.Null(task.LastVerification);
-    Assert.Equal(1, DispatchFailureClassifier.CountRecoverableProviderConnectivityFailures(task));
+    Assert.Equal(1, ProviderFailureSignals.CountRecoverableProviderConnectivityFailures(task));
     Assert.Equal(clock.UtcNow, task.LatestRetryAt);
     Assert.Equal(clock.UtcNow.AddMinutes(1), task.SubscriptionRetryAfter);
     Assert.Equal(GoalStatus.Active, goal.Status);
@@ -842,7 +842,7 @@ public sealed class DispatchExecutionTests
 
     var restoredBeforeRetry = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot(), clock);
     var restoredBeforeRetryTask = restoredBeforeRetry.GetTask(goal.Id, task.Id);
-    Assert.Equal(1, DispatchFailureClassifier.CountRecoverableProviderConnectivityFailures(restoredBeforeRetryTask));
+    Assert.Equal(1, ProviderFailureSignals.CountRecoverableProviderConnectivityFailures(restoredBeforeRetryTask));
     Assert.Equal(clock.UtcNow.AddMinutes(1), restoredBeforeRetryTask.SubscriptionRetryAfter);
 
     clock.Advance(TimeSpan.FromMinutes(1));
@@ -870,7 +870,7 @@ public sealed class DispatchExecutionTests
     Assert.Equal(WorkTaskStatus.Completed, task.Status);
     Assert.Equal(2, task.VerificationHistory.Count);
     Assert.Null(task.SubscriptionRetryAfter);
-    Assert.Equal(1, DispatchFailureClassifier.CountRecoverableProviderConnectivityFailures(task));
+    Assert.Equal(1, ProviderFailureSignals.CountRecoverableProviderConnectivityFailures(task));
     Assert.Contains(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskCompleted);
 }
 
@@ -901,7 +901,7 @@ public sealed class DispatchExecutionTests
     Assert.Equal(WorkTaskStatus.Assigned, restoredTask.Status);
     Assert.Null(restoredTask.LastVerification);
     Assert.Null(restoredTask.LastDispatch);
-    Assert.Equal(1, DispatchFailureClassifier.CountRecoverableProviderConnectivityFailures(restoredTask));
+    Assert.Equal(1, ProviderFailureSignals.CountRecoverableProviderConnectivityFailures(restoredTask));
     Assert.Equal(clock.UtcNow.AddMinutes(1), restoredTask.SubscriptionRetryAfter);
     Assert.Single(restoredGoal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskRetried);
     Assert.Contains(restoredGoal.Timeline, evt =>
@@ -936,7 +936,7 @@ public sealed class DispatchExecutionTests
 
     Assert.Equal(WorkTaskStatus.Failed, task.Status);
     Assert.NotNull(task.LastVerification);
-    Assert.Equal(4, DispatchFailureClassifier.CountRecoverableProviderConnectivityFailures(task));
+    Assert.Equal(4, ProviderFailureSignals.CountRecoverableProviderConnectivityFailures(task));
     Assert.Contains(goal.Timeline, evt =>
         evt.TaskId == task.Id &&
         evt.Kind == ProgressKind.TaskRetried &&
@@ -953,7 +953,7 @@ public sealed class DispatchExecutionTests
     restored.RecordDispatchExecutionResult(goal.Id, task.Id, finalVerification!);
 
     Assert.Equal(WorkTaskStatus.Failed, restoredTask.Status);
-    Assert.Equal(4, DispatchFailureClassifier.CountRecoverableProviderConnectivityFailures(restoredTask));
+    Assert.Equal(4, ProviderFailureSignals.CountRecoverableProviderConnectivityFailures(restoredTask));
     Assert.Single(restoredGoal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskFailed);
 }
 
@@ -987,14 +987,14 @@ public sealed class DispatchExecutionTests
             Assert.Equal(GoalStatus.Active, goal.Status);
             Assert.Null(task.LastVerification);
             Assert.Equal(RetryCause.ProviderInterruption, task.PendingRetryCause);
-            Assert.Equal(attempt, DispatchFailureClassifier.CountConsecutiveProviderInterruptionFailures(task));
+            Assert.Equal(attempt, ProviderFailureSignals.CountConsecutiveProviderInterruptionFailures(task));
         }
 
         clock.Advance(TimeSpan.FromMinutes(attempt));
     }
 
     Assert.Equal(WorkTaskStatus.Failed, task.Status);
-    Assert.Equal(4, DispatchFailureClassifier.CountConsecutiveProviderInterruptionFailures(task));
+    Assert.Equal(4, ProviderFailureSignals.CountConsecutiveProviderInterruptionFailures(task));
     Assert.Equal(3, goal.Timeline.Count(evt =>
         evt.TaskId == task.Id &&
         evt.Kind == ProgressKind.TaskRetried &&
@@ -1062,7 +1062,7 @@ public sealed class DispatchExecutionTests
         goal.Id,
         task.Id,
         ProviderInterruptionVerification("codex exec interruption", clock.UtcNow));
-    Assert.Equal(1, DispatchFailureClassifier.CountConsecutiveProviderInterruptionFailures(task));
+    Assert.Equal(1, ProviderFailureSignals.CountConsecutiveProviderInterruptionFailures(task));
 
     clock.Advance(TimeSpan.FromMinutes(1));
     kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
@@ -1082,7 +1082,7 @@ public sealed class DispatchExecutionTests
             DispatchFailureDiagnosticMarker.Format(DispatchFailureDiagnosticMarker.RequiredFileChangeEvidenceMissing),
             clock.UtcNow));
 
-    Assert.Equal(0, DispatchFailureClassifier.CountConsecutiveProviderInterruptionFailures(task));
+    Assert.Equal(0, ProviderFailureSignals.CountConsecutiveProviderInterruptionFailures(task));
     Assert.Equal(WorkTaskStatus.Failed, task.Status);
 }
 
@@ -1111,7 +1111,7 @@ public sealed class DispatchExecutionTests
 
     Assert.Equal(WorkTaskStatus.Failed, task.Status);
     Assert.NotNull(task.LastVerification);
-    Assert.True(DispatchFailureClassifier.HasRecoverableProviderAuthenticationFailure(task));
+    Assert.True(ProviderFailureSignals.HasRecoverableProviderAuthenticationFailure(task));
     Assert.False(goal.Timeline.Any(evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskRetried));
     Assert.Contains(goal.Timeline, evt =>
         evt.TaskId == task.Id &&

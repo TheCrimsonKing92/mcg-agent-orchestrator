@@ -133,7 +133,7 @@ public sealed class TesterInconclusiveSubscriptionRoundReplayTests
         Assert.Null(fixture.Tester.LastVerification);
         var record = fixture.Tester.VerificationHistory[^1];
 
-        Assert.True(DispatchFailureClassifier.IsProviderInterruptionFailure(record));
+        Assert.True(ProviderFailureSignals.IsProviderInterruptionFailure(record));
         var outcome = DispatchFailureClassifier.Classify(fixture.Tester, record);
         Assert.Equal(DispatchOutcomeKind.ProviderInterruption, outcome.Kind);
         Assert.Equal(RecoveryRecommendation.AutoRetry, outcome.RecoveryRecommendation);
