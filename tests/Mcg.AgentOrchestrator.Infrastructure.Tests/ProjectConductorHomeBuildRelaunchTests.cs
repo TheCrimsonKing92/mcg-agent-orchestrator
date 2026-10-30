@@ -62,7 +62,9 @@ public sealed class ProjectConductorHomeBuildRelaunchTests : ConductorBatchLoopT
                         var task = goal.Tasks.Single();
                         kernel.RecordTaskProcessRefreshed(goal.Id, task.Id,
                             task.LastProcess! with { CompletedAt = now, ExitCode = 0 }, null);
-                        PassVerification(kernel, goal, task);
+                        // The worker already has a dispatch; complete that round without redispatching it.
+                        kernel.RecordTaskVerification(goal.Id, task.Id,
+                            new TaskVerificationRecord("fixture", fixture.Root, 0, "ok", "", now));
                     }
                     gates = 1;
                 }
@@ -78,6 +80,7 @@ public sealed class ProjectConductorHomeBuildRelaunchTests : ConductorBatchLoopT
                 ConductorAutonomyPolicy.Conservative, Path.Combine(fixture.Root, "stop"), maxIterations: 4,
                 keepAliveWhenIdle: true, watchInterval: TimeSpan.FromSeconds(1), sleepFunc: _ => turns >= 4));
         Assert.Equal(3, handedOffAtTurn);
+        Assert.DoesNotContain("LOOP_JANITORIAL_FAILED", text, StringComparison.Ordinal);
         Assert.Contains(worker ? "blockers=running-workers:1" : "blockers=gate-holders:1", text, StringComparison.Ordinal);
         Assert.Contains("blockers=gate-holders:1", text, StringComparison.Ordinal);
         Assert.Equal(worker ? 2 : 1, CountOccurrences(text, "LOOP_RELAUNCH_HELD"));
