@@ -206,7 +206,7 @@ public sealed class OnboardingQuestionSourceTests
         var project = fixture.Register("unavailable");
         OnboardingConsoleFixture.Store(project, OnboardingConsoleFixture.Model(OnboardingConsoleFixture.TestKey));
         OwnerAnswerFile.Write(project.OrchestratorDirectory,
-            [new(OnboardingConsoleFixture.TestKey, "npm test", null, fixture.Clock.GetUtcNow())]);
+            [new(OnboardingConsoleFixture.TestKey, "npm test", null, fixture.Clock.GetUtcNow().ToUniversalTime())]);
         var before = OnboardingConsoleFixture.Snapshot(project);
         var refreshes = 0;
         var source = new OnboardingQuestionSource(new Questions(new([], [])),
