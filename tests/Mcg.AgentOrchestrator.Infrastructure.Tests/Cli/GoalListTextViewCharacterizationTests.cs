@@ -17,14 +17,18 @@ public sealed class GoalListTextViewCharacterizationTests
     [Fact]
     public void Print_KernelGoals_PreservesOrderingConditionsAndPriority()
     {
-        var older = new GoalSnapshot("aaaaaaaa-old", "Normal objective", GoalStatus.Draft, [],
+        var older = new GoalSnapshot("aaaaaaaa-old", "Normal objective", GoalStatus.Draft,
+            [new("task-older", "Implement", AgentRole.Developer, WorkTaskStatus.Pending,
+                null, null, null, null, null, null)],
             [new("aaaaaaaa-old", null, ProgressKind.GoalCreated, "Created", At(1))]);
         var newer = new GoalSnapshot("bbbbbbbb-new", "Critical objective", GoalStatus.Active,
             [new("task-failed", "Implement", AgentRole.Developer, WorkTaskStatus.Failed,
                 null, null, null, null, null, null)],
             [new("bbbbbbbb-new", null, ProgressKind.GoalCreated, "Created", At(2))],
             Priority: "critical");
-        var undated = new GoalSnapshot("cccccccc-none", "No timeline", GoalStatus.Draft, [], []);
+        var undated = new GoalSnapshot("cccccccc-none", "No timeline", GoalStatus.Draft,
+            [new("task-undated", "Implement", AgentRole.Developer, WorkTaskStatus.Pending,
+                null, null, null, null, null, null)], []);
         var kernel = AgentOrchestratorKernel.FromSnapshot(new([older, undated, newer], []));
 
         var actual = Capture(() => GoalListTextView.Print(kernel));
