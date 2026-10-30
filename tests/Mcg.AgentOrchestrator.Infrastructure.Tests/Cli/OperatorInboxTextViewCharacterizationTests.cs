@@ -1,4 +1,3 @@
-using System.Reflection;
 using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Xunit;
@@ -89,8 +88,5 @@ public sealed class OperatorInboxTextViewCharacterizationTests
         var source = File.ReadAllText(Path.Combine(cliRoot, "OperatorInboxTextView.cs"));
         Assert.Contains("internal static class OperatorInboxTextView", source);
         Assert.DoesNotMatch(@"\bpartial\s+class\b", source);
-        var methods = typeof(ConsoleViews).GetMethods(
-            BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.DeclaredOnly);
-        Assert.DoesNotContain(methods, method => method.Name == "PrintOperatorInbox");
     }
 }

@@ -1,4 +1,3 @@
-using System.Reflection;
 using System.Text.Json;
 using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.Core;
@@ -185,13 +184,6 @@ public sealed class GoalTextViewCharacterizationTests
             Assert.DoesNotMatch(@"\bpartial\s+class\b", source);
         }
 
-        string[] movedNames =
-        [
-            "PrintGoal", "PrintTaskQueryResult", "FormatTaskEvidence", "PrintGoalIntakeReceipt", "PrintHealth"
-        ];
-        var methods = typeof(ConsoleViews).GetMethods(
-            BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.DeclaredOnly);
-        Assert.DoesNotContain(methods, method => movedNames.Contains(method.Name));
     }
 
     [Fact]

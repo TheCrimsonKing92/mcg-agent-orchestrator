@@ -1,4 +1,3 @@
-using System.Reflection;
 using System.Text.RegularExpressions;
 using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Orchestration;
@@ -107,11 +106,6 @@ public sealed class GoalSupervisorTextViewCharacterizationTests
         var source = File.ReadAllText(Path.Combine(cliRoot, "GoalSupervisorTextView.cs"));
         Assert.Contains("internal static class GoalSupervisorTextView", source);
         Assert.DoesNotMatch(@"\bpartial\s+class\b", source);
-
-        var members = typeof(ConsoleViews).GetMembers(
-            BindingFlags.Static | BindingFlags.Instance | BindingFlags.Public |
-            BindingFlags.NonPublic | BindingFlags.DeclaredOnly);
-        Assert.DoesNotContain(members, member => member.Name == "PrintGoalSupervisorPlan");
 
         // Scan every ConsoleViews partial, including ConsoleViews.cs, as the ratchet does.
         var partials = Directory.EnumerateFiles(Path.Combine(root, "src"), "*.cs", SearchOption.AllDirectories)

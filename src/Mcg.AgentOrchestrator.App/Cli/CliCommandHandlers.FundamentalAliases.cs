@@ -109,10 +109,10 @@ private static bool HandleConfigAlias(IReadOnlyList<string> parts, CliExecutionC
     switch (subcommand)
     {
         case "agents":
-            ConsoleViews.PrintAgents(context.Agents);
+            WorkerConfigurationTextView.PrintAgents(context.Agents);
             return false;
         case "profiles":
-            ConsoleViews.PrintWorkerProfiles(context.WorkerProfiles);
+            WorkerConfigurationTextView.PrintWorkerProfiles(context.WorkerProfiles);
             return false;
         case "policy":
             AutonomyPoliciesTextView.PrintAutonomyPolicies();

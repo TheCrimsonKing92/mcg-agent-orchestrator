@@ -1,4 +1,3 @@
-using System.Reflection;
 using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
@@ -182,16 +181,6 @@ public sealed class TaskTextViewCharacterizationTests
             Assert.DoesNotMatch(@"\bpartial\s+class\b", source);
         }
 
-        string[] movedNames =
-        [
-            "PrintDelegationPlan", "PrintTask", "PrintRefreshDispatchResult", "PrintTimeline",
-            "PrintTaskTimeline", "PrintPendingHumanInput", "OneLine", "IsOutputTokenLimitHit",
-            "PrintContextUsageLine", "FormatContextUsageLine"
-        ];
-        var members = typeof(ConsoleViews).GetMembers(
-            BindingFlags.Static | BindingFlags.Instance | BindingFlags.Public |
-            BindingFlags.NonPublic | BindingFlags.DeclaredOnly);
-        Assert.DoesNotContain(members, member => movedNames.Contains(member.Name));
     }
 
     [Fact]

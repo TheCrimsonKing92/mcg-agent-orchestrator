@@ -35,7 +35,7 @@ internal static class CliGoalsEpicQueryCommand
         if (json)
             PrintJson(workspace, reference);
         else
-            ConsoleViews.PrintGoals(EpicProgressReadModel.ListMemberGoals(workspace, reference));
+            GoalListTextView.Print(EpicProgressReadModel.ListMemberGoals(workspace, reference));
     }
 
     internal static void PrintJson(OrchestratorWorkspace workspace, string? reference) =>
@@ -46,6 +46,6 @@ internal static class CliGoalsEpicQueryCommand
         if (args[^1].Equals("--json", StringComparison.OrdinalIgnoreCase))
             PrintJson(workspace, reference);
         else
-            ConsoleViews.PrintGoals(EpicProgressReadModel.ListMemberGoals(workspace, reference));
+            GoalListTextView.Print(EpicProgressReadModel.ListMemberGoals(workspace, reference));
     }
 }

@@ -375,7 +375,7 @@ public sealed class CliCommandTestsGoalBoard : CliCommandTestBase
             writable.SaveAsync(kernel).GetAwaiter().GetResult();
 
             var bareTimer = Stopwatch.StartNew();
-            var bareOutput = CaptureConsole(() => ConsoleViews.PrintGoals(writable.ListGoalMetadataAsync().GetAwaiter().GetResult()));
+            var bareOutput = CaptureConsole(() => GoalListTextView.Print(writable.ListGoalMetadataAsync().GetAwaiter().GetResult()));
             bareTimer.Stop();
             var boardTimer = Stopwatch.StartNew();
             var boardOutput = CaptureConsole(() => GoalBoardCommand.Run(

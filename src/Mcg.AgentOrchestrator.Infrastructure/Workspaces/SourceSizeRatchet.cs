@@ -677,7 +677,8 @@ internal static class SourceSizeRatchet
             // Goal cca651b1 extracts task duration stats, goal timing/rollup/dispatch value output and the shared duration formatter (slice 14, -213 lines, -2 partials): measured 659 lines in 7 partials; no headroom.
             // Goal 07c75166 extracts verification history, advance/run-goal result, acceptance evidence bundle and goal recovery report output and removes the task display number forwarder (slice 14, -341 lines, -4 partials): measured 318 lines in 3 partials; no headroom.
             // Goal 91c7c51a extracts dispatch result and next actions output (slice 14, -152 lines, -1 partial): measured 166 lines in 2 partials; no headroom.
-            new SourceClassCeiling("ConsoleViews", 166, 2),
+            // Goal ce713e3f retires ConsoleViews (slice 14, batch ten, -166 lines, -2 partials): measured 0 lines in 0 partials; zero ceiling blocks reintroduction.
+            new SourceClassCeiling("ConsoleViews", 0, 0),
         });
 
     internal static IReadOnlyList<SourceSizeViolation> EvaluateClasses(

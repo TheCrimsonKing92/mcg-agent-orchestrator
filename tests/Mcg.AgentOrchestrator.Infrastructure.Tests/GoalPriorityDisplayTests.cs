@@ -10,7 +10,7 @@ public sealed class GoalPriorityDisplayTests
         var normal = kernel.CreateGoal("Normal objective");
         var critical = kernel.CreateGoal("Critical objective");
         kernel.SetGoalPriority(critical.Id, GoalPriority.Critical, "test", "setup");
-        var lines = InfrastructureTestSupport.CaptureConsole(() => ConsoleViews.PrintGoals(kernel))
+        var lines = InfrastructureTestSupport.CaptureConsole(() => GoalListTextView.Print(kernel))
             .Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
         Assert.Equal($"{normal.Id.Value[..8]} {normal.Status}: Normal objective",
             Assert.Single(lines.Where(line => line.StartsWith(normal.Id.Value[..8]))));

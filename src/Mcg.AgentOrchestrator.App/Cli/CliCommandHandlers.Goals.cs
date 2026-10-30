@@ -855,14 +855,14 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 CliGoalsEpicQueryCommand.PrintGoals(context.Workspace, parts, GetFlagValue(parts, "--epic"));
                 return false;
             }
-            ConsoleViews.PrintGoals(context.Kernel);
-            ConsoleViews.PrintCleanupDebtWarning(GoalWorktrees.ListCleanupDebt(
+            GoalListTextView.Print(context.Kernel);
+            GoalListTextView.PrintCleanupDebtWarning(GoalWorktrees.ListCleanupDebt(
                 context.Workspace.ExecutionDirectory,
                 context.CleanupContext.Hooks));
             return false;
 
         case "agents":
-            ConsoleViews.PrintAgents(context.Agents);
+            WorkerConfigurationTextView.PrintAgents(context.Agents);
             return false;
 
         case "agent":
@@ -878,7 +878,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             context.Agents = new AgentCatalog(context.Agents).UpsertRole(agent).Agents;
             AgentCatalogStore.Save(context.AgentCatalogPath, new AgentCatalog(context.Agents));
             WarnAboutTasksPinnedToRemovedAgent(context.Kernel, previousRoleAgent, agent);
-            ConsoleViews.PrintAgents(context.Agents);
+            WorkerConfigurationTextView.PrintAgents(context.Agents);
             return false;
 
         case "agent-add":
@@ -893,11 +893,11 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             addedAgent = addedAgent with { Id = BuildAlternateAgentId(addedAgent, GetCliAgentIdSuffix(parts, addedAgent)) };
             context.Agents = new AgentCatalog(context.Agents).AddOrReplaceById(addedAgent).Agents;
             AgentCatalogStore.Save(context.AgentCatalogPath, new AgentCatalog(context.Agents));
-            ConsoleViews.PrintAgents(context.Agents);
+            WorkerConfigurationTextView.PrintAgents(context.Agents);
             return false;
 
         case "model-functions":
-            ConsoleViews.PrintModelFunctions(ModelFunctionCatalogStore.Load(context.Workspace.ModelFunctionCatalogPath));
+            WorkerConfigurationTextView.PrintModelFunctions(ModelFunctionCatalogStore.Load(context.Workspace.ModelFunctionCatalogPath));
             return false;
 
         case "model-function-add":

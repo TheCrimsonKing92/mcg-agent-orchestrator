@@ -149,7 +149,7 @@ public sealed class CliGoalsEpicJsonTests : CliTaskQueryTestSupport, IDisposable
     public void FormatFlag_BothRoutes_PreserveHumanRenderingAndEmitJson(params string[] args)
     {
         var workspace = Seed();
-        var expected = CaptureConsole(() => ConsoleViews.PrintGoals(ReadMembers(workspace)));
+        var expected = CaptureConsole(() => GoalListTextView.Print(ReadMembers(workspace)));
         Assert.NotEmpty(expected);
         Assert.Equal(expected, ExecuteRead(args, workspace, NewReadProbe()));
         Assert.Equal(expected, ExecutePersistent(args, workspace, new ProbeStateRepository(new AgentOrchestratorKernel())));

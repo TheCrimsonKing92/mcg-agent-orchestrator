@@ -1,4 +1,3 @@
-using System.Reflection;
 using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
@@ -195,11 +194,6 @@ public sealed class PortfolioTextViewCharacterizationTests
             Assert.Contains("internal static class " + name, source);
             Assert.DoesNotMatch(@"\bpartial\s+class\b", source);
         }
-        var oldMethods = typeof(ConsoleViews).GetMethods(
-            BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly);
-        foreach (var name in new[] { "PrintEpicRollups", "FormatEpicRollupLine", "PrintEpicShow",
-                     "PrintEpicMembers", "PrintPortfolio", "PrintClusterSuggestions", "ShortId" })
-            Assert.DoesNotContain(oldMethods, method => method.Name == name);
     }
 
     [Fact]

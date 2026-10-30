@@ -39,10 +39,10 @@ internal static class CliInspectionQueryCommand
                     Console.WriteLine(GoalsAgentReadView.Serialize(stateRepository.ListGoalMetadataAsync().GetAwaiter().GetResult()));
                     return;
                 }
-                ConsoleViews.PrintGoals(stateRepository.ListGoalMetadataAsync().GetAwaiter().GetResult());
+                GoalListTextView.Print(stateRepository.ListGoalMetadataAsync().GetAwaiter().GetResult());
                 var debtHooks = WorktreeCleanupContext.Load(
                     attentionStoreDirectory: workspace.OrchestratorDirectory).Hooks;
-                ConsoleViews.PrintCleanupDebtWarning(
+                GoalListTextView.PrintCleanupDebtWarning(
                     GoalWorktrees.ListCleanupDebt(workspace.ExecutionDirectory, debtHooks));
                 break;
             case "model-outcomes":

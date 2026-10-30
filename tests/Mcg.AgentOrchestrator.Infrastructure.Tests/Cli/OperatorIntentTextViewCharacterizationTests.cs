@@ -1,4 +1,3 @@
-using System.Reflection;
 using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Xunit;
@@ -79,9 +78,5 @@ public sealed class OperatorIntentTextViewCharacterizationTests
         var source = File.ReadAllText(Path.Combine(cliRoot, "OperatorIntentTextView.cs"));
         Assert.Contains("internal static class OperatorIntentTextView", source);
         Assert.DoesNotMatch(@"\bpartial\s+class\b", source);
-        var methods = typeof(ConsoleViews).GetMethods(
-            BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.DeclaredOnly);
-        Assert.DoesNotContain(methods, method =>
-            method.Name is "PrintOperatorIntentTemplates" or "PrintOperatorIntentPlan");
     }
 }

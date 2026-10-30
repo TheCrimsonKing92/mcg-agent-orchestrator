@@ -118,7 +118,7 @@ public sealed class CliCommandTestsEpicProgressViews : CliTaskQueryTestSupport, 
         var output = Execute(inline ? ["goals", "--epic=Board"] : ["goals", "--epic", "Board"], workspace, probe);
 
         var members = before.Where(goal => goal.Objective != "Unrelated title").ToArray();
-        Assert.Equal(CaptureConsole(() => ConsoleViews.PrintGoals(members)), output);
+        Assert.Equal(CaptureConsole(() => GoalListTextView.Print(members)), output);
         Assert.Equal(11, output.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries).Length);
         Assert.DoesNotContain("eeeeeeee", output);
         Assert.DoesNotContain("ffffffff", output);

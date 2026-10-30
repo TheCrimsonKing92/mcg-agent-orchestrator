@@ -1,4 +1,3 @@
-using System.Reflection;
 using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.Core;
 using Xunit;
@@ -114,9 +113,6 @@ public sealed class FindingLookupTextViewCharacterizationTests
         var source = File.ReadAllText(Path.Combine(cliRoot, "FindingLookupTextView.cs"));
         Assert.Contains("internal static class FindingLookupTextView", source);
         Assert.DoesNotMatch(@"\bpartial\s+class\b", source);
-        var methods = typeof(ConsoleViews).GetMethods(
-            BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.DeclaredOnly);
-        Assert.DoesNotContain(methods, method => method.Name == "PrintFindingLookup");
     }
 
     private static FindingLookupMatch Match(FindingEvidenceRequest? request = null) =>

@@ -1,4 +1,3 @@
-using System.Reflection;
 using System.Text.RegularExpressions;
 using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Orchestration;
@@ -94,11 +93,6 @@ public sealed class AcceptanceQueueTextViewCharacterizationTests
         var source = File.ReadAllText(Path.Combine(cliRoot, "AcceptanceQueueTextView.cs"));
         Assert.Contains("internal static class AcceptanceQueueTextView", source);
         Assert.DoesNotMatch(@"\bpartial\s+class\b", source);
-
-        var members = typeof(ConsoleViews).GetMembers(
-            BindingFlags.Static | BindingFlags.Instance | BindingFlags.Public |
-            BindingFlags.NonPublic | BindingFlags.DeclaredOnly);
-        Assert.DoesNotContain(members, member => member.Name == "PrintAcceptanceQueuePlan");
 
         // Scan every ConsoleViews partial, including ConsoleViews.cs, as the ratchet does.
         var partials = Directory.EnumerateFiles(Path.Combine(root, "src"), "*.cs", SearchOption.AllDirectories)

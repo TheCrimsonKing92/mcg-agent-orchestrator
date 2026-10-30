@@ -41,10 +41,6 @@ public sealed class GateStatusRemoteWaitTests
     {
         var cliRoot = Path.Combine(VerifiedRepositoryRoot.Find(), "src", "Mcg.AgentOrchestrator.App", "Cli");
         Assert.False(File.Exists(Path.Combine(cliRoot, "ConsoleViews.GateStatus.cs")));
-        var methods = typeof(ConsoleViews).GetMethods(System.Reflection.BindingFlags.Public |
-            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static |
-            System.Reflection.BindingFlags.DeclaredOnly);
-        Assert.DoesNotContain(methods, method => method.Name == "PrintGateStatus");
         Assert.DoesNotContain(Directory.EnumerateFiles(cliRoot, "*.cs"), path =>
             File.ReadAllText(path).Contains("ConsoleViews.PrintGateStatus", StringComparison.Ordinal));
     }
