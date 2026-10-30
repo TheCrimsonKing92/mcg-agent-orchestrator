@@ -7,7 +7,7 @@ using static Mcg.AgentOrchestrator.Infrastructure.Tests.LandingExecutorTestsDeny
 
 // Each fixture owns its git repository and stores; the collection isolates landing git hooks.
 [Collection(TestCollections.LandingGitRunner)]
-public sealed class LandingExecutorTestsPassedCohortApprovalHoldAttentionTests : AcceptanceCohortWorkflowTests
+public sealed class PassedCohortApprovalHoldAttentionTests : AcceptanceCohortWorkflowTests
 {
     [Theory]
     [InlineData(0)]

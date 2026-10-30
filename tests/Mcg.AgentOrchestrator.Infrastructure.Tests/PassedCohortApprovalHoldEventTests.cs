@@ -6,7 +6,7 @@ using static Mcg.AgentOrchestrator.Infrastructure.Tests.LandingExecutorTestsDeny
 
 // Each fixture owns its git repository and stores; the collection isolates landing git hooks.
 [Collection(TestCollections.LandingGitRunner)]
-public sealed class LandingExecutorTestsPassedCohortApprovalHoldEventTests : AcceptanceCohortWorkflowTests
+public sealed class PassedCohortApprovalHoldEventTests : AcceptanceCohortWorkflowTests
 {
     [Fact]
     public void HeldTick_SecondMemberNeedsApproval_StreamsOneEventPerMember()
