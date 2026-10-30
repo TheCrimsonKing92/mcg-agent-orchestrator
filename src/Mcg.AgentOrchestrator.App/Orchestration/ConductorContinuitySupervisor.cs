@@ -39,7 +39,8 @@ internal sealed record ConductorContinuityExitArtifact(
     int Ticks,
     int Done,
     bool RestartRequested,
-    [property: JsonPropertyName("landedGoals")] int LandedGoals = 0)
+    [property: JsonPropertyName("landedGoals")] int LandedGoals = 0,
+    HomeBuildAdoptionRecord? HomeBuildTarget = null)
 {
     public static void Write(string path, ConductorContinuityExitArtifact artifact)
     {
@@ -102,7 +103,9 @@ internal sealed partial class ConductorContinuitySupervisor(
     Func<string, string, IReadOnlyList<string>>? changedPathsBetween = null,
     TimeSpan? successorExitRetryDelay = null,
     Action<string, string, string>? raiseEscalationAttention = null,
-    Func<string, string, IReadOnlyCollection<string>?, ConductorRunClosureVerdict>? verifyRunClosure = null)
+    Func<string, string, IReadOnlyCollection<string>?, ConductorRunClosureVerdict>? verifyRunClosure = null,
+    HomeBuildAdoptionPublisher? homeBuildPublisher = null,
+    HomeBuildFollowerSuccessorSource? homeBuildFollower = null)
 {
     public const string ChildFlag = "--continuity-child";
     public const string ExitArtifactFlag = "--continuity-exit-artifact";
@@ -252,6 +255,14 @@ internal sealed partial class ConductorContinuitySupervisor(
                 PrepareOutputFile(stderrPath);
             }
             var successor = activeChild is null ? pendingSuccessor : null;
+            if (successor is not null && homeBuildFollower is not null && !homeBuildFollower.IsEligible(successor,
+                new ConductorSupervisorBuildIdentity(currentBuild.CommitSha, currentBuild.StagedBuildId), blockedActivationCommit))
+            {
+                successor.RunDirectoryLease?.Dispose();
+                pendingSuccessor = successor = null;
+                TryAppendConductEvent("LOOP_HANDOFF_SKIPPED reason=home-adoption-no-longer-eligible");
+                if (appliedUpgrade is not null && !CanRestore(0, stdoutPath, stderrPath)) return 1;
+            }
             if (successor is not null)
             {
                 // Observe with the retained build before running any successor. An
@@ -319,6 +330,7 @@ internal sealed partial class ConductorContinuitySupervisor(
             }
             var childArgs = args
                 .Where(arg => !arg.Equals(ChildFlag, StringComparison.OrdinalIgnoreCase))
+                .Where(arg => !arg.StartsWith("--home-build-blocked-commit=", StringComparison.Ordinal))
                 .Concat([
                     $"--project={projectName}",
                     $"--tenant={tenantName}",
@@ -326,6 +338,8 @@ internal sealed partial class ConductorContinuitySupervisor(
                     ExitArtifactFlag,
                     artifactPath
                 ])
+                .Concat(homeBuildFollower is not null && blockedActivationCommit is not null
+                    ? new[] { $"--home-build-blocked-commit={blockedActivationCommit}" } : Array.Empty<string>())
                 .Concat(activeChild is null && pendingSuccessor is not null ? new[] { "--require-current-stores" } : Array.Empty<string>())
                 .ToArray();
             ConductorSupervisorProcessResult result;
@@ -713,7 +727,9 @@ internal sealed partial class ConductorContinuitySupervisor(
             {
                 if (stallFailure is not null)
                     TryAppendConductEvent($"SUPERVISOR_STALL_RESTART_HONORED attempt={attempt} pid={result.ProcessId} stall={stallFailure}");
-                renewalsWithoutProgress = artifact.Done > 0 || artifact.LandedGoals > 0 ? 0 : renewalsWithoutProgress + 1;
+                var followingHome = artifact.HomeBuildTarget is not null && homeBuildFollower is not null;
+                // Home refreshes are externally driven, not no-progress renewals.
+                renewalsWithoutProgress = followingHome || artifact.Done > 0 || artifact.LandedGoals > 0 ? 0 : renewalsWithoutProgress + 1;
                 if (renewalsWithoutProgress > maxRenewalsWithoutProgress)
                 {
                     var reason = $"renewal-cap count={renewalsWithoutProgress} max={maxRenewalsWithoutProgress}";
@@ -725,7 +741,12 @@ internal sealed partial class ConductorContinuitySupervisor(
                 }
 
                 Record("restart", "planned", attempt, artifact.StopReason, result.ProcessId, stdoutPath, stderrPath);
-                if ((stageSuccessor is not null || stageSuccessorWithHook is not null) && !stagingDisabled)
+                Func<Action<string, string, CancellationToken>, CancellationToken, ConductorPreparedSuccessor?>? prepareWithHook = followingHome
+                    ? (hook, token) => homeBuildFollower!.Prepare(artifact.HomeBuildTarget!,
+                        new ConductorSupervisorBuildIdentity(currentBuild.CommitSha, currentBuild.StagedBuildId),
+                        blockedActivationCommit, hook, token)
+                    : stageSuccessorWithHook;
+                if ((stageSuccessor is not null || prepareWithHook is not null) && (!stagingDisabled || followingHome))
                 {
                     TryAppendConductEvent(
                         $"LOOP_HANDOFF_STAGING attempt={attempt} repositoryHead=resolve-pending");
@@ -735,9 +756,9 @@ internal sealed partial class ConductorContinuitySupervisor(
                         cancellationToken.ThrowIfCancellationRequested();
                         pendingSuccessor?.RunDirectoryLease?.Dispose();
                         pendingSuccessor = null;
-                        if (stageSuccessorWithHook is not null)
+                        if (prepareWithHook is not null)
                         {
-                            pendingSuccessor = stageSuccessorWithHook((dll, commit, token) =>
+                            pendingSuccessor = prepareWithHook((dll, commit, token) =>
                             {
                                 if (schemaUpgrade is null || string.Equals(commit, blockedActivationCommit, StringComparison.OrdinalIgnoreCase)) return;
                                 var binding = new List<string> { $"--project={projectName}", $"--tenant={tenantName}" };
@@ -789,6 +810,7 @@ internal sealed partial class ConductorContinuitySupervisor(
                     }
                     catch (Exception ex)
                     {
+                        if (followingHome) blockedActivationCommit = artifact.HomeBuildTarget!.AdoptedCommit;
                         consecutiveStagingFailures++;
                         stagingDisabled = consecutiveStagingFailures >= Math.Max(1, maxConsecutiveStagingFailures);
                         var phase = ex is ConductorSelfRelaunchPreparationException preparation

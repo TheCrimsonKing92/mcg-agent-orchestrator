@@ -342,6 +342,11 @@ internal sealed partial class ConductorContinuitySupervisor
                 SerializeActivationPayload(status, primaryBuild, secondaryBuild, reason, detail, attempt, now),
                 now))
             .GetAwaiter().GetResult();
+        try { homeBuildPublisher?.Record(status, primaryBuild); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Text.Json.JsonException)
+        {
+            TryAppendConductEvent($"HOME_BUILD_ADOPTION_PUBLISH_FAILED status={status} reason={Sanitize(ex.Message)}");
+        }
     }
 
     private void RaiseFailedBothAttention(

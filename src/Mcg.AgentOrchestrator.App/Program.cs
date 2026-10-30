@@ -339,6 +339,8 @@ if (ConductorContinuitySupervisor.ShouldSupervise(
 
         var supervisorSeam = new SystemConductorSupervisorHandoffSeam(
             Path.Combine(workspace.OrchestratorDirectory, "continuity"));
+        var conductorHome = OrchestratorHome.ResolveForProcess();
+        var homeSource = conductorHome.SourceRootDirectory;
         var supervisor = new ConductorContinuitySupervisor(
             new SystemConductorSupervisorProcessHost(),
             new SqliteRunEventStore(workspace.RunEventStorePath),
@@ -347,6 +349,10 @@ if (ConductorContinuitySupervisor.ShouldSupervise(
             successorExitRetryDelay: TimeSpan.FromSeconds(60),
             stageSuccessor: stageSuccessor,
             stageSuccessorWithHook: stageSuccessorWithHook,
+            homeBuildPublisher: homeSource is not null && conductorHome.IsHome(workspace)
+                ? new HomeBuildAdoptionPublisher(homeSource, HomeBuildAdoptionRecord.RecordPath(homeSource)) : null,
+            homeBuildFollower: homeSource is not null && !conductorHome.IsHome(workspace)
+                ? new HomeBuildFollowerSuccessorSource(homeSource) : null,
             schemaUpgrade: new ConductorHandoffSchemaUpgrade(
                 workspace.OrchestratorDirectory, workspace.ExecutionDirectory),
             appendConductEvent: (eventKind, goalId, detail) =>

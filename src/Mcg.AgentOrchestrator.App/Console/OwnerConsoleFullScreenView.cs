@@ -24,7 +24,9 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
     private readonly OwnerConsoleDecisionsPane _decisionsPane = new();
     private readonly OwnerConsoleActivityPane _activityPane = new();
     private readonly ListView _decisions;
-    private readonly TableView _board = new() { Width = Dim.Fill(), Height = Dim.Fill() };
+    private readonly OwnerConsoleBoardPane _board = new() { Width = Dim.Fill(), Height = Dim.Fill() };
+    private readonly View _boardFooter = new() { Y = Pos.AnchorEnd(1), Width = Dim.Fill(), Height = 1, Visible = false };
+    private IReadOnlyList<(string Text, bool Dimmed)> _boardFooterSegments = [];
     private readonly Label _preview = new() { Width = Dim.Fill(), Height = 3 };
     private readonly OwnerConsoleSelectedGoalSummary _summary;
     private OwnerConsoleSelectedGoalPreview _selectedPreview = new(null, null);
@@ -129,7 +131,8 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
         _previewFrame = new FrameView { Title = "SELECTED", Y = Pos.Bottom(_boardFrame), Width = Dim.Fill(), Height = 5 };
         _activityFrame = new FrameView { Title = "ACTIVITY", Y = Pos.Bottom(_previewFrame), Width = Dim.Fill(), Height = Dim.Fill(3) };
         _decisionsFrame.Add(_decisions, _decisionsPane.EmptyLabel);
-        _boardFrame.Add(_board);
+        _boardFrame.Add(_board, _boardFooter);
+        _boardFooter.DrawingContent += (_, _) => OwnerConsoleBoardPane.DrawSegments(_boardFooter, 0, _boardFooterSegments);
         _previewFrame.Add(_preview);
         _activityFrame.Add(_activity);
         _board.Table = new DataTableSource(BoardTable);
@@ -251,6 +254,14 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
     {
         using var trace = _diagnostics?.Begin("board-source-replacement", TraceState);
         if (_controller.Model is not { } model) return;
+        _boardFooterSegments = OwnerConsoleBoardSection.Footer(model);
+        var footerVisible = _boardFooterSegments.Count > 0;
+        if (_boardFooter.Visible != footerVisible)
+        {
+            _boardFooter.Visible = footerVisible;
+            _board.Height = Dim.Fill(footerVisible ? 1 : 0);
+        }
+        _boardFooter.SetNeedsDraw();
         OwnerConsoleBoardRenderer.Render(BoardTable, _board, model.Board, _board.Viewport.Width, _boardTitleWidth,
             model.BoardScope is { ProjectCount: > 1 });
         RenderPreview();
@@ -274,7 +285,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
         SetTitle(_decisionsFrame, "DECISIONS" + (_decisionsPane.TitleStatus is { } status ? $" ({status})" : ""), OwnerConsoleOverflow.Of(
             _decisions.Source?.Count ?? 0, _decisions.Viewport.Y, _decisions.Viewport.Height));
         SetTitle(_boardFrame, "BOARD", OwnerConsoleOverflow.Of(
-            model?.Board.Length ?? 0, _board.RowOffset, BoardBodyRows()));
+            BoardTable.Rows.Count, _board.RowOffset, BoardBodyRows()));
         var activityTitle = OwnerConsoleActivityTitle.Title(OwnerConsoleOverflow.Of(
             ActivityLines.Count, _activity.Viewport.Y, _activity.Viewport.Height),
             _activityPane.Following, _activityFrame.Frame.Width - OwnerConsoleOverflow.TitleChrome,
@@ -480,7 +491,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
         { key.Handled = true; if (!ActionRunning) FollowLatest(); return; }
         var pane = FocusedPane;
         var count = pane == OwnerConsolePane.Activity ? ActivityLines.Count : pane == OwnerConsolePane.Board ?
-            _controller.Model?.Board.Length ?? 0 : _controller.Model?.Decisions.Length ?? 0;
+            BoardTable.Rows.Count : _controller.Model?.Decisions.Length ?? 0;
         var current = pane == OwnerConsolePane.Activity ? _activity.SelectedItem ?? 0 : pane == OwnerConsolePane.Board ?
             _selectedBoardIndex : _controller.SelectedIndex;
         var pageHeight = pane == OwnerConsolePane.Board ? BoardBodyRows() : PaneView(pane).Viewport.Height;
@@ -702,6 +713,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
         SelectedProject = selectable < 0 ? null : row.Project;
         _summary.Select(row.IsForeign || row.IsDiagnostic ? null : SelectedGoalId, refresh);
         RenderPreview();
+        if (selectable < 0 || BoardTable.Rows.Count == 0) return;
         if (_board.Value?.SelectedCell.Y != _selectedBoardIndex)
             _board.SetSelection(0, _selectedBoardIndex, false);
         _board.EnsureCursorIsVisible();

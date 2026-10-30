@@ -76,6 +76,8 @@ internal sealed partial class ConductorBatchLoop
     private readonly Func<ConductorLoopHandoffRequest, ConductorLoopHandoffResult>? _handoffOnMaxDuration;
     private readonly Func<ConductorSelfRelaunchRequest, ConductorSelfRelaunchResult>? _selfRelaunch;
     private readonly bool _selfRelaunchEnabled;
+    private readonly HomeBuildRelaunchCoordinator? _homeBuildRelaunchCoordinator;
+    private readonly Func<IReadOnlyList<string>>? _homeBuildIdleBlockers;
     private readonly PostLandingCanaryCoordinator? _postLandingCanary;
     private readonly PromptRolloutWatchCoordinator? _promptRolloutWatch;
     private readonly AcceptanceEngineCircuitBreaker? _acceptanceEngineCircuit;
@@ -129,7 +131,10 @@ internal sealed partial class ConductorBatchLoop
         Func<TimeSpan>? processCpuTime = null,
         Action<string>? loadTrxCoherenceVerdicts = null,
         Func<int>? countLiveGroupedGates = null,
-        Func<AgentOrchestratorKernel, GoalId, bool>? prepareOperatorIntentTarget = null)
+        Func<AgentOrchestratorKernel, GoalId, bool>? prepareOperatorIntentTarget = null,
+        HomeBuildAdoptionDetector? homeBuildAdoption = null,
+        Func<ConductorSelfRelaunchRequest, ConductorSelfRelaunchResult>? homeBuildRelaunch = null,
+        Func<IReadOnlyList<string>>? homeBuildIdleBlockers = null)
     {
         _sweep = measuredSweepWithCheckpointHolds is not null
             ? measuredSweepWithCheckpointHolds
@@ -153,6 +158,9 @@ internal sealed partial class ConductorBatchLoop
         _handoffOnMaxDuration = handoffOnMaxDuration;
         _selfRelaunch = selfRelaunch;
         _selfRelaunchEnabled = selfRelaunchEnabled;
+        _homeBuildRelaunchCoordinator = homeBuildAdoption is not null && homeBuildRelaunch is not null
+            ? new HomeBuildRelaunchCoordinator(homeBuildAdoption, homeBuildRelaunch) : null;
+        _homeBuildIdleBlockers = homeBuildIdleBlockers;
         _postLandingCanary = postLandingCanary;
         _acceptanceEngineCircuit = postLandingCanary?.CircuitBreaker ?? acceptanceEngineCircuit;
         _conductEventLogWriter = conductEventLogWriter;
@@ -317,6 +325,7 @@ internal sealed partial class ConductorBatchLoop
         var selfRelaunchDrainCap = new SelfRelaunchDrainCapState(
             ResolveRelaunchDrainCap(_readRelaunchDrainCap()));
         ConductorLoopHandoffResult? selfRelaunchHandoff = null;
+        HomeBuildAdoptionRecord? handedOffHomeBuild = null;
         var started = _utcNow();
         _cohortGatherDeadline = ComputeCohortGatherDeadline(started, maxDuration);
         var effectiveGoalStallThreshold = goalStallThreshold ?? DefaultGoalStallThreshold;
@@ -417,6 +426,21 @@ internal sealed partial class ConductorBatchLoop
 
         SelfRelaunchDrainOutcome DrainSelfRelaunch(int tick)
         {
+            if (pendingSelfRelaunch?.HomeBuildTarget is { } homeTarget)
+            {
+                // Follower reservations never enter the home drain-cap/detach path.
+                var followerResult = _homeBuildRelaunchCoordinator!.TryHandoff(pendingSelfRelaunch, tick,
+                    HomeBuildBlockers, () => AwaitCanaryTasks(canaryTasks, canaryTasksGate));
+                if (followerResult is not null)
+                {
+                    handedOffHomeBuild = homeTarget;
+                    selfRelaunchHandoff = followerResult.Handoff;
+                    EmitHandoffProgress(tick, followerResult.Handoff!, pendingSelfRelaunch.GoalId);
+                    return new(SelfRelaunchDrainDisposition.BreakLoop);
+                }
+                pendingSelfRelaunch = null;
+                return new(SelfRelaunchDrainDisposition.Proceed);
+            }
             var activeDispatches = RunJanitorialPhase<int?>(
                 "count-running-dispatches",
                 tick,
@@ -568,6 +592,10 @@ internal sealed partial class ConductorBatchLoop
                 kind, timingLines, busyWriteDelay,
                 checkpointGoalTick: checkpointGoalTick, checkpointHeldGoalIds: checkpointHeldGoals);
         }
+
+        IReadOnlyList<string> HomeBuildBlockers() => ProjectConductorIdleCheck.ReadBlockers(
+            () => CountRunningDispatches(kernel, onlyGoalId), driver, _countLiveGroupedGates,
+            _operatorIntents, _homeBuildIdleBlockers);
 
         while (true)
         {
@@ -734,6 +762,9 @@ internal sealed partial class ConductorBatchLoop
                 _recoverInterruptedDispatches(kernel);
                 return true;
             });
+            // Reserve before any dispatch, gate acquisition, landing or next intent application.
+            if (pendingSelfRelaunch is null && _selfRelaunchEnabled)
+                pendingSelfRelaunch = _homeBuildRelaunchCoordinator?.TryReserve(nextTick, HomeBuildBlockers);
             if (pendingSelfRelaunch is not null)
             {
                 var drainOutcome = RunJanitorialPhase(
@@ -1696,7 +1727,7 @@ internal sealed partial class ConductorBatchLoop
         {
             StopLoop("loop-return");
         }
-        return new BatchLoopSummary(totalTicks, totalAdvanced, totalHeld, totalEscalated, totalRetried, totalDone, stopRequested, handoff, stopReason, totalBlockedRechecks, GetSuccessfulLandingCount(landedGoalIds));
+        return new BatchLoopSummary(totalTicks, totalAdvanced, totalHeld, totalEscalated, totalRetried, totalDone, stopRequested, handoff, stopReason, totalBlockedRechecks, GetSuccessfulLandingCount(landedGoalIds)) { HomeBuildTarget = handedOffHomeBuild };
         }
         catch (Exception ex)
         {
@@ -2493,54 +2524,11 @@ internal sealed record ParallelLandingOutcome(ConductorAdvanceResult Result, int
 
 internal sealed record GoalWalkTiming(string Goal, string Result, TimeSpan Elapsed);
 
-public sealed record BatchLoopSummary(
-    int Ticks,
-    int Advanced,
-    int Held,
-    int Escalated,
-    int Retried,
-    int Done,
-    bool StopRequested,
-    ConductorLoopHandoffResult? Handoff = null,
-    string? StopReason = null,
-    int Rechecks = 0,
-    int LandedGoals = 0);
-
 public sealed record ConductorLoopHandoffRequest(
     int Tick,
     TimeSpan MaxDuration,
     int Done,
     int LandedGoalDelta = 0);
-
-public sealed record ConductorLoopHandoffResult(
-    bool Started,
-    int? ProcessId,
-    string? StdoutPath,
-    string? StderrPath,
-    string? Reason,
-    bool Failed = false,
-    string? VerificationOutcome = null,
-    bool RollbackSucceeded = true)
-{
-    public static ConductorLoopHandoffResult StartedProcess(
-        int processId,
-        string stdoutPath,
-        string stderrPath,
-        string? verificationOutcome = null) =>
-        new(true, processId, stdoutPath, stderrPath, null, Failed: false, verificationOutcome);
-
-    public static ConductorLoopHandoffResult Skipped(string reason) =>
-        new(false, null, null, null, reason);
-
-    public static ConductorLoopHandoffResult FailedStart(
-        string reason,
-        string? stdoutPath,
-        string? stderrPath,
-        string? verificationOutcome = null,
-        int? processId = null,
-        bool rollbackSucceeded = false) =>
-        new(false, processId, stdoutPath, stderrPath, reason, Failed: true, verificationOutcome, rollbackSucceeded);
-}
 
 public sealed record BatchTickSummary(
     int Tick,

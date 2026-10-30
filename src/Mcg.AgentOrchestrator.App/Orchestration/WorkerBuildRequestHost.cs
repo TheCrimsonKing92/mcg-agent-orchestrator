@@ -170,7 +170,9 @@ internal sealed class WorkerBuildRequestHost : IWorkerBuildRequestService
                     if (task.LastDispatch.SandboxLowIntegrity) child.LowerIntegrityBeforeResume();
                     TaskIntentAdmission.ExecuteAuthorized(_reference.Admission!, "worker-build:" + invocation.Id + ":" + identity.Pid, () =>
                     {
-                        CheckCurrent();
+                        // Already inside the admission checkpoint. A nested checkpoint could
+                        // wait while retaining the outer mutex and prevent intent resolution.
+                        CheckWorkerCurrent();
                         // No user code executes before durable registration and this canonical/source check.
                         child.Resume();
                         Advance(WorkerBuildPhase.CompilerStarted);
@@ -261,9 +263,13 @@ internal sealed class WorkerBuildRequestHost : IWorkerBuildRequestService
         }
         void CheckCurrent(bool validateCandidate = true)
         {
+            TaskIntentAdmission.ExecuteAuthorized(_reference.Admission!, "worker-build-lifetime:" + invocation.Id, () => { });
+            CheckWorkerCurrent(validateCandidate);
+        }
+        void CheckWorkerCurrent(bool validateCandidate = true)
+        {
             stop.Token.ThrowIfCancellationRequested();
             if (!WorkerBuildInvocationOperations.IsExactProcessAlive(worker)) throw new OperationCanceledException("Worker exited.");
-            TaskIntentAdmission.ExecuteAuthorized(_reference.Admission!, "worker-build-lifetime:" + invocation.Id, () => { });
             var latestKernel = _operations.Load(_reference.GoalId);
             if (latestKernel.GetTask(new GoalId(_reference.GoalId), new TaskId(_reference.TaskId)).Status == WorkTaskStatus.Cancelled)
             { stopCause = StopCause.DispatchCancelled; throw new OperationCanceledException("Dispatch cancelled."); }

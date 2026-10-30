@@ -1,5 +1,7 @@
 using System.Collections.Immutable;
+using System.Collections.Concurrent;
 using System.Data;
+using System.Drawing;
 using System.Reflection;
 using System.Text.Json.Nodes;
 using Mcg.AgentOrchestrator.App.Orchestration;
@@ -7,14 +9,298 @@ using Mcg.AgentOrchestrator.App.OwnerConsole;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Terminal.Gui.App;
+using Terminal.Gui.Drivers;
 using Terminal.Gui.Input;
+using Terminal.Gui.ViewBase;
 using Terminal.Gui.Views;
 
-// Parallel-safe: every scene owns its SQLite files, registry, lease and driverless GUI.
+// Parallel-safe: scenes own their databases, leases, instance GUI, input and screen buffer.
 public sealed class OwnerConsoleBoardSectionTests
 {
     private static CancellationToken Token => TestContext.Current.CancellationToken;
     private static readonly string[] Columns = ["GOAL", "EPIC", "TITLE", "PRIORITY", "STATUS", "AGE"];
+
+    [Fact]
+    public async Task AllProjects_Screen_DrawsOneHeaderAndGroupedFooter()
+    {
+        using var projects = await Projects.CreateAsync();
+        projects.RemoveProject("alpha");
+        projects.RemoveProject("beta");
+        var leases = new List<IDisposable>();
+        try
+        {
+            leases.Add(ConductorLoopLease.Acquire(projects.Home.OrchestratorDirectory));
+            foreach (var name in new[] { "crosswalk", "necromancer", "net-health", "pz-item-searcher", "schema-drift" })
+            {
+                var workspace = projects.Register(name);
+                await projects.SaveAsync(workspace, new AgentOrchestratorKernel());
+                if (name != "net-health") leases.Add(ConductorLoopLease.Acquire(workspace.OrchestratorDirectory));
+            }
+            using var scene = new Scene(projects);
+            await scene.RefreshAsync();
+
+            var screen = scene.CaptureBoard();
+
+            var header = Assert.Single(screen.Lines.Where(line => line.StartsWith("── ")));
+            Assert.StartsWith("── home · conductor running · 1 active · last landed never ──", header);
+            AssertHeaderLine(header, scene.View.BoardPane);
+            var headerIndex = Array.IndexOf(screen.Lines, header);
+            Assert.Contains("11111111", screen.Lines[headerIndex + 1]);
+            Assert.Contains("home goal", screen.Lines[headerIndex + 1]);
+            const string footer = "idle: crosswalk, necromancer, pz-item-searcher, schema-drift · stopped: net-health";
+            Assert.Equal(footer, Assert.Single(screen.Lines.Where(line => line.StartsWith("idle:"))).TrimEnd());
+            Assert.Equal(footer, screen.Lines[^1].TrimEnd());
+            var scheme = scene.View.BoardPane.GetScheme();
+            var normal = scheme.Normal;
+            var expected = new Terminal.Gui.Drawing.Attribute(normal.Foreground, normal.Background,
+                normal.Style | Terminal.Gui.Drawing.TextStyle.Bold);
+            Assert.True(header.TrimEnd().Length < screen.Attributes.GetLength(1));
+            for (var x = 0; x < screen.Attributes.GetLength(1); x++)
+            {
+                Assert.Equal(expected, screen.Attributes[headerIndex, x]);
+                Assert.NotEqual(scheme.Disabled, screen.Attributes[headerIndex, x]);
+                Assert.NotEqual(scheme.Highlight, screen.Attributes[headerIndex, x]);
+            }
+        }
+        finally { foreach (var lease in leases) lease.Dispose(); }
+    }
+
+    [Fact]
+    public async Task AllProjects_Screen_KeepsSelectedGoalFocusDistinctFromHeader()
+    {
+        using var projects = await Projects.CreateAsync();
+        using var scene = new Scene(projects);
+        await scene.RefreshAsync();
+        await scene.FocusBoardAsync();
+        AssertSelectedGoal(scene, "home", "11111111-home");
+
+        var screen = scene.CaptureBoard(focusBoard: true);
+
+        var headerIndex = Array.FindIndex(screen.Lines, line => line.StartsWith("── home ·"));
+        Assert.True(headerIndex >= 0);
+        var goalIndex = headerIndex + 1;
+        var goalColumn = screen.Lines[goalIndex].IndexOf("11111111", StringComparison.Ordinal);
+        Assert.True(goalColumn >= 0);
+        Assert.Equal(scene.View.BoardPane.GetScheme().Focus, screen.Attributes[goalIndex, goalColumn]);
+        Assert.NotEqual(screen.Attributes[headerIndex, goalColumn], screen.Attributes[goalIndex, goalColumn]);
+    }
+
+    [Fact]
+    public async Task AllProjects_Screen_CountsRunningAndWaitingGateWorkInHeaders()
+    {
+        using var projects = await Projects.CreateAsync();
+        projects.RemoveProject("alpha");
+        await projects.AddGoalAsync(projects.Home, "44444444-in-gate", GoalStatus.Verifying);
+        await projects.AddGoalAsync(projects.Home, "55555555-waiting", GoalStatus.Verified);
+        await projects.AddGoalAsync(projects.Home, "66666666-waiting", GoalStatus.Verified);
+        await projects.AddGoalAsync(projects.Beta, "77777777-active", GoalStatus.Active);
+        using var scene = new Scene(projects);
+        await scene.RefreshAsync();
+
+        var screen = scene.CaptureBoard();
+
+        var headers = screen.Lines.Where(line => line.StartsWith("── ")).ToArray();
+        Assert.Equal(2, headers.Length);
+        var home = Assert.Single(headers.Where(line => line.StartsWith("── home ·"))).TrimEnd();
+        Assert.Equal("── home · conductor stopped · 4 active · 1 in gate · 2 waiting for gate · last landed never ──", home);
+        var beta = Assert.Single(headers.Where(line => line.StartsWith("── beta ·"))).TrimEnd();
+        Assert.Equal("── beta · conductor stopped · 1 active · last landed never ──", beta);
+        Assert.DoesNotContain("in gate", beta);
+        Assert.DoesNotContain("waiting for gate", beta);
+        Assert.All(headers, header => Assert.DoesNotContain("verified", header));
+    }
+
+    [Fact]
+    public async Task TwoProjects_Screen_DrawsOrderedSectionsWithoutFooter()
+    {
+        using var projects = await Projects.CreateAsync();
+        using var scene = new Scene(projects);
+        Assert.True(scene.Source.HandleScope("home, alpha").Success);
+        await scene.RefreshAsync();
+
+        var screen = scene.CaptureBoard();
+
+        var headers = screen.Lines.Select((text, index) => (text, index))
+            .Where(line => line.text.StartsWith("── ")).ToArray();
+        Assert.Equal(2, headers.Length);
+        Assert.StartsWith("── home · conductor stopped · 1 active", headers[0].text);
+        Assert.StartsWith("── alpha · conductor stopped · 2 active", headers[1].text);
+        AssertHeaderLine(headers[0].text, scene.View.BoardPane);
+        AssertHeaderLine(headers[1].text, scene.View.BoardPane);
+        Assert.Equal(headers[0].index + 2, headers[1].index);
+        Assert.Contains("11111111", screen.Lines[headers[0].index + 1]);
+        Assert.Contains("22222222", screen.Lines[headers[1].index + 1]);
+        Assert.Contains("33333333", screen.Lines[headers[1].index + 2]);
+        Assert.DoesNotContain(screen.Lines, IsFooterLine);
+        Assert.Equal(scene.View.BoardPane.SuperView!.Viewport.Height, scene.View.BoardPane.Viewport.Height);
+    }
+
+    [Fact]
+    public async Task Navigation_HeadersAndFooter_AlwaysSelectsProjectQualifiedGoals()
+    {
+        using var projects = await Projects.CreateAsync();
+        using var scene = new Scene(projects);
+        await scene.RefreshAsync();
+        await scene.FocusBoardAsync();
+        AssertSelectedGoal(scene, "home", "11111111-home");
+        await scene.View.HandleKeyAsync(Key.CursorDown);
+        AssertSelectedGoal(scene, "alpha", "22222222-verified");
+
+        foreach (var key in new[] { Key.Home, Key.End, Key.CursorDown, Key.PageDown, Key.PageUp, Key.CursorUp })
+        {
+            await scene.View.HandleKeyAsync(key);
+            AssertSelectedGoal(scene);
+        }
+        // Pointer/programmatic selection enters through the same ValueChanged event.
+        foreach (var headerIndex in new[] { 0, 2 })
+        {
+            scene.View.BoardPane.SetSelection(0, headerIndex, false);
+            AssertSelectedGoal(scene);
+        }
+        scene.View.BoardPane.SetSelection(0, scene.View.BoardTable.Rows.Count, false);
+        AssertSelectedGoal(scene, "alpha", "33333333-active");
+        await scene.View.HandleKeyAsync(Key.End);
+        await scene.View.HandleKeyAsync(Key.CursorDown);
+        AssertSelectedGoal(scene, "alpha", "33333333-active");
+
+        // A refresh with the same id in both projects restores by (project, id).
+        await projects.AddGoalAsync(projects.Home, "33333333-active", GoalStatus.Active);
+        await scene.RefreshAsync();
+        AssertSelectedGoal(scene, "alpha", "33333333-active");
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task SingleProject_Screen_MatchesLegacyTableAndColumnStyles(bool projectLaunch)
+    {
+        using var projects = await Projects.CreateAsync();
+        using var scene = new Scene(projects, projectLaunch ? projects.Alpha : projects.Home);
+        if (!projectLaunch) Assert.True(scene.Source.HandleScope("alpha").Success);
+        await scene.RefreshAsync();
+        var actual = scene.CaptureBoard();
+        var board = scene.View.BoardPane;
+        Assert.Equal(Columns, scene.View.BoardTable.Columns.Cast<DataColumn>().Select(column => column.ColumnName));
+        Assert.Equal(new[] { "22222222", "", "alpha goal", "Normal", "waiting for gate (1st in queue)", "1m" },
+            scene.View.BoardTable.Rows[0].ItemArray.Cast<string>());
+        Assert.Equal(new[] { "33333333", "", "alpha goal", "Normal", "in progress: Developer", "1m" },
+            scene.View.BoardTable.Rows[1].ItemArray.Cast<string>());
+        Assert.Equal(new[] { 8, 4, 10, 8, 31, 3 }, Enumerable.Range(0, Columns.Length)
+            .Select(column => board.Style.GetOrCreateColumnStyle(column).MaxWidth));
+        Assert.Equal(new[] { true, true, true, false, true, true }, Enumerable.Range(0, Columns.Length)
+            .Select(column => board.Style.GetOrCreateColumnStyle(column).Visible));
+        Assert.DoesNotContain(actual.Lines, line => line.StartsWith("── ") || IsFooterLine(line));
+        Assert.Equal(board.SuperView!.Viewport.Height, board.Viewport.Height);
+
+        // Render the old plain TableView in the same window and geometry, without the subclass.
+        var parent = board.SuperView;
+        using var legacy = new TableView
+        {
+            Table = new DataTableSource(scene.View.BoardTable), Style = board.Style,
+            FullRowSelect = board.FullRowSelect, MaxCellWidth = board.MaxCellWidth,
+            Width = Dim.Fill(), Height = Dim.Fill()
+        };
+        legacy.SetSelection(0, board.Value!.SelectedCell.Y, false);
+        parent.Remove(board);
+        parent.Add(legacy);
+        try
+        {
+            var expected = scene.CaptureBoard(legacy);
+            Assert.Equal(actual.Bounds, expected.Bounds);
+            Assert.Equal(actual.Lines, expected.Lines);
+        }
+        finally { parent.Remove(legacy); parent.Add(board); }
+    }
+
+    [Fact]
+    public async Task EmptyProjects_Screen_ShowsDimmedDiagnosticFooterAndNoSelection()
+    {
+        using var projects = await Projects.CreateAsync();
+        await File.WriteAllTextAsync(projects.Beta.SqliteStatePath, "invalid SQLite data", Token);
+        using var scene = new Scene(projects);
+        Assert.True(scene.Source.HandleScope("alpha, beta").Success);
+        await scene.RefreshAsync();
+        var model = scene.Model;
+        scene.View.Render(model with { Board = [.. model.Board.Where(row => row.IsDiagnostic)] });
+
+        var screen = scene.CaptureBoard();
+
+        Assert.DoesNotContain(screen.Lines, line => line.StartsWith("── "));
+        Assert.Empty(scene.View.BoardTable.Rows);
+        Assert.Null(scene.View.SelectedGoalId);
+        Assert.Null(scene.View.SelectedProject);
+        Assert.StartsWith("stopped: alpha · unreadable: ", screen.Lines[^1]);
+        var diagnostic = Assert.Single(scene.Model.Board.Where(row => row.Dimmed)).Title;
+        var start = screen.Lines[^1].IndexOf("unreadable: ", StringComparison.Ordinal) + "unreadable: ".Length;
+        Assert.StartsWith(diagnostic[..Math.Min(diagnostic.Length, screen.Bounds.Width - start)], screen.Lines[^1][start..]);
+        Assert.Equal(scene.View.BoardPane.GetScheme().Disabled, screen.Attributes[screen.Lines.Length - 1, start]);
+        await scene.FocusBoardAsync();
+        foreach (var key in new[] { Key.Home, Key.End, Key.CursorDown, Key.PageDown })
+        {
+            await scene.View.HandleKeyAsync(key);
+            Assert.Null(scene.View.SelectedGoalId);
+            Assert.Null(scene.View.SelectedProject);
+        }
+    }
+
+    [Fact]
+    public async Task Scrolling_Screen_KeepsFooterFixedAndSelectionOnGoals()
+    {
+        using var projects = await Projects.CreateAsync();
+        using var scene = new Scene(projects);
+        await scene.RefreshAsync();
+        var home = scene.Model.Board.First(row => row.Project == "home" && !row.IsDiagnostic);
+        var alpha = scene.Model.Board.First(row => row.Project == "alpha" && !row.IsDiagnostic);
+        var goals = new[] { home, alpha }.SelectMany((row, project) => Enumerable.Range(0, 12)
+            .Select(index => row with
+            {
+                GoalId = $"{project + 7}{index:D7}-scroll", GoalPrefix = $"{project + 7}{index:D7}"
+            }));
+        scene.View.Render(scene.Model with
+        {
+            Board = [.. scene.Model.Board.Where(row => row.IsDiagnostic), .. goals]
+        });
+        await scene.FocusBoardAsync();
+        var first = scene.CaptureBoard();
+        Assert.Equal("stopped: beta", first.Lines[^1].TrimEnd());
+        await scene.View.HandleKeyAsync(Key.End);
+        AssertSelectedGoal(scene, "alpha", "80000011-scroll");
+        Assert.True(scene.View.BoardPane.RowOffset > 0);
+        var last = scene.CaptureBoard();
+        Assert.Equal(first.Bounds, last.Bounds);
+        Assert.Equal(first.Lines[^1], last.Lines[^1]);
+        Assert.Contains(last.Lines, line => line.Contains("80000011", StringComparison.Ordinal));
+        await scene.View.HandleKeyAsync(Key.PageUp);
+        AssertSelectedGoal(scene);
+        await scene.View.HandleKeyAsync(Key.PageDown);
+        AssertSelectedGoal(scene);
+    }
+
+    private static bool IsFooterLine(string line) =>
+        new[] { "running:", "idle:", "stopped:", "unreadable:" }.Any(line.StartsWith);
+
+    private static void AssertHeaderLine(string line, TableView pane)
+    {
+        Assert.StartsWith("── ", line);
+        Assert.DoesNotContain('│', line);
+        Assert.DoesNotContain('┃', line);
+        Assert.DoesNotContain('|', line);
+        // Terminal.Gui defaults SeparatorSymbol to a space; header prose still contains spaces.
+        if (!char.IsWhiteSpace(pane.SeparatorSymbol)) Assert.DoesNotContain(pane.SeparatorSymbol.ToString(), line);
+    }
+
+    private static void AssertSelectedGoal(Scene scene, string? project = null, string? id = null)
+    {
+        Assert.NotNull(scene.View.SelectedProject);
+        Assert.NotNull(scene.View.SelectedGoalId);
+        var index = scene.View.BoardPane.Value!.SelectedCell.Y;
+        Assert.InRange(index, 0, scene.View.BoardTable.Rows.Count - 1);
+        Assert.False(scene.Model.Board[index].IsDiagnostic);
+        Assert.Equal(scene.Model.Board[index].Project, scene.View.SelectedProject);
+        Assert.Equal(scene.Model.Board[index].GoalId, scene.View.SelectedGoalId);
+        if (project is not null) Assert.Equal(project, scene.View.SelectedProject);
+        if (id is not null) Assert.Equal(id, scene.View.SelectedGoalId);
+    }
 
     [Fact]
     public async Task AllProjects_Refresh_RendersOrderedHeadersAndRankedGoals()
@@ -29,22 +315,27 @@ public sealed class OwnerConsoleBoardSectionTests
             scene.Model.Board.Select(row => row.Project));
         var headers = scene.Model.Board.Where(row => row.IsDiagnostic).ToArray();
         Assert.Equal(new[] { "home", "alpha", "beta" }, headers.Select(row => row.Project));
-        Assert.Equal("home  conductor stopped  1 active  0 verified  last landed never", headers[0].Title);
-        Assert.Equal("alpha  conductor running  2 active  1 verified  last landed never", headers[1].Title);
-        Assert.Equal("beta  conductor stopped  0 active  0 verified  last landed never  no active goals", headers[2].Title);
+        Assert.Equal("home · conductor stopped · 1 active · last landed never", headers[0].Title);
+        Assert.Equal("alpha · conductor running · 2 active · 1 waiting for gate · last landed never", headers[1].Title);
+        Assert.Equal("beta · conductor stopped · 0 active · last landed never", headers[2].Title);
         Assert.Equal(new[] { "11111111-home", "22222222-verified", "33333333-active" },
             scene.Model.Board.Where(row => !row.IsDiagnostic).Select(row => row.GoalId));
         Assert.Equal(Columns, scene.View.BoardTable.Columns.Cast<DataColumn>().Select(column => column.ColumnName));
         Assert.Equal(Columns, scene.View.BoardPane.Table!.ColumnNames);
-        for (var index = 0; index < scene.Model.Board.Length; index++)
+        Assert.Equal(5, scene.View.BoardTable.Rows.Count);
+        var pane = Assert.IsType<OwnerConsoleBoardPane>(scene.View.BoardPane);
+        Assert.Equal(new[] { 0, 2 }, pane.Headers.Keys.Order());
+        Assert.Equal("── home · conductor stopped · 1 active · last landed never ──", pane.Headers[0]);
+        Assert.Equal("stopped: beta", string.Concat(OwnerConsoleBoardSection.Footer(scene.Model).Select(segment => segment.Text)));
+        for (var index = 0; index < scene.View.BoardTable.Rows.Count; index++)
         {
-            Assert.Equal(scene.Model.Board[index].Title, scene.View.BoardTable.Rows[index]["TITLE"]);
             if (scene.Model.Board[index].IsDiagnostic)
             {
                 Assert.Empty(scene.Model.Board[index].GoalId);
                 Assert.False(scene.Model.Board[index].Dimmed);
-                Assert.Equal("", scene.View.BoardTable.Rows[index]["AGE"]);
+                Assert.All(scene.View.BoardTable.Rows[index].ItemArray, cell => Assert.Equal("", cell));
             }
+            else Assert.Equal(scene.Model.Board[index].Title, scene.View.BoardTable.Rows[index]["TITLE"]);
         }
     }
 
@@ -76,7 +367,8 @@ public sealed class OwnerConsoleBoardSectionTests
 
         var header = Assert.Single(scene.Model.Board.Where(row => row.Project == "beta"));
         Assert.True(header.IsDiagnostic);
-        Assert.Equal("beta  conductor idle  0 active  0 verified  last landed 2h  no active goals", header.Title);
+        Assert.Equal("beta · conductor idle · 0 active · last landed 2h", header.Title);
+        Assert.Equal("idle: beta", string.Concat(OwnerConsoleBoardSection.Footer(scene.Model).Select(segment => segment.Text)));
         Assert.DoesNotContain(scene.Model.Board, row => row.GoalId == "44444444-landed");
     }
 
@@ -261,7 +553,7 @@ public sealed class OwnerConsoleBoardSectionTests
         Assert.Equal(new[] { "alpha", "home", "beta" }, scene.Model.BoardScope.Sections);
         Assert.Equal(new[] { "alpha", "home", "beta" },
             scene.Model.Board.Where(row => row.IsDiagnostic).Select(row => row.Project));
-        Assert.Equal("alpha  conductor running  2 active  1 verified  last landed 2h", scene.Model.Board[0].Title);
+        Assert.Equal("alpha · conductor running · 2 active · 1 waiting for gate · last landed 2h", scene.Model.Board[0].Title);
         Assert.False(scene.Model.Board[0].Dimmed);
         Assert.Equal(goals, scene.Model.Board.Where(row => row.Project == "alpha" && !row.IsDiagnostic));
         Assert.All(scene.Model.Board.Where(row => row.Project == "alpha"), row => Assert.False(row.IsForeign));
@@ -277,10 +569,10 @@ public sealed class OwnerConsoleBoardSectionTests
 
         var arranged = OwnerConsoleBoardSection.Arrange(model);
 
-        Assert.Equal(new[] { "home", "home", "beta", "alpha", "alpha", "alpha" },
+        Assert.Equal(new[] { "home", "home", "alpha", "alpha", "alpha", "beta" },
             arranged.Board.Select(row => row.Project));
         Assert.Equal(model.Board.Length, arranged.Board.Length);
-        Assert.Equal(model.Board.Where(row => row.Project == "alpha"), arranged.Board.Skip(3));
+        Assert.Equal(model.Board.Where(row => row.Project == "alpha"), arranged.Board.Skip(2).Take(3));
         Assert.Equal(arranged.Board, OwnerConsoleBoardSection.Arrange(arranged).Board);
     }
 
@@ -330,7 +622,7 @@ public sealed class OwnerConsoleBoardSectionTests
             catch { projects.Dispose(); throw; }
         }
 
-        private OrchestratorWorkspace Register(string name)
+        internal OrchestratorWorkspace Register(string name)
         {
             var root = Path.Combine(_root, "repos", name);
             Directory.CreateDirectory(root);
@@ -364,7 +656,7 @@ public sealed class OwnerConsoleBoardSectionTests
             File.WriteAllText(Registry.RegistryPath, registry.ToJsonString());
         }
 
-        private async Task SaveAsync(OrchestratorWorkspace workspace, AgentOrchestratorKernel kernel)
+        internal async Task SaveAsync(OrchestratorWorkspace workspace, AgentOrchestratorKernel kernel)
         {
             Directory.CreateDirectory(Path.GetDirectoryName(workspace.SqliteStatePath)!);
             _ = StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath);
@@ -421,7 +713,77 @@ public sealed class OwnerConsoleBoardSectionTests
             Assert.Equal(OwnerConsolePane.Board, View.FocusedPane);
         }
 
+        internal BoardScreen CaptureBoard(TableView? board = null, bool focusBoard = false)
+        {
+            board ??= View.BoardPane;
+            using var app = Application.Create();
+            OwnerConsoleFrameOutputInstaller.RequireFactoryMember(app.GetType()).SetValue(app, new ScreenFactory());
+            app.Init();
+            Assert.NotNull(app.Driver);
+            Assert.Equal(new Size(160, 40), app.Driver.Screen.Size);
+            // The in-memory terminal has fixed capabilities; complete discovery without a native reply or timeout.
+            if (app.Driver.AnsiStartupGate is { } startup)
+                foreach (var query in startup.PendingQueries.ToArray()) startup.MarkComplete(query);
+            var session = app.Begin(View.Window);
+            try
+            {
+                if (focusBoard)
+                {
+                    board.SetFocus();
+                    Assert.True(board.HasFocus);
+                }
+                app.LayoutAndDraw(forceRedraw: true);
+                var bounds = board.FrameToScreen();
+                bounds.Size = new Size(board.Viewport.Width, board.SuperView!.Viewport.Height);
+                Assert.True(bounds.Width > 100);
+                Assert.True(bounds.Height > 5);
+                var cells = app.Driver.Contents!;
+                var lines = new string[bounds.Height];
+                var attributes = new Terminal.Gui.Drawing.Attribute?[bounds.Height, bounds.Width];
+                for (var y = 0; y < bounds.Height; y++)
+                {
+                    var text = new System.Text.StringBuilder();
+                    for (var x = 0; x < bounds.Width; x++)
+                    {
+                        var cell = cells[bounds.Y + y, bounds.X + x];
+                        text.Append(string.IsNullOrEmpty(cell.Grapheme) ? " " : cell.Grapheme);
+                        attributes[y, x] = cell.Attribute;
+                    }
+                    lines[y] = text.ToString();
+                }
+                return new(bounds, lines, attributes);
+            }
+            finally { app.End(session); }
+        }
+
         public void Dispose() { View.Dispose(); _app.Dispose(); }
+    }
+
+    private sealed record BoardScreen(Rectangle Bounds, string[] Lines, Terminal.Gui.Drawing.Attribute?[,] Attributes);
+
+    // Use the pinned factory seam; never initialize native console input or infer rows from the model.
+    private sealed class ScreenFactory() : AnsiComponentFactory(
+        output: new OwnerConsoleFrameReproductionTests.RecordingOutput(160, 40) { RecordOnly = true },
+        sizeMonitor: new FixedSizeMonitor())
+    {
+        public override IInput<char> CreateInput() => new NoInput();
+    }
+
+    private sealed class NoInput : IInput<char>
+    {
+        public CancellationTokenSource? ExternalCancellationTokenSource { get; set; }
+        public void Initialize(ConcurrentQueue<char> inputBuffer) { }
+        public void Run(CancellationToken cancellationToken) => cancellationToken.WaitHandle.WaitOne();
+        public void Dispose() { }
+    }
+
+    private sealed class FixedSizeMonitor : ISizeMonitor
+    {
+        public bool InitialSizeReceived => true;
+        public int InitialCursorRow => 0;
+        public event EventHandler<SizeChangedEventArgs>? SizeChanged { add { } remove { } }
+        public void Initialize(IDriver driver) => driver.SetScreenSize(160, 40);
+        public bool Poll() => false;
     }
 
     private sealed class Epics : IOwnerGoalEpicLookup

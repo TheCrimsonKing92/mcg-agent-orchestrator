@@ -110,7 +110,7 @@ public sealed class TaskIntentDispatchAdmissionTests
     }
 
     [Xunit.Fact]
-    public async Task RejectedIntent_OldPreparationStaysFenced_FreshAdmissionIsReleased()
+    public async Task RejectedIntent_OldAndFreshPreparationsAreReleased()
     {
         using var seed = new Scenario();
         var before = seed.Store.CaptureAdmission(seed.Goal.Id.Value, seed.Task.Id.Value);
@@ -118,11 +118,122 @@ public sealed class TaskIntentDispatchAdmissionTests
         await seed.Store.ClaimNextAsync(seed.Goal.Id.Value, "test-owner");
         await seed.Store.CompleteAsync(intent.Id, "test-owner", OperatorIntentStatus.Rejected, "stale precondition", seed.Now);
         Xunit.Assert.Empty(seed.Store.ListHeldTaskIds(seed.Goal.Id.Value));
-        var denial = Xunit.Assert.Throws<TaskIntentDispatchSuppressedException>(() =>
+        Xunit.Assert.Throws<ProbeReached>(() =>
             TaskIntentAdmission.Launch(before, "stale", () => throw new ProbeReached()));
-        Xunit.Assert.Equal("task-admission-version-changed", denial.Receipt.Reason);
         var fresh = seed.Store.CaptureAdmission(seed.Goal.Id.Value, seed.Task.Id.Value);
         Xunit.Assert.Throws<ProbeReached>(() => TaskIntentAdmission.Launch(fresh, "fresh", () => throw new ProbeReached()));
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(OperatorIntentStatus.Rejected)]
+    [Xunit.InlineData(OperatorIntentStatus.Applied)]
+    public async Task RunningCheckpoint_WaitsOutsideAdmissionLocks_ThenUsesResolvedOutcome(OperatorIntentStatus status)
+    {
+        using var seed = new Scenario();
+        var reference = seed.Store.CaptureAdmission(seed.Goal.Id.Value, seed.Task.Id.Value) with { DispatchedAt = seed.Now };
+        seed.Store.BindPreparedAdmission(reference, seed.Now);
+        var actions = 0;
+        TaskIntentAdmission.ExecuteAuthorized(reference, "initial", () => actions++);
+        var intent = await seed.Store.EnqueueAsync(seed.Intent(OperatorIntentVerbs.Adjudicate));
+        await seed.Store.ClaimNextAsync(seed.Goal.Id.Value, "owner");
+        var events = new List<TaskIntentAdmissionEvent>();
+        var clock = new AdmissionClock();
+        var delays = 0;
+        var waiter = new RunningDispatchIntentWait(clock, interval =>
+        {
+            delays++;
+            // Enqueue takes the task mutex on another thread; this is also a lock-release probe.
+            seed.Store.EnqueueAsync(intent).GetAwaiter().GetResult();
+            seed.Store.CompleteAsync(intent.Id, "owner", status, "task-not-retryable", seed.Now).GetAwaiter().GetResult();
+            clock.Advance(interval);
+        }, events.Add);
+
+        if (status == OperatorIntentStatus.Applied)
+        {
+            var denial = Xunit.Assert.Throws<TaskIntentDispatchSuppressedException>(() =>
+                waiter.Execute(reference, "running", () => actions++));
+            Xunit.Assert.Equal(intent.Id, denial.Receipt.IntentId);
+            Xunit.Assert.Equal("task-admission-version-changed", denial.Receipt.Reason);
+            Xunit.Assert.Equal(1, actions);
+            Xunit.Assert.Empty(events);
+        }
+        else
+        {
+            waiter.Execute(reference, "running", () => actions++);
+            // A new helper/callback still uses durable deduplication across checkpoints.
+            new RunningDispatchIntentWait(clock, _ => throw new ProbeReached(), events.Add)
+                .Execute(reference, "again", () => actions++);
+            Xunit.Assert.Equal(3, actions);
+            var continued = Xunit.Assert.Single(events);
+            Xunit.Assert.Equal("continued", continued.Kind);
+            Xunit.Assert.Equal(intent.Id, continued.IntentId);
+            Xunit.Assert.Equal("task-not-retryable", continued.Outcome);
+            var stored = await new SqliteRunEventStore(seed.Workspace.RunEventStorePath)
+                .ReadSinceAsync(goalId: reference.GoalId);
+            Xunit.Assert.Single(stored, item => item.EventType == "task-intent.dispatch" && item.Operation == "continued");
+        }
+        Xunit.Assert.Equal(1, delays);
+    }
+
+    [Xunit.Fact]
+    public async Task RunningCheckpoint_UnresolvedIntentsShareDeadline_ThenDeferWithoutSuppression()
+    {
+        using var seed = new Scenario();
+        var reference = seed.Store.CaptureAdmission(seed.Goal.Id.Value, seed.Task.Id.Value);
+        var first = await seed.Store.EnqueueAsync(seed.Intent(OperatorIntentVerbs.Progress));
+        await seed.Store.ClaimNextAsync(seed.Goal.Id.Value, "owner");
+        var clock = new AdmissionClock();
+        var events = new List<TaskIntentAdmissionEvent>();
+        OperatorIntentRecord? second = null;
+        var actions = 0;
+        var waiter = new RunningDispatchIntentWait(clock, _ =>
+        {
+            // Replace the barrier halfway through the same window. The second intent
+            // must not restart the deadline. No elapsed wall-clock time decides this test.
+            if (second is null)
+            {
+                seed.Store.CompleteAsync(first.Id, "owner", OperatorIntentStatus.Rejected, "stale", seed.Now).GetAwaiter().GetResult();
+                second = seed.Store.EnqueueAsync(seed.Intent(OperatorIntentVerbs.Adjudicate)).GetAwaiter().GetResult();
+                clock.Advance(RunningDispatchIntentWait.MaxRunningWait / 2);
+            }
+            else clock.Advance(RunningDispatchIntentWait.MaxRunningWait / 2);
+        }, events.Add);
+        waiter.Execute(reference, "defer", () => actions++);
+        Xunit.Assert.Equal(1, actions);
+        var deferred = Xunit.Assert.Single(events, item => item.Kind == "deferred");
+        Xunit.Assert.Equal(first.Id, Xunit.Assert.Single(events, item => item.Kind == "continued").IntentId);
+        Xunit.Assert.Equal(second!.Id, deferred.IntentId);
+        Xunit.Assert.Equal(RunningDispatchIntentWait.MaxRunningWait.TotalMilliseconds, deferred.WaitedMilliseconds);
+        Xunit.Assert.Null(seed.Store.GetSuppression("defer"));
+
+        await seed.Store.ClaimNextAsync(seed.Goal.Id.Value, "owner");
+        await seed.Store.CompleteAsync(second.Id, "owner", OperatorIntentStatus.Applied, "applied", seed.Now);
+        Xunit.Assert.Throws<TaskIntentDispatchSuppressedException>(() =>
+            waiter.Execute(reference, "after-defer", () => actions++));
+        Xunit.Assert.Equal(1, actions);
+    }
+
+    [Xunit.Fact]
+    public async Task RunningCheckpoint_EventWriteFails_ActionHasNotRun()
+    {
+        using var seed = new Scenario();
+        var reference = seed.Store.CaptureAdmission(seed.Goal.Id.Value, seed.Task.Id.Value);
+        var intent = await seed.Store.EnqueueAsync(seed.Intent(OperatorIntentVerbs.Adjudicate));
+        await seed.Store.ClaimNextAsync(seed.Goal.Id.Value, "owner");
+        await seed.Store.CompleteAsync(intent.Id, "owner", OperatorIntentStatus.Rejected, "task-not-retryable", seed.Now);
+        _ = new SqliteRunEventStore(seed.Workspace.RunEventStorePath);
+        using var conn = new SqliteConnection(new SqliteConnectionStringBuilder
+            { DataSource = seed.Workspace.RunEventStorePath, Pooling = false }.ToString());
+        conn.Open();
+        using var command = conn.CreateCommand();
+        command.CommandText = "CREATE TRIGGER deny_events BEFORE INSERT ON run_events BEGIN SELECT RAISE(ABORT, 'event-write-failed'); END";
+        command.ExecuteNonQuery();
+        var actions = 0;
+        var failure = Xunit.Assert.Throws<SqliteException>(() =>
+            TaskIntentAdmission.ExecuteAuthorized(reference, "event-failure", () => actions++));
+        Xunit.Assert.Contains("event-write-failed", failure.Message);
+        Xunit.Assert.Equal(0, actions);
+        Xunit.Assert.Null(seed.Store.GetSuppression("event-failure"));
     }
 
     [Xunit.Fact]
@@ -235,7 +346,7 @@ public sealed class TaskIntentDispatchAdmissionTests
         var current = seed.Store.CaptureAdmission(seed.Goal.Id.Value, seed.Task.Id.Value);
         seed.Store.BindPreparedAdmission(current, at); // duplicate preparation cannot relabel an old attempt
         Xunit.Assert.Equal(old.Version, seed.Reopen().GetPreparedAdmission(old.GoalId, old.TaskId, at).Version);
-        Xunit.Assert.NotNull(seed.Store.RecordSuppression(old, "old-preparation"));
+        Xunit.Assert.Null(seed.Store.RecordSuppression(old, "old-preparation"));
         seed.Store.BindPreparedAdmission(current, at.AddTicks(1));
         Xunit.Assert.Null(seed.Store.RecordSuppression(seed.Reopen().GetPreparedAdmission(old.GoalId, old.TaskId, at.AddTicks(1)), "new-preparation"));
     }
@@ -565,6 +676,14 @@ public sealed class TaskIntentDispatchAdmissionTests
     }
 
     private sealed class ProbeReached : Exception { }
+
+    private sealed class AdmissionClock : TimeProvider
+    {
+        private long _ticks;
+        public override long TimestampFrequency => TimeSpan.TicksPerSecond;
+        public override long GetTimestamp() => _ticks;
+        internal void Advance(TimeSpan interval) => _ticks += interval.Ticks;
+    }
 
     private sealed class Scenario : IDisposable, IClock
     {
