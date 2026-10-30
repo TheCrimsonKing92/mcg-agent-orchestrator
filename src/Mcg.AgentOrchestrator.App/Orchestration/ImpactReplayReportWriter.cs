@@ -26,6 +26,8 @@ internal static class ImpactReplayReportWriter
         text.AppendLine($"Unreplayable attempts: {report.UnreplayableAttempts.Count}");
         text.AppendLine($"Skipped inputs: {report.SkippedInputs.Count}");
         text.AppendLine($"Incomplete miss checks: {report.Attempts.Count(attempt => !attempt.MissCheckComplete)}");
+        if (report.AttemptsGainingChangedTestClasses > 0)
+            text.AppendLine($"Attempts whose selection gained changed test classes: {report.AttemptsGainingChangedTestClasses}");
         var shares = report.Attempts.Select(attempt => attempt.ShareOfLanesSkipped).Order().ToArray();
         text.AppendLine($"Median share of lanes skipped: {Percent(NearestRank(shares, 0.5))}");
         text.AppendLine($"P90 share of lanes skipped: {Percent(NearestRank(shares, 0.9))}");
@@ -51,6 +53,20 @@ internal static class ImpactReplayReportWriter
                 text.AppendLine($"| {Cell(miss.AttemptId)} | {Cell(miss.Failure.ClassName)} | {Cell(miss.Failure.Lane!)} |");
         }
         text.AppendLine();
+        var flakes = report.Attempts.SelectMany(attempt => attempt.FailingClasses
+            .Where(failure => failure.IsFlakyFailureInSkippedLane)
+            .Select(failure => (attempt.AttemptId, failure.ClassName, failure.Lane, failure.FlakeEvidence)))
+            .DistinctBy(item => (item.AttemptId, item.Lane, item.ClassName)).ToArray();
+        if (flakes.Length > 0)
+        {
+            text.AppendLine("## Flaky failures in skipped lanes");
+            text.AppendLine();
+            text.AppendLine("| Attempt | Class | Lane | Evidence |");
+            text.AppendLine("| --- | --- | --- | --- |");
+            foreach (var flake in flakes)
+                text.AppendLine($"| {Cell(flake.AttemptId)} | {Cell(flake.ClassName)} | {Cell(flake.Lane!)} | {Cell(flake.FlakeEvidence!)} |");
+            text.AppendLine();
+        }
         text.AppendLine("## Attempts");
         text.AppendLine();
         text.AppendLine("| Attempt | Selection | Lanes ran | Would run | Skipped | Estimated seconds saved |");

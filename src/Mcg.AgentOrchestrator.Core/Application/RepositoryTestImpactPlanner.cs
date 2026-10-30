@@ -62,7 +62,7 @@ public sealed record RepositoryTestImpactPlan(
 
 public static partial class RepositoryTestImpactPlanner
 {
-    private sealed record TestClassFilterBuildResult(
+    internal sealed record TestClassFilterBuildResult(
         string? Filter,
         string? AbandonReason,
         IReadOnlyList<string> TestClasses);
@@ -196,14 +196,7 @@ public static partial class RepositoryTestImpactPlanner
             StartsWith(file.Path, "tests/Mcg.AgentOrchestrator.Core.Tests/"));
         const string acceptanceTestsPrefix = "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Acceptance/";
         const string cliTestsPrefix = "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Cli/";
-        var cliTestSources = summary.Files.Where(file => StartsWith(file.Path, cliTestsPrefix) &&
-            file.Path.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)).ToArray();
-        var nestedTestSources = summary.Files.Where(file =>
-            RepositoryTestImpactPlannerNestedProjects.Routes.Any(route => StartsWith(file.Path, route.Prefix))).ToArray();
-        var nonCliSummary = summary with
-        {
-            Files = summary.Files.Except(cliTestSources).Except(nestedTestSources).ToArray()
-        };
+        var (nonCliSummary, cliTestSources, nestedTestSources) = PartitionTestSources(summary);
         var touchesAcceptanceTests = summary.Files.Any(file => StartsWith(file.Path, acceptanceTestsPrefix));
         var touchesInfrastructure = nonCliSummary.Files.Any(file =>
             StartsWith(file.Path, "src/Mcg.AgentOrchestrator.Infrastructure/") ||
@@ -469,6 +462,26 @@ public static partial class RepositoryTestImpactPlanner
 
     private static bool StartsWith(string path, string prefix) =>
         path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase);
+
+    internal static TestClassFilterBuildResult ReadChangedInfrastructureTestClasses(
+        IEnumerable<string> changedPaths, string repositoryRoot)
+    {
+        var (summary, _, _) = PartitionTestSources(RepositoryChangeClassifier.Classify(changedPaths));
+        return BuildChangedTestClassFilter(summary, "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/",
+            new FileSystemTestClassDeclarationReader(repositoryRoot),
+            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Acceptance/");
+    }
+
+    private static (RepositoryChangeSummary Infrastructure, RepositoryChangedFile[] Cli,
+        RepositoryChangedFile[] Nested) PartitionTestSources(RepositoryChangeSummary summary)
+    {
+        var cli = summary.Files.Where(file =>
+            StartsWith(file.Path, "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Cli/") &&
+            file.Path.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)).ToArray();
+        var nested = summary.Files.Where(file =>
+            RepositoryTestImpactPlannerNestedProjects.Routes.Any(route => StartsWith(file.Path, route.Prefix))).ToArray();
+        return (summary with { Files = summary.Files.Except(cli).Except(nested).ToArray() }, cli, nested);
+    }
 
     private static TestClassFilterBuildResult BuildChangedTestClassFilter(
         RepositoryChangeSummary summary,

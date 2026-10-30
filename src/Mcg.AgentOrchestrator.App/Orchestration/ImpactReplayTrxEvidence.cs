@@ -67,7 +67,7 @@ internal static class ImpactReplayTrxEvidence
         return (ran, failures.Distinct().ToArray(), warnings);
     }
 
-    private static string? ResolveClass(string? identity, IReadOnlyList<AcceptanceTestClassDescriptor> classes)
+    internal static string? ResolveClass(string? identity, IReadOnlyList<AcceptanceTestClassDescriptor> classes)
     {
         if (string.IsNullOrWhiteSpace(identity)) return null;
         var normalized = AcceptanceTrxTestIdentityResolver.NormalizeSelector(identity);

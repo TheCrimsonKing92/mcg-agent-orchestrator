@@ -6,4 +6,5 @@ internal sealed record ImpactReplayReport(
     IReadOnlyList<ImpactReplayAttemptRecord> Attempts,
     IReadOnlyList<ImpactReplayDiagnostic> SkippedInputs,
     IReadOnlyList<ImpactReplayDiagnostic> UnreplayableAttempts,
-    IReadOnlyList<string> CleanupErrors);
+    IReadOnlyList<string> CleanupErrors,
+    int AttemptsGainingChangedTestClasses = 0);
