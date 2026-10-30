@@ -16,7 +16,7 @@ public sealed class CliAuthorDraftCommandTestsHouseConventions
     public void House_draft_without_planner_section_passes_all_eight_checks(string newline)
     {
         var checks = Run(HouseDraft.ReplaceLineEndings(newline));
-        Assert.Equal(new[] { "sections", "criteria-present", "owner-sentence", "premise-citations", "numbered-criteria", "developer-deferred-criterion", "build-item-count", "post-landing-criterion", "new-partial-file", "pre-change-failure-criterion" },
+        Assert.Equal(new[] { "sections", "criteria-present", "owner-sentence", "premise-citations", "numbered-criteria", "developer-deferred-criterion", "build-item-count", "post-landing-criterion", "new-partial-file", "pre-change-failure-criterion", "modification-targets", "ratchet-rows" },
             checks.Select(check => check.Name).ToArray());
         Assert.All(checks, check => Assert.True(check.Passed, check.Detail));
     }
@@ -104,7 +104,8 @@ public sealed class CliAuthorDraftCommandTestsHouseConventions
         var checks = Run(markdown);
         foreach (var name in HouseChecks)
             Assert.False(Assert.Single(checks, check => check.Name == name).Passed, name);
-        Assert.All(checks.Where(check => !HouseChecks.Contains(check.Name)),
+        Assert.False(Assert.Single(checks, check => check.Name == "modification-targets").Passed);
+        Assert.All(checks.Where(check => !HouseChecks.Contains(check.Name) && check.Name != "modification-targets"),
             check => Assert.True(check.Passed, check.Detail));
         Assert.Contains("Observed 6 numbered build items", Assert.Single(checks, check => check.Name == "build-item-count").Detail);
         Assert.Contains("Observed 7 declared criteria", Assert.Single(checks, check => check.Name == "developer-deferred-criterion").Detail);
