@@ -23,7 +23,7 @@ public sealed class ProviderLimitSignalsTests
     {
         // Baseline 4d1d7767f: DispatchOutcomeClassifyTests.ClassifyRecoverableSubscriptionLimitFromStderr.
         // Its 42s input takes the original CompletedAt.Add(retryAfterDelay) return path.
-        const string line = "ERROR: Rate limit reached for gpt-5.5. Please try again in 42s.";
+        const string line = "ERROR: Rate limit reached for gpt-5.5. Please try again in 42s."; // Deliberate fixture text pins historical/parser behavior independently of the live catalog.
         var verification = Verification(stderr: line);
 
         Assert.True(ProviderLimitSignals.TryGetRelativeRetryAfter(line, out var delay));
