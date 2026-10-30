@@ -12,7 +12,7 @@ public sealed class ProviderBudgetHoldMemo
         (bool Found, ProviderBudgetExhaustionHold Hold)> _results = new();
 
     public ProviderBudgetHoldMemo(IReadOnlyCollection<Goal> goals)
-        : this(goals, DispatchFailureClassifier.TryGetProviderBudgetExhaustionHold)
+        : this(goals, ProviderLimitSignals.TryGetProviderBudgetExhaustionHold)
     {
     }
 

@@ -37,8 +37,8 @@ public sealed class ProviderHoldHistoryTests
         var history = new ProviderHoldHistory();
         history.Retain([first, second], [Observed("z", true, "Anthropic", @"C:\login-a", 20)]);
         Assert.Equal(second.Id, Assert.Single(history.Retained).Id);
-        Assert.False(DispatchFailureClassifier.TryGetProviderBudgetExhaustionHold(history.Scope([]), "Anthropic", @"C:\login-a", out _));
-        Assert.True(DispatchFailureClassifier.TryGetProviderBudgetExhaustionHold(history.Scope([]), "Anthropic", @"C:\login-b", out _));
+        Assert.False(ProviderLimitSignals.TryGetProviderBudgetExhaustionHold(history.Scope([]), "Anthropic", @"C:\login-a", out _));
+        Assert.True(ProviderLimitSignals.TryGetProviderBudgetExhaustionHold(history.Scope([]), "Anthropic", @"C:\login-b", out _));
     }
 
     [Fact]
@@ -102,13 +102,13 @@ public sealed class ProviderHoldHistoryTests
         kernel.RefreshTrackedGoals(snapshot with { Goals = snapshot.Goals.Select(goal => goal with { Status = GoalStatus.Cancelled }).ToArray() });
         Assert.Empty(kernel.Goals);
         Assert.Equal(GoalStatus.Cancelled, Assert.Single(kernel.ProviderHoldHistory.Retained).Status);
-        Assert.True(DispatchFailureClassifier.TryGetProviderBudgetExhaustionHold(kernel.ProviderHoldScope, "xAI", null, out var hold));
+        Assert.True(ProviderLimitSignals.TryGetProviderBudgetExhaustionHold(kernel.ProviderHoldScope, "xAI", null, out var hold));
         Assert.Equal(source.Id, hold.SourceGoalId);
         Assert.Empty(kernel.ExportSnapshot().Goals);
     }
 
     private static bool Held(IReadOnlyCollection<Goal> scope) =>
-        DispatchFailureClassifier.TryGetProviderBudgetExhaustionHold(scope, "xAI", null, out _);
+        ProviderLimitSignals.TryGetProviderBudgetExhaustionHold(scope, "xAI", null, out _);
 
     private static ModelFitHistoryRow Row(string id, string provider, int minute, bool exhausted = false) =>
         new(id, "task", AgentRole.Tester, provider, "fixture", null, null,

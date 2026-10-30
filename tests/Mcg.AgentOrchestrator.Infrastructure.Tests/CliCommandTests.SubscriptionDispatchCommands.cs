@@ -2771,7 +2771,7 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
         Xunit.Assert.Contains("--confirm-limit-review <note>", blocked.Message);
         Xunit.Assert.Contains("--confirm-limit-review <note>", missingNote.Message);
         Xunit.Assert.True(changed);
-        Xunit.Assert.False(DispatchFailureClassifier.RequiresSubscriptionLimitReview(task));
+        Xunit.Assert.False(ProviderLimitSignals.RequiresSubscriptionLimitReview(task));
         Xunit.Assert.Equal("Reviewed profile and timing.", task.SubscriptionLimitReviewNote);
         Xunit.Assert.Equal(2, task.SubscriptionLimitReviewedFailureCount);
         Xunit.Assert.Equal(WorkTaskStatus.Running, task.Status);
@@ -2851,7 +2851,7 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
 
         Xunit.Assert.True(changed);
         Xunit.Assert.Equal(note, task.SubscriptionLimitReviewNote);
-        Xunit.Assert.False(DispatchFailureClassifier.RequiresSubscriptionLimitReview(task));
+        Xunit.Assert.False(ProviderLimitSignals.RequiresSubscriptionLimitReview(task));
     }
 
 

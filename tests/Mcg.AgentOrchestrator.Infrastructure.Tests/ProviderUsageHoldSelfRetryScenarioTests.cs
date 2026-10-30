@@ -47,7 +47,7 @@ public sealed class ProviderUsageHoldSelfRetryScenarioTests
         Assert.Equal(goal.Tasks.Single().Id, Assert.Single(scenario.ProbeNotes()).TaskId);
         scenario.At("2026-10-17T11:40:00Z");
         scenario.Finish(goal, 0, "Success", "");
-        Assert.False(DispatchFailureClassifier.TryGetProviderBudgetExhaustionHold(scenario.Kernel.Goals, "xAI", null, out _));
+        Assert.False(ProviderLimitSignals.TryGetProviderBudgetExhaustionHold(scenario.Kernel.Goals, "xAI", null, out _));
         Assert.Equal(2, scenario.PrimaryDispatches());
         Assert.DoesNotContain(scenario.Current(goal).Timeline, evt => evt.Kind == ProgressKind.ProviderHoldSubstituted);
         Assert.Empty(scenario.Escalations);
@@ -182,7 +182,7 @@ public sealed class ProviderUsageHoldSelfRetryScenarioTests
                 new("grok-cli", "fixture", scenario.Workspace.ResolveExecutionDirectory(success.Id), scenario.Clock.UtcNow, ProviderName: "xAI"));
             scenario.At("2026-10-17T11:08:20Z");
             scenario.Finish(success, 0, "Success", "");
-            Assert.False(DispatchFailureClassifier.TryGetProviderBudgetExhaustionHold(scenario.Kernel.Goals, "xAI", null, out _));
+            Assert.False(ProviderLimitSignals.TryGetProviderBudgetExhaustionHold(scenario.Kernel.Goals, "xAI", null, out _));
         }
         scenario.At("2026-10-17T11:09:00Z");
         if (row == "already-substituted")
@@ -280,7 +280,7 @@ public sealed class ProviderUsageHoldSelfRetryScenarioTests
         {
             get
             {
-                Assert.True(DispatchFailureClassifier.TryGetProviderBudgetExhaustionHold(Kernel.Goals, "xAI", null, out var hold));
+                Assert.True(ProviderLimitSignals.TryGetProviderBudgetExhaustionHold(Kernel.Goals, "xAI", null, out var hold));
                 return hold;
             }
         }

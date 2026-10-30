@@ -158,7 +158,7 @@ public sealed class SubscriptionCooldownSubstitutionTests
         Assert.Equal(scenario.Alternate.Id, task.AssignedAgentId);
         scenario.Clock.UtcNow = scenario.Clock.UtcNow.AddMinutes(1);
         scenario.Limit(goal, provider: "OpenAI");
-        Assert.True(DispatchFailureClassifier.RequiresSubscriptionLimitReview(task));
+        Assert.True(ProviderLimitSignals.RequiresSubscriptionLimitReview(task));
         scenario.Kernel.AcknowledgeSubscriptionLimitReview(goal.Id, task.Id,
             "Acknowledge repeated limits to isolate the automatic substitution bound.");
         var third = Scenario.Agent("third", "Ollama", "codex-oss-cli", "qwen3-coder");

@@ -36,11 +36,11 @@ public sealed class ProviderBudgetExhaustionClassifierTests : WorkerDispatchTest
         Assert.Contains("source=stdout", outcome.EvidenceSummary, StringComparison.Ordinal);
         Assert.Contains("evidence=Credit balance is too low", outcome.EvidenceSummary, StringComparison.Ordinal);
 
-        Assert.True(DispatchFailureClassifier.TryGetProviderBudgetExhaustionHold(
+        Assert.True(ProviderLimitSignals.TryGetProviderBudgetExhaustionHold(
             kernel.Goals, "AnthropicApi", credentialBinding: null, out var hold));
         Assert.Equal(task.Id, hold.SourceTaskId);
         Assert.Equal("anthropicapi::<provider-default>", hold.BindingKey);
-        Assert.False(DispatchFailureClassifier.TryGetProviderBudgetExhaustionHold(
+        Assert.False(ProviderLimitSignals.TryGetProviderBudgetExhaustionHold(
             kernel.Goals, "Anthropic", credentialBinding: null, out _));
 
         var schedule = ProviderBudgetHoldSchedules.Evaluate(kernel.Goals, hold, verification.CompletedAt);
@@ -259,7 +259,7 @@ public sealed class ProviderBudgetExhaustionClassifierTests : WorkerDispatchTest
         Assert.Equal(ProviderFailureKind.Unknown, failureKind);
         Assert.Equal(DispatchOutcomeKind.UnknownFailure, outcome.Kind);
         Assert.Contains("rule=required-file-change-evidence-missing", outcome.ClassifierReceipt, StringComparison.Ordinal);
-        Assert.False(DispatchFailureClassifier.TryGetProviderBudgetExhaustionHold(
+        Assert.False(ProviderLimitSignals.TryGetProviderBudgetExhaustionHold(
             kernel.Goals,
             "xAI",
             credentialBinding: null,
@@ -334,14 +334,14 @@ public sealed class ProviderBudgetExhaustionClassifierTests : WorkerDispatchTest
         var restored = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot());
         var restoredRecoveryGoal = restored.GetGoal(recoveryGoal.Id);
 
-        Assert.True(DispatchFailureClassifier.TryGetProviderBudgetExhaustionHold(
+        Assert.True(ProviderLimitSignals.TryGetProviderBudgetExhaustionHold(
             restored.Goals,
             "xAI",
             credentialBinding: null,
             out var hold));
         Assert.Equal("provider-only", hold.BindingScope);
         Assert.Equal(sourceGoal.Id, hold.SourceGoalId);
-        Assert.False(DispatchFailureClassifier.TryGetProviderBudgetExhaustionHold(
+        Assert.False(ProviderLimitSignals.TryGetProviderBudgetExhaustionHold(
             restored.Goals,
             "OpenAI",
             credentialBinding: null,
@@ -370,7 +370,7 @@ public sealed class ProviderBudgetExhaustionClassifierTests : WorkerDispatchTest
             AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot()),
             sourceGoal.Id,
             GoalStatus.Failed);
-        Assert.True(DispatchFailureClassifier.TryGetProviderBudgetExhaustionHold(
+        Assert.True(ProviderLimitSignals.TryGetProviderBudgetExhaustionHold(
             operatorRecovered.Goals,
             "xAI",
             credentialBinding: null,
@@ -380,7 +380,7 @@ public sealed class ProviderBudgetExhaustionClassifierTests : WorkerDispatchTest
             sourceTask.Id,
             "Operator confirmed the named billing binding was replenished.",
             RetryCause.ProviderBudgetRecovery);
-        Assert.False(DispatchFailureClassifier.TryGetProviderBudgetExhaustionHold(
+        Assert.False(ProviderLimitSignals.TryGetProviderBudgetExhaustionHold(
             operatorRecovered.Goals,
             "xAI",
             credentialBinding: null,
@@ -391,7 +391,7 @@ public sealed class ProviderBudgetExhaustionClassifierTests : WorkerDispatchTest
             sourceTask.Id,
             "Later automatic retry must not erase the explicit budget recovery marker.",
             RetryCause.ProviderInterruption);
-        Assert.False(DispatchFailureClassifier.TryGetProviderBudgetExhaustionHold(
+        Assert.False(ProviderLimitSignals.TryGetProviderBudgetExhaustionHold(
             recoveryRoundTrip.Goals,
             "xAI",
             credentialBinding: null,
@@ -412,7 +412,7 @@ public sealed class ProviderBudgetExhaustionClassifierTests : WorkerDispatchTest
                 recoveryDispatchAt.AddMinutes(1),
                 DispatchStartedAt: recoveryDispatchAt));
 
-        Assert.False(DispatchFailureClassifier.TryGetProviderBudgetExhaustionHold(
+        Assert.False(ProviderLimitSignals.TryGetProviderBudgetExhaustionHold(
             restored.Goals,
             "xAI",
             credentialBinding: null,
@@ -439,7 +439,7 @@ public sealed class ProviderBudgetExhaustionClassifierTests : WorkerDispatchTest
             "Automatic provider interruption retry.",
             RetryCause.ProviderInterruption);
 
-        Assert.True(DispatchFailureClassifier.TryGetProviderBudgetExhaustionHold(
+        Assert.True(ProviderLimitSignals.TryGetProviderBudgetExhaustionHold(
             kernel.Goals,
             "xAI",
             credentialBinding: null,
@@ -485,12 +485,12 @@ public sealed class ProviderBudgetExhaustionClassifierTests : WorkerDispatchTest
             "Operator replenished funded-b.",
             RetryCause.ProviderBudgetRecovery);
 
-        Assert.True(DispatchFailureClassifier.TryGetProviderBudgetExhaustionHold(
+        Assert.True(ProviderLimitSignals.TryGetProviderBudgetExhaustionHold(
             kernel.Goals,
             "Anthropic",
             @"C:\profiles\funded-a",
             out _));
-        Assert.False(DispatchFailureClassifier.TryGetProviderBudgetExhaustionHold(
+        Assert.False(ProviderLimitSignals.TryGetProviderBudgetExhaustionHold(
             kernel.Goals,
             "Anthropic",
             @"C:\profiles\funded-b",
@@ -593,7 +593,7 @@ public sealed class ProviderBudgetExhaustionClassifierTests : WorkerDispatchTest
             await repository.SaveAsync(kernel);
             var restored = await repository.LoadAsync();
 
-            Assert.True(DispatchFailureClassifier.TryGetProviderBudgetExhaustionHold(
+            Assert.True(ProviderLimitSignals.TryGetProviderBudgetExhaustionHold(
                 restored.Goals,
                 "xAI",
                 credentialBinding: null,

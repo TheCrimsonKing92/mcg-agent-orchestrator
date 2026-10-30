@@ -433,7 +433,7 @@ public sealed partial class AgentOrchestratorKernel
         if (!verification.Succeeded &&
             outcome.Kind == DispatchOutcomeKind.RecoverableSubscriptionLimit)
         {
-            if (DispatchFailureClassifier.TryGetSubscriptionLimitRetryAfter(verification, out var retryAfter))
+            if (ProviderLimitSignals.TryGetSubscriptionLimitRetryAfter(verification, out var retryAfter))
             {
                 task.SetSubscriptionRetryAfter(retryAfter);
             }

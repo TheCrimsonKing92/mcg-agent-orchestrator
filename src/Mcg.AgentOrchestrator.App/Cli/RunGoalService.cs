@@ -232,8 +232,8 @@ internal static class RunGoalService
     {
         var task = ResolveStopTask(goal, result.BlockingAction)
             ?? goal.Tasks.FirstOrDefault(task => task.Status is WorkTaskStatus.Failed or WorkTaskStatus.WaitingForHuman)
-            ?? goal.Tasks.FirstOrDefault(task => DispatchFailureClassifier.IsSubscriptionRetryDeferred(task, clock.UtcNow, out _))
-            ?? goal.Tasks.FirstOrDefault(task => DispatchFailureClassifier.RequiresSubscriptionLimitReview(task));
+            ?? goal.Tasks.FirstOrDefault(task => ProviderLimitSignals.IsSubscriptionRetryDeferred(task, clock.UtcNow, out _))
+            ?? goal.Tasks.FirstOrDefault(task => ProviderLimitSignals.RequiresSubscriptionLimitReview(task));
 
         if (task is null)
         {
@@ -389,7 +389,7 @@ internal static class RunGoalService
             return true;
         }
 
-        if (DispatchFailureClassifier.IsSubscriptionRetryDeferred(task, now, out var retryAfter))
+        if (ProviderLimitSignals.IsSubscriptionRetryDeferred(task, now, out var retryAfter))
         {
             evidence = new AutomaticFailoverEvidence(
                 $"recoverable subscription usage limit retry deferral until {retryAfter:u}",

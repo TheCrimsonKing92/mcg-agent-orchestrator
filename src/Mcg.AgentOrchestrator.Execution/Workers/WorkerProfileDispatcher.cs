@@ -685,10 +685,10 @@ public static partial class WorkerProfileDispatcher
             if (IsTaskRetryDeferred(task, now, out var retryAfter))
             {
                 findings.Add(
-                    $"blocked: subscription retry deferred until {retryAfter:u}; source: {DispatchFailureClassifier.DescribeSubscriptionRetrySource(task)}");
+                    $"blocked: subscription retry deferred until {retryAfter:u}; source: {ProviderLimitSignals.DescribeSubscriptionRetrySource(task)}");
             }
 
-            if (DispatchFailureClassifier.TryGetProviderSubscriptionCooldown(
+            if (ProviderLimitSignals.TryGetProviderSubscriptionCooldown(
                 goal,
                 task.Id,
                 roleSelection.Model.ProviderName,
@@ -702,7 +702,7 @@ public static partial class WorkerProfileDispatcher
             WorkerSubscriptionPreflightFindings.AddProviderBudgetExhaustionFinding(
                 findings, providerHoldScope ?? [goal], dispatchProviderName, claudeCredentialSelection?.DirectoryPath, goal, task, now);
 
-            if (DispatchFailureClassifier.RequiresSubscriptionLimitReview(task))
+            if (ProviderLimitSignals.RequiresSubscriptionLimitReview(task))
             {
                 findings.Add("blocked: repeated recoverable subscription limits require operator review");
             }
@@ -1397,7 +1397,7 @@ public static partial class WorkerProfileDispatcher
             return true;
         }
 
-        return DispatchFailureClassifier.IsSubscriptionRetryDeferred(task, now, out retryAfter);
+        return ProviderLimitSignals.IsSubscriptionRetryDeferred(task, now, out retryAfter);
     }
 
     private static void EnsureWorktreeForFileRole(AgentRole role, string workingDirectory)
@@ -1532,12 +1532,12 @@ public static partial class WorkerProfileDispatcher
         }
 
         throw new InvalidOperationException(
-            $"Task '{task.Id}' subscription retry deferred until {retryAfter:u}; source: {DispatchFailureClassifier.DescribeSubscriptionRetrySource(task)}.");
+            $"Task '{task.Id}' subscription retry deferred until {retryAfter:u}; source: {ProviderLimitSignals.DescribeSubscriptionRetrySource(task)}.");
     }
 
     private static void EnsureRepeatedSubscriptionLimitReviewed(TaskSpec task)
     {
-        if (!DispatchFailureClassifier.RequiresSubscriptionLimitReview(task))
+        if (!ProviderLimitSignals.RequiresSubscriptionLimitReview(task))
         {
             return;
         }

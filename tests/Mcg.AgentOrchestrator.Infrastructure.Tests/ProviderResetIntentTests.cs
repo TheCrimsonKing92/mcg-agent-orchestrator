@@ -154,7 +154,7 @@ public sealed class ProviderResetIntentTests
         {
             get
             {
-                Assert.True(DispatchFailureClassifier.TryGetProviderBudgetExhaustionHold(Kernel.Goals, "xAI", null, out var hold));
+                Assert.True(ProviderLimitSignals.TryGetProviderBudgetExhaustionHold(Kernel.Goals, "xAI", null, out var hold));
                 return hold;
             }
         }
@@ -181,7 +181,7 @@ public sealed class ProviderResetIntentTests
             Kernel.RecordTaskDispatch(goal.Id, goal.Tasks.Single().Id, new("grok-cli", "grok", Root, Clock.UtcNow, ProviderName: "xAI"));
             Clock.UtcNow = Clock.UtcNow.AddMinutes(1);
             Kernel.RecordTaskVerification(goal.Id, goal.Tasks.Single().Id, new("grok", Root, 0, "Success", "", Clock.UtcNow));
-            Assert.False(DispatchFailureClassifier.TryGetProviderBudgetExhaustionHold(Kernel.Goals, "xAI", null, out _));
+            Assert.False(ProviderLimitSignals.TryGetProviderBudgetExhaustionHold(Kernel.Goals, "xAI", null, out _));
         }
         internal void Submit(string target, string reset, string path, params string[] flags) =>
             InfrastructureTestSupport.CaptureConsole(() => CliProviderResetCommand.Execute(

@@ -140,7 +140,7 @@ public sealed class ProviderHoldFallbackScenarioTests
             ProviderName: "xAI", WorkerProviderKind: ProviderKind.XaiGrokCli, GoalId: recoveryGoal.Id));
         scenario.Kernel.RecordTaskVerification(recoveryGoal.Id, task.Id, new TaskVerificationRecord(
             "grok", scenario.Root, 0, "Success", string.Empty, dispatchAt.AddMinutes(1), DispatchStartedAt: dispatchAt));
-        Assert.False(DispatchFailureClassifier.TryGetProviderBudgetExhaustionHold(scenario.Kernel.Goals, "xAI", null, out _));
+        Assert.False(ProviderLimitSignals.TryGetProviderBudgetExhaustionHold(scenario.Kernel.Goals, "xAI", null, out _));
         var goal = scenario.NewGoal();
         var starts = new Dictionary<GoalId, SubscriptionStartResult>();
         Driver(scenario, starts, []).AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
