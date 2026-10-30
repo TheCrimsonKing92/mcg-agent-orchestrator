@@ -1,4 +1,3 @@
-using System.Text.Json;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
@@ -33,67 +32,20 @@ internal static class ProjectAnswerCommand
 
         var directory = ProjectDiscoveryModelLocation.ResolveDirectory(project, null, defaultRootDirectory,
             registry.DataRootDirectory);
-        var modelPath = Path.Combine(directory, "project-model.json");
-        if (!File.Exists(modelPath))
+        var result = ProjectOwnerAnswerRecorder.Record(directory, key, value, reason,
+            clock?.Invoke() ?? DateTimeOffset.UtcNow);
+        if (!result.Success)
         {
-            output.WriteLine($"Refused: Missing project model {modelPath}; run project discover.");
+            output.WriteLine(result.ErrorPrefix + result.Message);
             return 1;
         }
-
-        ProjectModel model;
-        try
-        {
-            model = ProjectModelJson.Deserialize(File.ReadAllText(modelPath));
-        }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or
-            NotSupportedException or ArgumentException or JsonException or InvalidOperationException or InvalidDataException)
-        {
-            output.WriteLine($"Project model unreadable: {exception.Message}; run project discover.");
-            return 1;
-        }
-
-        try
-        {
-            value = OwnerAnswerValidator.Validate(key, value);
-        }
-        catch (ArgumentException exception)
-        {
-            output.WriteLine($"Refused: {exception.Message}");
-            return 1;
-        }
-
-        var utc = (clock?.Invoke() ?? DateTimeOffset.UtcNow).ToUniversalTime();
-        utc = new DateTimeOffset(utc.Ticks - utc.Ticks % TimeSpan.TicksPerSecond, TimeSpan.Zero);
-        var answer = new OwnerAnswer(key, value, reason, utc);
-        var applied = OwnerAnswerApplier.Apply(model, [answer]);
-        if (applied.AnsweredFacts.Count == 0)
-        {
-            output.WriteLine($"Refused: {key}: {applied.StaleAnswers[0].Reason}");
-            return 1;
-        }
-
-        var (answers, error) = ReadAnswersForOutput(directory);
-        if (error is not null)
-        {
-            output.WriteLine($"Owner answers unreadable: {error}");
-            return 1;
-        }
-        OwnerAnswerFile.Write(directory, [.. answers, answer]);
-        output.WriteLine($"Recorded owner answer: {key} = {value} (High, {OwnerAnswerApplier.FormatRecorded(utc)})");
+        var answer = result.Answer!;
+        output.WriteLine($"Recorded owner answer: {key} = {answer.Value} (High, {OwnerAnswerApplier.FormatRecorded(answer.RecordedUtc)})");
         return 0;
     }
 
-    internal static (IReadOnlyList<OwnerAnswer> Answers, string? Error) ReadAnswersForOutput(string directory)
-    {
-        try
-        {
-            return (OwnerAnswerFile.Read(directory), null);
-        }
-        catch (InvalidDataException exception)
-        {
-            return (Array.Empty<OwnerAnswer>(), exception.Message);
-        }
-    }
+    internal static (IReadOnlyList<OwnerAnswer> Answers, string? Error) ReadAnswersForOutput(string directory) =>
+        ProjectOwnerAnswerRecorder.ReadAnswers(directory);
 
     internal static void WriteAnswerLines(TextWriter output, AppliedOwnerAnswers applied)
     {

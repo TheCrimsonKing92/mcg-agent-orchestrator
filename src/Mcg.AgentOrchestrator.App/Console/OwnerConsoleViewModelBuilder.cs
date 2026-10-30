@@ -42,10 +42,13 @@ internal sealed class OwnerConsoleViewModelBuilder(IOrchestratorStateQueries sta
         {
             if (!_numbers.TryGetValue(question.ItemId, out var number))
                 _numbers.Add(question.ItemId, number = _numbers.Count + 1);
-            return new OwnerConsoleDecision(question.ItemId, number, question.GoalId, Prefix(question.GoalId),
+            var label = question.Kind == OwnerQuestionKind.Onboarding &&
+                OnboardingQuestionSource.TryIdentify(question.ItemId, out var project, out _, out _)
+                ? project : Prefix(question.GoalId);
+            return new OwnerConsoleDecision(question.ItemId, number, question.GoalId, label,
                 question.Kind, Summary(question.Text), question.Text, question.BlastRadius,
                 question.Confidence, question.ProposedDefault,
-                snapshot.RaisedAt?.TryGetValue(question.ItemId, out var raisedAt) == true ? raisedAt : null);
+                snapshot.RaisedAt?.TryGetValue(question.ItemId, out var raisedAt) == true ? raisedAt : null, question.CanAnswer);
         }).ToImmutableArray();
         lock (_observationGate)
         {
