@@ -33,7 +33,8 @@ public sealed class ImpactReplayUnmappedTestClassReasonTests
     [Fact]
     public void AmbiguousClassWithLanesKeepsResolvedSelection()
     {
-        using var fixture = new ImpactReplayFixture(changedTestFiles: new Dictionary<string, string>
+        // Keep the collision outside the changed frontier, which independently rejects ambiguous declarations.
+        using var fixture = new ImpactReplayFixture(initialTestFiles: new Dictionary<string, string>
         {
             ["Nested/AlphaTests.cs"] = "namespace SampleTests.Nested; public class AlphaTests { [Xunit.Fact] public void Works() { } }"
         });
@@ -42,6 +43,8 @@ public sealed class ImpactReplayUnmappedTestClassReasonTests
         var (report, _) = fixture.Run();
 
         var attempt = Assert.Single(report.Attempts);
+        Assert.Equal(new[] { "src/Sample/Alpha.cs" }, attempt.ChangedFiles);
+        Assert.Equal(new[] { "AlphaTests" }, attempt.SelectedTestClasses);
         Assert.Equal("Resolved", attempt.SelectionOutcome);
         Assert.Null(attempt.DegradationKind);
         Assert.Equal(new[] { "Alpha lane", "Chaos gate" }, attempt.WouldRunLanes);
