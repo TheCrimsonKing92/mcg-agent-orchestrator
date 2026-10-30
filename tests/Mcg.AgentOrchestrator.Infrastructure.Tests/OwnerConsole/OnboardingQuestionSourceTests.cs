@@ -170,6 +170,71 @@ public sealed class OnboardingQuestionSourceTests
         Assert.Equal(goal, Assert.Single((await source.ReadAsync(Token)).Live));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RegistryFailure_PreservesGoalSnapshotAndAnswerSubmission(bool invalidBranch)
+    {
+        var harness = new OwnerConsoleHarness();
+        var goal = new OwnerQuestion("goal-question", "12345678-goal", OwnerQuestionKind.Clarification, "Ship?");
+        var hidden = new HiddenOwnerQuestion(goal with { ItemId = "hidden" }, "held");
+        var raised = new Dictionary<string, DateTimeOffset> { [goal.ItemId] = harness.Clock.GetUtcNow() };
+        var snapshot = new OwnerQuestionSnapshot([goal], [hidden], raised);
+        var source = new OnboardingQuestionSource(new Questions(snapshot), () => throw (invalidBranch
+            ? new ArgumentException("Invalid integration branch.")
+            : new System.Text.Json.JsonException("Malformed project registry.")), harness.Clock);
+
+        Assert.Same(snapshot, await source.ReadAsync(Token));
+        Assert.Equal(goal, Assert.Single(await source.ListOpenAsync(Token)));
+        var builder = new OwnerConsoleViewModelBuilder(harness.State, source, harness.Liveness, new Epics(), harness.Clock);
+        var decision = Assert.Single((await builder.ReadDecisionsAsync(Token)).Decisions);
+        var dialogs = new Dialogs { Answer = "yes" };
+        using var tracking = new AnswerIntentStatusTracker(harness.Answers.ReadStatusAsync, harness.Clock);
+        var workflow = new OwnerDecisionWorkflow(source, harness.Answers, dialogs, tracking, null, harness.Clock);
+
+        await workflow.AnswerAsync(decision, false, null, Token);
+
+        Assert.Equal((goal.ItemId, "yes"), Assert.Single(harness.Answers.Calls));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RegistryFailure_RefusesOnboardingMutationWithoutChangingAnswers(bool dismiss)
+    {
+        using var fixture = new OnboardingConsoleFixture();
+        var project = fixture.Register("unavailable");
+        OnboardingConsoleFixture.Store(project, OnboardingConsoleFixture.Model(OnboardingConsoleFixture.TestKey));
+        OwnerAnswerFile.Write(project.OrchestratorDirectory,
+            [new(OnboardingConsoleFixture.TestKey, "npm test", null, fixture.Clock.GetUtcNow())]);
+        var before = OnboardingConsoleFixture.Snapshot(project);
+        var refreshes = 0;
+        var source = new OnboardingQuestionSource(new Questions(new([], [])),
+            () => throw new IOException("Registry unreadable."), fixture.Clock, () => refreshes++);
+        var itemId = $"{(dismiss ? "onboarding-stale" : "onboarding")}:unavailable:{Uri.EscapeDataString(OnboardingConsoleFixture.TestKey)}";
+
+        var result = dismiss ? await source.DismissAsync(itemId, Token) : await source.AnswerAsync(itemId, "npm run changed", Token);
+
+        Assert.False(result.Success);
+        Assert.Equal("unavailable: project unavailable. Registry unreadable.", result.Message);
+        Assert.Equal(before.OrderBy(pair => pair.Key), OnboardingConsoleFixture.Snapshot(project).OrderBy(pair => pair.Key));
+        Assert.Equal(0, refreshes);
+    }
+
+    [Fact]
+    public async Task RegistryCancellation_PropagatesForReadsAnswersAndDismissals()
+    {
+        var harness = new OwnerConsoleHarness();
+        var cancellation = new OperationCanceledException(Token);
+        var source = new OnboardingQuestionSource(harness.Questions, () => throw cancellation, harness.Clock);
+
+        Assert.Same(cancellation, await Assert.ThrowsAsync<OperationCanceledException>(() => source.ReadAsync(Token)));
+        Assert.Same(cancellation, await Assert.ThrowsAsync<OperationCanceledException>(async () =>
+            await source.AnswerAsync("onboarding:project:fact", "answer", Token)));
+        Assert.Same(cancellation, await Assert.ThrowsAsync<OperationCanceledException>(async () =>
+            await source.DismissAsync("onboarding-stale:project:fact", Token)));
+    }
+
     private sealed class Epics : IOwnerGoalEpicLookup
     {
         public Task<string> GetTitleAsync(string goalId, CancellationToken cancellationToken) => Task.FromResult("");

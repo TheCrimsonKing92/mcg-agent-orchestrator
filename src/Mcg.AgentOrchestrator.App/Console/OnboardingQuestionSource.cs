@@ -14,8 +14,17 @@ internal sealed class OnboardingQuestionSource(IOwnerQuestionSource inner,
     public async Task<OwnerQuestionSnapshot> ReadAsync(CancellationToken cancellationToken)
     {
         var snapshot = await inner.ReadAsync(cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
+        IReadOnlyList<OwnerConsoleBoardProject> scope;
+        try { scope = projects(); }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            // Onboarding registry availability must not hide or block goal-scoped decisions.
+            return snapshot;
+        }
         var live = snapshot.Live.ToList();
-        foreach (var project in projects())
+        foreach (var project in scope)
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (project.Name.Equals("home", StringComparison.OrdinalIgnoreCase) || project.Error is not null) continue;
@@ -61,7 +70,13 @@ internal sealed class OnboardingQuestionSource(IOwnerQuestionSource inner,
         token.ThrowIfCancellationRequested();
         if (!TryIdentify(itemId, out var name, out var key, out var stale))
             return Task.FromResult(new ProjectOwnerAnswerOutcome(false, "Unknown onboarding item."));
-        var project = projects().FirstOrDefault(project => project.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+        OwnerConsoleBoardProject? project;
+        try { project = projects().FirstOrDefault(project => project.Name.Equals(name, StringComparison.OrdinalIgnoreCase)); }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            token.ThrowIfCancellationRequested();
+            return Task.FromResult(new ProjectOwnerAnswerOutcome(false, $"{name}: project unavailable. {ex.Message}"));
+        }
         if (project is null || project.Error is not null)
             return Task.FromResult(new ProjectOwnerAnswerOutcome(false, $"{name}: project unavailable."));
         ProjectOwnerAnswerOutcome result;
