@@ -335,7 +335,7 @@ public static class ProviderFailureSignals
 
     internal static bool HasUsefulPreWorkOutput(string output)
     {
-        return HasVerificationEvidence(output, string.Empty) ||
+        return DispatchCompletionEvidence.HasVerificationEvidence(output, string.Empty) ||
             output.Contains("HUMAN_INPUT:", StringComparison.OrdinalIgnoreCase) ||
             output.Contains("Model fit:", StringComparison.OrdinalIgnoreCase) ||
             output.Contains("Changed files:", StringComparison.OrdinalIgnoreCase) ||

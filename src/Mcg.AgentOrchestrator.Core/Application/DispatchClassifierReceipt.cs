@@ -164,7 +164,7 @@ internal static class DispatchClassifierReceipt
 
     private static string DescribeCommitProvenance(TaskSpec task, TaskVerificationRecord verification, bool hasCommittedChanges)
     {
-        if (HasDispatchResultCommitEvidence(task))
+        if (DispatchCompletionEvidence.HasDispatchResultCommitEvidence(task))
         {
             return "orchestrator";
         }
