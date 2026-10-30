@@ -76,10 +76,8 @@ internal sealed partial class ConductorBatchLoop
     private readonly Func<ConductorLoopHandoffRequest, ConductorLoopHandoffResult>? _handoffOnMaxDuration;
     private readonly Func<ConductorSelfRelaunchRequest, ConductorSelfRelaunchResult>? _selfRelaunch;
     private readonly bool _selfRelaunchEnabled;
-    private readonly HomeBuildAdoptionDetector? _homeBuildAdoption;
-    private readonly Func<ConductorSelfRelaunchRequest, ConductorSelfRelaunchResult>? _homeBuildRelaunch;
+    private readonly HomeBuildRelaunchCoordinator? _homeBuildRelaunchCoordinator;
     private readonly Func<IReadOnlyList<string>>? _homeBuildIdleBlockers;
-    private string? _homeBuildHeld;
     private readonly PostLandingCanaryCoordinator? _postLandingCanary;
     private readonly PromptRolloutWatchCoordinator? _promptRolloutWatch;
     private readonly AcceptanceEngineCircuitBreaker? _acceptanceEngineCircuit;
@@ -160,8 +158,8 @@ internal sealed partial class ConductorBatchLoop
         _handoffOnMaxDuration = handoffOnMaxDuration;
         _selfRelaunch = selfRelaunch;
         _selfRelaunchEnabled = selfRelaunchEnabled;
-        _homeBuildAdoption = homeBuildAdoption;
-        _homeBuildRelaunch = homeBuildRelaunch;
+        _homeBuildRelaunchCoordinator = homeBuildAdoption is not null && homeBuildRelaunch is not null
+            ? new HomeBuildRelaunchCoordinator(homeBuildAdoption, homeBuildRelaunch) : null;
         _homeBuildIdleBlockers = homeBuildIdleBlockers;
         _postLandingCanary = postLandingCanary;
         _acceptanceEngineCircuit = postLandingCanary?.CircuitBreaker ?? acceptanceEngineCircuit;
@@ -431,35 +429,15 @@ internal sealed partial class ConductorBatchLoop
             if (pendingSelfRelaunch?.HomeBuildTarget is { } homeTarget)
             {
                 // Follower reservations never enter the home drain-cap/detach path.
-                var candidate = _homeBuildAdoption!.Detect();
-                var blockers = HomeBuildBlockers();
-                if (candidate is null || candidate != homeTarget || blockers.Count > 0)
+                var followerResult = _homeBuildRelaunchCoordinator!.TryHandoff(pendingSelfRelaunch, tick,
+                    HomeBuildBlockers, () => AwaitCanaryTasks(canaryTasks, canaryTasksGate));
+                if (followerResult is not null)
                 {
-                    if (candidate is not null && blockers.Count > 0) EmitHomeBuildHeld(tick, candidate, blockers);
-                    pendingSelfRelaunch = null;
-                    return new(SelfRelaunchDrainDisposition.Proceed);
-                }
-                AwaitCanaryTasks(canaryTasks, canaryTasksGate);
-                // Awaiting canaries can yield; re-read authority and all blockers at the action boundary.
-                candidate = _homeBuildAdoption.Detect();
-                blockers = HomeBuildBlockers();
-                if (candidate != homeTarget || blockers.Count > 0)
-                {
-                    if (candidate is not null && blockers.Count > 0) EmitHomeBuildHeld(tick, candidate, blockers);
-                    pendingSelfRelaunch = null;
-                    return new(SelfRelaunchDrainDisposition.Proceed);
-                }
-                var followerResult = _homeBuildRelaunch!(pendingSelfRelaunch);
-                if (followerResult.HandedOff)
-                {
-                    handedOffHomeBuild = candidate;
+                    handedOffHomeBuild = homeTarget;
                     selfRelaunchHandoff = followerResult.Handoff;
                     EmitHandoffProgress(tick, followerResult.Handoff!, pendingSelfRelaunch.GoalId);
                     return new(SelfRelaunchDrainDisposition.BreakLoop);
                 }
-                if (!followerResult.IncumbentCanContinue)
-                    throw new InvalidOperationException("Home-build handoff did not confirm incumbent authority.");
-                EmitHomeBuildHeld(tick, candidate!, [followerResult.Reason ?? "handoff-unavailable"]);
                 pendingSelfRelaunch = null;
                 return new(SelfRelaunchDrainDisposition.Proceed);
             }
@@ -615,25 +593,9 @@ internal sealed partial class ConductorBatchLoop
                 checkpointGoalTick: checkpointGoalTick, checkpointHeldGoalIds: checkpointHeldGoals);
         }
 
-        IReadOnlyList<string> HomeBuildBlockers()
-        {
-            try
-            {
-                // Landings and intent application are synchronous on this thread. Durable claimed intents
-                // and acceptance holders cover work that survives a previous conductor generation.
-                var gateCount = _countLiveGroupedGates() + driver.ParallelAcceptanceAttemptCoordinator
-                    .GetAllCapacityReservingAttempts().Count + driver._focusedEvidenceAttemptCoordinator
-                    .GetAllCapacityReservingAttempts().Count;
-                return ProjectConductorIdleCheck.Blockers(CountRunningDispatches(kernel, onlyGoalId),
-                    gateCount, landingInProgress: false, pendingIntents: _operatorIntents?.HasRelaunchBlockingIntents() == true,
-                    applyingIntents: false).Concat(_homeBuildIdleBlockers?.Invoke() ?? []).ToArray();
-            }
-            catch (Exception ex)
-            {
-                // An unreadable holder/intent census cannot authorize shutdown.
-                return [$"idle-state-unavailable:{ex.GetType().Name}"];
-            }
-        }
+        IReadOnlyList<string> HomeBuildBlockers() => ProjectConductorIdleCheck.ReadBlockers(
+            () => CountRunningDispatches(kernel, onlyGoalId), driver, _countLiveGroupedGates,
+            _operatorIntents, _homeBuildIdleBlockers);
 
         while (true)
         {
@@ -800,23 +762,9 @@ internal sealed partial class ConductorBatchLoop
                 _recoverInterruptedDispatches(kernel);
                 return true;
             });
-            if (pendingSelfRelaunch is null && _selfRelaunchEnabled && _homeBuildAdoption is not null && _homeBuildRelaunch is not null)
-            {
-                var homeBuild = _homeBuildAdoption.Detect();
-                if (homeBuild is not null)
-                {
-                    var blockers = HomeBuildBlockers();
-                    if (blockers.Count > 0) EmitHomeBuildHeld(nextTick, homeBuild, blockers);
-                    else
-                    {
-                        // Reserve before any dispatch, gate acquisition, landing or next intent application.
-                        pendingSelfRelaunch = new ConductorSelfRelaunchRequest("home-build", nextTick, homeBuild);
-                        _homeBuildHeld = null;
-                        EmitProgress($"LOOP_RELAUNCH_SCHEDULED tick={nextTick} reason=home-build-adopted commit={homeBuild.AdoptedCommit} sequence={homeBuild.Sequence}");
-                    }
-                }
-                else _homeBuildHeld = null;
-            }
+            // Reserve before any dispatch, gate acquisition, landing or next intent application.
+            if (pendingSelfRelaunch is null && _selfRelaunchEnabled)
+                pendingSelfRelaunch = _homeBuildRelaunchCoordinator?.TryReserve(nextTick, HomeBuildBlockers);
             if (pendingSelfRelaunch is not null)
             {
                 var drainOutcome = RunJanitorialPhase(
@@ -2576,57 +2524,11 @@ internal sealed record ParallelLandingOutcome(ConductorAdvanceResult Result, int
 
 internal sealed record GoalWalkTiming(string Goal, string Result, TimeSpan Elapsed);
 
-public sealed record BatchLoopSummary(
-    int Ticks,
-    int Advanced,
-    int Held,
-    int Escalated,
-    int Retried,
-    int Done,
-    bool StopRequested,
-    ConductorLoopHandoffResult? Handoff = null,
-    string? StopReason = null,
-    int Rechecks = 0,
-    int LandedGoals = 0)
-{
-    internal HomeBuildAdoptionRecord? HomeBuildTarget { get; init; }
-}
-
 public sealed record ConductorLoopHandoffRequest(
     int Tick,
     TimeSpan MaxDuration,
     int Done,
     int LandedGoalDelta = 0);
-
-public sealed record ConductorLoopHandoffResult(
-    bool Started,
-    int? ProcessId,
-    string? StdoutPath,
-    string? StderrPath,
-    string? Reason,
-    bool Failed = false,
-    string? VerificationOutcome = null,
-    bool RollbackSucceeded = true)
-{
-    public static ConductorLoopHandoffResult StartedProcess(
-        int processId,
-        string stdoutPath,
-        string stderrPath,
-        string? verificationOutcome = null) =>
-        new(true, processId, stdoutPath, stderrPath, null, Failed: false, verificationOutcome);
-
-    public static ConductorLoopHandoffResult Skipped(string reason) =>
-        new(false, null, null, null, reason);
-
-    public static ConductorLoopHandoffResult FailedStart(
-        string reason,
-        string? stdoutPath,
-        string? stderrPath,
-        string? verificationOutcome = null,
-        int? processId = null,
-        bool rollbackSucceeded = false) =>
-        new(false, processId, stdoutPath, stderrPath, reason, Failed: true, verificationOutcome, rollbackSucceeded);
-}
 
 public sealed record BatchTickSummary(
     int Tick,
