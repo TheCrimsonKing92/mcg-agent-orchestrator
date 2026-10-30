@@ -24,6 +24,7 @@ internal static class FindingEvidenceRequestNormalization
             return false;
         }
 
+        var crosswalk = CrosswalkFocusedEvidence.Applies(engineSettings);
         var selections = new List<FindingEvidenceSelection>();
         foreach (var selection in request.Selections)
         {
@@ -33,12 +34,14 @@ internal static class FindingEvidenceRequestNormalization
                 return false;
             }
             var project = selection.TestProject?.Trim();
-            var originalTestClass = FindingEvidenceNameSelector.ToFullyQualified(selection.TestClass ?? string.Empty);
+            var originalTestClass = crosswalk ? selection.TestClass ?? string.Empty
+                : FindingEvidenceNameSelector.ToFullyQualified(selection.TestClass ?? string.Empty);
             var testClass = originalTestClass.Trim();
             if (string.IsNullOrWhiteSpace(project) ||
                 string.IsNullOrWhiteSpace(testClass) ||
                 originalTestClass.Length > FindingEvidenceFilterSyntax.MaximumLength ||
-                !(FindingEvidenceFilterSyntax.IsSupported(testClass) || GoPackageFocusedEvidence.Applies(engineSettings)))
+                !(crosswalk ? CrosswalkFocusedEvidence.IsSupportedSelector(testClass)
+                    : FindingEvidenceFilterSyntax.IsSupported(testClass) || GoPackageFocusedEvidence.Applies(engineSettings)))
             {
                 refusalDetail =
                     $"Every evidence selection requires a bounded valid test_project and test_class; " +
@@ -65,7 +68,7 @@ internal static class FindingEvidenceRequestNormalization
             foreach (var classFilter in classFilters)
             {
                 selections.Add(new FindingEvidenceSelection(canonicalProject, classFilter));
-                if (!FindingEvidenceFilterSyntax.TryGetExpandableClass(classFilter.Trim(), out var requestedClass, out var filterPrefix)) continue;
+                if (crosswalk || !FindingEvidenceFilterSyntax.TryGetExpandableClass(classFilter.Trim(), out var requestedClass, out var filterPrefix)) continue;
                 foreach (var siblingClass in resolveSiblingClasses(resolvedProject, requestedClass))
                 {
                     if (string.IsNullOrWhiteSpace(siblingClass) ||

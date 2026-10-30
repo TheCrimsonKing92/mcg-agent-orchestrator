@@ -831,7 +831,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 parts[2].Contains("--confirm-goal-rollback", StringComparison.OrdinalIgnoreCase)
                 ? GoalRollbackPlanner.Apply(context.Workspace.ExecutionDirectory, context.CurrentGoal, rollbackReason, context.Workspace.IntegrationBranch)
                 : GoalRollbackPlanner.Build(context.Workspace.ExecutionDirectory, context.CurrentGoal, rollbackReason, context.Workspace.IntegrationBranch);
-            ConsoleViews.PrintGoalRollbackPlan(rollbackPlan);
+            GoalRollbackPlanTextView.PrintGoalRollbackPlan(rollbackPlan);
             if (rollbackPlan.DryRun)
             {
                 return false;
@@ -975,7 +975,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     .Where(goal => goal.Id != context.CurrentGoal.Id)
                     .Append(context.CurrentGoal).ToArray();
             }
-            ConsoleViews.PrintGoalReadinessPreflight(GoalReadinessPreflight.Build(
+            GoalReadinessPreflightTextView.PrintGoalReadinessPreflight(GoalReadinessPreflight.Build(
                 context.CurrentGoal,
                 context.Agents,
                 context.Workspace.ExecutionDirectory,

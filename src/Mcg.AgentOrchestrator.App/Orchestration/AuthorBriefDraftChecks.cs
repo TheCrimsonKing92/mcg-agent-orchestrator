@@ -104,7 +104,8 @@ internal static class AuthorBriefDraftChecks
                 "No declared criterion demands a pre-change failure with Acceptance executing." :
                 string.Join(" | ", preChangeCriteria.Select(criterion =>
                     $"criterion {criterion.Index} matched \"{criterion.Match.Groups["anchor"].Value}\"")) +
-                ". " + BriefLint.PreChangeFailureRemedy)
+                ". " + BriefLint.PreChangeFailureRemedy),
+            .. AuthorBriefDraftTargetChecks.Run(markdown, mainHead, repository)
         ];
 
         string SectionText(string name)

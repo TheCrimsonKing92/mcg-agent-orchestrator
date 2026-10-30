@@ -29,7 +29,7 @@ internal static class CliReadinessQueryCommand
                 .Where(goal => goal.Id != context.CurrentGoal.Id)
                 .Append(context.CurrentGoal).ToArray();
         }
-        ConsoleViews.PrintGoalReadinessPreflight(GoalReadinessPreflight.Build(
+        GoalReadinessPreflightTextView.PrintGoalReadinessPreflight(GoalReadinessPreflight.Build(
             context.CurrentGoal,
             context.Agents,
             context.Workspace.ExecutionDirectory,

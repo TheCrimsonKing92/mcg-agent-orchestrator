@@ -78,7 +78,7 @@ internal static class SourceSizeRatchet
             // Goal 78053cf4 capture custody collaborator measured at 378 lines.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.CaptureCustody.cs", 332),
             // Goal c60a7cb5 split focused-evidence request resolution into its own type.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.FocusedEvidenceRequestResolver.cs", 692),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.FocusedEvidenceRequestResolver.cs", 678),
             // Goal 40cc558d keeps direct SDK selection, bounded missing-executable fallback, and pipe recustody at the capture lifecycle boundary; measured candidate is 635 lines.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.ProcessRunner.cs", 192),
             // Goal e3bb2a77 extracted acceptance child invocation into its own owner.
@@ -669,7 +669,8 @@ internal static class SourceSizeRatchet
             // Goal 9a0a3d15 splits GoalsAndTasks into GoalTextView, GoalIntakeReceiptTextView and HealthTextView (slice 14, -228 lines, -1 partial): measured 2234 lines in 32 partials; no headroom.
             // Goal ddac2d5b extracts readiness and worklist output to ReadinessWorklistTextView: measured 2007 lines in 31 partials; no headroom.
             // Goal 5d0d9fe7 extracts operator intent, inbox, goals-prune and dogfood evaluation and renames FindingLookupTextView (slice 14, -140 lines, -4 partials): measured 1867 lines in 27 partials; no headroom.
-            new SourceClassCeiling("ConsoleViews", 1867, 27),
+            // Goal 48205141 extracts rollback, readiness, ideation and drain plans and removes the gate-status forwarder (slice 14): measured 1719 lines in 22 partials; no headroom.
+            new SourceClassCeiling("ConsoleViews", 1719, 22),
         });
 
     internal static IReadOnlyList<SourceSizeViolation> EvaluateClasses(

@@ -205,7 +205,7 @@ private static bool HandleIdeate(CliExecutionContext context, IReadOnlyList<stri
 
     var candidates = Task.WhenAll(sampleTasks).GetAwaiter().GetResult();
     var plan = IdeationProposalPlanner.SelectBestOfN(candidates);
-    ConsoleViews.PrintIdeationPlan(plan);
+    IdeationPlanTextView.PrintIdeationPlan(plan);
 
     if (appendBacklog && plan.IsValid && plan.Ideas.Count > 0)
     {

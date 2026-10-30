@@ -3,7 +3,7 @@ using Mcg.AgentOrchestrator.App.Rendering;
 
 namespace Mcg.AgentOrchestrator.App.Cli;
 
-internal static partial class ConsoleViews
+internal static class GoalRollbackPlanTextView
 {
     public static void PrintGoalRollbackPlan(GoalRollbackPlan plan)
     {

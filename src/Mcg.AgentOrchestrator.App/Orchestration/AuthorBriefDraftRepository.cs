@@ -8,6 +8,7 @@ internal interface IAuthorBriefDraftRepository
     (string? MainHead, AuthorDraftTrackedEdits? TrackedEdits) ResolveMainHeadOrTrackedEdits() => (ResolveMainHead(), null);
     int? TrackedLineCount(string sha, string path);
     bool IsTrackedDirectory(string sha, string path) => false;
+    string? TrackedFileText(string sha, string path) => null;
 }
 
 internal sealed class GitAuthorBriefDraftRepository(string repositoryRoot, string integrationBranch) : IAuthorBriefDraftRepository
@@ -59,6 +60,16 @@ internal sealed class GitAuthorBriefDraftRepository(string repositoryRoot, strin
         if (!type.ProcessStarted || type.DrainTimedOut)
             throw new InvalidOperationException($"Cannot inspect citation {path}: {type.Error}");
         return type.Succeeded && type.Output.Trim() == "tree";
+    }
+
+    public string? TrackedFileText(string sha, string path)
+    {
+        if (!IsRepositoryPath(path)) return null;
+        var type = GitCli.Run(repositoryRoot, "cat-file", "-t", $"{sha}:{path}");
+        if (!type.ProcessStarted || type.DrainTimedOut)
+            throw new InvalidOperationException($"Cannot inspect citation {path}: {type.Error}");
+        if (!type.Succeeded || type.Output.Trim() != "blob") return null;
+        return Require(GitCli.Run(repositoryRoot, "show", $"{sha}:{path}"));
     }
 
     private static bool IsRepositoryPath(string path) =>
