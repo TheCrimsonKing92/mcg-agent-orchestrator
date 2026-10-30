@@ -154,7 +154,7 @@ public sealed class ProviderCapabilityAgentSubstitutionTests
                 "fixture worker", worktree, 1, string.Empty,
                 "ERROR: You've hit your usage limit. Try again in 2 hours.", Scenario.ObservedAt,
                 ProviderFailureKind: ProviderFailureKind.RateLimit, DispatchStartedAt: Scenario.ObservedAt));
-            Assert.True(DispatchFailureClassifier.TryGetProviderSubscriptionCooldown(
+            Assert.True(ProviderLimitSignals.TryGetProviderSubscriptionCooldown(
                 goal, task.Id, "xAI", Scenario.ObservedAt.AddHours(1), out _));
         }
         else

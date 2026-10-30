@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Mcg.AgentOrchestrator.Infrastructure;
+using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
@@ -83,7 +84,11 @@ public sealed class OrchestratorProjectRegistry
                     IntegrationBranch = resolution.Branch,
                     IntegrationBranchSource = resolution.Source,
                     IntegrationBranchNote = resolution.Note,
-                    DataRootDirectory = DataRootDirectory
+                    DataRootDirectory = DataRootDirectory,
+                    Delivery = entry.DeliveryAnswer?.Value ?? ProjectDelivery.Direct,
+                    DeliveryDecider = entry.DeliveryDeciderAnswer?.Value,
+                    DeliveryAnswer = entry.DeliveryAnswer,
+                    DeliveryDeciderAnswer = entry.DeliveryDeciderAnswer
                 };
             })
             .OrderBy(project => project.Name, StringComparer.OrdinalIgnoreCase)
@@ -155,7 +160,13 @@ public sealed class OrchestratorProjectRegistry
 
         alreadyRegistered = true;
         return new OrchestratorProject(existing.Name, existingRoot)
-            { IntegrationBranch = existingBranch, DataRootDirectory = DataRootDirectory };
+        {
+            IntegrationBranch = existingBranch, DataRootDirectory = DataRootDirectory,
+            Delivery = existing.DeliveryAnswer?.Value ?? ProjectDelivery.Direct,
+            DeliveryDecider = existing.DeliveryDeciderAnswer?.Value,
+            DeliveryAnswer = existing.DeliveryAnswer,
+            DeliveryDeciderAnswer = existing.DeliveryDeciderAnswer
+        };
     }
 
     public void SelectProject(string name)
@@ -189,6 +200,29 @@ public sealed class OrchestratorProjectRegistry
             throw new ArgumentException(UnknownProjectMessage(normalizedName));
 
         entry.UseLearnedIntegrationBranch = value ? true : null;
+        SaveFile(file);
+    }
+
+    public void SetDeliveryAnswer(string name, OwnerAnswer answer)
+    {
+        var value = answer.FactKey switch
+        {
+            ProjectDelivery.ModeKey => ProjectDelivery.ValidateMode(answer.Value),
+            ProjectDelivery.DeciderKey => ProjectDelivery.ValidateDecider(answer.Value),
+            _ => throw new ArgumentException("Expected delivery or delivery-decider.")
+        };
+        var normalizedName = OrchestratorProjectSelection.NormalizeProjectName(name);
+        if (normalizedName.Equals(OrchestratorWorkspace.DefaultProjectName, StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException("register the project with project create to record delivery");
+
+        var file = LoadFile();
+        var entry = file.Projects.FirstOrDefault(project =>
+            project.Name.Equals(normalizedName, StringComparison.OrdinalIgnoreCase));
+        if (entry is null) throw new ArgumentException(UnknownProjectMessage(normalizedName));
+
+        var canonical = new OwnerAnswer(answer.FactKey, value, answer.Reason, answer.RecordedUtc);
+        if (answer.FactKey == ProjectDelivery.ModeKey) entry.DeliveryAnswer = canonical;
+        else entry.DeliveryDeciderAnswer = canonical;
         SaveFile(file);
     }
 
@@ -321,5 +355,9 @@ public sealed class OrchestratorProjectRegistry
         public string? IntegrationBranch { get; set; }
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
         public bool? UseLearnedIntegrationBranch { get; set; }
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public OwnerAnswer? DeliveryAnswer { get; set; }
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public OwnerAnswer? DeliveryDeciderAnswer { get; set; }
     }
 }

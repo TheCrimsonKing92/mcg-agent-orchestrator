@@ -56,9 +56,9 @@ public static class GoalHealthEvaluator
         }
 
         var deferredTask = goal.Tasks.FirstOrDefault(task =>
-            DispatchFailureClassifier.IsSubscriptionRetryDeferred(task, DateTimeOffset.UtcNow, out _));
+            ProviderLimitSignals.IsSubscriptionRetryDeferred(task, DateTimeOffset.UtcNow, out _));
         if (deferredTask is not null &&
-            DispatchFailureClassifier.IsSubscriptionRetryDeferred(deferredTask, DateTimeOffset.UtcNow, out var deferredUntil))
+            ProviderLimitSignals.IsSubscriptionRetryDeferred(deferredTask, DateTimeOffset.UtcNow, out var deferredUntil))
         {
             reasons.Add($"subscription retry-after {deferredUntil:u}");
             return Report(GoalHealthDisposition.ProviderLimited, 55, $"Wait until {deferredUntil:u} or route deferred work to an alternate provider.", $"subscription-plan {prefix}");

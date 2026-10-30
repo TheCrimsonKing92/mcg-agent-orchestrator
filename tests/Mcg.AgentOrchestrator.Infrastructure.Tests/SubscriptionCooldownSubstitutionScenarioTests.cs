@@ -83,7 +83,7 @@ public sealed class SubscriptionCooldownSubstitutionScenarioTests
         Assert.Equal("codex-cli", task.LastDispatch.WorkerName);
         Assert.NotNull(task.LastProcess);
         Assert.Null(task.SubscriptionRetryAfter);
-        Assert.False(DispatchFailureClassifier.IsSubscriptionRetryDeferred(task, scenario.Clock.UtcNow, out _));
+        Assert.False(ProviderLimitSignals.IsSubscriptionRetryDeferred(task, scenario.Clock.UtcNow, out _));
         Assert.Contains(task.VerificationHistory, item =>
             item.DispatchStartedAt == sourceVerification.DispatchStartedAt &&
             item.CompletedAt == sourceVerification.CompletedAt &&
@@ -111,18 +111,18 @@ public sealed class SubscriptionCooldownSubstitutionScenarioTests
         scenario.Agents = [scenario.Primary, scenario.Alternate];
         var sibling = restored.AddTask(goal.Id, AgentRole.Planner, "Another provider request.", scenario.Agents);
         Assert.Equal(scenario.Primary.Id, sibling.AssignedAgentId);
-        Assert.True(DispatchFailureClassifier.TryGetProviderSubscriptionCooldown(
+        Assert.True(ProviderLimitSignals.TryGetProviderSubscriptionCooldown(
             restoredGoal, sibling.Id, "Anthropic", scenario.Clock.UtcNow, out var hold));
         Assert.Equal(reset, hold.RetryAfter);
         Assert.Equal(scenario.Receipt(goal), hold.EvidenceReceipt);
         var blocked = scenario.Preflight(restoredGoal, sibling, restored.Goals);
         Assert.False(blocked.Allowed);
         Assert.Contains(blocked.Findings, finding => finding.Contains("provider Anthropic is cooling down", StringComparison.Ordinal));
-        Assert.True(DispatchFailureClassifier.TryGetProviderSubscriptionCooldown(
+        Assert.True(ProviderLimitSignals.TryGetProviderSubscriptionCooldown(
             restoredGoal, sibling.Id, "Anthropic", reset.AddTicks(-1), out _));
-        Assert.False(DispatchFailureClassifier.TryGetProviderSubscriptionCooldown(
+        Assert.False(ProviderLimitSignals.TryGetProviderSubscriptionCooldown(
             restoredGoal, sibling.Id, "Anthropic", reset, out _));
-        Assert.False(DispatchFailureClassifier.TryGetProviderSubscriptionCooldown(
+        Assert.False(ProviderLimitSignals.TryGetProviderSubscriptionCooldown(
             restoredGoal, sibling.Id, "Anthropic", reset.AddTicks(1), out _));
         var intents = SqliteOperatorIntentStore.ForDirectories(scenario.Workspace.OrchestratorDirectory, scenario.Workspace.LogDirectory);
         Assert.Empty(await intents.ListForGoalAsync(goal.Id.Value, cancellationToken: Xunit.TestContext.Current.CancellationToken));
@@ -208,7 +208,7 @@ public sealed class SubscriptionCooldownSubstitutionScenarioTests
         Assert.Equal(substitution, Assert.Single(restoredGoal.Timeline, evt => evt.Kind == ProgressKind.ProviderHoldSubstituted));
         Assert.Equal(reset, restored.GetTask(goal.Id, source.Id).SubscriptionRetryAfter);
         Assert.Equal(scenario.Primary.Id, restored.GetTask(goal.Id, source.Id).AssignedAgentId);
-        Assert.True(DispatchFailureClassifier.TryGetProviderSubscriptionCooldown(restoredGoal,
+        Assert.True(ProviderLimitSignals.TryGetProviderSubscriptionCooldown(restoredGoal,
             task.Id, "Anthropic", scenario.Clock.UtcNow, out var hold));
         Assert.Equal(reset, hold.RetryAfter);
         Assert.Equal(scenario.Receipt(goal), hold.EvidenceReceipt);
@@ -400,13 +400,13 @@ public sealed class SubscriptionCooldownSubstitutionScenarioTests
         await repository.SaveAsync(scenario.Kernel);
         var restored = await repository.LoadAsync();
         var restoredGoal = restored.GetGoal(goal.Id);
-        Assert.True(DispatchFailureClassifier.TryGetProviderSubscriptionCooldown(restoredGoal,
+        Assert.True(ProviderLimitSignals.TryGetProviderSubscriptionCooldown(restoredGoal,
             TaskId.New(), "Anthropic", scenario.Clock.UtcNow, out var cooldown));
         Assert.Equal(reset, cooldown.RetryAfter);
         Assert.Equal(scenario.Receipt(goal), cooldown.EvidenceReceipt);
         Assert.Equal("anthropic::<provider-default>", cooldown.BindingKey);
         Assert.Equal(original.DispatchStartedAt, cooldown.DispatchStartedAt);
-        Assert.False(DispatchFailureClassifier.TryGetProviderSubscriptionCooldown(restoredGoal,
+        Assert.False(ProviderLimitSignals.TryGetProviderSubscriptionCooldown(restoredGoal,
             TaskId.New(), "OpenAI", scenario.Clock.UtcNow, out _));
     }
 
@@ -416,7 +416,7 @@ public sealed class SubscriptionCooldownSubstitutionScenarioTests
         Assert.Equal(scenario.Primary.Id, task.AssignedAgentId);
         Assert.Null(task.SubscriptionRetryAfter);
         Assert.False(WorkerProfileDispatcher.IsTaskRetryDeferred(task, scenario.Clock.UtcNow, out _));
-        Assert.True(DispatchFailureClassifier.TryGetProviderSubscriptionCooldown(
+        Assert.True(ProviderLimitSignals.TryGetProviderSubscriptionCooldown(
             goal, task.Id, "Anthropic", scenario.Clock.UtcNow, out var hold));
         Assert.Equal(scenario.Receipt(goal), hold.EvidenceReceipt);
         return task;

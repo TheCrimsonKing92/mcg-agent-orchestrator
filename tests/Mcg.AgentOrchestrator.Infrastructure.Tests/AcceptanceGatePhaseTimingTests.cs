@@ -121,6 +121,7 @@ public sealed class AcceptanceGatePhaseTimingTests : GoalAcceptanceVerifierTestB
 
             var innerException = Assert.IsType<InvalidOperationException>(exception.InnerException);
             Assert.Equal("deterministic runner fault", innerException.Message);
+            Assert.Single(progress, item => item.Phase == "lane-plan");
             Assert.Equal("check-execution", exception.GatePhase);
             Assert.Equal("phase seam", exception.GateTarget);
             Assert.Contains("deterministic runner fault", exception.FaultStack, StringComparison.Ordinal);

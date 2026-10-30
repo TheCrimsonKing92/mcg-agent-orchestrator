@@ -373,7 +373,7 @@ public sealed class InterruptedWorkCheckpointContinuationTests
                     evt.Kind == ProgressKind.TaskRetried &&
                     evt.Message == outcome.AutoRequeueDisposition.Message));
             Xunit.Assert.NotNull(task.PendingInterruptedWorkCheckpoint);
-            Xunit.Assert.True(DispatchFailureClassifier.IsSubscriptionRetryDeferred(task, Now, out var retryAfter));
+            Xunit.Assert.True(ProviderLimitSignals.IsSubscriptionRetryDeferred(task, Now, out var retryAfter));
             Xunit.Assert.Equal(task.SubscriptionRetryAfter, retryAfter);
             Xunit.Assert.NotEqual(WorkTaskStatus.Completed, task.Status);
         }

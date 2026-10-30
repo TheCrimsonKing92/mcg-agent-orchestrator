@@ -92,10 +92,10 @@ internal sealed class ProviderHoldAgentSubstitution(
     internal static bool TryGetSubscriptionCooldown(Goal goal, TaskSpec task, AgentDefinition assigned,
         DateTimeOffset now, out ProviderSubscriptionCooldown cooldown)
     {
-        if (DispatchFailureClassifier.TryGetTaskSubscriptionCooldown(task, now, out cooldown) &&
+        if (ProviderLimitSignals.TryGetTaskSubscriptionCooldown(task, now, out cooldown) &&
             cooldown.ProviderName.Equals(assigned.Model.ProviderName, StringComparison.OrdinalIgnoreCase))
             return true;
-        return DispatchFailureClassifier.TryGetProviderSubscriptionCooldown(goal, task.Id,
+        return ProviderLimitSignals.TryGetProviderSubscriptionCooldown(goal, task.Id,
             assigned.Model.ProviderName, now, out cooldown);
     }
 
@@ -105,7 +105,7 @@ internal sealed class ProviderHoldAgentSubstitution(
             .Select(dispatch => (Provider: dispatch.ProviderName ?? dispatch.WorkerName,
                 Credential: dispatch.ClaudeCredentialSourceDirectory)).Distinct();
         foreach (var binding in bindings)
-            if (DispatchFailureClassifier.TryGetProviderBudgetExhaustionHold(kernel.ProviderHoldScope,
+            if (ProviderLimitSignals.TryGetProviderBudgetExhaustionHold(kernel.ProviderHoldScope,
                     binding.Provider, binding.Credential, out var hold) &&
                 findings.Any(finding => finding.StartsWith("blocked:", StringComparison.OrdinalIgnoreCase) &&
                     finding.Contains($"binding {hold.BindingKey} (", StringComparison.OrdinalIgnoreCase)))

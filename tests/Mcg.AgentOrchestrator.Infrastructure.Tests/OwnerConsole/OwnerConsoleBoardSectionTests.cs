@@ -42,7 +42,7 @@ public sealed class OwnerConsoleBoardSectionTests
             var screen = scene.CaptureBoard();
 
             var header = Assert.Single(screen.Lines.Where(line => line.StartsWith("── ")));
-            Assert.StartsWith("── home · conductor running · 1 active · 0 verified · last landed never ──", header);
+            Assert.StartsWith("── home · conductor running · 1 active · last landed never ──", header);
             AssertHeaderLine(header, scene.View.BoardPane);
             var headerIndex = Array.IndexOf(screen.Lines, header);
             Assert.Contains("11111111", screen.Lines[headerIndex + 1]);
@@ -50,9 +50,64 @@ public sealed class OwnerConsoleBoardSectionTests
             const string footer = "idle: crosswalk, necromancer, pz-item-searcher, schema-drift · stopped: net-health";
             Assert.Equal(footer, Assert.Single(screen.Lines.Where(line => line.StartsWith("idle:"))).TrimEnd());
             Assert.Equal(footer, screen.Lines[^1].TrimEnd());
-            Assert.Equal(scene.View.BoardPane.GetScheme().Highlight, screen.Attributes[headerIndex, 0]);
+            var scheme = scene.View.BoardPane.GetScheme();
+            var normal = scheme.Normal;
+            var expected = new Terminal.Gui.Drawing.Attribute(normal.Foreground, normal.Background,
+                normal.Style | Terminal.Gui.Drawing.TextStyle.Bold);
+            Assert.True(header.TrimEnd().Length < screen.Attributes.GetLength(1));
+            for (var x = 0; x < screen.Attributes.GetLength(1); x++)
+            {
+                Assert.Equal(expected, screen.Attributes[headerIndex, x]);
+                Assert.NotEqual(scheme.Disabled, screen.Attributes[headerIndex, x]);
+                Assert.NotEqual(scheme.Highlight, screen.Attributes[headerIndex, x]);
+            }
         }
         finally { foreach (var lease in leases) lease.Dispose(); }
+    }
+
+    [Fact]
+    public async Task AllProjects_Screen_KeepsSelectedGoalFocusDistinctFromHeader()
+    {
+        using var projects = await Projects.CreateAsync();
+        using var scene = new Scene(projects);
+        await scene.RefreshAsync();
+        await scene.FocusBoardAsync();
+        AssertSelectedGoal(scene, "home", "11111111-home");
+
+        var screen = scene.CaptureBoard(focusBoard: true);
+
+        var headerIndex = Array.FindIndex(screen.Lines, line => line.StartsWith("── home ·"));
+        Assert.True(headerIndex >= 0);
+        var goalIndex = headerIndex + 1;
+        var goalColumn = screen.Lines[goalIndex].IndexOf("11111111", StringComparison.Ordinal);
+        Assert.True(goalColumn >= 0);
+        Assert.Equal(scene.View.BoardPane.GetScheme().Focus, screen.Attributes[goalIndex, goalColumn]);
+        Assert.NotEqual(screen.Attributes[headerIndex, goalColumn], screen.Attributes[goalIndex, goalColumn]);
+    }
+
+    [Fact]
+    public async Task AllProjects_Screen_CountsRunningAndWaitingGateWorkInHeaders()
+    {
+        using var projects = await Projects.CreateAsync();
+        projects.RemoveProject("alpha");
+        await projects.AddGoalAsync(projects.Home, "44444444-in-gate", GoalStatus.Verifying);
+        await projects.AddGoalAsync(projects.Home, "55555555-waiting", GoalStatus.Verified);
+        await projects.AddGoalAsync(projects.Home, "66666666-waiting", GoalStatus.Verified);
+        await projects.AddGoalAsync(projects.Beta, "77777777-active", GoalStatus.Active);
+        using var scene = new Scene(projects);
+        await scene.RefreshAsync();
+
+        var screen = scene.CaptureBoard();
+
+        var headers = screen.Lines.Where(line => line.StartsWith("── ")).ToArray();
+        Assert.Equal(2, headers.Length);
+        var home = Assert.Single(headers.Where(line => line.StartsWith("── home ·"))).TrimEnd();
+        Assert.Equal("── home · conductor stopped · 4 active · 1 in gate · 2 waiting for gate · last landed never ──", home);
+        var beta = Assert.Single(headers.Where(line => line.StartsWith("── beta ·"))).TrimEnd();
+        Assert.Equal("── beta · conductor stopped · 1 active · last landed never ──", beta);
+        Assert.DoesNotContain("in gate", beta);
+        Assert.DoesNotContain("waiting for gate", beta);
+        Assert.All(headers, header => Assert.DoesNotContain("verified", header));
     }
 
     [Fact]
@@ -260,9 +315,9 @@ public sealed class OwnerConsoleBoardSectionTests
             scene.Model.Board.Select(row => row.Project));
         var headers = scene.Model.Board.Where(row => row.IsDiagnostic).ToArray();
         Assert.Equal(new[] { "home", "alpha", "beta" }, headers.Select(row => row.Project));
-        Assert.Equal("home · conductor stopped · 1 active · 0 verified · last landed never", headers[0].Title);
-        Assert.Equal("alpha · conductor running · 2 active · 1 verified · last landed never", headers[1].Title);
-        Assert.Equal("beta · conductor stopped · 0 active · 0 verified · last landed never", headers[2].Title);
+        Assert.Equal("home · conductor stopped · 1 active · last landed never", headers[0].Title);
+        Assert.Equal("alpha · conductor running · 2 active · 1 waiting for gate · last landed never", headers[1].Title);
+        Assert.Equal("beta · conductor stopped · 0 active · last landed never", headers[2].Title);
         Assert.Equal(new[] { "11111111-home", "22222222-verified", "33333333-active" },
             scene.Model.Board.Where(row => !row.IsDiagnostic).Select(row => row.GoalId));
         Assert.Equal(Columns, scene.View.BoardTable.Columns.Cast<DataColumn>().Select(column => column.ColumnName));
@@ -270,7 +325,7 @@ public sealed class OwnerConsoleBoardSectionTests
         Assert.Equal(5, scene.View.BoardTable.Rows.Count);
         var pane = Assert.IsType<OwnerConsoleBoardPane>(scene.View.BoardPane);
         Assert.Equal(new[] { 0, 2 }, pane.Headers.Keys.Order());
-        Assert.Equal("── home · conductor stopped · 1 active · 0 verified · last landed never ──", pane.Headers[0]);
+        Assert.Equal("── home · conductor stopped · 1 active · last landed never ──", pane.Headers[0]);
         Assert.Equal("stopped: beta", string.Concat(OwnerConsoleBoardSection.Footer(scene.Model).Select(segment => segment.Text)));
         for (var index = 0; index < scene.View.BoardTable.Rows.Count; index++)
         {
@@ -312,7 +367,7 @@ public sealed class OwnerConsoleBoardSectionTests
 
         var header = Assert.Single(scene.Model.Board.Where(row => row.Project == "beta"));
         Assert.True(header.IsDiagnostic);
-        Assert.Equal("beta · conductor idle · 0 active · 0 verified · last landed 2h", header.Title);
+        Assert.Equal("beta · conductor idle · 0 active · last landed 2h", header.Title);
         Assert.Equal("idle: beta", string.Concat(OwnerConsoleBoardSection.Footer(scene.Model).Select(segment => segment.Text)));
         Assert.DoesNotContain(scene.Model.Board, row => row.GoalId == "44444444-landed");
     }
@@ -498,7 +553,7 @@ public sealed class OwnerConsoleBoardSectionTests
         Assert.Equal(new[] { "alpha", "home", "beta" }, scene.Model.BoardScope.Sections);
         Assert.Equal(new[] { "alpha", "home", "beta" },
             scene.Model.Board.Where(row => row.IsDiagnostic).Select(row => row.Project));
-        Assert.Equal("alpha · conductor running · 2 active · 1 verified · last landed 2h", scene.Model.Board[0].Title);
+        Assert.Equal("alpha · conductor running · 2 active · 1 waiting for gate · last landed 2h", scene.Model.Board[0].Title);
         Assert.False(scene.Model.Board[0].Dimmed);
         Assert.Equal(goals, scene.Model.Board.Where(row => row.Project == "alpha" && !row.IsDiagnostic));
         Assert.All(scene.Model.Board.Where(row => row.Project == "alpha"), row => Assert.False(row.IsForeign));
@@ -658,7 +713,7 @@ public sealed class OwnerConsoleBoardSectionTests
             Assert.Equal(OwnerConsolePane.Board, View.FocusedPane);
         }
 
-        internal BoardScreen CaptureBoard(TableView? board = null)
+        internal BoardScreen CaptureBoard(TableView? board = null, bool focusBoard = false)
         {
             board ??= View.BoardPane;
             using var app = Application.Create();
@@ -672,6 +727,11 @@ public sealed class OwnerConsoleBoardSectionTests
             var session = app.Begin(View.Window);
             try
             {
+                if (focusBoard)
+                {
+                    board.SetFocus();
+                    Assert.True(board.HasFocus);
+                }
                 app.LayoutAndDraw(forceRedraw: true);
                 var bounds = board.FrameToScreen();
                 bounds.Size = new Size(board.Viewport.Width, board.SuperView!.Viewport.Height);
