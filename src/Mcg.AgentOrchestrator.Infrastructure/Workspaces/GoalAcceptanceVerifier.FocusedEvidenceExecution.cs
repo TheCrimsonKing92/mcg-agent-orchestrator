@@ -177,6 +177,12 @@ internal static class FocusedEvidenceExecution
             EmitFocusedEvidenceArmResolved(candidate);
         }
 
+        if (CrosswalkSelectorResolution.TryBuildRejection(request, focusedChecks, candidate.Checks, out var crosswalkRejection))
+        {
+            return new FocusedEvidenceRunResult(request, Accepted: false, Passed: false,
+                Summary: crosswalkRejection.Detail, Checks: candidate.Checks, Rejection: crosswalkRejection, Coverage: coverage);
+        }
+
         if (!runBaselineArm)
         {
             if (candidate.Disposition == FindingEvidenceArmDisposition.Green)
