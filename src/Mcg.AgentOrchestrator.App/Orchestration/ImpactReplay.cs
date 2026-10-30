@@ -19,7 +19,7 @@ internal static class ImpactReplay
         IReadOnlyList<AcceptanceLaneFlakeRow> flakeRows;
         try
         {
-            flakeRows = new AcceptanceLaneFlakeLedger(Directory.GetParent(Path.GetFullPath(orchestratorDirectory))!.FullName).Read();
+            flakeRows = new AcceptanceLaneFlakeLedger(executionDirectory).Read();
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {

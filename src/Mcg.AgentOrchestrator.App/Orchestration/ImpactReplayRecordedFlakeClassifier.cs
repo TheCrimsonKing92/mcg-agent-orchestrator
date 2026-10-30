@@ -11,14 +11,18 @@ internal static class ImpactReplayRecordedFlakeClassifier
         IReadOnlyList<string> checkNames, IReadOnlyList<AcceptanceTestClassDescriptor> classes,
         IReadOnlyList<AcceptanceLaneFlakeRow> rows)
     {
-        var recorded = rows.Where(row => row.AttemptId == attemptId && row.Outcome == AcceptanceLaneRerunEvidence.Flake)
-            .ToArray();
+        var recorded = rows.Where(row => row.AttemptId == attemptId).ToArray();
         var reruns = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
         return failures.Select(failure =>
         {
             if (failure.Lane is not { } lane || failure.WouldRun != false) return failure;
-            if (recorded.Any(row => (row.LaneName == lane || checkNames.Any(check => row.LaneName == check + ": " + lane)) &&
-                row.FirstFailingTestIdentities.Any(identity => ImpactReplayTrxEvidence.ResolveClass(identity, classes) == failure.ClassName)))
+            var matchingRows = recorded.Where(row =>
+                (row.LaneName == lane || checkNames.Any(check => row.LaneName == check + ": " + lane)) &&
+                row.FirstFailingTestIdentities.Any(identity =>
+                    ImpactReplayTrxEvidence.ResolveClass(identity, classes) == failure.ClassName)).ToArray();
+            // An adjudicated failure must not be overturned by partial TRX evidence.
+            if (matchingRows.Any(row => row.Outcome == AcceptanceLaneRerunEvidence.ConfirmedFailure)) return failure;
+            if (matchingRows.Any(row => row.Outcome == AcceptanceLaneRerunEvidence.Flake))
                 return failure with { FlakeEvidence = "lane-flakes" };
 
             if (!reruns.TryGetValue(lane, out var flakyClasses))
@@ -33,8 +37,6 @@ internal static class ImpactReplayRecordedFlakeClassifier
     private static HashSet<string> ReadReruns(IReadOnlyList<string> paths,
         IReadOnlyList<AcceptanceTestClassDescriptor> classes)
     {
-        var firstFailures = new Dictionary<string, int>(StringComparer.Ordinal);
-        var passes = new List<(string ClassName, int Ordinal)>();
         var runs = new Dictionary<int, List<TestResult>>();
         var incompleteRuns = new HashSet<int>();
         foreach (var path in paths)
@@ -51,21 +53,34 @@ internal static class ImpactReplayRecordedFlakeClassifier
             }
             if (!runs.TryGetValue(ordinal, out var records)) runs.Add(ordinal, records = []);
             records.AddRange(result.Records);
+            var completion = AcceptanceShardCompletionAdjudicator.InspectTrxCompletion([path]);
+            if (!completion.Passed || completion.FailedPredicate is not null ||
+                completion.ExecutedTestCount is not > 0 || completion.DiscoveredTestCount is null ||
+                completion.ExecutedTestCount < completion.DiscoveredTestCount || completion.NotExecutedTestCount != 0 ||
+                !(completion.Outcome.Equals("Passed", StringComparison.OrdinalIgnoreCase) ||
+                  completion.Outcome.Equals("Completed", StringComparison.OrdinalIgnoreCase)))
+                incompleteRuns.Add(ordinal);
         }
-        foreach (var (ordinal, records) in runs)
+        var failures = runs.SelectMany(run => run.Value
+                .Where(record => record.Status is TestResultStatus.Failed or TestResultStatus.Error)
+                .Select(record => (ClassName: ClassName(record), record.Id, Ordinal: run.Key)))
+            .Where(failure => failure.ClassName is not null).GroupBy(failure => failure.ClassName!);
+        var flakyClasses = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var group in failures)
         {
-            foreach (var group in records.GroupBy(record =>
-                record.SuitePath.FirstOrDefault(name => classes.Any(item => item.FullName == name)) ??
-                ImpactReplayTrxEvidence.ResolveClass(record.Id, classes)))
-            {
-                if (group.Key is not { } className) continue;
-                if (group.Any(record => record.Status is TestResultStatus.Failed or TestResultStatus.Error))
-                    firstFailures[className] = Math.Min(firstFailures.GetValueOrDefault(className, int.MaxValue), ordinal);
-                else if (!incompleteRuns.Contains(ordinal) && group.Any(record => record.Status == TestResultStatus.Passed))
-                    passes.Add((className, ordinal));
-            }
+            var lastFailure = group.Max(failure => failure.Ordinal);
+            var failedIdentities = group.Select(failure => failure.Id).Distinct(StringComparer.Ordinal).ToArray();
+            if (runs.Any(run => run.Key > lastFailure && !incompleteRuns.Contains(run.Key) &&
+                failedIdentities.All(identity => run.Value.Any(record => record.Id == identity &&
+                    ClassName(record) == group.Key && record.Status == TestResultStatus.Passed)) &&
+                run.Value.Where(record => ClassName(record) == group.Key)
+                    .All(record => record.Status == TestResultStatus.Passed)))
+                flakyClasses.Add(group.Key);
         }
-        return passes.Where(pass => firstFailures.TryGetValue(pass.ClassName, out var failedAt) && pass.Ordinal > failedAt)
-            .Select(pass => pass.ClassName).ToHashSet(StringComparer.Ordinal);
+        return flakyClasses;
+
+        string? ClassName(TestResult record) =>
+            record.SuitePath.FirstOrDefault(name => classes.Any(item => item.FullName == name)) ??
+            ImpactReplayTrxEvidence.ResolveClass(record.Id, classes);
     }
 }

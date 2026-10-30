@@ -16,13 +16,18 @@ internal sealed class ImpactReplayFixture : IDisposable
     private readonly string _branch;
     private readonly bool _changedFooTests;
     private readonly bool _extraBetaClass;
-    private string StateDirectory => Path.Combine(_root, ".orchestrator");
+    private string StateDirectory { get; }
+    public string FlakeLedgerPath => Path.Combine(_root, ".orchestrator", "lane-flakes.jsonl");
     public string OutputDirectory => Path.Combine(StateDirectory, "reports");
     public string CheckoutParent => Path.Combine(_root, "checkouts");
 
     public ImpactReplayFixture(int changedSourceCount = 1, bool changedFooTests = false,
-        bool extraBetaClass = false, IReadOnlyDictionary<string, string>? changedTestFiles = null)
+        bool extraBetaClass = false, IReadOnlyDictionary<string, string>? changedTestFiles = null,
+        bool separateStateDirectory = false)
     {
+        StateDirectory = separateStateDirectory
+            ? Path.Combine(_root, ".orchestrator", "projects", "fixture")
+            : Path.Combine(_root, ".orchestrator");
         _changedFooTests = changedFooTests;
         _extraBetaClass = extraBetaClass;
         Git("init", "--quiet", "--template=");
@@ -103,7 +108,7 @@ internal sealed class ImpactReplayFixture : IDisposable
     public void AddAttempt(string id, bool failingBeta = false, bool rerunBetaPass = false,
         bool earlierBetaPass = false, bool rerunBetaFailure = false, bool rerunOtherLanePass = false)
     {
-        var directory = ".orchestrator/acceptance-gate-attempts/fixture-goal/";
+        var directory = Path.Combine(StateDirectory, "acceptance-gate-attempts", "fixture-goal") + Path.DirectorySeparatorChar;
         var trxPaths = new List<string>();
         var cases = new List<(string Slug, string ClassName, bool Failed)>
             { ("alpha-lane", "AlphaTests", false), ("beta-lane", "BetaTests", failingBeta), ("chaos-gate", "FloorTests", false) };
@@ -132,6 +137,7 @@ internal sealed class ImpactReplayFixture : IDisposable
             Write(directory + name, "<TestRun><TestDefinitions /><Results /></TestRun>");
             AppendTrxResult(directory + name, "BetaTests", "Passed");
             if (rerunBetaFailure) AppendTrxResult(directory + name, "BetaTests", "Failed", "StillFails");
+            SetTrxCompletion(directory + name, "Completed");
         }
         Write(directory + id + ".attempt.json", JsonSerializer.Serialize(new
         {
@@ -154,6 +160,33 @@ internal sealed class ImpactReplayFixture : IDisposable
         new AcceptanceLaneFlakeLedger(_root).Append(row);
     }
 
+    public void RewriteBetaRerun(string attemptId, (string Method, string Outcome)[] results,
+        string? summaryOutcome = "Completed", int? discovered = null)
+    {
+        var path = Path.Combine(StateDirectory, "acceptance-gate-attempts", "fixture-goal",
+            $"{attemptId}.infrastructure-tests-beta-lane-run-1.trx");
+        Write(path, "<TestRun><TestDefinitions /><Results /></TestRun>");
+        foreach (var (method, outcome) in results) AppendTrxResult(path, "BetaTests", outcome, method);
+        if (summaryOutcome is not null) SetTrxCompletion(path, summaryOutcome, discovered);
+    }
+
+    public void AddBetaFailure(string attemptId, string method) => AppendTrxResult(
+        Path.Combine(StateDirectory, "acceptance-gate-attempts", "fixture-goal",
+            $"{attemptId}.infrastructure-tests-beta-lane.trx"), "BetaTests", "Failed", method);
+
+    private static void SetTrxCompletion(string path, string outcome, int? discovered = null)
+    {
+        var document = XDocument.Load(path);
+        var ns = document.Root!.Name.Namespace;
+        var results = document.Descendants(ns + "UnitTestResult").ToArray();
+        var notExecuted = results.Count(result => result.Attribute("outcome")?.Value == "NotExecuted");
+        document.Root.Add(new XElement(ns + "ResultSummary", new XAttribute("outcome", outcome),
+            new XElement(ns + "Counters", new XAttribute("total", discovered ?? results.Length),
+                new XAttribute("executed", results.Length - notExecuted),
+                new XAttribute("notExecuted", notExecuted))));
+        document.Save(path);
+    }
+
     private void AppendTrxResult(string relativePath, string className, string outcome, string method = "Works")
     {
         var path = Path.Combine(_root, relativePath);
@@ -168,7 +201,7 @@ internal sealed class ImpactReplayFixture : IDisposable
         document.Save(path);
     }
 
-    public (ImpactReplayReport Report, string Markdown) Run()
+    public (ImpactReplayReport Report, string Markdown) Run(bool allowSkippedInputs = false)
     {
         using var output = new StringWriter();
         using var error = new StringWriter();
@@ -180,7 +213,7 @@ internal sealed class ImpactReplayFixture : IDisposable
         var report = JsonSerializer.Deserialize<ImpactReplayReport>(
             File.ReadAllText(Path.Combine(OutputDirectory, "impact-replay.json")), Json);
         Assert.NotNull(report);
-        Assert.Empty(report.SkippedInputs);
+        if (!allowSkippedInputs) Assert.Empty(report.SkippedInputs);
         Assert.Empty(report.UnreplayableAttempts);
         Assert.Empty(report.CleanupErrors);
         return (report, File.ReadAllText(Path.Combine(OutputDirectory, "impact-replay.md")));
