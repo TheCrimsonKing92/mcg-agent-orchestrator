@@ -7,7 +7,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 using static GoalAcceptanceVerifierDotnetBuildSlotTestsLaneEarlyStop;
 
 [Xunit.Collection(TestCollections.JobAccounting)]
-public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteShardInvalidationStop
+public sealed class RemoteShardInvalidationStopTests
     : GoalAcceptanceVerifierDotnetBuildSlotTests
 {
     [Fact]
