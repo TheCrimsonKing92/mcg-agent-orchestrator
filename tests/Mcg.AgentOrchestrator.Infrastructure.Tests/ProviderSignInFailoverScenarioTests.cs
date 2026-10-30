@@ -96,7 +96,7 @@ public sealed class ProviderSignInFailoverScenarioTests
         Assert.Equal("openai-tester", scenario.Current(goal).Tasks.Single().LastDispatch!.AssignedAgentId);
         scenario.Finish(goal, 1, "", stderr);
         Assert.Equal(recoverableAuthentication,
-            DispatchFailureClassifier.HasRecoverableProviderAuthenticationFailure(scenario.Current(goal).Tasks.Single()));
+            ProviderFailureSignals.HasRecoverableProviderAuthenticationFailure(scenario.Current(goal).Tasks.Single()));
         if (recoverableAuthentication) scenario.AssertAuthenticationFailure(goal);
 
         var outcome = Assert.IsType<ConductorAdvanceOutcome.Escalated>(scenario.Tick(goal).Outcome);

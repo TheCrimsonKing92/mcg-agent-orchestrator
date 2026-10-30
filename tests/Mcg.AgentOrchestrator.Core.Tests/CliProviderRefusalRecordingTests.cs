@@ -69,7 +69,7 @@ public sealed class CliProviderRefusalRecordingTests
 
         Assert.Equal(WorkTaskStatus.Failed, task.Status);
         Assert.NotNull(task.LastVerification);
-        Assert.Equal(4, DispatchFailureClassifier.CountRecoverableProviderConnectivityFailures(task));
+        Assert.Equal(4, ProviderFailureSignals.CountRecoverableProviderConnectivityFailures(task));
         var failure = Assert.Single(goal.Timeline.Where(
             evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskFailed));
         Assert.Contains("provider connectivity failed after 3 automatic retry attempt", failure.Message, StringComparison.Ordinal);

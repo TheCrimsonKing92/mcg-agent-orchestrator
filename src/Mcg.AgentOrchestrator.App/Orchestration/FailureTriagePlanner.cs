@@ -135,7 +135,7 @@ public static class FailureTriagePlanner
         AutonomyPolicy policy,
         DateTimeOffset now)
     {
-        if (DispatchFailureClassifier.HasRecoverableProviderConnectivityFailure(task) &&
+        if (ProviderFailureSignals.HasRecoverableProviderConnectivityFailure(task) &&
             agents.Any(agent =>
                 agent.Role == task.RequiredRole &&
                 agent.Status == AgentStatus.Available &&
@@ -177,19 +177,19 @@ public static class FailureTriagePlanner
             return;
         }
 
-        if (DispatchFailureClassifier.HasProviderNeutralProgressStallFailure(task))
+        if (ProviderFailureSignals.HasProviderNeutralProgressStallFailure(task))
         {
             AddFailoverItem(items, task, taskNumber, agents, policy, FailureTriageCause.ProgressStall);
             return;
         }
 
-        if (DispatchFailureClassifier.HasRecoverableProviderConnectivityFailure(task))
+        if (ProviderFailureSignals.HasRecoverableProviderConnectivityFailure(task))
         {
             AddFailoverItem(items, task, taskNumber, agents, policy, FailureTriageCause.ProviderConnectivity);
             return;
         }
 
-        if (DispatchFailureClassifier.HasRecoverableProviderModelRejectionFailure(task))
+        if (ProviderFailureSignals.HasRecoverableProviderModelRejectionFailure(task))
         {
             AddFailoverItem(items, task, taskNumber, agents, policy, FailureTriageCause.ProviderModelRejected);
             return;

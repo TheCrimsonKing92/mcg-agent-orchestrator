@@ -66,7 +66,7 @@ public sealed class DispatchOutcomeClassifyTestsConductorGenerationInterrupted
             kernel.RecordTaskDispatch(goal.Id, task.Id, new("codex-cli", "codex exec", "C:\\repo", clock.UtcNow,
                 WorkerProviderKind: ProviderKind.OpenAICodexCli));
             kernel.RecordDispatchExecutionResult(goal.Id, task.Id, Verification(clock, Marker + "\n" + Receipt));
-            Assert.Equal(attempt, DispatchFailureClassifier.CountConsecutiveProviderInterruptionFailures(task));
+            Assert.Equal(attempt, ProviderFailureSignals.CountConsecutiveProviderInterruptionFailures(task));
             Assert.Equal(attempt, goal.Timeline.Count(evt => evt.TaskId == task.Id &&
                 evt.Kind == ProgressKind.TaskNote &&
                 TaskOutcomeClassifier.TryExtractRule(evt.Message) == "conductor-generation-interrupted"));

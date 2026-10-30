@@ -5,7 +5,7 @@ namespace Mcg.AgentOrchestrator.Core;
 
 public static partial class DispatchFailureClassifier
 {
-    private static IReadOnlyList<string> GetCliRefusalSignalLines(TaskVerificationRecord verification) =>
+    internal static IReadOnlyList<string> GetCliRefusalSignalLines(TaskVerificationRecord verification) =>
         ProviderLimitEvidenceParser.GetCliRefusalLines(
             verification.ExitCode,
             DispatchEvidenceSummaries.EnumerateEvidenceLines(verification, includeStandardOutput: true, includeStandardError: false));
@@ -78,7 +78,7 @@ public static partial class DispatchFailureClassifier
         return false;
     }
 
-    private static bool IsApiErrorOverloadLine(string line)
+    internal static bool IsApiErrorOverloadLine(string line)
     {
         var match = CliApiErrorStatus().Match(line);
         return match.Success && match.Groups["status"].Value != "429" &&
@@ -87,7 +87,7 @@ public static partial class DispatchFailureClassifier
 
     private static string BuildProviderAuthenticationEvidenceSummary(TaskSpec task, TaskVerificationRecord verification)
     {
-        var hasLine = TryGetProviderAuthenticationLine(verification, out var line);
+        var hasLine = ProviderFailureSignals.TryGetProviderAuthenticationLine(verification, out var line);
         var dispatch = FindDispatchForVerification(task, verification) ?? task.LastDispatch;
         var remediation = "codex login / provider re-auth";
         if (dispatch is not null &&
