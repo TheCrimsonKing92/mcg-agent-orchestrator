@@ -148,7 +148,7 @@ public sealed class PreReviewExclusionOnlyFilterTests
     public void NonExclusionFilters_KeepExistingBehavior(bool oversized)
     {
         var filter = oversized
-            ? $"({string.Join('|', Enumerable.Range(0, 70).Select(i => $"FullyQualifiedName~PositiveTests{i}"))})"
+            ? $"({string.Join('|', Enumerable.Range(0, 70).Select(i => $"FullyQualifiedName~PositiveTests{i}"))})&FullyQualifiedName~Required"
             : "FullyQualifiedName~PositiveTests&FullyQualifiedName!~OtherTests";
         var logs = new List<string>();
         var check = Check("positive selection", filter);
