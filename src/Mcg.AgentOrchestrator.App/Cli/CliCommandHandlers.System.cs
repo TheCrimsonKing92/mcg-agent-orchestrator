@@ -373,14 +373,14 @@ internal static partial class CliCommandHandlers
                         var showWaits = HumanWaitsForAttention(context.Kernel, null, includeHistory);
                         if (showWaits.Count > 0 || context.Kernel.Goals.Any(goal => goal.GateTestObligations.Count > 0))
                         {
-                            ConsoleViews.PrintHumanWaits(showWaits, DateTimeOffset.UtcNow, includeHistory, context.Kernel.Goals);
+                            HumanWaitsTextView.Print(showWaits, DateTimeOffset.UtcNow, includeHistory, context.Kernel.Goals);
                         }
                         if (showWaits.Count > 0)
                         {
                             if (includeHistory)
                             {
                                 var allItems = store.ListAsync().GetAwaiter().GetResult();
-                                ConsoleViews.PrintCollaborationItems(
+                                CollaborationItemsTextView.Print(
                                     CollaborationItemsForAttention(allItems, context.Kernel, null, includeHistory),
                                     includeHistory);
                             }
@@ -393,7 +393,7 @@ internal static partial class CliCommandHandlers
                             : store.GetAttentionQueueAsync().GetAwaiter().GetResult();
                         var globalQueue = CollaborationItemsForAttention(globalItems, context.Kernel, null, includeHistory);
                         var allClarifications = AllClarifications(store);
-                        ConsoleViews.PrintCollaborationItems(
+                        CollaborationItemsTextView.Print(
                             globalQueue,
                             includeHistory,
                             item => IsSpecClarification(item) ? ClarificationId(item, allClarifications) : null);
@@ -407,7 +407,7 @@ internal static partial class CliCommandHandlers
                         .ToList();
                     var waitsForGoal = HumanWaitsForAttention(context.Kernel, goal.Id, includeHistory);
                     if (waitsForGoal.Count > 0 || goal.GateTestObligations.Count > 0)
-                        ConsoleViews.PrintHumanWaits(waitsForGoal, DateTimeOffset.UtcNow, includeHistory, [goal]);
+                        HumanWaitsTextView.Print(waitsForGoal, DateTimeOffset.UtcNow, includeHistory, [goal]);
 
                     if (includeHistory)
                     {
@@ -415,7 +415,7 @@ internal static partial class CliCommandHandlers
                         var historyItems = CollaborationItemsForAttention(allItems, context.Kernel, goal.Id, includeHistory);
                         if (waitsForGoal.Count > 0)
                         {
-                            ConsoleViews.PrintCollaborationItems(
+                            CollaborationItemsTextView.Print(
                                 historyItems,
                                 includeHistory,
                                 item => IsSpecClarification(item) ? ClarificationId(item, clarificationIdentityUniverse) : null);
@@ -428,7 +428,7 @@ internal static partial class CliCommandHandlers
                             return changed;
                         }
 
-                        ConsoleViews.PrintCollaborationItems(
+                        CollaborationItemsTextView.Print(
                             historyItems,
                             includeHistory,
                             item => IsSpecClarification(item) ? ClarificationId(item, clarificationIdentityUniverse) : null);
@@ -482,7 +482,7 @@ internal static partial class CliCommandHandlers
                 if (waits.Count > 0 || context.Kernel.Goals.Any(goal => goal.GateTestObligations
                         .Any(item => item.BriefVersion == goal.AuthoritativeBrief.Version)))
                 {
-                    ConsoleViews.PrintHumanWaits(waits, DateTimeOffset.UtcNow, goals: context.Kernel.Goals);
+                    HumanWaitsTextView.Print(waits, DateTimeOffset.UtcNow, goals: context.Kernel.Goals);
                 }
                 if (waits.Count > 0)
                 {
@@ -494,7 +494,7 @@ internal static partial class CliCommandHandlers
                     context.Kernel,
                     null,
                     includeHistory: false);
-                ConsoleViews.PrintAttentionQueue(queue);
+                CollaborationItemsTextView.PrintAttentionQueue(queue);
                 return migratedHumanWaits > 0 || migratedCollaborationItems > 0;
             }
 
@@ -651,7 +651,7 @@ internal static partial class CliCommandHandlers
                 var snapshot = context.Kernel.BuildProvenanceReport(
                     dogfoodText,
                     sha => GitCommitShaExists(executionDirectory, sha));
-                ConsoleViews.PrintProvenanceReport(snapshot);
+                ProvenanceReportTextView.Print(snapshot);
                 if (snapshot.UnbackedGoalCount > 0)
                 {
                     throw new InvalidOperationException(

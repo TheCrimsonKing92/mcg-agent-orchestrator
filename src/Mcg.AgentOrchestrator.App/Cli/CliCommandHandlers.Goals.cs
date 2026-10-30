@@ -155,7 +155,7 @@ private static void PrintScopeCollisionAdvisory(
     lifecycleObservations ??= GoalMonitoringSubscriptionCommand.ReadScopeCollisionLifecycleObservations(
         context.Workspace,
         GoalScopeCollisionAdvisor.SelectComparisonCandidates(context.Kernel.Goals, intakeItemId));
-    ConsoleViews.PrintGoalScopeCollisionReport(
+    GoalScopeCollisionReportTextView.Print(
         GoalScopeCollisionAdvisor.Build(
             [rawObjective],
             context.Kernel.Goals,
