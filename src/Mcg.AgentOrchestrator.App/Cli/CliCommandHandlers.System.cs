@@ -639,7 +639,7 @@ internal static partial class CliCommandHandlers
                 {
                     lastN = parsedN;
                 }
-                ConsoleViews.PrintLoopHealthReport(context.Kernel.BuildLoopHealthReport(lastN));
+                LoopHealthReportTextView.Print(context.Kernel.BuildLoopHealthReport(lastN));
                 return false;
             }
 

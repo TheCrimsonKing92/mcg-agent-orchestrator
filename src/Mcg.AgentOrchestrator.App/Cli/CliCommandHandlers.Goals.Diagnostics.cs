@@ -89,7 +89,7 @@ private static void PrintNextFullDetail(CliExecutionContext context, AutonomyPol
 {
     var goal = context.CurrentGoal!;
     GoalTextView.PrintGoal(goal);
-    ConsoleViews.PrintMonitor(context.Kernel.BuildMonitor(goal.Id));
+    MonitorTextView.Print(context.Kernel.BuildMonitor(goal.Id));
     GoalReadinessPreflightTextView.PrintGoalReadinessPreflight(GoalReadinessPreflight.Build(
         goal,
         context.Agents,
@@ -110,7 +110,7 @@ private static void PrintNextFullDetail(CliExecutionContext context, AutonomyPol
         task => WorkerProfileDispatcher.EstimateSubscriptionPromptCharacters(context.Kernel, goal, task, context.Agents),
         providerHoldScope: context.Kernel.Goals));
     ModelOutcomeBoundModels.Print(context.Kernel.BuildModelOutcomeScorecard(), context.Workspace);
-    ConsoleViews.PrintLoopHealthReport(context.Kernel.BuildLoopHealthReport(null));
+    LoopHealthReportTextView.Print(context.Kernel.BuildLoopHealthReport(null));
     FailureTriageTextView.PrintFailureTriageReport(FailureTriagePlanner.Build(context.Kernel, goal, context.Agents, context.Workspace.ExecutionDirectory, context.Workspace.IntegrationBranch, policy));
     ConsoleViews.PrintGoalRecoveryReport(GoalRecoveryPlanner.Build(
         context.Kernel, goal, context.Workspace.ExecutionDirectory, context.Workspace.IntegrationBranch, cleanupHooks: context.CleanupContext.Hooks, targetHome: context.TargetHome));
