@@ -940,12 +940,12 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             CliArgumentParser.RequirePartCount(parts, 2, "goal-timing <goal-prefix> | goal-timing --all");
             if (parts[1].Equals("--all", StringComparison.OrdinalIgnoreCase))
             {
-                ConsoleViews.PrintGoalTimingRollup(context.Kernel.BuildGoalTimingRollup(BuildGoalTimingContexts(context)));
+                GoalTimingTextView.PrintRollup(context.Kernel.BuildGoalTimingRollup(BuildGoalTimingContexts(context)));
                 return false;
             }
 
             context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, parts[1]);
-            ConsoleViews.PrintGoalTimingReport(context.Kernel.BuildGoalTimingReport(
+            GoalTimingTextView.PrintReport(context.Kernel.BuildGoalTimingReport(
                 context.CurrentGoal.Id,
                 BuildGoalTimingContext(context, context.CurrentGoal)));
             return false;

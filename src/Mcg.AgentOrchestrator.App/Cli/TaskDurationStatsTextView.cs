@@ -2,9 +2,9 @@ using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.App.Cli;
 
-internal static partial class ConsoleViews
+internal static class TaskDurationStatsTextView
 {
-    public static void PrintTaskDurationStats(
+    public static void Print(
         IReadOnlyList<TaskDurationStatsRecord> records,
         DateTimeOffset? since = null,
         IReadOnlyList<TaskDurationTrendRecord>? trend = null)
@@ -22,13 +22,13 @@ internal static partial class ConsoleViews
         foreach (var record in records)
         {
             var medianRuntime = record.HasPublishedStats
-                ? FormatDuration(record.MedianLegitimateRuntime)
+                ? ConsoleDurationFormat.Format(record.MedianLegitimateRuntime)
                 : FormatInsufficient(record.TaskCount);
             var p90Runtime = record.HasPublishedStats
-                ? FormatDuration(record.P90LegitimateRuntime)
+                ? ConsoleDurationFormat.Format(record.P90LegitimateRuntime)
                 : FormatInsufficient(record.TaskCount);
             var medianOverhead = record.HasPublishedStats
-                ? FormatDuration(record.MedianFailureInterventionOverhead)
+                ? ConsoleDurationFormat.Format(record.MedianFailureInterventionOverhead)
                 : FormatInsufficient(record.TaskCount);
             Console.WriteLine(
                 $"  {record.Scope}: tasks={record.TaskCount} attempts={record.AttemptCount} " +
@@ -55,19 +55,6 @@ internal static partial class ConsoleViews
         }
 
         Console.WriteLine();
-    }
-
-    private static string FormatDuration(TimeSpan? duration)
-    {
-        if (duration is null)
-        {
-            return "n/a";
-        }
-
-        var value = duration.Value;
-        return value.TotalMinutes >= 1
-            ? $"{value.TotalMinutes:0.#}m"
-            : $"{value.TotalSeconds:0.#}s";
     }
 
     private static string FormatInsufficient(int sampleCount) => $"n/a (n={sampleCount})";
