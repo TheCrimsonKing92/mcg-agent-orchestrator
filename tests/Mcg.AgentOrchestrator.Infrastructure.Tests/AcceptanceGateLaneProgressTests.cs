@@ -100,6 +100,7 @@ public sealed class AcceptanceGateLaneProgressTests : GoalAcceptanceVerifierTest
     [Fact]
     public async Task CommandChecks_CompleteOnceBeforePhaseBreakdown()
     {
+        using var resultsRoot = AcceptanceOwnerResultsTestRoot.Create();
         var root = CreateManifestWorkspace("""
             { "version": 1, "checks": [
                 { "name": "first seam", "type": "command", "command": "git", "arguments": ["first"] },
@@ -112,7 +113,7 @@ public sealed class AcceptanceGateLaneProgressTests : GoalAcceptanceVerifierTest
             var verifier = new GoalAcceptanceVerifier((args, _, _) => Task.FromResult(
                 new GoalAcceptanceVerifier.CommandResult(args.Contains("second") ? 1 : 0, string.Empty)));
             var result = await verifier.RunOwnedAsync(root, null, null, null, null, default,
-                new AcceptanceRunExecutionOptions(ProgressSink: progress.Add));
+                resultsRoot.CreateOptions(progress.Add));
 
             Assert.False(result.Passed);
             var first = Assert.Single(progress, item => item.Phase == "check-complete" && item.CurrentTarget == "first seam");

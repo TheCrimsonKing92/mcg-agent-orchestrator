@@ -22,12 +22,12 @@ private static bool HandleOperatorIntentTemplate(CliExecutionContext context, IR
 
     if (!TryParseIntentTemplateRequest(parts, out var templateName, out var request))
     {
-        ConsoleViews.PrintOperatorIntentTemplates(OperatorIntentTemplates.All);
+        OperatorIntentTextView.PrintOperatorIntentTemplates(OperatorIntentTemplates.All);
         return false;
     }
 
     var plan = OperatorIntentTemplates.Build(templateName, request);
-    ConsoleViews.PrintOperatorIntentPlan(plan);
+    OperatorIntentTextView.PrintOperatorIntentPlan(plan);
     if (!createGoal && !createSimpleGoal)
     {
         return false;

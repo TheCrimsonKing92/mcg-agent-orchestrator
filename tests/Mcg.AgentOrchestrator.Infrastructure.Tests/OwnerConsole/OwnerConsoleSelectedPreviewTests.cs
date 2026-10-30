@@ -59,10 +59,10 @@ public sealed class OwnerConsoleSelectedPreviewTests
             Assert.Equal(Head, head);
             return Task.FromResult(new OwnerGoalAcceptanceEvidence(Basis,
                 scenario is "gate-passed" or "gate-failed" ? Outcome(goal, scenario == "gate-passed") : null));
-        });
+        }, mergeBase: (_, _) => Task.FromResult<string?>(Basis));
 
         var summary = await query.LoadAsync(goal, Token);
-        Assert.Equal(scenario == "no-commit" ? 0 : 1, diffReads);
+        Assert.Equal(scenario == "no-commit" ? 0 : 2, diffReads);
         Assert.Equal(scenario == "no-commit" ? 0 : 1, acceptanceReads);
         var lines = OwnerConsoleSelectedPreview.Lines(new(Id, summary), Stage, TimeZoneInfo.Utc, 160);
         Assert.Equal(new[] { Title, changes, progress }, lines);
@@ -80,7 +80,8 @@ public sealed class OwnerConsoleSelectedPreviewTests
     public async Task PathsKeepFileNamesAndNormalizeAreas(string file, string expected)
     {
         var query = new OwnerGoalChangeSummaryQuery(changes: (_, _, _) =>
-            Task.FromResult(new CommittedGoalChanges(true, [file], 1)));
+            Task.FromResult(new CommittedGoalChanges(true, [file], 1)),
+            mergeBase: (_, _) => Task.FromResult<string?>(Basis));
         var summary = await query.LoadAsync(GoalFor("one-file"), Token);
         Assert.Equal(expected, OwnerConsoleSelectedPreview.Lines(new(Id, summary), Stage, TimeZoneInfo.Utc, 160)[1]);
     }
@@ -166,7 +167,8 @@ public sealed class OwnerConsoleSelectedPreviewTests
                 "A src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/Other.cs"], 2)),
             acceptance: (id, _, _, _) => Task.FromResult(new OwnerGoalAcceptanceEvidence(Basis,
                 new("width-test", id, "acceptance", GoalOperationStatus.Failed, At, null,
-                    BranchHeadSha: Head, MainHeadSha: Basis, AcceptanceOutcome: "failed", FailedCheckNames: [new string('E', 100)]))));
+                    BranchHeadSha: Head, MainHeadSha: Basis, AcceptanceOutcome: "failed", FailedCheckNames: [new string('E', 100)]))),
+            mergeBase: (_, _) => Task.FromResult<string?>(Basis));
         var summary = await query.LoadAsync(GoalFor("one-file"), Token);
         var preview = new OwnerConsoleSelectedGoalPreview(Id, summary);
         var stage = "waiting for the build lock";
@@ -210,7 +212,7 @@ public sealed class OwnerConsoleSelectedPreviewTests
             await TestHangGuard.WaitAsync(loaded.Task, "selected summary load entered");
             view.Window.Layout(new Size(100, 40));
             var frame = Assert.Single(view.Window.SubViews.OfType<FrameView>(), frame => frame.Title == "SELECTED 11111111");
-            Assert.Equal("Loading…", Assert.Single(frame.SubViews.OfType<Label>()).Text);
+            Assert.Equal(string.Join('\n', Title, Stage), Assert.Single(frame.SubViews.OfType<Label>()).Text);
         }
         finally { release.TrySetResult(); }
         await TestHangGuard.WaitAsync(view.PreviewLoad, "selected panel publication");

@@ -64,13 +64,13 @@ public sealed class OwnerConsoleGoalGateJumpTests
 
         Assert.True(goalOpened);
         Assert.True(view.GateView.IsOpen);
-        Assert.Equal("22222222 Member + 33333333 Companion", view.GateView.Lines[1]);
+        Assert.Equal(new[] { "  22222222  Member", "  33333333  Companion" }, view.GateView.Lines.Skip(1).Take(2));
         var jumped = view.GateView.Lines.ToArray();
         Assert.Null(controller.TakeRequestedGateGoalId());
         view.Render(await Model(harness, gate));
         Assert.Equal(jumped, view.GateView.Lines);
         await view.HandleKeyAsync(Key.Enter); // Expansion also re-renders the pinned gate.
-        Assert.Equal("22222222 Member + 33333333 Companion", view.GateView.Lines[1]);
+        Assert.Equal(new[] { "  22222222  Member", "  33333333  Companion" }, view.GateView.Lines.Skip(1).Take(2));
         await view.HandleKeyAsync(new Key('q'));
         await Command(view, ":gate " + Id[..8]);
         Assert.True(view.GateView.IsOpen);
@@ -80,7 +80,8 @@ public sealed class OwnerConsoleGoalGateJumpTests
         await view.HandleKeyAsync(new Key('g'));
         Assert.True(view.GateView.IsOpen);
         var boardDefault = view.GateView.Lines.ToArray();
-        Assert.Equal(secondary ? "11111111 Other" : "22222222 Member + 33333333 Companion", boardDefault[1]);
+        Assert.Equal(secondary ? new[] { "11111111 Other" } : new[] { "  22222222  Member", "  33333333  Companion" },
+            boardDefault.Skip(1).Take(secondary ? 1 : 2));
         await view.HandleKeyAsync(new Key('q'));
         await Command(view, ":gate");
         Assert.True(view.GateView.IsOpen);

@@ -529,7 +529,7 @@ internal static class SourceSizeRatchet
             // Goal 7139117b: the focused runner binds the attribution occupancy heartbeat (+2 lines).
             // Goal 3abf245e: optional reproduction runner and one multi-member attribution call site.
             // Measured 14593 total lines across the same 70 partial files; no extra headroom.
-            new SourceClassCeiling("ConductorDriver", 14473, 70),
+            new SourceClassCeiling("ConductorDriver", 14459, 70),
             // Goal b7c2f833: epic-at-creation validation and post-commit inheritance call sites
             // require handler glue; resolution/assignment remain in the separate EpicAtCreation type.
             // Measured 12223 total lines across the existing 30 partial files after integrating main; no extra headroom.
@@ -609,7 +609,7 @@ internal static class SourceSizeRatchet
             // Raised by 5 lines for goal e4c3d077: expose locked role-report evidence closure at landing.
             // Goal 60609951: persisted capability substitution beside the existing budget substitution (+16 lines).
             // Goal 2e546ce9: criteria-changing revision invokes evidence supersession (+3 measured lines, no headroom).
-            new SourceClassCeiling("AgentOrchestratorKernel", 9295, 28),
+            new SourceClassCeiling("AgentOrchestratorKernel", 9294, 28),
             // Goal d6033045 extracted the pre-admission receipt pass to PassedMergeTrainReceiptAdmission; goal 1d0f2317
             // adds one admission predicate to exclude stream-complete children before slot reservation. Measured 9255.
             // Goal 679eee57 added a one-line tick call to the separately owned ConductorExperimentWatch (+1); goal 80de5cb2 extracted
@@ -668,7 +668,8 @@ internal static class SourceSizeRatchet
             // Goal 7dadc55c extracts task detail and timeline output to TaskTextView and TaskTimelineTextView (slice 14): measured 2462 lines in 33 partials; no headroom.
             // Goal 9a0a3d15 splits GoalsAndTasks into GoalTextView, GoalIntakeReceiptTextView and HealthTextView (slice 14, -228 lines, -1 partial): measured 2234 lines in 32 partials; no headroom.
             // Goal ddac2d5b extracts readiness and worklist output to ReadinessWorklistTextView: measured 2007 lines in 31 partials; no headroom.
-            new SourceClassCeiling("ConsoleViews", 2007, 31),
+            // Goal 5d0d9fe7 extracts operator intent, inbox, goals-prune and dogfood evaluation and renames FindingLookupTextView (slice 14, -140 lines, -4 partials): measured 1867 lines in 27 partials; no headroom.
+            new SourceClassCeiling("ConsoleViews", 1867, 27),
         });
 
     internal static IReadOnlyList<SourceSizeViolation> EvaluateClasses(

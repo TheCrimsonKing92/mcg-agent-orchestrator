@@ -8,6 +8,8 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 internal sealed partial class ConductorDriver
 {
     internal MergeTrainReproductionAttribution.Runner? MergeTrainReproductionRunner { get; set; }
+    internal MergeTrainFocusedRecheckRunner.Runner? MergeTrainRecheckRunner { get; set; }
+    internal MergeTrainFocusedRecheckDecision.DependencySelector MergeTrainRecheckDependencySelector { get; set; } = RepositoryRecheckTestSelection.Read;
 
     internal MergeTrainReproductionAttribution.Runner CreateMergeTrainReproductionRunner() =>
         MergeTrainReproductionAttribution.CreateLiveRunner(_cohortWorkspace!, _cohortAcceptanceVerifier!, _cohortCleanupHooks,
@@ -88,6 +90,7 @@ internal sealed partial class ConductorDriver
         IReadOnlyList<string> redSubjects = [];
         var redAttributionSource = "ownership";
         Action? completeAttributedFailure = null;
+        MergeTrainFocusedRecheckDecision? pendingRecheck = null;
         for (var attempt = 0; attempt <= 1; attempt++)
         {
             MergeTrainWorkspace workspace;
@@ -225,38 +228,15 @@ internal sealed partial class ConductorDriver
                         admitted = true;
                         onGateAdmitted?.Invoke();
                     }
-                    var executionOwner = AcceptanceExecutionOwners.CreateAttempt(
-                        workspace.Path,
-                        members[0].GoalId,
-                        stableSlotLease.Environment.BuildPermitIndex,
-                        cancellationToken,
-                        CreateMergeTrainGateExecutionOptions(identity, members, trainKey, goalsById));
-                    var verification = AcceptanceExecutionOwnerLifetime.Run(
-                        executionOwner,
-                        () => _cohortAcceptanceVerifier.RunOwnedAsync(
-                            workspace.Path,
-                            goalId: members[0].GoalId,
-                            changedFiles,
-                            stableSlotLease.Environment.BuildPermitIndex,
-                            stableSlotLease,
-                            executionOwner).GetAwaiter().GetResult());
-                    clock.Stop();
-                    var resultPaths = NormalizeCohortTestResultPaths(verification.TestResultPaths);
-                    var outcome = MergeTrainTimeoutAttribution.ResolveGateOutcome(
-                        AcceptanceCohortVerificationClassifier.ClassifyCohortVerificationResultWithPaths(
-                            verification, allowNormalized: false).Classification, resultPaths, workspace.Path, members);
-                    var receiptId = $"merge-train-receipt-{identity.Value[(MergeTrainIdentity.Version.Length + 1)..]}";
-                    receipt = _mergeTrainAcceptanceStore.SaveGateReceipt(new MergeTrainReceipt(
-                        receiptId,
-                        identity,
-                        outcome,
-                        _utcNow(),
-                        checked((long)clock.Elapsed.TotalMilliseconds),
-                        verification.Checks?.Where(check => !check.Passed && !check.Advisory)
-                            .Select(check => check.Name).ToArray() ?? [],
-                        verification.ExitCode,
-                        GroupedReceiptTestResultPaths.Apply(Console.Out, "train", receiptId, verification, resultPaths),
-                        ValidForLanding: outcome == MergeTrainGateOutcome.Passed));
+                    receipt = pendingRecheck?.Execute(workspace.Path, identity, _mergeTrainAcceptanceStore,
+                        MergeTrainRecheckRunner ?? MergeTrainFocusedRecheckRunner.CreateLiveRunner(_cohortAcceptanceVerifier, _cohortWorkspace),
+                        stableSlotLease, _utcNow(), cancellationToken, detail => TryAppendGateProgressEvent(
+                            new ConductEventLogWriter(_cohortWorkspace.ConductEventsLogPath), pendingRecheck.Culprit.GoalId.Value,
+                            detail, eventKind: "train-focused-recheck"));
+                    if (receipt is null)
+                        receipt = MergeTrainGateReceiptExecution.Run(_cohortAcceptanceVerifier, workspace.Path,
+                            identity, changedFiles, _mergeTrainAcceptanceStore, stableSlotLease,
+                            CreateMergeTrainGateExecutionOptions(identity, members, trainKey, goalsById), clock, _utcNow, cancellationToken, attemptId);
                 }
                 catch (Exception ex) when (ex is AcceptanceInfrastructureDeferredException or
                     DotnetBuildSlotsBusyException or BuildLockBlockedException or OperationCanceledException or
@@ -385,6 +365,9 @@ internal sealed partial class ConductorDriver
                     completeAttributedFailure();
                     return Fallback($"outcome={receipt.Outcome} attempts={attempt + 1} fallback=ordinary");
                 }
+                if (reproduced.Count == 1)
+                    pendingRecheck = MergeTrainFocusedRecheckDecision.Plan(receipt, workspace.Path,
+                        reproduced[0].Member, "reproduction", MergeTrainRecheckDependencySelector);
                 continue;
             }
             // Record positively attributed RED before the bisect can lose its build slot;
@@ -406,6 +389,9 @@ internal sealed partial class ConductorDriver
             // Keep the bounded bisection; absent source attribution, retain drop-newest.
             // The dropped member remains absent from MemberResults for its later solo gate.
             var dropped = attributed ?? members[^1];
+            if (!messageSubjectFailure)
+                pendingRecheck = MergeTrainFocusedRecheckDecision.Plan(receipt, workspace.Path,
+                    dropped, attributed is null ? null : attributionSource, MergeTrainRecheckDependencySelector);
             redDropped = messageSubjectFailure ? null : dropped;
             redReceipt = receipt;
             redSubjects = subjects;

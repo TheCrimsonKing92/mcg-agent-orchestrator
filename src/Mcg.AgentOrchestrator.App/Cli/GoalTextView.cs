@@ -82,7 +82,7 @@ public static void PrintGoal(
 
     if (!tasksOnly)
     {
-        var declaredCriteria = AcceptanceCriteriaParser.ParseDeclared(goal.Objective);
+        var declaredCriteria = DeclaredTestRemovalSet.FromObjective(goal.Objective).Ordinary;
         if (declaredCriteria.Count > 0 || goal.RefinedSpec is not null)
         {
             Console.WriteLine($"Brief acceptance criteria ({declaredCriteria.Count}):");

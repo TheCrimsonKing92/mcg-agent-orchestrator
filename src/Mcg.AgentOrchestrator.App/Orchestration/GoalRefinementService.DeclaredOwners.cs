@@ -111,7 +111,7 @@ internal sealed partial class GoalRefinementService
         var versionText = topic["ownership-v".Length..].Split('-')[0];
         return int.TryParse(versionText, out var version) && goal.AuthoritativeBrief.Version > version &&
                goal.RefinedSpec is { } spec &&
-               FindDeclaredOwnershipIssues(goal, AcceptanceCriteriaParser.ParseDeclared(goal.Objective),
+               FindDeclaredOwnershipIssues(goal, DeclaredTestRemovalSet.FromObjective(goal.Objective).Ordinary,
                    spec.AcceptanceCriteria, [], spec.OperatorOwnedAcceptanceCriteria.ToList(),
                    spec.AcceptanceGateOwnedAcceptanceCriteria.ToList()).Count == 0;
     }

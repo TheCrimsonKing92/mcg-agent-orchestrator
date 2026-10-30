@@ -7,7 +7,7 @@ internal static class ProspectiveEvidenceTrxRows
 {
     internal sealed record Row(
         string FullIdentity, string ShortIdentity, string? ClassName, string? Outcome, string Path,
-        string? AliasIdentity = null, string? BareIdentity = null)
+        string? AliasIdentity = null, string? BareIdentity = null, string? CodeBase = null)
     {
         internal bool Passed => Outcome == "Passed";
     }
@@ -34,7 +34,8 @@ internal static class ProspectiveEvidenceTrxRows
                 var alias = string.IsNullOrEmpty(codeBase) ? null : $"{codeBase}.{method.Attribute("name")?.Value}";
                 var bareName = method.Attribute("name")?.Value;
                 yield return new(full, definition?.Attribute("name")?.Value ?? full, className,
-                    result.Attribute("outcome")?.Value, path, alias, string.IsNullOrEmpty(bareName) ? null : bareName);
+                    result.Attribute("outcome")?.Value, path, alias, string.IsNullOrEmpty(bareName) ? null : bareName,
+                    string.IsNullOrEmpty(codeBase) ? null : codeBase);
                 continue;
             }
             var namespaceEnd = className?.LastIndexOf('.') ?? -1;

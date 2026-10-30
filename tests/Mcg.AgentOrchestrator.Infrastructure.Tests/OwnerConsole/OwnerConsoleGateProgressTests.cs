@@ -157,8 +157,8 @@ public sealed class OwnerConsoleGateProgressTests
         Assert.False(gate.Failing);
         Assert.Contains("0/2", OwnerConsoleGateFormatter.StatusSegment(gate));
         var lines = OwnerConsoleGateLayout.Lines(gate, 120, false);
-        Assert.Equal(" x 0 failed   > 1 running   + 0 passed   = 0 cached   . 1 queued", lines[2]);
-        Assert.Equal("[##--------] estimate 27%  ~3m left", lines[3]);
+        Assert.Equal(" x 0 failed   > 1 running   + 0 passed   = 0 cached   . 1 queued", lines[1 + members]);
+        Assert.Equal("[##--------] estimate 27%  ~3m left", lines[2 + members]);
     }
 
     [Theory]

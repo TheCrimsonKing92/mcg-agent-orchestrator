@@ -6,6 +6,21 @@ using Mcg.AgentOrchestrator.Infrastructure;
 // Parallel-safe: unique roots, fake owned launch callbacks, no real process or shared store.
 public sealed class AcceptanceAttemptGcEnvironmentTests
 {
+    [Fact]
+    public void Solo_PropagatesOrchestratorDataRootAfterHermeticScrub_AndLanesScrubItAgain()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"r-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            var environment = EnvironmentFor(Launch(root, focused: false));
+            Assert.Equal(OrchestratorDataRoot.Resolve().RootDirectory, environment[OrchestratorDataRoot.EnvironmentVariable]);
+            GoalAcceptanceVerifier.ConfigureHermeticVerificationEnvironment(environment, root);
+            Assert.False(environment.ContainsKey(OrchestratorDataRoot.EnvironmentVariable));
+        }
+        finally { SharedTestSupport.RemoveTempDirectory(root); }
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

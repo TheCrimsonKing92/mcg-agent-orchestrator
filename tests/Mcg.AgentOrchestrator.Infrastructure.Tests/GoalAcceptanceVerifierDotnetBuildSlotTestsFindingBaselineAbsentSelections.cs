@@ -153,7 +153,7 @@ internal sealed class FindingBaselineProbeFixture : IDisposable
 
     internal Task<FocusedEvidenceRunResult> RunAsync(string request =
         "Core.Tests: AddedProbeTests; Core.Tests: PreExistingProbeTests") =>
-        new GoalAcceptanceVerifier().RunFocusedEvidenceAsync(Root, _goalId, request, runBaselineArm: true);
+        new GoalAcceptanceVerifier(new CrosswalkExecutableResolver()).RunFocusedEvidenceAsync(Root, _goalId, request, runBaselineArm: true);
 
     public void Dispose()
     {

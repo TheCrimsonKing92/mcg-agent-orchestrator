@@ -141,7 +141,7 @@ internal sealed partial class GoalRefinementService
             var fallbackOperatorOwned = fallback.OperatorOwnedAcceptanceCriteria.ToList();
             var fallbackGateOwned = fallback.AcceptanceGateOwnedAcceptanceCriteria.ToList();
             var fallbackIssues = FindDeclaredOwnershipIssues(
-                goal, AcceptanceCriteriaParser.ParseDeclared(goal.Objective), fallback.AcceptanceCriteria, [],
+                goal, DeclaredTestRemovalSet.FromObjective(goal.Objective).Ordinary, fallback.AcceptanceCriteria, [],
                 fallbackOperatorOwned, fallbackGateOwned);
             var fallbackQuestions = new List<RefinedSpecOpenQuestion>();
             var raisedOwnershipClarification = await AddDeclaredOwnershipQuestionsAsync(
@@ -176,7 +176,9 @@ internal sealed partial class GoalRefinementService
                     : $"Answered by operator; topic already resolved (topic: {resolved.TopicKey}).");
         }
 
-        var rawDeclaredCriteria = AcceptanceCriteriaParser.ParseDeclared(goal.Objective);
+        var removalSet = DeclaredTestRemovalSet.FromObjective(goal.Objective);
+        var rawDeclaredCriteria = removalSet.Ordinary;
+        var criterionOwnerships = RemapOrdinaryCriterionOwnerships(removalSet, output.CriterionOwnerships);
         var declaredCriteria = rawDeclaredCriteria
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
@@ -192,7 +194,7 @@ internal sealed partial class GoalRefinementService
         {
             acceptanceGateOwnedCriteria = ResolveDeclaredOwnedCriteria(
                 acceptanceCriteria,
-                output.CriterionOwnerships,
+                criterionOwnerships,
                 operatorOwnedCriteria,
                 parseDiagnostics);
         }
@@ -213,7 +215,7 @@ internal sealed partial class GoalRefinementService
             operatorOwnedCriteria,
             resolvedClarifications);
         var ownershipIssues = FindDeclaredOwnershipIssues(
-            goal, rawDeclaredCriteria, acceptanceCriteria, output.CriterionOwnerships,
+            goal, rawDeclaredCriteria, acceptanceCriteria, criterionOwnerships,
             operatorOwnedCriteria, acceptanceGateOwnedCriteria);
         acceptanceGateOwnedCriteria.RemoveAll(criterion =>
             operatorOwnedCriteria.Contains(criterion, StringComparer.OrdinalIgnoreCase));
@@ -425,9 +427,11 @@ internal sealed partial class GoalRefinementService
             OperatorOwnedAcceptanceCriteria = operatorOwnedCriteria,
             AcceptanceGateOwnedAcceptanceCriteria = acceptanceGateOwnedCriteria,
             ClarificationAnswerHistory = clarificationAnswerHistory,
-            CriterionEvidenceDeclarations = output.CriterionEvidenceDeclarations.Select(declaration =>
+            CriterionEvidenceDeclarations = output.CriterionEvidenceDeclarations
+                .Where(declaration => criterionOwnerships.Any(item => item.Text == declaration.Criterion))
+                .Select(declaration =>
             {
-                var matches = output.CriterionOwnerships.Where(item => item.Text == declaration.Criterion).ToArray();
+                var matches = criterionOwnerships.Where(item => item.Text == declaration.Criterion).ToArray();
                 var criterion = matches.Length == 1 && matches[0].DeclaredIndex is { } number &&
                     number > 0 && number <= acceptanceCriteria.Count
                     ? acceptanceCriteria[number - 1] : declaration.Criterion;
@@ -872,7 +876,7 @@ internal sealed partial class GoalRefinementService
         var prompt = SpecRefinerPlanner.BuildPrompt(objective, resolvedClarifications);
         var promptCharacters = prompt.Length;
         var promptBytes = Encoding.UTF8.GetByteCount(prompt);
-        var declaredCriteriaCount = ParseDeclaredAcceptanceCriteria(objective).Count;
+        var declaredCriteriaCount = AcceptanceCriteriaParser.ParseDeclared(objective).Count;
         int? declaredIndexUpperBound = declaredCriteriaCount > 0 ? declaredCriteriaCount : null;
         if (binding.Subscription is { } subscription && _workerProfiles is not null)
         {
@@ -1132,14 +1136,36 @@ internal sealed partial class GoalRefinementService
             return declaredCriteria;
 
         return refinedCriteria
+            .Where(text => !AcceptanceCriteriaParser.TryGetTestRemovalIdentity(text, out _))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
     }
 
     private static List<string> ParseDeclaredAcceptanceCriteria(string objective) =>
-        AcceptanceCriteriaParser.ParseDeclared(objective)
+        DeclaredTestRemovalSet.FromObjective(objective).Ordinary
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
+
+    private static IReadOnlyList<SpecRefinementCriterionOwnership> RemapOrdinaryCriterionOwnerships(
+        DeclaredTestRemovalSet removals,
+        IReadOnlyList<SpecRefinementCriterionOwnership> ownerships)
+    {
+        var result = new List<SpecRefinementCriterionOwnership>();
+        foreach (var ownership in ownerships)
+        {
+            if (ownership.DeclaredIndex is { } declaredIndex &&
+                declaredIndex >= 1 && declaredIndex <= removals.Ordinary.Count + removals.Count)
+            {
+                if (removals.GetOrdinaryIndex(declaredIndex) is { } ordinaryIndex)
+                    result.Add(ownership with { DeclaredIndex = ordinaryIndex + 1 });
+            }
+            else if (!AcceptanceCriteriaParser.TryGetTestRemovalIdentity(ownership.Text, out _))
+            {
+                result.Add(ownership);
+            }
+        }
+        return result;
+    }
 
     private static string BuildCorrelationKey(GoalId goalId, string topicKey)
     {

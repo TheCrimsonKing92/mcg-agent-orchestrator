@@ -14,6 +14,7 @@ internal static class CliCommandCapabilities
         "failure-clusters",
         "storage-health",
         "build-attribution",
+        "impact-replay",
         "intent-coverage",
         "remote-executors",
         "round-value",

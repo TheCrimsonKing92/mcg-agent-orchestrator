@@ -35,6 +35,15 @@ public sealed record CommittedGoalChanges(bool Available, IReadOnlyList<string> 
 
 public static class GoalChangesReader
 {
+    // Resolve only the configured integration ref and the recorded candidate, never a worktree HEAD.
+    public static string? ReadMergeBase(string repository, string integrationBranch, string candidate)
+    {
+        if (!IsRevision(candidate) || string.IsNullOrWhiteSpace(integrationBranch)) return null;
+        var result = GitCli.Run(repository, 20_000, "merge-base", "--all", "refs/heads/" + integrationBranch, candidate);
+        var revision = result.Output.Trim();
+        return result.Succeeded && !result.DrainTimedOut && IsRevision(revision) ? revision : null;
+    }
+
     // Immutable range only. Failure must not look like a confirmed empty change set.
     public static CommittedGoalChanges ReadCommittedRange(string repository, string basis, string candidate)
     {

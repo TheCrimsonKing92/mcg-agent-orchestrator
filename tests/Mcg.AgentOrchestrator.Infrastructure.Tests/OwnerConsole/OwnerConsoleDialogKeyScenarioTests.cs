@@ -76,9 +76,11 @@ public sealed class OwnerConsoleDialogKeyScenarioTests
     {
         using var fixture = new Fixture();
         await fixture.RenderAsync();
+        string[]? priorLines = null;
         if (detail)
         {
             await fixture.View.HandleKeyAsync(new Key('e'));
+            priorLines = fixture.View.EpicView.Lines.ToArray();
             fixture.Source.Error = new InvalidOperationException("portfolio unavailable");
             await fixture.View.HandleKeyAsync(Key.Enter);
             Assert.True(fixture.View.EpicView.ShowingDetail);
@@ -89,7 +91,12 @@ public sealed class OwnerConsoleDialogKeyScenarioTests
             await fixture.View.HandleKeyAsync(new Key('e'));
         }
         var epic = fixture.View.EpicView;
-        Assert.Contains("Could not load epics: portfolio unavailable. Press Ctrl+R to retry.", epic.Lines);
+        if (detail)
+        {
+            Assert.Equal(priorLines, epic.Lines);
+            Assert.Contains("refresh failed: portfolio unavailable", epic.Title.ToString());
+        }
+        else Assert.Contains("Could not load epics: portfolio unavailable. Press Ctrl+R to retry.", epic.Lines);
         Assert.Contains("Ctrl+R retry", epic.HintText);
         var calls = fixture.Source.Calls;
         var plain = new Key('r');

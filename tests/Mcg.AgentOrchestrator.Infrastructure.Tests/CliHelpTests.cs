@@ -9,6 +9,7 @@ public sealed class CliHelpTests
 {
     [Xunit.Theory(DisplayName = "Cli_help_prints_usage_without_executing_command")]
     [Xunit.InlineData(new[] { "backlog-list", "--help" }, "backlog-list", "--limit <n>")]
+    [Xunit.InlineData(new[] { "impact-replay", "--help" }, "impact-replay", "--floor <name>")]
     [Xunit.InlineData(new[] { "backlog-add", "-h" }, "backlog-add", "--text-file")]
     [Xunit.InlineData(new[] { "backlog-similar", "--help" }, "backlog-similar", "--excerpt")]
     [Xunit.InlineData(new[] { "backlog-update", "--help" }, "backlog-update", "--description")]
@@ -690,6 +691,15 @@ public sealed class CliHelpTests
 
         Xunit.Assert.Contains("Unknown option '--zz-not-a-real-flag'", exception.Message, StringComparison.Ordinal);
         Xunit.Assert.Contains("Usage:", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void ImpactReplayIsRegisteredAsReadOnlyWithDocumentedFlags()
+    {
+        Xunit.Assert.Contains("impact-replay", CliArgumentParser.RecognizedCommands);
+        Xunit.Assert.Equal(CliCommandCapability.QueryOnly, CliCommandCapabilities.Classify(["impact-replay"]));
+        CliCommandHelp.ThrowIfInvalidFlags(["impact-replay", "--since", "2026-10-29", "--limit", "100",
+            "--out", "report", "--floor", "Chaos gate", "--floor", "Process spawning"]);
     }
 
     [Xunit.Fact]

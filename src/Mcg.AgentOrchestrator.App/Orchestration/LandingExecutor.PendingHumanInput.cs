@@ -22,13 +22,22 @@ internal static partial class LandingExecutor
                 (reviewed, landing) => ConductorOnlyCandidateRange.IsConductorOnly(
                     workspace.ResolveExecutionDirectory(goal.Id), workspace.IntegrationBranch, reviewed, landing));
         var obligations = GateTestObligationEvaluator.Evaluate(goal, orchestratorDirectory, candidateRevision,
-            new(workspace.ExecutionDirectory, workspace.IntegrationBranch), kernel.HumanInputRequests.ToArray());
+            new(workspace.ExecutionDirectory, workspace.IntegrationBranch), kernel.HumanInputRequests.ToArray(),
+            journalDirectory: workspace.ExecutionDirectory);
         foreach (var result in obligations.Where(result => result.Outcome == GateTestObligationEvaluator.Outcome.Satisfied &&
             result.RenameProvenance.Length > 0))
             Console.WriteLine(result.RenameProvenance);
         foreach (var result in obligations.Where(result => result.Outcome == GateTestObligationEvaluator.Outcome.Satisfied &&
             result.AnswerRebindProvenance.Length > 0))
             Console.WriteLine(result.AnswerRebindProvenance);
+        foreach (var line in obligations.Where(result => result.Outcome == GateTestObligationEvaluator.Outcome.Satisfied)
+            .Select(result => result.CarryForwardProvenance).Where(line => line.Length > 0).Distinct(StringComparer.Ordinal))
+            Console.WriteLine(line);
+        foreach (var line in obligations.Select(result => result.CarryForwardDiagnostic)
+            .Where(line => line is not null).Distinct(StringComparer.Ordinal))
+            Console.WriteLine(line);
+        foreach (var line in obligations.SelectMany(result => result.PackageResolutionProvenance))
+            Console.WriteLine(line);
         var obligationLines = obligations
             .Where(result => result.Outcome is not (GateTestObligationEvaluator.Outcome.Satisfied or GateTestObligationEvaluator.Outcome.Waived))
             .Select(result =>

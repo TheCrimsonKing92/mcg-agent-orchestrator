@@ -205,7 +205,12 @@ public sealed class OwnerConsoleActivityFilterScenarioTests
         }
 
         await Command(scene, "filter 2222");
-        if (mode == "loading") Assert.Equal(new[] { "loading..." }, scene.View.ActivityLines);
+        if (mode == "loading")
+        {
+            Assert.DoesNotContain("loading...", scene.View.ActivityLines);
+            Assert.Contains("(refreshing)", scene.View.PaneTitle(OwnerConsolePane.Activity));
+            Assert.NotEmpty(scene.View.ActivityLines);
+        }
         await Command(scene, "filter");
 
         EqualPanes(baseline, scene);

@@ -79,7 +79,7 @@ public sealed class CliCommandCapabilitiesTestsQueryRouteNoWriterEffects : CliTa
     public void QueryOnlyVerbs_TableAndFiveExemptions_CoverEveryVerb()
     {
         string[] exemptions =
-            ["owner-digest", "context-usage"];
+            ["owner-digest", "context-usage", "impact-replay"];
         foreach (var verb in CliCommandCapabilities.QueryOnlyVerbs)
             Assert.True(ServedForms.ContainsKey(verb) ||
                 exemptions.Contains(verb, StringComparer.OrdinalIgnoreCase),

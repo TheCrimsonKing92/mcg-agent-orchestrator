@@ -117,12 +117,13 @@ public sealed partial class AgentOrchestratorKernel
         var refinedCriteriaCount = default(int?);
         var refinedCriteriaReDerived = false;
         IReadOnlyList<HumanInputRequestId> closedPlannerEvidenceRequestIds = [];
-        var declaredCriteria = AcceptanceCriteriaParser.ParseDeclared(newBrief);
+        var removalSet = DeclaredTestRemovalSet.FromObjective(newBrief);
+        var declaredCriteria = removalSet.Ordinary;
         if (discardFailedRefinement)
         {
             goal.DiscardRefinedSpecForFailedRefinement();
         }
-        else if (declaredCriteria.Count > 0 &&
+        else if ((declaredCriteria.Count > 0 || removalSet.Count > 0) &&
             goal.RefinedSpec is { } currentSpec &&
             !currentSpec.AcceptanceCriteria.SequenceEqual(declaredCriteria, StringComparer.Ordinal))
         {

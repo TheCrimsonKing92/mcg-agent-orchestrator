@@ -9,10 +9,14 @@ internal static class GateTestObligationEvaluator
 
     internal sealed record RenameScope(string RepositoryDirectory, string IntegrationBranch);
 
+    internal sealed record CarryForwardFollow(string GoalId, string FromSha, string ToSha);
+
     internal sealed record Result(
         GateTestObligation Obligation, Outcome Outcome, IReadOnlyList<string> Selectors, string? SourceId,
         string? WaiverReason = null, IReadOnlyList<TestClassRenameEvidence.ClassRename>? RenameFollows = null,
-        IReadOnlyList<AnsweredSelectorRebinding.Rebind>? AnswerRebinds = null)
+        IReadOnlyList<AnsweredSelectorRebinding.Rebind>? AnswerRebinds = null,
+        CarryForwardFollow? CarryForward = null, string? CarryForwardDiagnostic = null,
+        IReadOnlyList<GoTestPackageResolution.Resolution>? PackageResolutions = null)
     {
         internal string RenameProvenance => string.Join("; ", (RenameFollows ?? []).Select(rename =>
             $"GATE_TEST_OBLIGATION_RENAME_FOLLOWED id={Obligation.Id[..Math.Min(8, Obligation.Id.Length)]} " +
@@ -23,26 +27,39 @@ internal static class GateTestObligationEvaluator
             $"GATE_TEST_OBLIGATION_ANSWER_REBOUND id={Obligation.Id[..Math.Min(8, Obligation.Id.Length)]} " +
             $"old={rebind.OldClass} new={rebind.NewClass} request={rebind.RequestId[..Math.Min(8, rebind.RequestId.Length)]} " +
             $"answer={rebind.AnswerId} source={SourceId}"));
+
+        internal string CarryForwardProvenance => CarryForward is { } carry
+            ? $"GATE_TEST_OBLIGATION_CARRY_FORWARD_FOLLOWED id={carry.GoalId[..Math.Min(8, carry.GoalId.Length)]} " +
+                $"from={carry.FromSha} to={carry.ToSha} source={SourceId}"
+            : "";
+
+        internal IReadOnlyList<string> PackageResolutionProvenance => (PackageResolutions ?? []).Select(resolution =>
+            $"GATE_TEST_OBLIGATION_PACKAGE_RESOLVED id={Obligation.Id[..Math.Min(8, Obligation.Id.Length)]} " +
+            $"selector={resolution.Selector} package={resolution.Package} directory={resolution.Directory} source={SourceId}")
+            .ToArray();
     }
 
     internal static IReadOnlyList<Result> Evaluate(
         Goal goal, string orchestratorDirectory, string? candidateSha, RenameScope? renameScope = null,
-        IEnumerable<HumanInputRequest>? answeredRequests = null)
+        IEnumerable<HumanInputRequest>? answeredRequests = null, string? journalDirectory = null)
     {
         var obligations = goal.GateTestObligations
             .Where(obligation => obligation.BriefVersion == goal.AuthoritativeBrief.Version).ToArray();
         if (obligations.Length == 0) return [];
 
-        var sources = ProspectiveEvidenceGateResolver.ReadAttempts(orchestratorDirectory, goal.Id, candidateSha)
-            .Select(attempt => new Source(attempt.Id, attempt.CompletedAt, attempt.Paths, attempt.BriefVersion))
-            .Concat(GroupedGateReceiptTrxEvidence.ReadPassedReceipts(orchestratorDirectory, goal.Id, candidateSha)
-                .Select(receipt => new Source(receipt.ReceiptId, receipt.CompletedAt, receipt.TrxPaths, receipt.BriefVersion)))
+        var carried = journalDirectory is not null && !string.IsNullOrWhiteSpace(candidateSha)
+            ? CarriedForwardGateSourceResolver.Resolve(journalDirectory, goal.Id, candidateSha)
+            : new CarriedForwardGateSourceResolver.Resolution([]);
+        var sources = ReadSources(orchestratorDirectory, goal.Id, candidateSha)
+            .Concat(carried.CarriedFromShas.SelectMany(sha => ReadSources(orchestratorDirectory, goal.Id, sha, sha)))
             .Where(source => AllPathsExist(source.Paths, orchestratorDirectory))
             .OrderByDescending(source => source.CompletedAt)
             .ThenBy(source => source.Id, StringComparer.Ordinal).ToArray();
 
         var renames = new Lazy<IReadOnlyList<TestClassRenameEvidence.ClassRename>>(() =>
             TestClassRenameEvidence.Read(renameScope!.RepositoryDirectory, renameScope.IntegrationBranch, candidateSha!));
+        var packageResolution = renameScope is not null && !string.IsNullOrWhiteSpace(candidateSha)
+            ? new GoTestPackageResolution(renameScope.RepositoryDirectory, renameScope.IntegrationBranch, candidateSha) : null;
         return obligations.Select(obligation =>
         {
             if (GateTestObligationWaivers.FindWaiver(goal, obligation) is { } waiver)
@@ -51,11 +68,24 @@ internal static class GateTestObligationEvaluator
             var result = original.Outcome == Outcome.SelectorNotFound && renameScope is not null &&
                 !string.IsNullOrWhiteSpace(candidateSha)
                 ? FollowRenames(original, sources, orchestratorDirectory, renames.Value) : original;
-            return result.Outcome == Outcome.SelectorNotFound && answeredRequests is not null
+            if (result.Outcome is Outcome.SelectorNotFound or Outcome.Failed && packageResolution is not null)
+                result = packageResolution.Resolve(result, sources, orchestratorDirectory);
+            result = result.Outcome == Outcome.SelectorNotFound && answeredRequests is not null
                 ? FollowAnswerRebinds(result, sources, orchestratorDirectory,
                     AnsweredSelectorRebinding.For(goal, obligation, answeredRequests)) : result;
+            if (result.Outcome == Outcome.Satisfied &&
+                sources.FirstOrDefault(source => source.Id == result.SourceId)?.CarriedFrom is { } from)
+                result = result with { CarryForward = new(goal.Id.Value, from, candidateSha!) };
+            return result with { CarryForwardDiagnostic = carried.Diagnostic };
         }).ToArray();
     }
+
+    private static IEnumerable<Source> ReadSources(
+        string orchestratorDirectory, GoalId goalId, string? sha, string? carriedFrom = null) =>
+        ProspectiveEvidenceGateResolver.ReadAttempts(orchestratorDirectory, goalId, sha)
+            .Select(attempt => new Source(attempt.Id, attempt.CompletedAt, attempt.Paths, attempt.BriefVersion, carriedFrom))
+            .Concat(GroupedGateReceiptTrxEvidence.ReadPassedReceipts(orchestratorDirectory, goalId, sha)
+                .Select(receipt => new Source(receipt.ReceiptId, receipt.CompletedAt, receipt.TrxPaths, receipt.BriefVersion, carriedFrom)));
 
     private static Result FollowRenames(Result original, IReadOnlyList<Source> sources,
         string orchestratorDirectory, IReadOnlyList<TestClassRenameEvidence.ClassRename> renames)
@@ -132,17 +162,25 @@ internal static class GateTestObligationEvaluator
                 return new(obligation, Outcome.Satisfied, obligation.Selectors, source.Id);
             if (newest is not null) continue;
 
-            var failed = evidence.Where(item => !item.Satisfied && item.Failed > 0)
+            newest = Grade(obligation, source.Id, evidence);
+        }
+        return newest ?? new(obligation, Outcome.Pending, obligation.Selectors, null);
+    }
+
+    internal static Result Grade(GateTestObligation obligation, string sourceId,
+        IReadOnlyList<GroupedGateReceiptTrxEvidence.SelectorEvidence> evidence)
+    {
+        if (evidence.All(item => item.Satisfied))
+            return new(obligation, Outcome.Satisfied, obligation.Selectors, sourceId);
+        var failed = evidence.Where(item => !item.Satisfied && item.Failed > 0)
                 .Select(item => item.Selector).ToArray();
-            newest = failed.Length > 0
-                ? new(obligation, Outcome.Failed, failed, source.Id)
+        return failed.Length > 0
+                ? new(obligation, Outcome.Failed, failed, sourceId)
                 : new(obligation, Outcome.SelectorNotFound,
                     evidence.Where(item => !item.Satisfied && item.Failed == 0 &&
                             (item.AmbiguousClassNames is not null || item.Passed + item.Failed + item.Superseded == 0))
                         .Select(item => item.AmbiguousClassNames is not null ? item.ReportedEntry : item.Selector)
-                        .ToArray(), source.Id);
-        }
-        return newest ?? new(obligation, Outcome.Pending, obligation.Selectors, null);
+                        .ToArray(), sourceId);
     }
 
     private static bool AllPathsExist(IReadOnlyList<string> paths, string orchestratorDirectory)
@@ -151,5 +189,6 @@ internal static class GateTestObligationEvaluator
         catch (Exception) { return false; }
     }
 
-    private sealed record Source(string Id, DateTimeOffset CompletedAt, IReadOnlyList<string> Paths, int? BriefVersion);
+    internal sealed record Source(
+        string Id, DateTimeOffset CompletedAt, IReadOnlyList<string> Paths, int? BriefVersion, string? CarriedFrom = null);
 }

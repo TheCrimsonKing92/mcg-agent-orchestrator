@@ -91,7 +91,7 @@ public sealed class OwnerConsolePreviewCompletionTests
                 // The window and SELECTED frame each consume two border columns.
                 Assert.Equal(96, label.Viewport.Width);
                 // TextChanging still exposes the old text fitted to the initial four-cell interior.
-                Assert.Equal("Loa…", label.Text);
+                Assert.Equal("Pre…\nDev…", label.Text);
                 layoutWriting.SetResult();
                 if (!finishLayout.Wait(TestHangGuard.Bound, Token))
                     throw new TimeoutException("Hang guard: release of layout's loading text write was not signalled.");
