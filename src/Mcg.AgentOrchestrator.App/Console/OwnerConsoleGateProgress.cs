@@ -45,10 +45,12 @@ internal sealed record OwnerConsoleGateProgress(bool Live, string Kind,
     internal static OwnerConsoleGateProgress Build(DateTimeOffset now, IEnumerable<OwnerConductEvent> events,
         IReadOnlyList<OwnerConsoleGateManifestLane> manifest, IEnumerable<OwnerConsoleGateDuration> durations,
         Func<string, string?>? title = null, IReadOnlyDictionary<string, double>? quietSeconds = null,
-        OwnerConsoleGateLaneResolver? lanes = null, int? capacity = null)
+        OwnerConsoleGateLaneResolver? lanes = null, int? capacity = null,
+        IReadOnlyList<OwnerConsoleGateExecutorSlots>? executors = null)
     {
         var parsed = events.OrderBy(item => item.Timestamp).Select(item => new Observation(item, Tokens(item.Detail))).ToArray();
         var breakdownConcurrency = BreakdownConcurrency(parsed) ?? Math.Max(1, capacity ?? 1);
+        var executorSlots = executors?.Where(executor => executor.Enabled).Sum(executor => Math.Max(0, executor.Slots)) ?? 0;
         var gates = new Dictionary<string, Gate>(StringComparer.Ordinal);
         DateTimeOffset? lastEnd = null;
         foreach (var item in parsed)
@@ -189,7 +191,8 @@ internal sealed record OwnerConsoleGateProgress(bool Live, string Kind,
             var total = counted.Sum(row => row.MedianSeconds ?? 0);
             var done = counted.Where(IsDone).ToArray();
             var unfinished = counted.Where(row => !IsDone(row)).ToArray();
-            var concurrency = Math.Max(breakdownConcurrency, rows.Count(row => row.IsManifestLane && row.State == OwnerConsoleGateLaneState.Running));
+            var concurrency = Math.Max(breakdownConcurrency + executorSlots,
+                rows.Count(row => row.IsManifestLane && row.State == OwnerConsoleGateLaneState.Running));
             var remaining = OwnerConsoleGateRemainingEstimate.Makespan(unfinished, concurrency);
             var gateElapsed = Nonnegative(now - gate.Start);
             var denominator = gateElapsed.TotalSeconds + remaining;
