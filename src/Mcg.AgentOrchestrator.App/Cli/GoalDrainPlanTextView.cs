@@ -3,7 +3,7 @@ using Mcg.AgentOrchestrator.App.Rendering;
 
 namespace Mcg.AgentOrchestrator.App.Cli;
 
-internal static partial class ConsoleViews
+internal static class GoalDrainPlanTextView
 {
     public static void PrintGoalDrainPlan(GoalDrainPlan plan, IReadOnlyList<string>? appliedActions = null)
     {

@@ -90,7 +90,7 @@ private static void PrintNextFullDetail(CliExecutionContext context, AutonomyPol
     var goal = context.CurrentGoal!;
     GoalTextView.PrintGoal(goal);
     ConsoleViews.PrintMonitor(context.Kernel.BuildMonitor(goal.Id));
-    ConsoleViews.PrintGoalReadinessPreflight(GoalReadinessPreflight.Build(
+    GoalReadinessPreflightTextView.PrintGoalReadinessPreflight(GoalReadinessPreflight.Build(
         goal,
         context.Agents,
         context.Workspace.ExecutionDirectory,

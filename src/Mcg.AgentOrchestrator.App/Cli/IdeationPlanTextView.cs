@@ -2,7 +2,7 @@ using Mcg.AgentOrchestrator.App.Orchestration;
 
 namespace Mcg.AgentOrchestrator.App.Cli;
 
-internal static partial class ConsoleViews
+internal static class IdeationPlanTextView
 {
     public static void PrintIdeationPlan(IdeationPlan plan)
     {

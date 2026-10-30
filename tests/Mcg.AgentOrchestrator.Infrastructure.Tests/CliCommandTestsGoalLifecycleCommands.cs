@@ -1682,7 +1682,7 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
             apply: true,
             drainPolicy: drainPolicy,
             now: night);
-        var closedOutput = CaptureConsole(() => ConsoleViews.PrintGoalDrainPlan(closedPlan));
+        var closedOutput = CaptureConsole(() => GoalDrainPlanTextView.PrintGoalDrainPlan(closedPlan));
 
         Xunit.Assert.False(closedPlan.Schedule.IsOpen);
         Xunit.Assert.Equal(0, closedPlan.FirstBatchGoalCount);
