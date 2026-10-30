@@ -56,6 +56,7 @@ public sealed class RuntimeAssemblyArchitectureTests
         new("Mcg.AgentOrchestrator.Infrastructure.AcceptanceGitTextResolver", "Git text reads for acceptance", "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceGitTextResolver.cs:26"),
         new("Mcg.AgentOrchestrator.Infrastructure.AcceptanceLaneClosureHasher", "Git reads for lane closure hashing", "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceLaneClosureHasher.cs:131"),
         new("Mcg.AgentOrchestrator.Infrastructure.DotnetBuildServerRecovery", "Build-server shutdown", "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/DotnetBuildServerRecovery.cs:56"),
+        new("Mcg.AgentOrchestrator.Infrastructure.ForgeProcessRunner", "Bounded read-only git and gh queries behind IForgeProcessRunner", "src/Mcg.AgentOrchestrator.Infrastructure/Forge/ForgeProcessRunner.cs:28"),
         new("Mcg.AgentOrchestrator.Infrastructure.GoalAcceptanceVerifier", "Git scalar reads", "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs:6470"),
         new("Mcg.AgentOrchestrator.Infrastructure.GoalWorktrees", "Build-server shutdown and direct git", "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalWorktrees.GitOps.cs:372"),
         new("Mcg.AgentOrchestrator.Infrastructure.ProcessUnitCommandMeasurer", "Explicit project discover --measure dotnet child behind IUnitCommandMeasurer", "src/Mcg.AgentOrchestrator.Infrastructure/Onboarding/ProcessUnitCommandMeasurer.cs:37"),
