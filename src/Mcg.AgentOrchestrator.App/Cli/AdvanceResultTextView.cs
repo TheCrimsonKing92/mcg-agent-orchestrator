@@ -6,9 +6,9 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Cli;
 
-internal static partial class ConsoleViews
+internal static class AdvanceResultTextView
 {
-public static void PrintAdvanceResult(
+public static void Print(
     Goal goal,
     GoalAdvanceOutcome result,
     IReadOnlyList<AgentDefinition>? agents = null)

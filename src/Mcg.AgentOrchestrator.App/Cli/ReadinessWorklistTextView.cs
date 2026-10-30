@@ -1,7 +1,6 @@
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.App.Rendering;
 using Mcg.AgentOrchestrator.Infrastructure;
-using static Mcg.AgentOrchestrator.App.Cli.ConsoleViews;
 
 namespace Mcg.AgentOrchestrator.App.Cli;
 
@@ -42,7 +41,7 @@ public static void PrintEvidenceSummary(Goal goal, GoalEvidenceSummary summary)
 
     foreach (var item in summary.Tasks)
     {
-        Console.WriteLine($"  {GetTaskDisplayNumber(goal, item.TaskId)}. [{item.LatestEvidence}] {item.Role}: {OutputTextPreview.CreateSummary(item.Description).Text}");
+        Console.WriteLine($"  {TaskDisplayNumber.Resolve(goal, item.TaskId)}. [{item.LatestEvidence}] {item.Role}: {OutputTextPreview.CreateSummary(item.Description).Text}");
         Console.WriteLine($"     {OutputTextPreview.CreateTimeline(item.Message).Text}");
     }
 
@@ -99,7 +98,7 @@ public static void PrintStageReadinessReport(
 
     foreach (var stage in report.Stages)
     {
-        var taskNumber = GetTaskDisplayNumber(goal, stage.TaskId);
+        var taskNumber = TaskDisplayNumber.Resolve(goal, stage.TaskId);
         Console.WriteLine($"  {taskNumber}. [{stage.StageStatus}] {stage.Stage}: {OutputTextPreview.CreateSummary(stage.Description).Text}");
         Console.WriteLine($"     task={stage.TaskStatus}; assigned={stage.IsAssigned}; evidence={stage.LatestEvidence}; gate={stage.VerificationStatus}");
         Console.WriteLine($"     {OutputTextPreview.CreateTimeline(stage.Message).Text}");
@@ -119,7 +118,7 @@ public static void PrintVerificationGate(Goal goal, GoalVerificationGate gate)
 
     foreach (var task in gate.Tasks)
     {
-        Console.WriteLine($"  {GetTaskDisplayNumber(goal, task.TaskId)}. [{task.GateStatus}] {task.Role}: {OutputTextPreview.CreateSummary(task.Description).Text}");
+        Console.WriteLine($"  {TaskDisplayNumber.Resolve(goal, task.TaskId)}. [{task.GateStatus}] {task.Role}: {OutputTextPreview.CreateSummary(task.Description).Text}");
         Console.WriteLine($"     task status: {task.TaskStatus}");
         Console.WriteLine($"     {OutputTextPreview.CreateTimeline(task.Message).Text}");
     }
@@ -142,7 +141,7 @@ public static void PrintVerificationWorklist(Goal goal, GoalVerificationWorklist
     {
         foreach (var item in worklist.Items)
         {
-            var taskNumber = GetTaskDisplayNumber(goal, item.TaskId);
+            var taskNumber = TaskDisplayNumber.Resolve(goal, item.TaskId);
             Console.WriteLine($"  {taskNumber}. [{item.GateStatus}] {item.Role}: {OutputTextPreview.CreateSummary(item.Description).Text}");
             Console.WriteLine($"     {OutputTextPreview.CreateTimeline(item.Message).Text}");
             Console.WriteLine($"     action: {OutputTextPreview.CreateTimeline(item.SuggestedAction).Text}");
@@ -170,7 +169,7 @@ public static void PrintHumanInputWorklist(Goal goal, GoalHumanInputWorklist wor
         {
             var scope = item.TaskId is null
                 ? "goal"
-                : $"task {GetTaskDisplayNumber(goal, item.TaskId)} [{item.TaskStatus}] {item.Role}: {OutputTextPreview.CreateSummary(item.Description ?? string.Empty).Text}";
+                : $"task {TaskDisplayNumber.Resolve(goal, item.TaskId)} [{item.TaskStatus}] {item.Role}: {OutputTextPreview.CreateSummary(item.Description ?? string.Empty).Text}";
             Console.WriteLine($"  {item.RequestId.Value} {item.Kind} age={item.AgeSeconds}s occurrences={item.OccurrenceCount} {scope}");
             Console.WriteLine($"     flags: auto-defaultable={item.IsAutoDefaultable}; dismissible={item.IsDismissible}; answer-required={item.IsAnswerRequired}; externally-blocked={item.IsExternallyBlocked}");
             Console.WriteLine($"     question: {OutputTextPreview.CreateSummary(item.Question).Text}");

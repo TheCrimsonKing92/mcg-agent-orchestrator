@@ -996,7 +996,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             TerminalGoalSweepTextView.PrintTerminalGoalSweep(recoverySweep);
             TerminalGoalSweepAttention.Surface(context.Kernel, recoverySweep, context.Workspace.OrchestratorDirectory, context.CurrentGoal.Id);
             context.CurrentGoal = context.Kernel.GetGoal(context.CurrentGoal.Id);
-            ConsoleViews.PrintGoalRecoveryReport(GoalRecoveryPlanner.Build(
+            GoalRecoveryReportTextView.Print(GoalRecoveryPlanner.Build(
                 context.Kernel, context.CurrentGoal, context.Workspace.ExecutionDirectory, context.Workspace.IntegrationBranch,
                 cleanupHooks: context.CleanupContext.Hooks, targetHome: context.TargetHome));
             return recoverySweep.Changed;
@@ -1282,7 +1282,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 .AdvanceGoalAsync(context.Kernel, context.Agents, context.Providers, context.Workspace, context.CurrentGoal)
                 .GetAwaiter()
                 .GetResult();
-            ConsoleViews.PrintAdvanceResult(context.CurrentGoal, advance, context.Agents);
+            AdvanceResultTextView.Print(context.CurrentGoal, advance, context.Agents);
             return advance.Executed;
 
         case "advance-subscription":
@@ -1305,7 +1305,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 context.CurrentGoal,
                 HasCliConfirmation(parts, SubscriptionPromptCostGuard.CliConfirmationFlag),
                 context.Providers);
-            ConsoleViews.PrintAdvanceResult(context.CurrentGoal, subscriptionAdvance, context.Agents);
+            AdvanceResultTextView.Print(context.CurrentGoal, subscriptionAdvance, context.Agents);
             if (subscriptionAdvance.Payload is GoalAdvanceDispatchStartFailed subscriptionAdvanceFailure)
             {
                 context.FailAfterCommit(subscriptionAdvanceFailure.Failure.Reason);
@@ -1327,7 +1327,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             EnsureGoalReadinessAllowsStart(context, context.CurrentGoal, HasCliConfirmation(parts, "--confirm-readiness-risk"));
             RecordPolicyAllowed(context, context.CurrentGoal, runGoalPolicy, AutonomyAction.DispatchStart, "run-goal");
             var runGoalResult = RunGoal(context, context.CurrentGoal, HasCliConfirmation(parts, SubscriptionPromptCostGuard.CliConfirmationFlag));
-            ConsoleViews.PrintRunGoalResult(context.CurrentGoal, runGoalResult, context.Agents);
+            AdvanceResultTextView.PrintRunGoalResult(context.CurrentGoal, runGoalResult, context.Agents);
             if (runGoalResult.Failure is { } runGoalFailure)
             {
                 context.FailAfterCommit(runGoalFailure.Reason);

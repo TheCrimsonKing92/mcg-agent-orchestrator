@@ -111,7 +111,7 @@ private static void HandleLifecycleGoal(CliExecutionContext context, IReadOnlyLi
     goal = context.Kernel.GetGoal(goal.Id);
     context.CurrentGoal = goal;
     Console.WriteLine("Stage run-goal:");
-    ConsoleViews.PrintRunGoalResult(goal, runGoalResult, context.Agents);
+    AdvanceResultTextView.PrintRunGoalResult(goal, runGoalResult, context.Agents);
     if (goal.Status != GoalStatus.Verified)
     {
         GoalOperationJournal.Failed(context.Workspace.ExecutionDirectory, goal, "run-goal", runGoalResult.StopReason);
