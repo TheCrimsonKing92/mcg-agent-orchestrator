@@ -84,9 +84,11 @@ internal sealed class CrosswalkAcceptanceCheck(
                 diagnostics.Add(new(CrosswalkDiagnosticCategory.MalformedResults, "Discovery IDs must be nonblank and unique."));
             if (diagnostics.Count > 0) return Finish();
 
-            selected = check.Arguments.Count == 0 ? ids : check.Arguments.ToArray();
+            selected = CrosswalkFocusedEvidence.IsEvidenceCheck(check)
+                ? CrosswalkFocusedEvidence.ExpandSelectors(check.Arguments, ids)
+                : check.Arguments.Count == 0 ? ids : check.Arguments.ToArray();
             var known = ids.ToHashSet(StringComparer.Ordinal);
-            if (selected.Any(string.IsNullOrWhiteSpace) || selected.Distinct(StringComparer.Ordinal).Count() != selected.Length ||
+            if (selected.Length == 0 || selected.Any(string.IsNullOrWhiteSpace) || selected.Distinct(StringComparer.Ordinal).Count() != selected.Length ||
                 selected.Any(id => !known.Contains(id)))
             {
                 diagnostics.Add(new(CrosswalkDiagnosticCategory.InvalidSelection, "Selectors must be nonblank, unique, exact discovered IDs."));
