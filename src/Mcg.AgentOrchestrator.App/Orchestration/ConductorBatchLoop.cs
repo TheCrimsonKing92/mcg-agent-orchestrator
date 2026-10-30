@@ -1209,22 +1209,9 @@ internal sealed partial class ConductorBatchLoop
                     continue;
                 }
 
-                if (driver.ParallelAcceptanceAttemptCoordinator.TryGetLiveInvalidatedAttempt(
-                        goal.Id.Value,
-                        out var invalidatedAttempt))
+                if (_invalidatedAttemptStopPolicy.TryHold(driver.ParallelAcceptanceAttemptCoordinator, goal.Id.Value,
+                        InvalidatedAttemptStop, line => EmitProgress(line, tickLines), out var holdReason))
                 {
-                    var holdReason =
-                        $"invalidated acceptance attempt {invalidatedAttempt.AttemptId} process {invalidatedAttempt.OwnerProcessId} is still exiting";
-                    try
-                    {
-                        if (_invalidatedAttemptStopPolicy.Observe(driver.ParallelAcceptanceAttemptCoordinator,
-                                invalidatedAttempt, InvalidatedAttemptStop) is { } stopEvent)
-                            EmitProgress(stopEvent, tickLines);
-                    }
-                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
-                    {
-                        EmitProgress($"INVALIDATED_ATTEMPT_STOP_FAILED goal={goal.Id.Value} attempt={invalidatedAttempt.AttemptId} error={SanitizeReason(ex.Message)}", tickLines);
-                    }
                     var progressLine = $"GOAL goal={label} result=held reason={SanitizeReason(holdReason)}";
                     if (RecordChangedDisposition(goal.Id.Value, progressLine, lastGoalDisposition, changedGoalLines))
                     {

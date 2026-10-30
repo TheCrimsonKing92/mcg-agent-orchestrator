@@ -20,10 +20,7 @@ internal sealed partial class ConductorBatchLoop
         if (writer is null || !TryClassifyConductEvent(line, out var kind, out var goalId))
             return;
 
-        var required = kind is "loop-start-deferred" or "loop-relaunch-rollback" or "loop-janitorial-failure" or "loop-janitorial-degraded" or "goal-stalled" or "sweep-blocker" or "sweep-owned-root-deferred" or
-            "sweep-remedy-attempt" or "sweep-remedy-result" or "sweep-escalation" or "exit-unapplied" or
-            "blocked-recheck-heartbeat" or "policy-reload-failed" or "prompt-rollout-suspect" or "invalidated-attempt-stop" ||
-            line.StartsWith("LOOP_HANDOFF_FAILED ", StringComparison.Ordinal);
+        var required = ConductEventDurabilityPolicy.IsRequired(kind, line);
         try
         {
             if (required)

@@ -12,6 +12,28 @@ internal sealed class InvalidatedAcceptanceAttemptStopPolicy(Func<DateTimeOffset
     private readonly Dictionary<string, (ConductorParallelAcceptanceAttempt Attempt, DateTimeOffset InvalidatedAt, bool StopIssued)> _observed = new(StringComparer.Ordinal);
     private readonly InvalidatedAcceptanceAttemptProcessStop _processStop = new();
 
+    internal bool TryHold(
+        ConductorParallelAcceptanceAttemptCoordinator coordinator,
+        string goalId,
+        Func<ConductorParallelAcceptanceAttempt, InvalidatedAcceptanceAttemptStopResult>? stop,
+        Action<string> report,
+        out string holdReason)
+    {
+        holdReason = string.Empty;
+        if (!coordinator.TryGetLiveInvalidatedAttempt(goalId, out var attempt)) return false;
+        holdReason = $"invalidated acceptance attempt {attempt.AttemptId} process {attempt.OwnerProcessId} is still exiting";
+        try
+        {
+            if (Observe(coordinator, attempt, stop) is { } stopEvent) report(stopEvent);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
+        {
+            report($"INVALIDATED_ATTEMPT_STOP_FAILED goal={goalId} attempt={attempt.AttemptId} error={ConductorBatchLoop.SanitizeReason(ex.Message)}");
+        }
+        // Even a successful stop holds this tick. The next tick must confirm owner exit.
+        return true;
+    }
+
     internal string? Observe(
         ConductorParallelAcceptanceAttemptCoordinator coordinator,
         ConductorParallelAcceptanceAttempt observed,

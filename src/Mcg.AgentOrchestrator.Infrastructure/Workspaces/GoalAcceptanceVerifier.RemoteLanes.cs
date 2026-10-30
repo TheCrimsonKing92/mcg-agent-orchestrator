@@ -167,15 +167,10 @@ public sealed partial class GoalAcceptanceVerifier
         SemaphoreSlim? slotBudget = null,
         CancellationToken stopToken = default)
     {
-        // The owned attempt supplies None as the caller token. Its metadata invalidation is
-        // exposed by the probe, which must also cancel remote offers, polls and slot waits.
-        await using var probeCancellation = new AcceptanceGateProbeCancellationSource(
-            _executionContext?.ResolveCancellationProbe(boundary: false), cancellationToken);
-        cancellationToken = probeCancellation.Token;
         var remote = ResolveGateRemoteLanes(cacheContext);
-        var offers = remote is null ? null : RemoteLaneEarlyOffer.For(remote);
-        using var sharedApparatusCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, stopToken);
-        using var remoteCancellation = sharedApparatusCancellation.Token.Register(() => { offers?.Cancel(); remote?.AbandonAll(); });
+        await using var sharedApparatusCancellation = new AcceptanceGateShardCancellation(
+            _executionContext?.ResolveCancellationProbe(boundary: false), cancellationToken, stopToken, remote);
+        cancellationToken = sharedApparatusCancellation.CallerToken;
         AcceptanceGatePhaseAccountant.TransitionCurrent(AcceptanceGatePhaseNames.SharedPrebuild);
         var allShardsUseMtp = shardChecks.All(UsesMicrosoftTestingPlatform);
         if (allShardsUseMtp && primaryBuildPhase is not null)
@@ -211,11 +206,7 @@ public sealed partial class GoalAcceptanceVerifier
         var failures = new List<Exception>();
         AcceptanceLaneEarlyStop? earlyStop = null;
         var laneStopEnabled = cacheContext is not null && _testOverrides.PartitionVerdictWithinAttemptRerunEnabled;
-        if (offers is not null)
-        {
-            try { await offers.OfferPassCompleted.WaitAsync(cancellationToken).ConfigureAwait(false); }
-            catch (OperationCanceledException) when (stopToken.IsCancellationRequested && !cancellationToken.IsCancellationRequested) { }
-        }
+        await sharedApparatusCancellation.WaitForOffersAsync().ConfigureAwait(false);
 
         bool IsConfirmedLocalFailure(IndexedShard shard, Task task) =>
             laneStopEnabled && task.IsCompleted &&
@@ -286,13 +277,8 @@ public sealed partial class GoalAcceptanceVerifier
                     var shard = pendingShards[index];
                     if (activeShards.Any(active => IsConfirmedLocalFailure(active.Shard, active.Task))) break;
                     if (reuseConsulted.ContainsKey(shard.Index)) continue;
-                    RemoteLaneEarlyOffer.Offered? offered;
-                    try
-                    {
-                        offered = offers!.TryAdopt(shard.Check.Name, out var adopted) ? adopted :
-                            await offers.TryOfferAsync(shard.Check, offerContext!, sharedApparatusCancellation.Token).ConfigureAwait(false);
-                    }
-                    catch (OperationCanceledException) when (sharedApparatusCancellation.IsCancellationRequested)
+                    var (offered, offerCancelled) = await sharedApparatusCancellation.TryOfferAsync(shard.Check, offerContext!).ConfigureAwait(false);
+                    if (offerCancelled)
                     {
                         pendingShards.Clear();
                         break; // Drain active work before rethrowing caller/probe cancellation below.
@@ -384,8 +370,7 @@ public sealed partial class GoalAcceptanceVerifier
                 }
                 catch (Exception exception)
                 {
-                    if (exception is not OperationCanceledException ||
-                        (earlyStop is null && cacheContext?.SharedApparatusInvalidation is null && !stopToken.IsCancellationRequested && !cancellationToken.IsCancellationRequested)) failures.Add(exception);
+                    sharedApparatusCancellation.RecordFailure(failures, exception, earlyStop is not null || cacheContext?.SharedApparatusInvalidation is not null);
                 }
                 continue;
             }
@@ -399,11 +384,7 @@ public sealed partial class GoalAcceptanceVerifier
             }
             catch (Exception exception)
             {
-                if (exception is not OperationCanceledException ||
-                    (earlyStop is null && cacheContext?.SharedApparatusInvalidation is null && !stopToken.IsCancellationRequested && !cancellationToken.IsCancellationRequested))
-                {
-                    failures.Add(exception);
-                }
+                sharedApparatusCancellation.RecordFailure(failures, exception, earlyStop is not null || cacheContext?.SharedApparatusInvalidation is not null);
             }
             finally
             {
