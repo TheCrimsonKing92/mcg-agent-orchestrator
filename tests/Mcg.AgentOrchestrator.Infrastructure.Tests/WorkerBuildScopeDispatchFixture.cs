@@ -18,32 +18,63 @@ internal sealed class WorkerBuildScopeDispatchFixture : WorkerDispatchTestSuppor
     internal IClock Clock { get; } = new TestClock(DateTimeOffset.Parse("2026-10-20T12:00:00Z"));
     internal int Builds { get; private set; }
 
-    internal WorkerBuildScopeDispatchFixture()
+    internal WorkerBuildScopeDispatchFixture(GoalId? goalId = null, TaskId? predecessorId = null, TaskId? successorId = null)
     {
         Main = CreateSeededDispatchRepository();
-        Write(Main, ".gitignore", ".orchestrator-context/\n");
-        Write(Main, "Core/Core.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>");
-        Write(Main, "Core/Core.cs", "public class Core { }");
-        RunGit(Main, ["add", "-A"], Clock.UtcNow.AddMinutes(-1));
-        RunGit(Main, ["commit", "-m", "initial project"], Clock.UtcNow.AddMinutes(-1));
-        IntegrationBranch = Git(Main, "branch", "--show-current").Trim();
-        Kernel = new AgentOrchestratorKernel(Clock);
-        var developer = new TaskSpec(TaskId.New(), "Implement scoped change", AgentRole.Developer);
-        var tester = new TaskSpec(TaskId.New(), "Inspect scoped change", AgentRole.Tester);
-        var goal = Kernel.CreateGoal("Dispatch-owned build scope", [developer, tester]);
-        GoalId = goal.Id;
-        PredecessorId = developer.Id;
-        SuccessorId = tester.Id;
-        Kernel.ActivateGoal(GoalId, new[] { AgentRole.Developer, AgentRole.Tester }.Select(role =>
+        try
+        {
+            Write(Main, ".gitignore", ".orchestrator-context/\n");
+            Write(Main, "Core/Core.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>");
+            Write(Main, "Core/Core.cs", "public class Core { }");
+            RunGit(Main, ["add", "-A"], Clock.UtcNow.AddMinutes(-1));
+            RunGit(Main, ["commit", "-m", "initial project"], Clock.UtcNow.AddMinutes(-1));
+            IntegrationBranch = Git(Main, "branch", "--show-current").Trim();
+            GoalId = goalId ?? GoalId.New();
+            PredecessorId = predecessorId ?? TaskId.New();
+            SuccessorId = successorId ?? TaskId.New();
+            Kernel = CreateKernel();
+            Root = GoalWorktrees.Ensure(Main, GoalId);
+            Prepare(Predecessor);
+            Write(Root, "Core/Core.cs", "public class Core { public int Value => 1; }");
+            Commit();
+            CompleteProcess(Predecessor);
+            ReceiptPath = Path.Combine(Main, "logs", WorkerBuildReceipt.FileName);
+            WriteReceipt(Predecessor);
+        }
+        catch
+        {
+            ScriptSandboxCleanup.DeleteOrThrow([Main]);
+            throw;
+        }
+    }
+
+    internal WorkerBuildScopeDispatchFixture(string main, string root, WorkerBuildScopeDispatchFixture source,
+        TaskDispatchRecord dispatch, TaskProcessRecord process)
+    {
+        Main = main;
+        Root = root;
+        IntegrationBranch = source.IntegrationBranch;
+        GoalId = source.GoalId;
+        PredecessorId = source.PredecessorId;
+        SuccessorId = source.SuccessorId;
+        ReceiptPath = Path.Combine(Main, "logs", WorkerBuildReceipt.FileName);
+        Kernel = CreateKernel();
+        Kernel.RecordTaskDispatch(GoalId, PredecessorId, dispatch with { BaseCommit = null, WorkerBuildScope = null });
+        Kernel.RecordDispatchBaseCommit(GoalId, PredecessorId, dispatch.BaseCommit!, dispatch.WorkerBuildScope);
+        Kernel.RecordTaskProcessStarted(GoalId, PredecessorId, process);
+        WorkerBuildProjectScope.ReadRetainedDispatchMetadata(Root, GoalId, PredecessorId, Predecessor.LastDispatch!);
+    }
+
+    private AgentOrchestratorKernel CreateKernel()
+    {
+        var kernel = new AgentOrchestratorKernel(Clock);
+        kernel.CreateGoal(GoalId, "Dispatch-owned build scope",
+            [new TaskSpec(PredecessorId, "Implement scoped change", AgentRole.Developer),
+             new TaskSpec(SuccessorId, "Inspect scoped change", AgentRole.Tester)]);
+        kernel.ActivateGoal(GoalId, new[] { AgentRole.Developer, AgentRole.Tester }.Select(role =>
             new AgentDefinition(new AgentId(role.ToString()), role.ToString(), role,
                 new ModelProfile("OpenAI", AgentCatalog.OpenAiSubscriptionModelAlias, ModelCapability.Text, SubscriptionMode.ApiKey))).ToArray());
-        Root = GoalWorktrees.Ensure(Main, GoalId);
-        Prepare(Predecessor);
-        Write(Root, "Core/Core.cs", "public class Core { public int Value => 1; }");
-        Commit();
-        CompleteProcess(Predecessor);
-        ReceiptPath = Path.Combine(Main, "logs", WorkerBuildReceipt.FileName);
-        WriteReceipt(Predecessor);
+        return kernel;
     }
 
     internal void Prepare(TaskSpec task)

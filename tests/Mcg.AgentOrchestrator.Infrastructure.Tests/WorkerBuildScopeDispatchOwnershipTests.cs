@@ -3,7 +3,9 @@ using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Mcg.AgentOrchestrator.App.Orchestration;
 
-public sealed class WorkerBuildScopeDispatchOwnershipTests
+// Class-owned template; each row owns independent Git files, logs and kernel state.
+public sealed class WorkerBuildScopeDispatchOwnershipTests(WorkerBuildScopeDispatchFixtureTemplate template)
+    : IClassFixture<WorkerBuildScopeDispatchFixtureTemplate>
 {
     [Theory]
     [InlineData(false, false)]
@@ -12,7 +14,7 @@ public sealed class WorkerBuildScopeDispatchOwnershipTests
     [InlineData(true, true)]
     public void SuccessorPreparationPreservesPredecessorCompletion(bool abortStart, bool reload)
     {
-        using var fixture = new WorkerBuildScopeDispatchFixture();
+        using var fixture = template.Copy();
         Assert.True(fixture.Receipt().Matches);
         var predecessor = fixture.Predecessor.LastDispatch!;
         var candidate = WorkerBuildScopeDispatchFixture.Git(fixture.Root, "rev-parse", "HEAD");
@@ -64,7 +66,7 @@ public sealed class WorkerBuildScopeDispatchOwnershipTests
     [Fact]
     public void SuccessorLaterCompletionUsesItsOwnScopeAndDispatchBase()
     {
-        using var fixture = new WorkerBuildScopeDispatchFixture();
+        using var fixture = template.Copy();
         fixture.Prepare(fixture.Successor);
         var successor = fixture.Successor.LastDispatch!;
         Assert.NotEqual(fixture.Predecessor.LastDispatch!.BaseCommit, successor.BaseCommit);
@@ -85,7 +87,7 @@ public sealed class WorkerBuildScopeDispatchOwnershipTests
     [Fact]
     public void ProviderSessionDiscoveryPreservesScopeAuthority()
     {
-        using var fixture = new WorkerBuildScopeDispatchFixture();
+        using var fixture = template.Copy();
         var captured = fixture.Predecessor.LastDispatch!.WorkerBuildScope;
         Assert.Null(fixture.Predecessor.LastDispatch.ProviderSessionId);
         fixture.Kernel.RecordDispatchProviderSessionId(fixture.GoalId, fixture.PredecessorId, "discovered-session");
