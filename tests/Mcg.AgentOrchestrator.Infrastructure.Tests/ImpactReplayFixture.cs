@@ -23,7 +23,7 @@ internal sealed class ImpactReplayFixture : IDisposable
 
     public ImpactReplayFixture(int changedSourceCount = 1, bool changedFooTests = false,
         bool extraBetaClass = false, IReadOnlyDictionary<string, string>? changedTestFiles = null,
-        bool separateStateDirectory = false)
+        bool separateStateDirectory = false, IReadOnlyDictionary<string, string>? initialTestFiles = null)
     {
         StateDirectory = separateStateDirectory
             ? Path.Combine(_root, ".orchestrator", "projects", "fixture")
@@ -86,6 +86,8 @@ internal sealed class ImpactReplayFixture : IDisposable
                 { "name": "Foo lane", "filter": "FullyQualifiedName~FooTests", "estimatedSerialSeconds": 5 }
                 """));
         File.WriteAllText(manifestPath, manifest.ToJsonString());
+        foreach (var (path, text) in initialTestFiles ?? new Dictionary<string, string>())
+            Write(TestProject + "/" + path, text);
         Commit();
         _main = Git("rev-parse", "HEAD").Trim();
         Write("src/Sample/Alpha.cs", "namespace Sample; public class Alpha { public int Value => 2; }");

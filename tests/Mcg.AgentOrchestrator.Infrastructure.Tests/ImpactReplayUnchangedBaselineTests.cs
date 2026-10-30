@@ -64,7 +64,15 @@ public sealed class ImpactReplayUnchangedBaselineTests
             "| baseline | Resolved | Alpha lane, Beta lane, Chaos gate | Alpha lane, Chaos gate | Beta lane | 23.5 |",
             "",
             "## Input and evidence diagnostics",
-            ""
+            "",
+            "",
+            "## Unmapped test classes",
+            "",
+            "- not-scanned: 0",
+            "- no-lane: 0",
+            "- ambiguous: 0",
+            "",
+            "No unmapped test classes were found."
         });
         Assert.Equal("# Impact replay\n\n" + string.Join(Environment.NewLine, expectedLines) + Environment.NewLine, markdown);
     }
