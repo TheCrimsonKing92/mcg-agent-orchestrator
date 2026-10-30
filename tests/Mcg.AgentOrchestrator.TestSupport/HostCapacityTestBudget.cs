@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Globalization;
 
 /// <summary>
@@ -28,10 +29,15 @@ public sealed class HostCapacityTestBudget
     public const string SlotCountVariable = "MCG_TEST_HOST_CAPACITY_SLOTS";
 
     private readonly SemaphoreSlim slots;
+    private readonly Func<string, string?> environment;
 
-    public HostCapacityTestBudget(int slotCount)
+    public HostCapacityTestBudget(int slotCount) : this(slotCount, Environment.GetEnvironmentVariable) { }
+
+    public HostCapacityTestBudget(int slotCount, Func<string, string?> environment)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(slotCount, 1);
+        ArgumentNullException.ThrowIfNull(environment);
+        this.environment = environment;
         SlotCount = slotCount;
         slots = new SemaphoreSlim(slotCount, slotCount);
     }
@@ -51,8 +57,12 @@ public sealed class HostCapacityTestBudget
     /// </summary>
     public async ValueTask<IAsyncDisposable> EnterAsync(CancellationToken cancellationToken = default)
     {
+        var started = Stopwatch.GetTimestamp();
+        var destination = environment(HostCapacitySlotTimingWriter.VariableName);
+        var testName = string.IsNullOrEmpty(destination) ? null : HostCapacitySlotTimingWriter.CurrentTestName();
         await slots.WaitAsync(cancellationToken).ConfigureAwait(false);
-        return new Slot(slots);
+        var acquired = Stopwatch.GetTimestamp();
+        return new Slot(slots, destination, testName, started, acquired, SlotCount);
     }
 
     /// <summary>
@@ -82,13 +92,23 @@ public sealed class HostCapacityTestBudget
         return configured;
     }
 
-    private sealed class Slot(SemaphoreSlim slots) : IAsyncDisposable
+    private sealed class Slot(SemaphoreSlim slots, string? destination, string? testName,
+        long started, long acquired, int slotCount) : IAsyncDisposable
     {
         private SemaphoreSlim? held = slots;
 
         public ValueTask DisposeAsync()
         {
-            Interlocked.Exchange(ref held, null)?.Release();
+            var disposed = Stopwatch.GetTimestamp();
+            var released = Interlocked.Exchange(ref held, null);
+            if (released is not null)
+            {
+                released.Release();
+                if (!string.IsNullOrEmpty(destination))
+                    HostCapacitySlotTimingWriter.TryAppend(destination, testName,
+                        Stopwatch.GetElapsedTime(started, acquired).TotalMilliseconds,
+                        Stopwatch.GetElapsedTime(acquired, disposed).TotalMilliseconds, slotCount);
+            }
             return ValueTask.CompletedTask;
         }
     }

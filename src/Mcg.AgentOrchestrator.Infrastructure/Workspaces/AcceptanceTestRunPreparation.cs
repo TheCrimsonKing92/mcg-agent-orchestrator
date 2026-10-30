@@ -19,6 +19,7 @@ internal static class AcceptanceTestRunPreparation
         PublishOwnership(receiptPaths, operations);
         foreach (var path in receiptPaths)
         {
+            LaneSlotTimingReader.Reset(path);
             if (!File.Exists(path))
             {
                 continue;

@@ -5,12 +5,14 @@ using System.Xml.Linq;
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
 // A complete, bounded view of passed method durations; partial TRX reads are never evidence.
-internal sealed record LaneTestDurationSnapshot(IReadOnlyDictionary<string, double> Tests, string? UnavailableReason = null)
+internal sealed record LaneTestDurationSnapshot(IReadOnlyDictionary<string, double> Tests, string? UnavailableReason = null,
+    LaneSlotTimingReader.LaneSlotTotals? SlotTiming = null, string? SlotTimingUnavailableReason = null)
 {
     internal const int MaximumTests = 150;
 
     internal static LaneTestDurationSnapshot Read(IReadOnlyList<string>? paths)
     {
+        var timing = LaneSlotTimingReader.Read(paths);
         var currentPath = string.Empty;
         try
         {
@@ -39,19 +41,21 @@ internal sealed record LaneTestDurationSnapshot(IReadOnlyDictionary<string, doub
                     fileTotals[identity] = fileTotals.GetValueOrDefault(identity) + duration.TotalMilliseconds;
                 }
                 foreach (var (identity, milliseconds) in fileTotals)
-                    totals[identity] = Math.Max(totals.GetValueOrDefault(identity), milliseconds);
+                    totals[identity] = Math.Max(totals.GetValueOrDefault(identity),
+                        LaneSlotTimingReader.Subtract(milliseconds, timing.WaitFor(path, identity)));
             }
             var tests = Bound(totals);
-            return new(tests, tests.Count == 0 ? "no-passed-tests-above-floor" : null);
+            return new(tests, tests.Count == 0 ? "no-passed-tests-above-floor" : null, timing.Totals, timing.UnavailableReason);
         }
         catch (XmlException) { return Empty("trx-malformed:" + currentPath); }
         catch (Exception error) { return Empty("trx-unreadable:" + currentPath + ":" + error.GetType().Name); }
+
+        LaneTestDurationSnapshot Empty(string reason) => new(new Dictionary<string, double>(), reason,
+            timing.Totals, timing.UnavailableReason);
     }
 
     internal static Dictionary<string, double> Bound(IReadOnlyDictionary<string, double> tests) => tests
         .Where(pair => double.IsFinite(pair.Value) && pair.Value >= 1000)
         .OrderByDescending(pair => pair.Value).ThenBy(pair => pair.Key, StringComparer.Ordinal)
         .Take(MaximumTests).ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
-
-    private static LaneTestDurationSnapshot Empty(string reason) => new(new Dictionary<string, double>(), reason);
 }
