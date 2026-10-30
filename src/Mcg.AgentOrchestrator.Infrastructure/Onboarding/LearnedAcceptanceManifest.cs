@@ -19,7 +19,8 @@ public static class LearnedAcceptanceManifest
         var isNode = model.Stack == ProjectStack.Node;
         var isLua = model.Stack == ProjectStack.Lua;
         var isDeclared = model.Stack == ProjectStack.Declared;
-        var isDotnet = !isGo && !isNode && !isLua && !isDeclared;
+        var isCrosswalk = model.Stack == ProjectStack.Crosswalk;
+        var isDotnet = !isGo && !isNode && !isLua && !isDeclared && !isCrosswalk;
         var nodeChecks = isNode ? NodeVerificationChecks.For(model) : default;
         var luaChecks = isLua ? LuaProjectDiscoveryAdapter.For(model, applied) : default;
         var declaredChecks = isDeclared ? DeclaredProjectDiscoveryAdapter.For(model, applied) : default;
@@ -59,6 +60,17 @@ public static class LearnedAcceptanceManifest
         {
             foreach (var check in declaredChecks.Checks)
                 emittedChecks.Add(DeclaredProjectDiscoveryAdapter.Emit(check));
+        }
+        else if (isCrosswalk)
+        {
+            var check = CrosswalkProjectDiscoveryAdapter.VerificationCheck();
+            emittedChecks.Add(new JsonObject
+            {
+                ["name"] = check.Name,
+                ["type"] = check.Type,
+                ["project"] = check.Project,
+                ["arguments"] = new JsonArray()
+            });
         }
         else if (isGo)
         {
