@@ -448,7 +448,7 @@ private static bool HandleBacklogIntake(CliExecutionContext context, IReadOnlyLi
         throw new InvalidOperationException("No backlog items matched the requested filter.");
     }
 
-    ConsoleViews.PrintBacklogIntakePlan(plan);
+    BacklogIntakePlanTextView.Print(plan);
     if (!createGoal && !createSimpleGoal)
     {
         return false;
