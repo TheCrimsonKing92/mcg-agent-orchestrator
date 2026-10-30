@@ -3,7 +3,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 using Xunit;
 
 [Collection(TestCollections.GoalAcceptanceVerifier)]
-public sealed class DeclaredToolHomeGatePreflightTests
+public sealed class GoalAcceptanceVerifierTestsDeclaredToolHomePreflightTests
 {
     [Theory]
     [InlineData(false)]

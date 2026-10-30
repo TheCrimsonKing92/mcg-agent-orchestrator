@@ -2,7 +2,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 using Xunit;
 
 [Collection(TestCollections.GoalAcceptanceVerifier)]
-public sealed class HermeticVerificationEnvironmentToolHomeTests
+public sealed class HermeticVerificationEnvironmentTestsToolHomeTests
 {
     [Fact]
     public void Configure_DeclaredHomes_AppliesOnlyThisProjectsDeclarations()
