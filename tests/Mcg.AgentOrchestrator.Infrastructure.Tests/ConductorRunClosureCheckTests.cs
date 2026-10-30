@@ -285,6 +285,76 @@ public sealed class ConductorRunClosureCheckTests
         AssertDiagnostics(failed, successor, "unavailable");
     }
 
+    [Xunit.Fact]
+    public Task Damaged_retained_folder_cannot_recover_to_the_reverted_commit() =>
+        CheckRestoreRecovery("COMMIT-FRESH", "blocked-commit");
+
+    [Xunit.Fact]
+    public Task Damaged_retained_folder_cannot_recover_to_an_unrelated_commit() =>
+        CheckRestoreRecovery("commit-unrelated", "retained-commit-mismatch");
+
+    [Xunit.Fact]
+    public Task Damaged_retained_folder_can_recover_to_a_fresh_copy_of_the_retained_commit() =>
+        CheckRestoreRecovery("COMMIT-ORIGINAL", null);
+
+    private static async Task CheckRestoreRecovery(string recoveryCommit, string? rejection)
+    {
+        using var fixture = new PublishedFixture();
+        using var successor = new PublishedFixture();
+        using var replacement = new PublishedFixture();
+        using var replacementLease = new MemoryStream();
+        var probe = new SupervisorProbe(fixture);
+        probe.Host.OnLaunch = request =>
+        {
+            switch (probe.Host.Requests.Count)
+            {
+                case 1:
+                    WriteExit(request, restart: true);
+                    break;
+                case 2:
+                    // Revert the successor, then make the retained build need recovery.
+                    fixture.Delete(DeletedFile);
+                    throw new IOException("successor launch refused");
+                default:
+                    WriteExit(request, restart: false);
+                    break;
+            }
+        };
+        var stageCalls = 0;
+        var result = await probe.RunAsync(_ => ++stageCalls == 1 ? successor.Successor() :
+            new(replacement.RunDirectory, Path.Combine(replacement.RunDirectory, AppLeaf),
+                recoveryCommit, recoveryCommit, "self-check=true", replacementLease));
+
+        Assert.Equal(2, stageCalls);
+        Assert.Contains(probe.RunEvents.Events, e => e.Operation == "activation" && e.Status == "reverted");
+        var failed = Assert.Single(probe.Events.Where(IsFailedCheck));
+        Assert.Contains("launch=restore-child", failed, StringComparison.Ordinal);
+        AssertDiagnostics(failed, fixture, DeletedFile);
+        Assert.False(replacementLease.CanRead);
+        if (rejection is not null)
+        {
+            Assert.Equal(1, result);
+            Assert.Equal(2, probe.Host.Requests.Count);
+            var escalation = Assert.Single(probe.Events.Where(IsClosureEscalation));
+            AssertDiagnostics(escalation, fixture, DeletedFile);
+            Assert.Contains($"recovery={rejection}", escalation, StringComparison.Ordinal);
+            Assert.Contains(recoveryCommit, escalation, StringComparison.Ordinal);
+            Assert.Empty(probe.Events.Where(e => e.StartsWith("RUN_CLOSURE_RECOVERED ", StringComparison.Ordinal)));
+            Assert.DoesNotContain(probe.RunEvents.Events, e => e.Operation == "activation" && e.Status == "restored");
+            Assert.Single(probe.Attention);
+        }
+        else
+        {
+            Assert.Equal(0, result);
+            Assert.Equal(3, probe.Host.Requests.Count);
+            Assert.Equal(Path.Combine(replacement.RunDirectory, AppLeaf), probe.Host.Requests[2].CommandPrefix![1]);
+            Assert.DoesNotContain("--require-current-stores", probe.Host.Requests[2].Arguments);
+            Assert.Single(probe.Events.Where(e => e.StartsWith("RUN_CLOSURE_RECOVERED ", StringComparison.Ordinal)));
+            Assert.Empty(probe.Events.Where(IsClosureEscalation));
+            Assert.Empty(probe.Attention);
+        }
+    }
+
     private static bool IsFailedCheck(string text) => text.StartsWith("RUN_CLOSURE_CHECK_FAILED ", StringComparison.Ordinal);
     private static bool IsClosureEscalation(string text) => text.StartsWith("SUPERVISOR_ESCALATED reason=run-closure-damaged ", StringComparison.Ordinal);
 
@@ -316,12 +386,13 @@ public sealed class ConductorRunClosureCheckTests
     private sealed class SupervisorProbe(PublishedFixture fixture)
     {
         internal RecordingHost Host { get; } = new();
+        internal SupervisorHandoffFixture.RecordingEvents RunEvents { get; } = new();
         internal List<string> Events { get; } = [];
         internal List<string> Attention { get; } = [];
         internal Task<int> RunAsync(Func<CancellationToken, ConductorPreparedSuccessor>? stage = null)
         {
             var ownBuild = new ConductorSupervisorBuildIdentity("commit-original", fixture.RunDirectory);
-            var supervisor = new ConductorContinuitySupervisor(Host, new SupervisorHandoffFixture.RecordingEvents(),
+            var supervisor = new ConductorContinuitySupervisor(Host, RunEvents,
                 stageSuccessor: stage, appendConductEvent: (_, _, text) => Events.Add(text),
                 supervisorHandoff: new(new SupervisorHandoffFixture.FakeHandoffSeam(ownBuild), ownBuild,
                     TimeSpan.FromMinutes(1), TimeSpan.FromSeconds(1)),

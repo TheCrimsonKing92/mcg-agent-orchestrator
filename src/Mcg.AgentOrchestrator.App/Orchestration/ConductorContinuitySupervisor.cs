@@ -292,6 +292,7 @@ internal sealed partial class ConductorContinuitySupervisor(
                 var launch = successor is not null ? "successor" : restoring ? "restore-child" :
                     attempt == 1 ? "first-child" : "renewal-child";
                 if (!EnsureLaunchClosure(folder, appLeaf, launch, attempt, closureInventories,
+                    blockedActivationCommit, restoring ? currentBuild.CommitSha : null,
                     cancellationToken, out var fresh, out var closureFailure))
                 {
                     var detail = $"SUPERVISOR_ESCALATED reason=run-closure-damaged {closureFailure}";
@@ -898,7 +899,8 @@ internal sealed partial class ConductorContinuitySupervisor(
 
     private bool EnsureLaunchClosure(
         string folder, string appLeaf, string launch, int attempt,
-        Dictionary<string, IReadOnlyCollection<string>> inventories, CancellationToken cancellationToken,
+        Dictionary<string, IReadOnlyCollection<string>> inventories,
+        string? blockedActivationCommit, string? retainedCommit, CancellationToken cancellationToken,
         out ConductorPreparedSuccessor? fresh, out string? failure)
     {
         ConductorRunClosureVerdict Check(string directory, string leaf)
@@ -941,6 +943,20 @@ internal sealed partial class ConductorContinuitySupervisor(
             if (replacement is null)
             {
                 failure += " recovery=staging-unavailable";
+                return false;
+            }
+            // Publication proves closure, not activation eligibility. Recovery must
+            // honor a reverted HEAD and retain the fallback's identity on restore.
+            if (string.Equals(replacement.RepositoryHead, blockedActivationCommit, StringComparison.OrdinalIgnoreCase))
+            {
+                failure += $" recovery=blocked-commit commit={Sanitize(replacement.RepositoryHead)}";
+                return false;
+            }
+            if (retainedCommit is not null &&
+                !string.Equals(replacement.RepositoryHead, retainedCommit, StringComparison.OrdinalIgnoreCase))
+            {
+                failure += $" recovery=retained-commit-mismatch expectedCommit={Sanitize(retainedCommit)} " +
+                    $"actualCommit={Sanitize(replacement.RepositoryHead)}";
                 return false;
             }
             var validated = Check(replacement.RunDirectory, Path.GetFileName(replacement.AppDllPath));
