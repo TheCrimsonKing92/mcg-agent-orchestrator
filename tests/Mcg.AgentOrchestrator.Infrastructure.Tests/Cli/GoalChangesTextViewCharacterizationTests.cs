@@ -5,7 +5,7 @@ using Xunit;
 
 // Parallel-safe: AsyncLocal console capture and local fixtures.
 // Every expected string is derived from ConsoleViews.GoalChanges.cs at base fd85596fc,
-// including its default System.Text.Json serialization (numeric enums and LF indentation).
+// including its default System.Text.Json serialization (numeric enums and platform newlines).
 public sealed class GoalChangesTextViewCharacterizationTests
 {
     [Fact]
@@ -99,7 +99,7 @@ public sealed class GoalChangesTextViewCharacterizationTests
     {
         var actual = AsyncLocalConsoleRouter.Capture(() => GoalChangesTextView.PrintJson(EmptyReport()));
 
-        Assert.Equal(string.Join("\n",
+        Assert.Equal(string.Join(Environment.NewLine,
             "{",
             "  \"GoalId\": \"aaaaaaaa00000000\",",
             "  \"GoalPrefix\": \"aaaaaaaa\",",
@@ -121,7 +121,7 @@ public sealed class GoalChangesTextViewCharacterizationTests
 
         var actual = AsyncLocalConsoleRouter.Capture(() => GoalChangesTextView.PrintJson(report));
 
-        Assert.Equal(string.Join("\n",
+        Assert.Equal(string.Join(Environment.NewLine,
             "{",
             "  \"GoalId\": \"aaaaaaaa00000000\",",
             "  \"GoalPrefix\": \"aaaaaaaa\",",
