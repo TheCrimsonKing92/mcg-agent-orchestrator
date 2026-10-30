@@ -167,6 +167,15 @@ public sealed partial class GoalAcceptanceVerifier
         SemaphoreSlim? slotBudget = null,
         CancellationToken stopToken = default)
     {
+        // The owned attempt supplies None as the caller token. Its metadata invalidation is
+        // exposed by the probe, which must also cancel remote offers, polls and slot waits.
+        await using var probeCancellation = new AcceptanceGateProbeCancellationSource(
+            _executionContext?.ResolveCancellationProbe(boundary: false), cancellationToken);
+        cancellationToken = probeCancellation.Token;
+        var remote = ResolveGateRemoteLanes(cacheContext);
+        var offers = remote is null ? null : RemoteLaneEarlyOffer.For(remote);
+        using var sharedApparatusCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, stopToken);
+        using var remoteCancellation = sharedApparatusCancellation.Token.Register(() => { offers?.Cancel(); remote?.AbandonAll(); });
         AcceptanceGatePhaseAccountant.TransitionCurrent(AcceptanceGatePhaseNames.SharedPrebuild);
         var allShardsUseMtp = shardChecks.All(UsesMicrosoftTestingPlatform);
         if (allShardsUseMtp && primaryBuildPhase is not null)
@@ -197,16 +206,16 @@ public sealed partial class GoalAcceptanceVerifier
         var activeRemote = new List<(IndexedShard Shard, Task<RemoteLaneOutcome> Task)>();
         var reuseConsulted = new System.Collections.Concurrent.ConcurrentDictionary<int, bool>();
         var fallbackOutcomes = new System.Collections.Concurrent.ConcurrentDictionary<int, RemoteLaneOutcome>();
-        var remote = ResolveGateRemoteLanes(cacheContext);
-        var offers = remote is null ? null : RemoteLaneEarlyOffer.For(remote);
         var offerContext = remote is null ? null : CreateRemoteLaneOfferContext(remote, shardChecks, maxConcurrentShards, cacheContext, goalId, primarySlotIndex);
-        if (offers is not null) await offers.OfferPassCompleted.ConfigureAwait(false);
         var shardConcurrency = new GateShardConcurrencyCounter();
         var failures = new List<Exception>();
         AcceptanceLaneEarlyStop? earlyStop = null;
         var laneStopEnabled = cacheContext is not null && _testOverrides.PartitionVerdictWithinAttemptRerunEnabled;
-        using var sharedApparatusCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, stopToken);
-        using var remoteCancellation = sharedApparatusCancellation.Token.Register(() => { offers?.Cancel(); remote?.AbandonAll(); });
+        if (offers is not null)
+        {
+            try { await offers.OfferPassCompleted.WaitAsync(cancellationToken).ConfigureAwait(false); }
+            catch (OperationCanceledException) when (stopToken.IsCancellationRequested && !cancellationToken.IsCancellationRequested) { }
+        }
 
         bool IsConfirmedLocalFailure(IndexedShard shard, Task task) =>
             laneStopEnabled && task.IsCompleted &&
@@ -266,7 +275,7 @@ public sealed partial class GoalAcceptanceVerifier
 
         while (pendingShards.Count > 0 || activeShards.Count > 0 || activeRemote.Count > 0)
         {
-            if (stopToken.IsCancellationRequested)
+            if (sharedApparatusCancellation.IsCancellationRequested)
                 pendingShards.Clear();
             // Offer remote work before filling local slots; these tasks never enter the local budget.
             if (remote is not null && !sharedApparatusCancellation.IsCancellationRequested &&
@@ -277,8 +286,17 @@ public sealed partial class GoalAcceptanceVerifier
                     var shard = pendingShards[index];
                     if (activeShards.Any(active => IsConfirmedLocalFailure(active.Shard, active.Task))) break;
                     if (reuseConsulted.ContainsKey(shard.Index)) continue;
-                    var offered = offers!.TryAdopt(shard.Check.Name, out var adopted) ? adopted :
-                        await offers.TryOfferAsync(shard.Check, offerContext!, sharedApparatusCancellation.Token).ConfigureAwait(false);
+                    RemoteLaneEarlyOffer.Offered? offered;
+                    try
+                    {
+                        offered = offers!.TryAdopt(shard.Check.Name, out var adopted) ? adopted :
+                            await offers.TryOfferAsync(shard.Check, offerContext!, sharedApparatusCancellation.Token).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException) when (sharedApparatusCancellation.IsCancellationRequested)
+                    {
+                        pendingShards.Clear();
+                        break; // Drain active work before rethrowing caller/probe cancellation below.
+                    }
                     if (offered is null) continue;
                     pendingShards.RemoveAt(index--);
                     reuseConsulted[shard.Index] = true;
@@ -367,7 +385,7 @@ public sealed partial class GoalAcceptanceVerifier
                 catch (Exception exception)
                 {
                     if (exception is not OperationCanceledException ||
-                        (earlyStop is null && cacheContext?.SharedApparatusInvalidation is null && !stopToken.IsCancellationRequested)) failures.Add(exception);
+                        (earlyStop is null && cacheContext?.SharedApparatusInvalidation is null && !stopToken.IsCancellationRequested && !cancellationToken.IsCancellationRequested)) failures.Add(exception);
                 }
                 continue;
             }
@@ -382,7 +400,7 @@ public sealed partial class GoalAcceptanceVerifier
             catch (Exception exception)
             {
                 if (exception is not OperationCanceledException ||
-                    (earlyStop is null && cacheContext?.SharedApparatusInvalidation is null && !stopToken.IsCancellationRequested))
+                    (earlyStop is null && cacheContext?.SharedApparatusInvalidation is null && !stopToken.IsCancellationRequested && !cancellationToken.IsCancellationRequested))
                 {
                     failures.Add(exception);
                 }

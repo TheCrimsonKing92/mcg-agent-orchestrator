@@ -82,6 +82,8 @@ internal sealed partial class ConductorBatchLoop
     private readonly ConductEventLogWriter? _conductEventLogWriter;
     private readonly ConductorLifecycleRecorder? _lifecycleRecorder;
     private readonly Func<DateTimeOffset> _utcNow;
+    private readonly InvalidatedAcceptanceAttemptStopPolicy _invalidatedAttemptStopPolicy;
+    internal Func<ConductorParallelAcceptanceAttempt, InvalidatedAcceptanceAttemptStopResult>? InvalidatedAttemptStop { get; init; }
     private readonly Func<string?> _readRelaunchDrainCap;
     private readonly Func<int> _countLiveGroupedGates;
     private readonly Func<double> _writeJitter;
@@ -158,6 +160,7 @@ internal sealed partial class ConductorBatchLoop
         _conductEventLogWriter = conductEventLogWriter;
         _lifecycleRecorder = lifecycleRecorder;
         _utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
+        _invalidatedAttemptStopPolicy = new(_utcNow);
         _processCpuTime = processCpuTime ?? (() => Environment.CpuUsage.TotalTime);
         _readRelaunchDrainCap = readRelaunchDrainCap ?? (() => Environment.GetEnvironmentVariable(RelaunchDrainCapEnvironmentVariable));
         _countLiveGroupedGates = countLiveGroupedGates ?? (() => 0);
@@ -1212,6 +1215,16 @@ internal sealed partial class ConductorBatchLoop
                 {
                     var holdReason =
                         $"invalidated acceptance attempt {invalidatedAttempt.AttemptId} process {invalidatedAttempt.OwnerProcessId} is still exiting";
+                    try
+                    {
+                        if (_invalidatedAttemptStopPolicy.Observe(driver.ParallelAcceptanceAttemptCoordinator,
+                                invalidatedAttempt, InvalidatedAttemptStop) is { } stopEvent)
+                            EmitProgress(stopEvent, tickLines);
+                    }
+                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
+                    {
+                        EmitProgress($"INVALIDATED_ATTEMPT_STOP_FAILED goal={goal.Id.Value} attempt={invalidatedAttempt.AttemptId} error={SanitizeReason(ex.Message)}", tickLines);
+                    }
                     var progressLine = $"GOAL goal={label} result=held reason={SanitizeReason(holdReason)}";
                     if (RecordChangedDisposition(goal.Id.Value, progressLine, lastGoalDisposition, changedGoalLines))
                     {
