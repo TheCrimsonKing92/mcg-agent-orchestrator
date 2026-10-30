@@ -8,7 +8,7 @@ internal static class GateStatusRemoteWait
     internal static void PrintText(OrchestratorWorkspace workspace)
     {
         var observedAt = DateTimeOffset.UtcNow;
-        ConsoleViews.PrintGateStatus(GateHeartbeatArtifacts.ReadStableSlots(observedAt), observedAt,
+        GateStatusTextView.Print(GateHeartbeatArtifacts.ReadStableSlots(observedAt), observedAt,
             Count(workspace, observedAt));
     }
 

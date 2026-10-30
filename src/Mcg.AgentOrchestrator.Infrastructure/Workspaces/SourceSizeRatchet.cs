@@ -669,7 +669,8 @@ internal static class SourceSizeRatchet
             // Goal 9a0a3d15 splits GoalsAndTasks into GoalTextView, GoalIntakeReceiptTextView and HealthTextView (slice 14, -228 lines, -1 partial): measured 2234 lines in 32 partials; no headroom.
             // Goal ddac2d5b extracts readiness and worklist output to ReadinessWorklistTextView: measured 2007 lines in 31 partials; no headroom.
             // Goal 5d0d9fe7 extracts operator intent, inbox, goals-prune and dogfood evaluation and renames FindingLookupTextView (slice 14, -140 lines, -4 partials): measured 1867 lines in 27 partials; no headroom.
-            new SourceClassCeiling("ConsoleViews", 1867, 27),
+            // Goal 48205141 extracts rollback, readiness, ideation and drain plans and removes the gate-status forwarder (slice 14): measured 1719 lines in 22 partials; no headroom.
+            new SourceClassCeiling("ConsoleViews", 1719, 22),
         });
 
     internal static IReadOnlyList<SourceSizeViolation> EvaluateClasses(

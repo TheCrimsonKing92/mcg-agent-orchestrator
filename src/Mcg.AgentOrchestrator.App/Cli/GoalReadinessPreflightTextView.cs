@@ -3,7 +3,7 @@ using Mcg.AgentOrchestrator.App.Rendering;
 
 namespace Mcg.AgentOrchestrator.App.Cli;
 
-internal static partial class ConsoleViews
+internal static class GoalReadinessPreflightTextView
 {
 public static void PrintGoalReadinessPreflight(GoalReadinessPreflightReport report)
 {

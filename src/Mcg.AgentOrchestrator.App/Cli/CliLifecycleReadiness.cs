@@ -32,7 +32,7 @@ internal static class CliLifecycleReadiness
             projectHomeDirectory: context.Workspace.ProjectHomeDirectoryOrNull);
         if (!readiness.AllowsStart(confirmed))
         {
-            ConsoleViews.PrintGoalReadinessPreflight(readiness);
+            GoalReadinessPreflightTextView.PrintGoalReadinessPreflight(readiness);
         }
 
         GoalReadinessPreflight.ThrowIfStartBlocked(readiness, confirmed);
@@ -55,7 +55,7 @@ internal static class CliLifecycleReadiness
                 { Severity: GoalReadinessSeverity.Blocker, CanOverride: false })
         };
         if (!readiness.AllowsStart(confirmed))
-            ConsoleViews.PrintGoalReadinessPreflight(readiness);
+            GoalReadinessPreflightTextView.PrintGoalReadinessPreflight(readiness);
         GoalReadinessPreflight.ThrowIfStartBlocked(readiness, confirmed);
     }
 }

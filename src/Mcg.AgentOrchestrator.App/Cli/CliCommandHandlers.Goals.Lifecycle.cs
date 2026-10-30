@@ -236,7 +236,7 @@ private static bool HandleGoalDrain(CliExecutionContext context, IReadOnlyList<s
         drainPolicy);
     if (!apply)
     {
-        ConsoleViews.PrintGoalDrainPlan(plan);
+        GoalDrainPlanTextView.PrintGoalDrainPlan(plan);
         return false;
     }
 
@@ -301,7 +301,7 @@ private static bool HandleGoalDrain(CliExecutionContext context, IReadOnlyList<s
         apply,
         costConfirmed,
         drainPolicy);
-    ConsoleViews.PrintGoalDrainPlan(updated, applied);
+    GoalDrainPlanTextView.PrintGoalDrainPlan(updated, applied);
     if (startFailures.Count > 0)
     {
         context.FailAfterCommit(string.Join(Environment.NewLine, startFailures));
