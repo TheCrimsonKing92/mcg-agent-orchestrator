@@ -8,7 +8,7 @@ public static partial class DispatchFailureClassifier
     private static IReadOnlyList<string> GetCliRefusalSignalLines(TaskVerificationRecord verification) =>
         ProviderLimitEvidenceParser.GetCliRefusalLines(
             verification.ExitCode,
-            EnumerateEvidenceLines(verification, includeStandardOutput: true, includeStandardError: false));
+            DispatchEvidenceSummaries.EnumerateEvidenceLines(verification, includeStandardOutput: true, includeStandardError: false));
 
     private static bool TryGetCliRefusalLimitLine(TaskVerificationRecord verification, out string line)
     {
@@ -101,7 +101,7 @@ public static partial class DispatchFailureClassifier
         }
 
         return hasLine
-            ? $"provider-authentication: {TruncateEvidence(line)}; remediation={remediation}"
+            ? $"provider-authentication: {DispatchEvidenceSummaries.TruncateEvidence(line)}; remediation={remediation}"
             : $"provider-authentication; remediation={remediation}";
     }
 
