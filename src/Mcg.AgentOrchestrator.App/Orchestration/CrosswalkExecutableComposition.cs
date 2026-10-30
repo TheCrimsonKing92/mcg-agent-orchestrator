@@ -12,6 +12,9 @@ internal static class CrosswalkExecutableComposition
     internal static CrosswalkExecutableResolver ForProcess => Executables.GetOrAdd(
         OrchestratorDataRoot.Resolve().RootDirectory, static root => new(dataRoot: root));
 
+    internal static CrosswalkStackReader ForOnboarding() =>
+        new(ForProcess, new AcceptanceGateEngineSettings().ResolveDiscoveryTimeout());
+
     // Attempt hosts need the installation root after their profile and environment are scrubbed.
     // Their verification descendants still receive the normal hermetic environment.
     internal static void PropagateDataRoot(IDictionary<string, string?> environment) =>
