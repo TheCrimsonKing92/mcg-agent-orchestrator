@@ -51,7 +51,7 @@ public static class ProviderUsageHoldView
                 Credential: dispatch.ClaudeCredentialSourceDirectory)).Distinct();
         var holds = new Dictionary<string, ProviderBudgetExhaustionHold>(StringComparer.OrdinalIgnoreCase);
         foreach (var binding in bindings)
-            if (DispatchFailureClassifier.TryGetProviderBudgetExhaustionHold(holdScope,
+            if (ProviderLimitSignals.TryGetProviderBudgetExhaustionHold(holdScope,
                     binding.Provider, binding.Credential, out var hold))
                 holds.TryAdd(hold.BindingKey, hold);
         return holds.OrderBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase).Select(pair =>

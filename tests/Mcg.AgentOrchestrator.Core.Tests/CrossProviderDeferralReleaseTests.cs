@@ -35,7 +35,7 @@ public sealed class CrossProviderDeferralReleaseTests
         kernel.ReassignTaskAgent(goal.Id, task.Id, Tester(provider));
 
         Assert.Equal(retryAfter, task.SubscriptionRetryAfter);
-        Assert.True(DispatchFailureClassifier.IsSubscriptionRetryDeferred(task, clock.UtcNow, out _));
+        Assert.True(ProviderLimitSignals.IsSubscriptionRetryDeferred(task, clock.UtcNow, out _));
         Assert.Null(task.SubscriptionDeferralReleasedAt);
         AssertNoReleaseNote(goal);
     }
@@ -51,7 +51,7 @@ public sealed class CrossProviderDeferralReleaseTests
             agent with { Model = agent.Model with { ProviderName = "Anthropic" } });
 
         Assert.Equal(retryAfter, task.SubscriptionRetryAfter);
-        Assert.True(DispatchFailureClassifier.IsSubscriptionRetryDeferred(task, clock.UtcNow, out _));
+        Assert.True(ProviderLimitSignals.IsSubscriptionRetryDeferred(task, clock.UtcNow, out _));
         Assert.Null(task.SubscriptionDeferralReleasedAt);
         AssertNoReleaseNote(goal);
     }
@@ -67,7 +67,7 @@ public sealed class CrossProviderDeferralReleaseTests
         kernel.ReassignTaskAgent(goal.Id, task.Id, Tester("Anthropic"));
 
         Assert.Equal(retryAfter, task.SubscriptionRetryAfter);
-        Assert.True(DispatchFailureClassifier.IsSubscriptionRetryDeferred(task, clock.UtcNow, out _));
+        Assert.True(ProviderLimitSignals.IsSubscriptionRetryDeferred(task, clock.UtcNow, out _));
         Assert.Null(task.SubscriptionDeferralReleasedAt);
         AssertNoReleaseNote(goal);
     }
@@ -102,7 +102,7 @@ public sealed class CrossProviderDeferralReleaseTests
         kernel = AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot([snapshot], []), clock);
         goal = kernel.GetGoal(goal.Id);
         task = kernel.GetTask(goal.Id, task.Id);
-        Assert.True(DispatchFailureClassifier.IsSubscriptionRetryDeferred(task, clock.UtcNow, out _));
+        Assert.True(ProviderLimitSignals.IsSubscriptionRetryDeferred(task, clock.UtcNow, out _));
 
         kernel.ReassignTaskAgent(goal.Id, task.Id, Tester("Anthropic"));
 
@@ -135,12 +135,12 @@ public sealed class CrossProviderDeferralReleaseTests
         RecordLimit(kernel, goal, task, clock, "Anthropic");
 
         Assert.Equal(boundary, task.SubscriptionDeferralReleasedAt);
-        Assert.True(DispatchFailureClassifier.IsSubscriptionRetryDeferred(task, clock.UtcNow, out _));
+        Assert.True(ProviderLimitSignals.IsSubscriptionRetryDeferred(task, clock.UtcNow, out _));
         // A post-boundary verification must also defer when the stored value is absent.
         var snapshot = kernel.ExportGoalSnapshot(goal.Id);
         snapshot = snapshot with { Tasks = [snapshot.Tasks.Single() with { SubscriptionRetryAfter = null }] };
         var restored = AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot([snapshot], []), clock);
-        Assert.True(DispatchFailureClassifier.IsSubscriptionRetryDeferred(
+        Assert.True(ProviderLimitSignals.IsSubscriptionRetryDeferred(
             restored.GetTask(goal.Id, task.Id), clock.UtcNow, out _));
     }
 
@@ -162,17 +162,17 @@ public sealed class CrossProviderDeferralReleaseTests
         task = kernel.GetTask(goal.Id, task.Id);
 
         Assert.Null(task.SubscriptionRetryAfter);
-        Assert.False(DispatchFailureClassifier.IsSubscriptionRetryDeferred(task, clock.UtcNow, out _));
-        Assert.True(DispatchFailureClassifier.TryGetProviderSubscriptionCooldown(
+        Assert.False(ProviderLimitSignals.IsSubscriptionRetryDeferred(task, clock.UtcNow, out _));
+        Assert.True(ProviderLimitSignals.TryGetProviderSubscriptionCooldown(
             goal, TaskId.New(), "OpenAI", clock.UtcNow, out var hold));
         Assert.Equal(reset, hold.RetryAfter);
         Assert.Equal("openai::c:\\credentials\\original", hold.BindingKey);
         Assert.Equal($"verification:{clock.UtcNow:O}", hold.EvidenceReceipt);
         Assert.Equal(clock.UtcNow, hold.DispatchStartedAt);
         Assert.Equal(task.Id, hold.SourceTaskId);
-        Assert.True(DispatchFailureClassifier.TryGetProviderSubscriptionCooldown(
+        Assert.True(ProviderLimitSignals.TryGetProviderSubscriptionCooldown(
             goal, task.Id, "OpenAI", clock.UtcNow, out _));
-        Assert.False(DispatchFailureClassifier.TryGetProviderSubscriptionCooldown(
+        Assert.False(ProviderLimitSignals.TryGetProviderSubscriptionCooldown(
             goal, TaskId.New(), "Anthropic", clock.UtcNow, out _));
     }
 
@@ -187,7 +187,7 @@ public sealed class CrossProviderDeferralReleaseTests
         var task = goal.Tasks.Single();
         RecordLimit(kernel, goal, task, clock, dispatchProvider);
         Assert.Equal(new DateTimeOffset(2026, 6, 1, 16, 58, 0, TimeSpan.Zero), task.SubscriptionRetryAfter);
-        Assert.True(DispatchFailureClassifier.IsSubscriptionRetryDeferred(task, clock.UtcNow, out _));
+        Assert.True(ProviderLimitSignals.IsSubscriptionRetryDeferred(task, clock.UtcNow, out _));
         return (kernel, goal, task, clock, agent);
     }
 
@@ -210,7 +210,7 @@ public sealed class CrossProviderDeferralReleaseTests
     private static void AssertReleased(Goal goal, TaskSpec task, FakeClock clock)
     {
         Assert.Null(task.SubscriptionRetryAfter);
-        Assert.False(DispatchFailureClassifier.IsSubscriptionRetryDeferred(task, clock.UtcNow, out _));
+        Assert.False(ProviderLimitSignals.IsSubscriptionRetryDeferred(task, clock.UtcNow, out _));
         var note = Assert.Single(goal.Timeline.Where(evt => evt.TaskId == task.Id &&
             evt.Kind == ProgressKind.TaskNote && evt.Message.Contains(ReleaseMarker, StringComparison.Ordinal)));
         Assert.Contains("OpenAI", note.Message, StringComparison.Ordinal);

@@ -1164,7 +1164,7 @@ public sealed partial class AgentOrchestratorKernel
 
     private void ReleaseCrossProviderSubscriptionDeferral(Goal goal, TaskSpec task, AgentDefinition newAgent)
     {
-        if (!DispatchFailureClassifier.TryGetSubscriptionLimitRetryAfter(task, out var retryAfter))
+        if (!ProviderLimitSignals.TryGetSubscriptionLimitRetryAfter(task, out var retryAfter))
         {
             return;
         }

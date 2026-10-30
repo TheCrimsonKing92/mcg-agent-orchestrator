@@ -1424,7 +1424,7 @@ public sealed partial class TaskSpec
                     // An active reset receipt remains provider authority after reassignment.
                     candidate => !MustPreserveStructuredOutcome(role, candidate) &&
                         !(DispatchFailureClassifier.IsRecoverableSubscriptionLimitFailure(candidate) &&
-                          DispatchFailureClassifier.TryGetSubscriptionLimitRetryAfter(candidate, out var reset) &&
+                          ProviderLimitSignals.TryGetSubscriptionLimitRetryAfter(candidate, out var reset) &&
                           reset > item.CompletedAt));
                 if (removableIndex < 0)
                 {

@@ -57,7 +57,7 @@ public sealed class SqliteOrchestratorStateRepositoryTestsCrossProviderRelease :
         var restoredTask = restored.GetTask(goal.Id, task.Id);
         Assert.Null(restoredTask.SubscriptionDeferralReleasedAt);
         Assert.Null(restoredTask.SubscriptionRetryAfter);
-        Assert.True(DispatchFailureClassifier.IsSubscriptionRetryDeferred(
+        Assert.True(ProviderLimitSignals.IsSubscriptionRetryDeferred(
             restoredTask, clock.UtcNow, out var retryAfter));
         Assert.Equal(new DateTimeOffset(2026, 6, 1, 16, 58, 0, TimeSpan.Zero), retryAfter);
     }
@@ -128,7 +128,7 @@ public sealed class SqliteOrchestratorStateRepositoryTestsCrossProviderRelease :
             "codex exec", "C:\\repo", 1, string.Empty,
             "ERROR: You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at 4:58 PM.",
             clock.UtcNow, DispatchStartedAt: clock.UtcNow));
-        Assert.True(DispatchFailureClassifier.IsSubscriptionRetryDeferred(task, clock.UtcNow, out _));
+        Assert.True(ProviderLimitSignals.IsSubscriptionRetryDeferred(task, clock.UtcNow, out _));
         return (kernel, goal, task, clock);
     }
 
@@ -140,8 +140,8 @@ public sealed class SqliteOrchestratorStateRepositoryTestsCrossProviderRelease :
     {
         Assert.Equal(releasedAt, task.SubscriptionDeferralReleasedAt);
         Assert.Null(task.SubscriptionRetryAfter);
-        Assert.False(DispatchFailureClassifier.TryGetSubscriptionLimitRetryAfter(task, out _));
-        Assert.False(DispatchFailureClassifier.IsSubscriptionRetryDeferred(task, releasedAt, out _));
+        Assert.False(ProviderLimitSignals.TryGetSubscriptionLimitRetryAfter(task, out _));
+        Assert.False(ProviderLimitSignals.IsSubscriptionRetryDeferred(task, releasedAt, out _));
     }
 
     // Fixed clock; SQLite loads use the stored boundary, never the machine's current time.

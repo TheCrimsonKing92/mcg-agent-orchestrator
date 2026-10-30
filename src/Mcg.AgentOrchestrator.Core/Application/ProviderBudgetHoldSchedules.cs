@@ -66,8 +66,8 @@ public static class ProviderBudgetHoldSchedules
     public static bool TryGetResetAt(TaskVerificationRecord exhaustion, out DateTimeOffset resetAt)
     {
         resetAt = default;
-        if (!DispatchFailureClassifier.TryGetProviderBudgetExhaustionLine(exhaustion, out var line)) return false;
-        if (DispatchFailureClassifier.TryGetRelativeRetryAfter(line, out var delay))
+        if (!ProviderLimitSignals.TryGetProviderBudgetExhaustionLine(exhaustion, out var line)) return false;
+        if (ProviderLimitSignals.TryGetRelativeRetryAfter(line, out var delay))
         {
             try { resetAt = exhaustion.CompletedAt.Add(delay).ToUniversalTime(); }
             catch (ArgumentOutOfRangeException) { return false; }

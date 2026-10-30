@@ -328,7 +328,7 @@ public sealed partial class AgentOrchestratorKernel
             return (ProcessBatchItemStatus.Skipped, $"Task already has a running process pid={task.LastProcess.ProcessId}.");
         }
 
-        if (DispatchFailureClassifier.IsSubscriptionRetryDeferred(task, DateTimeOffset.UtcNow, out var retryAfter))
+        if (ProviderLimitSignals.IsSubscriptionRetryDeferred(task, DateTimeOffset.UtcNow, out var retryAfter))
         {
             return (ProcessBatchItemStatus.Skipped, $"Recoverable subscription usage limit is deferred; retry after {retryAfter:u}.");
         }

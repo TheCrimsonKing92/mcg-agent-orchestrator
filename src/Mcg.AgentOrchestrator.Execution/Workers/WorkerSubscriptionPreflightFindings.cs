@@ -66,7 +66,7 @@ internal static class WorkerSubscriptionPreflightFindings
         Goal goal, TaskSpec task, DateTimeOffset now)
     {
         var goals = providerHoldScope.ToArray();
-        if (!DispatchFailureClassifier.TryGetProviderBudgetExhaustionHold(
+        if (!ProviderLimitSignals.TryGetProviderBudgetExhaustionHold(
             goals,
             providerName,
             credentialBinding,

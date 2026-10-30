@@ -299,7 +299,7 @@ public sealed class GoalAdvancementOperations
         }
 
         var task = goal.Tasks.FirstOrDefault(task => task.Id == automation.TaskId);
-        if (task is null || !DispatchFailureClassifier.IsSubscriptionRetryDeferred(task, DateTimeOffset.UtcNow, out retryAfter))
+        if (task is null || !ProviderLimitSignals.IsSubscriptionRetryDeferred(task, DateTimeOffset.UtcNow, out retryAfter))
         {
             return false;
         }

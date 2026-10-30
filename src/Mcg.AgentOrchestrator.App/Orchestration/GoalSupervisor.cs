@@ -171,7 +171,7 @@ public static class GoalSupervisor
             return;
         }
 
-        if (DispatchFailureClassifier.IsSubscriptionRetryDeferred(task, now, out var retryAfter))
+        if (ProviderLimitSignals.IsSubscriptionRetryDeferred(task, now, out var retryAfter))
         {
             proposals.Add(new GoalSupervisorProposal(
                 GoalSupervisorProposalKind.DeferUntilRetryAfter,
@@ -186,7 +186,7 @@ public static class GoalSupervisor
             return;
         }
 
-        if (DispatchFailureClassifier.RequiresSubscriptionLimitReview(task))
+        if (ProviderLimitSignals.RequiresSubscriptionLimitReview(task))
         {
             proposals.Add(new GoalSupervisorProposal(
                 GoalSupervisorProposalKind.ParkForOperator,

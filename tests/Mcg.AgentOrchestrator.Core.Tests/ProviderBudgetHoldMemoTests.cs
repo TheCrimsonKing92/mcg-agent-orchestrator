@@ -22,7 +22,7 @@ public sealed class ProviderBudgetHoldMemoTests
         {
             Assert.Same(fixture.Kernel.Goals, goals);
             calls++;
-            return DispatchFailureClassifier.TryGetProviderBudgetExhaustionHold(goals, provider, credential, out hold);
+            return ProviderLimitSignals.TryGetProviderBudgetExhaustionHold(goals, provider, credential, out hold);
         }
         var memo = new ProviderBudgetHoldMemo(fixture.Kernel.Goals, Evaluate);
         ProviderBudgetExhaustionHold? first = null;
@@ -32,7 +32,7 @@ public sealed class ProviderBudgetHoldMemoTests
         foreach (var dispatch in dispatches)
         {
             var provider = dispatch.ProviderName ?? dispatch.WorkerName;
-            var expected = DispatchFailureClassifier.TryGetProviderBudgetExhaustionHold(fixture.Kernel.Goals,
+            var expected = ProviderLimitSignals.TryGetProviderBudgetExhaustionHold(fixture.Kernel.Goals,
                 provider, dispatch.ClaudeCredentialSourceDirectory, out var expectedHold);
             Assert.Equal(expected, memo.TryGet(provider, dispatch.ClaudeCredentialSourceDirectory, out var actualHold));
             Assert.Equal(expectedHold, actualHold); // Record equality covers every hold field.
@@ -59,7 +59,7 @@ public sealed class ProviderBudgetHoldMemoTests
             out ProviderBudgetExhaustionHold hold)
         {
             calls++;
-            return DispatchFailureClassifier.TryGetProviderBudgetExhaustionHold(goals, provider, credential, out hold);
+            return ProviderLimitSignals.TryGetProviderBudgetExhaustionHold(goals, provider, credential, out hold);
         }
         const string binding = "XAI::<PROVIDER-DEFAULT>";
         var memo = new ProviderBudgetHoldMemo(fixture.Kernel.Goals, Evaluate);
@@ -119,7 +119,7 @@ public sealed class ProviderBudgetHoldMemoTests
         foreach (var dispatch in all.SelectMany(goal => goal.Tasks).SelectMany(task => task.DispatchHistory))
             if (DispatchFailureClassifier.BuildProviderBindingKey(dispatch.ProviderName ?? dispatch.WorkerName,
                     dispatch.ClaudeCredentialSourceDirectory).Key.Equals(bindingKey, StringComparison.OrdinalIgnoreCase)
-                && DispatchFailureClassifier.TryGetProviderBudgetExhaustionHold(all,
+                && ProviderLimitSignals.TryGetProviderBudgetExhaustionHold(all,
                     dispatch.ProviderName ?? dispatch.WorkerName, dispatch.ClaudeCredentialSourceDirectory, out hold))
                 return true;
         hold = null!;

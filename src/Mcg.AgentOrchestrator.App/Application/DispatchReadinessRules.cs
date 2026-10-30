@@ -24,7 +24,7 @@ public static class DispatchReadinessRules
         return task.Status == WorkTaskStatus.Assigned &&
             !HasBlockingRunningProcess(task) &&
             (!WorkerProfileDispatcher.IsTaskRetryDeferred(task, now, out _) ||
-             DispatchFailureClassifier.TryGetTaskSubscriptionCooldown(task, now, out _));
+             ProviderLimitSignals.TryGetTaskSubscriptionCooldown(task, now, out _));
     }
 
     private static bool HasBlockingRunningProcess(TaskSpec task)

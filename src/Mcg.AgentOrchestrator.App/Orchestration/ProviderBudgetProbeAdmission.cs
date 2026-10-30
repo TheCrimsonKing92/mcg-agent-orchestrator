@@ -21,7 +21,7 @@ internal static class ProviderBudgetProbeAdmission
                 .Select(dispatch => (Provider: dispatch.ProviderName ?? dispatch.WorkerName, Credential: dispatch.ClaudeCredentialSourceDirectory)).Distinct();
             foreach (var binding in bindings)
             {
-                if (!DispatchFailureClassifier.TryGetProviderBudgetExhaustionHold(kernel.ProviderHoldScope, binding.Provider, binding.Credential, out var hold) ||
+                if (!ProviderLimitSignals.TryGetProviderBudgetExhaustionHold(kernel.ProviderHoldScope, binding.Provider, binding.Credential, out var hold) ||
                     !blocked[0].Contains($"binding {hold.BindingKey} (", StringComparison.OrdinalIgnoreCase) || admitted.Contains(hold.BindingKey)) continue;
                 var schedule = ProviderBudgetHoldSchedules.Evaluate(kernel.ProviderHoldScope, hold, now);
                 if (now < schedule.NextProbeAt || schedule.ProbeInFlight || schedule.AdmittedTaskId is not null) break;
