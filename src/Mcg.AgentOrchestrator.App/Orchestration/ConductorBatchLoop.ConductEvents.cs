@@ -70,7 +70,7 @@ internal sealed partial class ConductorBatchLoop
             "LOOP_HANDOFF_FAILED" => "loop-handoff",
             "LOOP_HANDOFF_PENDING" => "loop-handoff",
             "LOOP_HANDOFF_SKIPPED" => "loop-handoff",
-            "LOOP_RELAUNCH_SCHEDULED" => "loop-relaunch",
+            "LOOP_RELAUNCH_SCHEDULED" or "LOOP_RELAUNCH_HELD" => "loop-relaunch",
             "LOOP_RELAUNCH_NOT_REQUIRED" => "loop-relaunch",
             "LOOP_RELAUNCH_DRAIN" or "LOOP_RELAUNCH_DETACH" => "loop-relaunch",
             "LOOP_RELAUNCH_REBUILD" => "loop-relaunch",

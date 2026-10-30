@@ -62,7 +62,7 @@ public sealed class ConductorSelfRelaunchTests
         var goals = File.ReadAllText(Path.Combine(root, "src", "Mcg.AgentOrchestrator.App", "Cli", "CliCommandHandlers.Goals.cs"));
         var program = File.ReadAllText(Path.Combine(root, "src", "Mcg.AgentOrchestrator.App", "Program.cs"));
         Assert.Contains("ConductorSelfRelaunch.CreateForHome(", goals);
-        Assert.Contains("selfRelaunch: selfRelaunch is null ? null : delegateSelfRelaunchToSupervisor", goals);
+        Assert.Contains("selfRelaunch: selfRelaunch is null ? null : supervisorSetup.DelegateSelfRelaunchToSupervisor", goals);
         Assert.Contains("ConductorSelfRelaunch.CreateSuccessorStagerForHome(", program);
         Assert.Contains("stageSuccessor: stageSuccessor", program);
         Assert.DoesNotContain("\"Update-AppDllGitHeadMarker.ps1\"", goals);

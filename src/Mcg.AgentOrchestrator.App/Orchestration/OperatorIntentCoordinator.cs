@@ -154,6 +154,10 @@ internal sealed partial class OperatorIntentCoordinator
     public IReadOnlyList<string> ListActionableGoalIds() =>
         _store.ListActionableGoalIdsAsync().GetAwaiter().GetResult();
 
+    internal bool HasRelaunchBlockingIntents() =>
+        _pendingCompletions.Count > 0 || ListActionableGoalIds().Count > 0 ||
+        _store.ListActionableSummariesAsync([OperatorIntentScopes.Workspace]).GetAwaiter().GetResult().Count > 0;
+
     public IReadOnlyList<OperatorIntentRecord> CaptureGoalBatch() =>
         _store.CaptureGoalBatchAsync(ClaimOwner).GetAwaiter().GetResult();
 
