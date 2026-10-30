@@ -89,7 +89,20 @@ internal static class PassedCohortReceiptApprovalHoldAdmission
             {
                 results[member.GoalId.Value] = new ParallelLandingOutcome(
                     PassedCohortReceiptApprovalHold.Held(goals[member.GoalId], policy, hold), null);
-                recordProgress($"ADMISSION tick={tick} result=held {hold.Reason} goal={member.GoalId.Value[..8]}");
+                recordProgress($"ADMISSION tick={tick} result=held reason=PassedCohortReceiptApprovalHeld {hold.Reason} goal={member.GoalId.Value[..8]}");
+            }
+            foreach (var (goalId, holdReason) in hold.MissingApprovals)
+            {
+                try
+                {
+                    OperatorInbox.RecordLandingEscalation(OrchestratorWorkspace.ForDirectory(driver.ExecutionDirectory),
+                        goals[goalId], holdReason, LandingExecutor.IntegrationBranchName);
+                }
+                catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+                {
+                    recordProgress($"ADMISSION tick={tick} result=held reason=cohort-approval-attention-write-failed " +
+                        $"cohort={receipt.Identity.Value} goal={goalId.Value[..8]} error={exception.GetType().Name}");
+                }
             }
         }
         return (eligible.Concat(observable.Where(goal => restored.Contains(goal.Id)))

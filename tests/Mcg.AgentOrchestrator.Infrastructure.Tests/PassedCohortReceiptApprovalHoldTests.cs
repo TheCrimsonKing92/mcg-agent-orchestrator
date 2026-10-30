@@ -12,10 +12,11 @@ public sealed class PassedCohortReceiptApprovalHoldTests : AcceptanceCohortWorkf
     public void HeldTick_MissingDenylistApproval_StartsNoGateAndPreservesReceiptAndMembers()
     {
         using var scenario = new Scenario();
-        var beforeGoals = scenario.GoalState();
+        var beforeGoals = MemberState();
         var beforeReceipt = JsonSerializer.Serialize(scenario.Receipt);
         var decisions = CollaborationItemStore.ForDirectory(scenario.Workspace.OrchestratorDirectory);
-        var beforeAttention = JsonSerializer.Serialize(decisions.GetAttentionQueueAsync().GetAwaiter().GetResult());
+        var beforeAttention = decisions.GetAttentionQueueAsync().GetAwaiter().GetResult();
+        Assert.Empty(beforeAttention);
         var gateCount = scenario.Verifier.RunCount;
         for (var tick = 0; tick < 2; tick++)
         {
@@ -28,15 +29,24 @@ public sealed class PassedCohortReceiptApprovalHoldTests : AcceptanceCohortWorkf
                 line.Contains("outcome=inflight", StringComparison.Ordinal) ||
                 line.Contains("result=admitted", StringComparison.Ordinal));
             Assert.Equal(gateCount, scenario.Verifier.RunCount);
-            Assert.Equal(beforeGoals, scenario.GoalState());
+            Assert.Equal(beforeGoals, MemberState());
             Assert.Equal(beforeReceipt, JsonSerializer.Serialize(scenario.Store.TryReadReceipt(scenario.Receipt.Identity.Value)));
-            Assert.Equal(beforeAttention, JsonSerializer.Serialize(decisions.GetAttentionQueueAsync().GetAwaiter().GetResult()));
+            var approval = Assert.Single(decisions.GetAttentionQueueAsync().GetAwaiter().GetResult());
+            Assert.Equal(CollaborationItemType.Decision, approval.Type);
+            Assert.Equal(scenario.Goals[0].Id.Value, approval.GoalId);
+            Assert.Contains($"approve-policy-change {scenario.Goals[0].Id.Value[..8]} {scenario.CandidateRevisions[0]}",
+                approval.Body, StringComparison.Ordinal);
             Assert.All(scenario.Goals, goal =>
             {
                 Assert.Empty(scenario.Store.ReadFinalizedLandingsForGoal(goal.Id));
                 AssertNoLanded(scenario.Workspace, goal.Id);
+                Assert.Equal(goal.Status, scenario.PersistedStatuses[goal.Id]);
             });
         }
+
+        // Only the journal and its landing-blocker observation may change during the reservation.
+        string MemberState() => JsonSerializer.Serialize(scenario.Kernel.ExportSnapshot().Goals
+            .Select(goal => goal with { Timeline = [], LandingBlocker = null }));
     }
 
     [Fact]
@@ -155,14 +165,16 @@ public sealed class PassedCohortReceiptApprovalHoldTests : AcceptanceCohortWorkf
         internal AcceptanceCohortReceipt Receipt { get; }
         internal Dictionary<GoalId, GoalStatus> PersistedStatuses { get; } = [];
 
-        internal Scenario()
+        internal Scenario(int? protectedMemberIndex = 0)
         {
             AddAcceptanceManifest(Repo);
             Goals = [CreateCompletedGoal(Kernel, "Protected member", Repo), CreateCompletedGoal(Kernel, "Ordinary member", Repo)];
             CandidateRevisions =
             [
-                CreateWorktreeCandidate(Repo, Goals[0].Id, Protected, "protected"),
-                CreateWorktreeCandidate(Repo, Goals[1].Id, "tests/ApprovalPartner.cs", "ordinary")
+                CreateWorktreeCandidate(Repo, Goals[0].Id,
+                    protectedMemberIndex == 0 ? Protected : "src/Mcg.AgentOrchestrator.Infrastructure/ApprovalFirst.cs", "protected"),
+                CreateWorktreeCandidate(Repo, Goals[1].Id,
+                    protectedMemberIndex == 1 ? Protected : "tests/ApprovalPartner.cs", "ordinary")
             ];
             foreach (var (goal, revision) in Goals.Zip(CandidateRevisions))
             {
@@ -205,10 +217,11 @@ public sealed class PassedCohortReceiptApprovalHoldTests : AcceptanceCohortWorkf
         internal void AssertGateStarted() =>
             Assert.True(_started.Wait(TimeSpan.FromSeconds(30)), "Ordinary admission did not start a new gate.");
 
-        internal IReadOnlyList<string> Tick(OperatorIntentCoordinator? intents = null)
+        internal IReadOnlyList<string> Tick(OperatorIntentCoordinator? intents = null,
+            ConductEventLogWriter? events = null)
         {
             BatchTickSummary? tick = null;
-            new ConductorBatchLoop(operatorIntents: intents).Run(Kernel, Driver, ConductorAutonomyPolicy.Permissive,
+            new ConductorBatchLoop(operatorIntents: intents, conductEventLogWriter: events).Run(Kernel, Driver, ConductorAutonomyPolicy.Permissive,
                 Path.Combine(Repo, "stop-does-not-exist"), maxIterations: 1, onTick: summary => tick = summary,
                 persistGoalTick: (kernel, ids) =>
                 {

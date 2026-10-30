@@ -1252,16 +1252,6 @@ internal sealed partial class ConductorBatchLoop
                     continue;
                 }
 
-                if (parallelLandingResults.TryGetValue(goal.Id.Value, out var approvalReservation) &&
-                    PassedCohortReceiptApprovalHold.IsReadOnlyReservation(approvalReservation.Result))
-                {
-                    // Admission already emitted the reason. Preserve all persisted member state,
-                    // including policy events, LandingBlocker and CurrentHold, on a held tick.
-                    tickHeld++;
-                    FinishGoalWalk("cohort-approval-held");
-                    continue;
-                }
-
                 var beforeAdvance = GoalKernelChange.Capture(goal);
                 ConductorAdvanceResult result;
                 ParallelLandingOutcome? parallelLandingOutcome = null;
@@ -1441,7 +1431,8 @@ internal sealed partial class ConductorBatchLoop
                     goalProgressLine,
                     lastGoalDisposition,
                     changedGoalLines,
-                    ShouldAlwaysEmitDisposition(result.Outcome)))
+                    ShouldAlwaysEmitDisposition(result.Outcome),
+                    emitUnchanged: PassedCohortReceiptApprovalHold.IsReadOnlyReservation(result)))
                 {
                     // Changed held advances are already included by the before/after comparison.
                     if (!result.IsHeld)
@@ -2081,18 +2072,16 @@ internal sealed partial class ConductorBatchLoop
         string progressLine,
         Dictionary<string, string> lastGoalDisposition,
         List<string> changedGoalLines,
-        bool alwaysRecord = false)
+        bool alwaysRecord = false,
+        bool emitUnchanged = false)
     {
-        if (!alwaysRecord
-            && lastGoalDisposition.TryGetValue(goalId, out var previous)
-            && string.Equals(previous, progressLine, StringComparison.Ordinal))
-        {
-            return false;
-        }
-
-        lastGoalDisposition[goalId] = progressLine;
-        changedGoalLines.Add(progressLine);
-        return true;
+        var changed = alwaysRecord
+            || !lastGoalDisposition.TryGetValue(goalId, out var previous)
+            || !string.Equals(previous, progressLine, StringComparison.Ordinal);
+        if (changed) lastGoalDisposition[goalId] = progressLine;
+        // Repeated cohort approval holds stay visible without repeating the journal decision.
+        if (changed || emitUnchanged) changedGoalLines.Add(progressLine);
+        return changed;
     }
 
     private static bool ShouldAlwaysEmitDisposition(ConductorAdvanceOutcome outcome) =>
