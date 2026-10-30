@@ -1003,7 +1003,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
 
         case "dogfood-eval":
             context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, parts.Count > 1 ? parts[1] : null);
-            ConsoleViews.PrintHistoricalDogfoodEvaluation(HistoricalDogfoodEvaluationHarness.Evaluate(
+            DogfoodEvaluationTextView.PrintHistoricalDogfoodEvaluation(HistoricalDogfoodEvaluationHarness.Evaluate(
                 context.Kernel,
                 context.CurrentGoal,
                 context.Agents,
@@ -1196,7 +1196,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 context.Workspace,
                 inboxGoal,
                 HasCliConfirmation(parts, "--show-acknowledged"));
-            ConsoleViews.PrintOperatorInbox(inbox);
+            OperatorInboxTextView.PrintOperatorInbox(inbox);
             return false;
 
         case "operator-inbox-ack":
@@ -1210,7 +1210,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 parts[1],
                 parts.Count > 2 && !parts[2].StartsWith("--", StringComparison.Ordinal) ? parts[2] : null,
                 ackGoal);
-            ConsoleViews.PrintOperatorInbox(ackReport);
+            OperatorInboxTextView.PrintOperatorInbox(ackReport);
             return false;
 
         case "goal-diagnostics":

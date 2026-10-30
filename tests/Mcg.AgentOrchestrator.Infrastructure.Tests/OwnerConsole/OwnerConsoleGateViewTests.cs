@@ -10,11 +10,11 @@ public sealed class OwnerConsoleGateViewTests
     {
         var gate = Model();
         var lines = OwnerConsoleGateFormatter.Lines(gate);
-        Assert.Equal(" x 1 failed   > 1 running   + 1 passed   = 1 cached   . 1 queued", lines[2]);
+        Assert.Equal(" x 1 failed   > 1 running   + 1 passed   = 1 cached   . 1 queued", lines[3]);
         Assert.Equal(["FAILED", " x Failed        20s / 50s   local         failed", "RUNNING (longest pole first)",
             " > Running       80s / 200s  local slot 2  [####------] quiet 7m", "QUEUED",
             " . Queued          - / 100s  local", "PASSED  2 lanes (Enter to expand)",
-            "DONE  1 without a recorded outcome", "WHERE   local 2 [----------]   local [##########]   remote [##########]"], lines.Skip(3));
+            "DONE  1 without a recorded outcome", "WHERE   local 2 [----------]   local [##########]   remote [##########]"], lines.Skip(4));
         Assert.DoesNotContain("quiet", OwnerConsoleGateFormatter.LaneLine(gate.Lanes[0] with { QuietSeconds = 300 }));
         Assert.DoesNotContain("quiet", OwnerConsoleGateFormatter.LaneLine(gate.Lanes[3] with { QuietSeconds = 900 }));
         Assert.Equal("gate: cohort 776a+eade 4/6 FAILING", OwnerConsoleGateFormatter.StatusSegment(gate));
@@ -47,7 +47,7 @@ public sealed class OwnerConsoleGateViewTests
         await view.HandleKeyAsync(new Key('g'));
 
         Assert.True(view.GateView.IsOpen);
-        Assert.Equal(" x 1 failed   > 1 running   + 1 passed   = 1 cached   . 1 queued", view.GateView.Lines[2]);
+        Assert.Equal(" x 1 failed   > 1 running   + 1 passed   = 1 cached   . 1 queued", view.GateView.Lines[3]);
         Assert.Contains("gate: cohort 776a+eade 4/6 FAILING", view.StatusText);
         view.Render(model with { Gate = OwnerConsoleGateProgress.Idle(TimeSpan.FromMinutes(12)) });
         Assert.Equal(["gate: idle 12m"], view.GateView.Lines);

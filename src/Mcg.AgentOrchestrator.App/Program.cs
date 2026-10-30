@@ -222,6 +222,11 @@ try
         return 0;
     }
 
+    if (CliImpactReplayCommand.IsCommand(startupArgs))
+    {
+        return ExitCompletedStartupCommand(CliImpactReplayCommand.Run(startupArgs, workspace));
+    }
+
     CliCommandHelp.ThrowIfInvalidFlags(startupArgs);
 }
 catch (ArgumentException ex)

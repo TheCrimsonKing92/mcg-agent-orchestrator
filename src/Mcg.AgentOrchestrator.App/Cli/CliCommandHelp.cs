@@ -104,6 +104,7 @@ internal static class CliCommandHelp
     public const string RemoteExecutorsUsage = "Usage: remote-executors [--since <ISO-8601>] [--last <N>] [--json]";
     public const string RemoteLaneSelfTestUsage = "Usage: remote-lane-selftest --executor <id> [--timeout-minutes <n>]";
     public const string ExecutorScreenUsage = "Usage: executor-screen [--max-candidates <n>] [--executor <id>]";
+    public const string ImpactReplayUsage = "Usage: impact-replay [--since <yyyy-mm-dd>] [--limit <n>] --out <directory> [--floor <name> ...]";
     public const string ExecutorSetSlotsUsage = "Usage: executor-set-slots <executor-id> <slots> [--operator-actor <actor>] [--actor-kind <human|agent>] [--idempotency-key <key>] [--json]";
     public const string ExecutorSetEnabledUsage = "Usage: executor-set-enabled <executor-id> <true|false> [--operator-actor <actor>] [--actor-kind <human|agent>] [--idempotency-key <key>] [--json]";
     public const string FocusedEvidenceSetUsage = "Usage: focused-evidence-set [--mode off|shadow|remote-first] [--sample-every <n>] [--operator-actor <actor>] [--actor-kind <human|agent>] [--idempotency-key <key>] [--json]";
@@ -688,6 +689,9 @@ internal static class CliCommandHelp
     private static readonly CommandHelpEntry ExecutorScreen = new(
         ExecutorScreenUsage, "Screen a candidate on an idle executor and record an advisory receipt.",
         ["--max-candidates", "--executor", "--help", "-h"]);
+    private static readonly CommandHelpEntry ImpactReplay = new(
+        ImpactReplayUsage, "Replay historical gate lane impact without changing orchestrator state. Repeated --floor replaces the default floor.",
+        ["--since", "--limit", "--out", "--floor", "--help", "-h"]);
     public const string GateCancelUsage = "Usage: gate-cancel <goal-prefix> --text-file <path> [--attempt <attempt-id>] [--idempotency-key <key>] [--operator-actor <actor>] [--actor-kind <human|agent>] [--json]";
     private static readonly CommandHelpEntry GateCancel = new(
         GateCancelUsage, "Queue a typed request that stops the goal's live gate attempt without a verdict on the next tick.",
@@ -914,6 +918,7 @@ internal static class CliCommandHelp
         Console.WriteLine("  goal-replace      Replace an eligible terminal source-linked goal.");
         Console.WriteLine("  goals             List goals [--epic <id-or-title>].");
         Console.WriteLine("  status            Show goal or orchestrator status.");
+        Console.WriteLine("  impact-replay     Measure historical lane savings and missed failures.");
         Console.WriteLine("  attention         List or answer operator attention items.");
         Console.WriteLine("  backlog-list      List backlog items.");
         Console.WriteLine("  backlog-add       Add a backlog item.");
@@ -1287,6 +1292,11 @@ internal static class CliCommandHelp
         if (args[0].Equals("executor-screen", StringComparison.OrdinalIgnoreCase))
         {
             entry = ExecutorScreen;
+            return true;
+        }
+        if (args[0].Equals("impact-replay", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = ImpactReplay;
             return true;
         }
         if (args[0].Equals("gate-cancel", StringComparison.OrdinalIgnoreCase))

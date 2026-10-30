@@ -14,6 +14,10 @@ internal sealed class CrosswalkAcceptanceCheck(
     Func<string[], GateHeartbeatContext> createHeartbeat,
     Func<string[], string, TimeSpan, GateHeartbeatContext, CancellationToken, CancellationToken, Task<CommandResult>> runProcess)
 {
+    // Reserve cmd.exe/pwsh quoting, arguments and heartbeat pipe redirects outside the script.
+    private const int CommandWrapperMargin = 691;
+    internal const int RunCommandLineLimit = MaxCmdCommandLineLength - CommandWrapperMargin;
+
     internal static Task<AcceptanceCheckResult> RunOwnedAsync(
         AcceptanceManifestCheck check, string worktreePath,
         IAcceptanceRunExecutionContext? owner, AcceptanceInvocationContext? invocation,
@@ -89,10 +93,18 @@ internal sealed class CrosswalkAcceptanceCheck(
                 return Finish();
             }
             if (Expired()) return Finish();
-            var run = await client.RunAsync(root, selected, Remaining(), lifetime.Token).ConfigureAwait(false);
+            var run = check.Arguments.Count == 0
+                ? await client.RunAsync(root, [], Remaining(), lifetime.Token).ConfigureAwait(false)
+                : await new CrosswalkBatchedRunner(client, RunCommandLineLimit)
+                    .RunAsync(root, list.Executable!, selected, Remaining, lifetime.Token).ConfigureAwait(false);
             AddDiagnostics(run.Diagnostics);
             stderr.Add(run.StandardError);
             exitCode = run.ExitCode;
+            if (run.Result.Select(record => record.Id).Distinct(StringComparer.Ordinal).Count() != run.Result.Count)
+            {
+                diagnostics.Add(new(CrosswalkDiagnosticCategory.MalformedResults, "Result IDs must be unique across batches."));
+                return Finish();
+            }
 
             // A failed invocation can still return valuable evidence. Only current captured records
             // are published; neither old files nor paths embedded in stdout are evidence inputs.
@@ -118,12 +130,17 @@ internal sealed class CrosswalkAcceptanceCheck(
                     [CohortTestResultEvidence.Capture(path, Mcg.AgentOrchestrator.Core.AcceptanceCohortCheckEvidence.NormalizedFormat)]);
                 if (records.Any(record => string.IsNullOrWhiteSpace(record.Id)))
                     diagnostics.Add(new(CrosswalkDiagnosticCategory.MalformedResults, "Normalized IDs must be nonblank."));
+                if (records.Any(record => !known.Contains(record.Id)))
+                    diagnostics.Add(new(CrosswalkDiagnosticCategory.MalformedResults, "Result IDs must be exact discovered IDs."));
                 var executed = records.Where(record => record.Status is TestResultStatus.Passed or TestResultStatus.Failed or TestResultStatus.Error)
                     .Select(record => record.Id).ToHashSet(StringComparer.Ordinal);
                 if (executed.Count == 0)
                     diagnostics.Add(new(CrosswalkDiagnosticCategory.NoExecution, "Crosswalk reported no executed tests."));
-                if (selected.Any(id => !executed.Contains(id)))
-                    diagnostics.Add(new(CrosswalkDiagnosticCategory.MissingCoverage, "Not every selected ID has an executed result."));
+                var missing = selected.Where(id => !executed.Contains(id)).ToArray();
+                if (missing.Length > 0)
+                    diagnostics.Add(new(CrosswalkDiagnosticCategory.MissingCoverage,
+                        $"Not every selected ID has an executed result. Missing {missing.Length}: {string.Join(", ", missing.Take(20))}" +
+                        (missing.Length > 20 ? $"; and {missing.Length - 20} more." : ".")));
                 if (records.Any(record => record.Status is TestResultStatus.Failed or TestResultStatus.Error))
                     diagnostics.Add(new(CrosswalkDiagnosticCategory.TestFailures, "Crosswalk reported failed tests."));
             }
