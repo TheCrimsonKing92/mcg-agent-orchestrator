@@ -7,13 +7,20 @@ internal static class ProspectiveEvidenceTrxRows
 {
     internal sealed record Row(
         string FullIdentity, string ShortIdentity, string? ClassName, string? Outcome, string Path,
-        string? AliasIdentity = null, string? BareIdentity = null, string? CodeBase = null)
+        string? AliasIdentity = null, string? BareIdentity = null, string? CodeBase = null,
+        string? FileIdentity = null)
     {
         internal bool Passed => Outcome == "Passed";
     }
 
     internal static IEnumerable<Row> Read(string path)
     {
+        if (ProspectiveEvidenceCtrfRows.TryRead(path) is { } ctrf)
+        {
+            foreach (var row in ctrf) yield return row;
+            yield break;
+        }
+
         var document = XDocument.Load(path, LoadOptions.None);
         var definitions = document.Descendants()
             .Where(element => element.Name.LocalName == "UnitTest" && element.Attribute("id") is not null)
@@ -54,7 +61,9 @@ internal static class ProspectiveEvidenceTrxRows
         rows.Where(row => ProspectiveEvidenceGateResolver.Matches(selector, row.FullIdentity) ||
             ProspectiveEvidenceGateResolver.Matches(selector, row.ShortIdentity) ||
             (row.AliasIdentity is not null && ProspectiveEvidenceGateResolver.Matches(selector, row.AliasIdentity)) ||
-            (row.BareIdentity is not null && ProspectiveEvidenceGateResolver.Matches(selector, row.BareIdentity))).ToArray();
+            (row.BareIdentity is not null && ProspectiveEvidenceGateResolver.Matches(selector, row.BareIdentity)) ||
+            (row.FileIdentity is not null && string.Equals(selector.Replace('\\', '/'), row.FileIdentity,
+                StringComparison.Ordinal))).ToArray();
 
     internal static IReadOnlyList<string>? AmbiguousClassNames(IEnumerable<Row> matches)
     {
