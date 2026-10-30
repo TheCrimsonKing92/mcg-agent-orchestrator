@@ -92,6 +92,7 @@ internal static class GoalAcceptanceVerifierTestTelemetry
                     File.Move(temporaryPath, destinationPath, overwrite: true);
                 }
 
+                LaneSlotTimingReader.CopyBeside(sourcePath, destinationPath);
                 durablePaths[index] = destinationPath;
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)

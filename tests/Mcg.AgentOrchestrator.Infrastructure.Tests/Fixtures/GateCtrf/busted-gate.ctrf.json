@@ -1,0 +1,14 @@
+{
+  "reportFormat": "CTRF",
+  "results": {
+    "tool": { "name": "busted" },
+    "tests": [
+      { "testId": "spec/pzis_string_utils_spec.lua::PZISStringUtils createSearchPattern escapes Lua pattern characters", "name": "escapes Lua pattern characters", "status": "passed" },
+      { "testId": "spec/pzis_string_utils_spec.lua::PZISStringUtils createSearchPattern preserves plain text", "name": "preserves plain text", "status": "passed" },
+      { "testId": "spec/pzis_string_utils_spec.lua::PZISStringUtils trim strips whitespace", "name": "strips whitespace", "status": "passed" },
+      { "testId": "spec/pzis_collection_utils_spec.lua::PZISCollectionUtils.Set add adds a new member and increases size", "name": "adds a new member and increases size", "status": "passed" },
+      { "testId": "spec/pzis_collection_utils_spec.lua::PZISCollectionUtils.Set size counts members", "name": "counts members", "status": "passed" },
+      { "testId": "spec/pzis_object_utils_spec.lua::PZISObjectUtils getContainerNameByType returns name", "name": "returns name", "status": "passed" }
+    ]
+  }
+}

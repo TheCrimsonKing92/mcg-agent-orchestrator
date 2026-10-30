@@ -68,6 +68,14 @@ internal static class GateLaneReceiptLedger
             Add("cpu_ms", receipt.CpuMilliseconds);
             Add("peak_mem_bytes", receipt.PeakMemoryBytes);
             Add("host_available_memory_mb", receipt.HostAvailableMemoryMb);
+            if (snapshot?.SlotTiming is { } slotTiming)
+            {
+                row["slot_wait_ms"] = slotTiming.WaitMs;
+                row["slot_held_ms"] = slotTiming.HeldMs;
+                row["slot_count"] = slotTiming.SlotCount;
+            }
+            if (snapshot?.SlotTimingUnavailableReason is { } slotReason)
+                row["slot_timing_unavailable_reason"] = slotReason;
             row["slowdown_status"] = slowdown.Status;
             row["slowdown_ratio"] = slowdown.Status == "slow" && slowdown.Ratio is { } ratio ? Math.Round(ratio, 2) : null;
             row["sched_samples"] = null;

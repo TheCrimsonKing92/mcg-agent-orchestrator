@@ -23,6 +23,8 @@ internal static class AcceptanceShellProcessStartInfo
                     TempRootApparatusLossReceiptStore.ApplyCurrentScope(environment);
                 else
                     TempRootApparatusLossReceiptStore.ApplyScope(environment, request.GateInvocationId, request.ApparatusReceiptPath);
+                if (LaneSlotTimingReader.PathForArguments(arguments, workingDirectory) is { } timingPath)
+                    environment[LaneSlotTimingReader.VariableName] = timingPath;
                 if (request.ChildEnvironmentOverrides is { } overrides)
                 {
                     foreach (var pair in overrides)
