@@ -7,7 +7,7 @@ namespace Mcg.AgentOrchestrator.App.Cli;
 
 internal static class ProjectAnswerCommand
 {
-    internal const string Usage = "Usage: project answer [name] <fact-key> <value> [--reason <text>]";
+    internal const string Usage = "Usage: project answer [name] <fact-key> <value> [--reason <text>] (delivery: direct or pull-request; delivery-decider: <login>)";
 
     internal static int Execute(IReadOnlyList<string> parts, OrchestratorProjectRegistry registry,
         string defaultRootDirectory, string? activeProjectOverride, TextWriter output,
@@ -27,6 +27,9 @@ internal static class ProjectAnswerCommand
         {
             throw new ArgumentException($"{Usage}{Environment.NewLine}{exception.Message}", exception);
         }
+
+        if (key is ProjectDelivery.ModeKey or ProjectDelivery.DeciderKey)
+            return ProjectDeliveryAnswerCommand.Execute(registry, project, key, value, reason, output, clock);
 
         var directory = ProjectDiscoveryModelLocation.ResolveDirectory(project, null, defaultRootDirectory,
             registry.DataRootDirectory);
