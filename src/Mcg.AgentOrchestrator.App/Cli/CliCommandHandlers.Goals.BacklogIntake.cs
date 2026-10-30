@@ -375,7 +375,7 @@ private static bool HandleBacklogIntake(CliExecutionContext context, IReadOnlyLi
                     Console.WriteLine($"Backlog slice '{batchItem.Heading}' already has goal {reusedBatchGoal.Id.Value[..8]}; no new goal created.");
                     if (batchGoalPlan?.PipelineDecision.IsOverride == true)
                     {
-                        ConsoleViews.PrintGoalObjectivePlan(batchGoalPlan);
+                        GoalObjectivePlanTextView.PrintGoalObjectivePlan(batchGoalPlan);
                     }
                 }
                 continue;
@@ -409,7 +409,7 @@ private static bool HandleBacklogIntake(CliExecutionContext context, IReadOnlyLi
                 : $"Created goal from backlog slice '{batchItem.Heading}'.");
             if (batchGoalPlan is not null)
             {
-                ConsoleViews.PrintGoalObjectivePlan(batchGoalPlan);
+                GoalObjectivePlanTextView.PrintGoalObjectivePlan(batchGoalPlan);
             }
         }
 
@@ -483,7 +483,7 @@ private static bool HandleBacklogIntake(CliExecutionContext context, IReadOnlyLi
             Console.WriteLine($"Backlog slice already has goal {existingGoal.Id.Value[..8]}; no new goal created.");
             if (goalObjectivePlan?.PipelineDecision.IsOverride == true)
             {
-                ConsoleViews.PrintGoalObjectivePlan(goalObjectivePlan);
+                GoalObjectivePlanTextView.PrintGoalObjectivePlan(goalObjectivePlan);
             }
             GoalTextView.PrintGoal(existingGoal);
         }
@@ -527,7 +527,7 @@ private static bool HandleBacklogIntake(CliExecutionContext context, IReadOnlyLi
     Console.WriteLine(createSimpleGoal ? "Created simple goal from backlog slice." : "Created goal from backlog slice.");
     if (goalObjectivePlan is not null)
     {
-        ConsoleViews.PrintGoalObjectivePlan(goalObjectivePlan);
+        GoalObjectivePlanTextView.PrintGoalObjectivePlan(goalObjectivePlan);
     }
     GoalTextView.PrintGoal(context.CurrentGoal);
     return true;

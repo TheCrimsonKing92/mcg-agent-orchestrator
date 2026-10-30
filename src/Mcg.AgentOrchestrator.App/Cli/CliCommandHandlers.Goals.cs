@@ -236,7 +236,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             GoalObjectivePlanner.ThrowIfBlocked(plan);
             var replacementAgents = ApplyRoleAgentOverrides(parts, context.Agents);
             GoalLifecycleCommands.EnsureRequestedPipelineCanBeSatisfied(plan, replacementAgents);
-            ConsoleViews.PrintGoalObjectivePlan(plan);
+            GoalObjectivePlanTextView.PrintGoalObjectivePlan(plan);
             context.CurrentGoal = GoalLifecycleCommands.CreateAndActivateGoal(
                 context.Kernel,
                 replacementAgents,
@@ -325,7 +325,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 GoalObjectivePlanner.ThrowIfBlocked(runObjectivePlan);
                 var runAgents = ApplyRoleAgentOverrides(parts, context.Agents);
                 GoalLifecycleCommands.EnsureRequestedPipelineCanBeSatisfied(runObjectivePlan, runAgents);
-                ConsoleViews.PrintGoalObjectivePlan(runObjectivePlan);
+                GoalObjectivePlanTextView.PrintGoalObjectivePlan(runObjectivePlan);
                 PrintScopeCollisionAdvisory(context, runObjective);
                 PrintBriefLintAdvisory(runObjective);
                 var runSourceBacklogLink = ResolveSourceBacklogItemLink(context, parts, runObjective);
@@ -360,7 +360,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             GoalObjectivePlanner.ThrowIfBlocked(goalObjectivePlan);
             var goalAgents = ApplyRoleAgentOverrides(parts, context.Agents);
             GoalLifecycleCommands.EnsureRequestedPipelineCanBeSatisfied(goalObjectivePlan, goalAgents);
-            if (!summary) ConsoleViews.PrintGoalObjectivePlan(goalObjectivePlan);
+            if (!summary) GoalObjectivePlanTextView.PrintGoalObjectivePlan(goalObjectivePlan);
             PrintScopeCollisionAdvisory(context, goalObjective);
             PrintBriefLintAdvisory(goalObjective);
             var goalSourceBacklogLink = ResolveSourceBacklogItemLink(context, parts, goalObjective);
@@ -390,7 +390,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             var simpleObjective = ResolveBriefObjective(parts, "simple-goal <objective> | simple-goal --brief-file <path> | simple-goal --text-file <path>");
             var simpleObjectivePlan = BuildGoalObjectivePlan(context, simpleObjective, simple: true);
             GoalObjectivePlanner.ThrowIfBlocked(simpleObjectivePlan);
-            ConsoleViews.PrintGoalObjectivePlan(simpleObjectivePlan);
+            GoalObjectivePlanTextView.PrintGoalObjectivePlan(simpleObjectivePlan);
             PrintScopeCollisionAdvisory(context, simpleObjective);
             var simpleSourceBacklogLink = ResolveSourceBacklogItemLink(context, parts, simpleObjective);
             PrintClosedSourceBacklogWarning(simpleSourceBacklogLink);
@@ -961,7 +961,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 context.CurrentGoal.Id,
                 cleanupHooks: context.CleanupContext.Hooks,
                 orchestratorDirectory: context.Workspace.OrchestratorDirectory);
-            ConsoleViews.PrintTerminalGoalSweep(readinessSweep);
+            TerminalGoalSweepTextView.PrintTerminalGoalSweep(readinessSweep);
             TerminalGoalSweepAttention.Surface(context.Kernel, readinessSweep, context.Workspace.OrchestratorDirectory, context.CurrentGoal.Id);
             context.CurrentGoal = context.Kernel.GetGoal(context.CurrentGoal.Id);
             IReadOnlyCollection<Goal> readinessHoldScope = context.Kernel.Goals;
@@ -993,7 +993,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 context.CurrentGoal.Id,
                 cleanupHooks: context.CleanupContext.Hooks,
                 orchestratorDirectory: context.Workspace.OrchestratorDirectory);
-            ConsoleViews.PrintTerminalGoalSweep(recoverySweep);
+            TerminalGoalSweepTextView.PrintTerminalGoalSweep(recoverySweep);
             TerminalGoalSweepAttention.Surface(context.Kernel, recoverySweep, context.Workspace.OrchestratorDirectory, context.CurrentGoal.Id);
             context.CurrentGoal = context.Kernel.GetGoal(context.CurrentGoal.Id);
             ConsoleViews.PrintGoalRecoveryReport(GoalRecoveryPlanner.Build(
@@ -1237,7 +1237,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             {
                 var nextDiagnosis = TerminalGoalSweep.Diagnose(
                     context.Kernel, context.Workspace.ExecutionDirectory, context.Workspace.IntegrationBranch, context.CurrentGoal.Id);
-                ConsoleViews.PrintTerminalGoalSweep(nextDiagnosis, includeRepairs: false);
+                TerminalGoalSweepTextView.PrintTerminalGoalSweep(nextDiagnosis, includeRepairs: false);
             }
             else
             {
@@ -1247,7 +1247,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     context.CurrentGoal.Id,
                     cleanupHooks: context.CleanupContext.Hooks,
                     orchestratorDirectory: context.Workspace.OrchestratorDirectory);
-                ConsoleViews.PrintTerminalGoalSweep(nextSweep);
+                TerminalGoalSweepTextView.PrintTerminalGoalSweep(nextSweep);
                 TerminalGoalSweepAttention.Surface(context.Kernel, nextSweep, context.Workspace.OrchestratorDirectory, context.CurrentGoal.Id);
                 context.CurrentGoal = context.Kernel.GetGoal(context.CurrentGoal.Id);
                 nextChanged = nextSweep.Changed;
@@ -1681,7 +1681,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                         ReloadBaseline = reloadBaseline,
                         ProgressEvents = [.. remediation.Events, .. unappliedExitWatch.Observe(loopKernel), .. consoleCodePageWatch.Observe()]
                     };
-                    ConsoleViews.PrintTerminalGoalSweep(terminalSweep, includeBlockers: false);
+                    TerminalGoalSweepTextView.PrintTerminalGoalSweep(terminalSweep, includeBlockers: false);
                     TerminalGoalSweepAttention.Surface(loopKernel, terminalSweep, context.Workspace.OrchestratorDirectory);
                     context.CleanupContext.Scheduler.SweepIfDue(context.Workspace.ExecutionDirectory, loopKernel);
                     if (!suppressGoalRefinementForMaxDurationDeferral)

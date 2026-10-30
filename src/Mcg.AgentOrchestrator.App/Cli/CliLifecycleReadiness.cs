@@ -14,7 +14,7 @@ internal static class CliLifecycleReadiness
             goal.Id,
             cleanupHooks: context.CleanupContext.Hooks,
             orchestratorDirectory: context.Workspace.OrchestratorDirectory);
-        ConsoleViews.PrintTerminalGoalSweep(sweep);
+        TerminalGoalSweepTextView.PrintTerminalGoalSweep(sweep);
         TerminalGoalSweepAttention.Surface(context.Kernel, sweep, context.Workspace.OrchestratorDirectory, goal.Id);
         goal = context.Kernel.GetGoal(goal.Id);
         if (context.CurrentGoal?.Id == goal.Id)

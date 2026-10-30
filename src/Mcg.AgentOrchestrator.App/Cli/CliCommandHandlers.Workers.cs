@@ -233,7 +233,7 @@ private static bool? TryExecuteWorkerCommand(string command, IReadOnlyList<strin
             }
 
         case "cross-goal-start-plan":
-            ConsoleViews.PrintCrossGoalSubscriptionStartPlan(CrossGoalSubscriptionStartPlanner.Build(
+            CrossGoalStartPlanTextView.PrintCrossGoalSubscriptionStartPlan(CrossGoalSubscriptionStartPlanner.Build(
                 context.Kernel,
                 context.Agents,
                 context.WorkerProfiles,
@@ -252,7 +252,7 @@ private static bool? TryExecuteWorkerCommand(string command, IReadOnlyList<strin
                 context.Agents,
                 context.WorkerProfiles,
                 HasCliConfirmation(parts, SubscriptionPromptCostGuard.CliConfirmationFlag));
-            ConsoleViews.PrintCrossGoalSubscriptionStartPlan(crossGoalPlan);
+            CrossGoalStartPlanTextView.PrintCrossGoalSubscriptionStartPlan(crossGoalPlan);
             var startedAny = false;
             var crossGoalStartFailures = new List<string>();
             foreach (var candidate in crossGoalPlan.FirstBatchCandidates)
@@ -312,7 +312,7 @@ private static bool? TryExecuteWorkerCommand(string command, IReadOnlyList<strin
                 context.CurrentGoal.Id,
                 cleanupHooks: context.CleanupContext.Hooks,
                 orchestratorDirectory: context.Workspace.OrchestratorDirectory);
-            ConsoleViews.PrintTerminalGoalSweep(startReadySweep);
+            TerminalGoalSweepTextView.PrintTerminalGoalSweep(startReadySweep);
             TerminalGoalSweepAttention.Surface(context.Kernel, startReadySweep, context.Workspace.OrchestratorDirectory, context.CurrentGoal.Id);
             context.CurrentGoal = context.Kernel.GetGoal(context.CurrentGoal.Id);
             var readiness = GoalReadinessPreflight.Build(

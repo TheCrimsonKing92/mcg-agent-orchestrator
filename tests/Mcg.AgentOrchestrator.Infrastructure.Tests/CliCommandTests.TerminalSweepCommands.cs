@@ -79,7 +79,7 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
         }
 
         var result = RunSweep(kernel, CreateTempDirectory());
-        var output = CaptureConsole(() => ConsoleViews.PrintTerminalGoalSweep(result));
+        var output = CaptureConsole(() => TerminalGoalSweepTextView.PrintTerminalGoalSweep(result));
 
         Xunit.Assert.Equal(3, result.ExcludedGoalCount);
         Xunit.Assert.Equal(1, CountLinesContaining(output, "SWEEP_SUMMARY kind=stale-terminal-excluded count=3"));
@@ -1939,7 +1939,7 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
                 kernel,
                 result,
                 CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory));
-            var output = CaptureConsole(() => ConsoleViews.PrintTerminalGoalSweep(result));
+            var output = CaptureConsole(() => TerminalGoalSweepTextView.PrintTerminalGoalSweep(result));
 
             Xunit.Assert.Empty(result.Blockers);
             Xunit.Assert.DoesNotContain("SWEEP_BLOCKER", output, StringComparison.Ordinal);

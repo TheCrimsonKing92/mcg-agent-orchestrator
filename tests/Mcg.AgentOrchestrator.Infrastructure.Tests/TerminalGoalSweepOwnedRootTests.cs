@@ -32,7 +32,7 @@ public sealed class TerminalGoalSweepOwnedRootTests
                 DeferredReason: "owned-root reap deferred: synthetic registry hold")
         };
 
-        var output = AsyncLocalConsoleRouter.Capture(() => ConsoleViews.PrintTerminalGoalSweep(result));
+        var output = AsyncLocalConsoleRouter.Capture(() => TerminalGoalSweepTextView.PrintTerminalGoalSweep(result));
 
         Assert.Contains("SWEEP_OWNED_ROOT_DEFERRED", output, StringComparison.Ordinal);
         Assert.Contains("synthetic registry hold", output, StringComparison.Ordinal);
@@ -48,7 +48,7 @@ public sealed class TerminalGoalSweepOwnedRootTests
             OwnedRoots = new TerminalGoalSweepOwnedRootResult(0, 0, 0, 0, [])
         };
 
-        var output = AsyncLocalConsoleRouter.Capture(() => ConsoleViews.PrintTerminalGoalSweep(result));
+        var output = AsyncLocalConsoleRouter.Capture(() => TerminalGoalSweepTextView.PrintTerminalGoalSweep(result));
 
         Assert.Empty(output);
     }
