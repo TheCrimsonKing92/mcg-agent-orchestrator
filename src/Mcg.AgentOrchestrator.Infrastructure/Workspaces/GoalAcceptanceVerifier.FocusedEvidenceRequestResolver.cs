@@ -438,7 +438,7 @@ internal static partial class FocusedEvidenceRequestResolver
     internal static bool TryResolveFocusedEvidenceProject(
         string alias,
         out string project) =>
-        FocusedEvidenceProjectResolver.TryResolve(alias, engineSettings: null, out project);
+        FocusedEvidenceProjectResolver.TryResolve(alias, settings: null, out project);
 
     internal static bool TryResolveFocusedEvidenceProject(
         string alias,

@@ -2500,8 +2500,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             check.Name,
             result.ExitCode == 0,
             result.ExitCode,
-            result.ExitCode == 0 && !GoPackageFocusedEvidence.IsEvidenceCheck(check) &&
-                !CrosswalkFocusedEvidence.IsEvidenceCheck(check) ? null : TailOutput(result.Output),
+            result.ExitCode == 0 && !GoPackageFocusedEvidence.IsEvidenceCheck(check) ? null : TailOutput(result.Output),
             ResultSummary: BuildGenericCommandResultSummary(result),
             Advisory: check.Advisory,
             ResolvedCommandPath: result.ResolvedCommandPath)), false);
