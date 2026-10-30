@@ -19,12 +19,18 @@ internal static class OwnerConsoleBoardRenderer
         var statusColumn = titleColumn + 2;
         view.Style.RowColorGetter = args => args.RowIndex >= 0 && args.RowIndex < rows.Count && rows[args.RowIndex].Dimmed
             ? new Scheme(view.GetScheme().Disabled) : null;
-        var cells = rows.Select(row => new[] { row.GoalPrefix, row.Epic, row.Title, row.Priority, row.Stage,
-            sectioned && row.IsDiagnostic ? "" : Age(row.Age) }).ToArray();
+        var displayedCount = OwnerConsoleBoardSection.DisplayedRowCount(rows, sectioned);
+        // Empty placeholders preserve goal indexes. Header text is drawn pane-wide, never projected into cells.
+        var cells = rows.Take(displayedCount).Select(row => sectioned && row.IsDiagnostic
+            ? new[] { "", "", "", "", "", "" }
+            : new[] { row.GoalPrefix, row.Epic, row.Title, row.Priority, row.Stage, Age(row.Age) }).ToArray();
+        if (view is OwnerConsoleBoardPane pane)
+            pane.Headers = sectioned ? Enumerable.Range(0, displayedCount).Where(index => rows[index].IsDiagnostic)
+                .ToDictionary(index => index, index => OwnerConsoleBoardSection.HeaderLine(rows[index])) : [];
         var widestTitle = cells.Select(row => row[titleColumn].GetColumns()).DefaultIfEmpty().Max();
         var widths = Enumerable.Range(0, table.Columns.Count).Select(column =>
             Math.Max(table.Columns[column].ColumnName.GetColumns(), cells.Select(row => row[column].GetColumns()).DefaultIfEmpty().Max())).ToArray();
-        var showPriority = rows.Any(row => row.Priority is { Length: > 0 } and not "Normal");
+        var showPriority = cells.Any(row => row[priorityColumn] is { Length: > 0 } and not "Normal");
         if (paneWidth > 0)
         {
             var statusHeaderWidth = table.Columns[statusColumn].ColumnName.GetColumns();
