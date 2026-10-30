@@ -171,6 +171,7 @@ internal sealed record ConductorParallelAcceptanceAttempt(
     public DateTimeOffset? ReplayLandedAt { get; init; }
     public DateTimeOffset? OwnerProcessStartedAt { get; init; }
     public string? OwnerExecutablePath { get; init; }
+    public DateTimeOffset? InvalidatedAt { get; init; }
     public int HolderContractVersion { get; init; }
     // The candidate the durable holder lease and job were bound to at launch. Terminal persistence
     // rewrites the heads to the integrated candidate, which must not change the lease identity.
@@ -1080,6 +1081,22 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
 
         var attempt = TryReadLatest(goalId);
         return attempt is not null && IsLiveAttempt(attempt);
+    }
+
+    internal void WithLiveInvalidatedOwner(
+        ConductorParallelAcceptanceAttempt observed,
+        Action<ConductorParallelAcceptanceAttempt> action)
+    {
+        lock (MetadataWriteGate)
+        {
+            var current = TryReadLatest(observed.GoalId);
+            if (current is null || current.AttemptId != observed.AttemptId ||
+                current.OwnerProcessId != observed.OwnerProcessId ||
+                current.OwnerProcessStartedAt != observed.OwnerProcessStartedAt ||
+                !string.Equals(current.OwnerExecutablePath, observed.OwnerExecutablePath, StringComparison.OrdinalIgnoreCase) ||
+                !IsLiveInvalidatedAttempt(current)) return;
+            action(current);
+        }
     }
 
     internal IReadOnlyList<ConductorParallelAcceptanceAttempt> GetCapacityReservingAttempts(IEnumerable<string> goalIds) =>
@@ -2056,6 +2073,7 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
         WriteAttemptFile(current with
         {
             Outcome = ConductorParallelAcceptanceAttemptOutcome.StaleCandidate,
+            InvalidatedAt = current.InvalidatedAt ?? _utcNow(),
             CompletedAt = _utcNow(),
             ReconciledAt = _utcNow(),
             LastHeartbeatAt = _utcNow(),
