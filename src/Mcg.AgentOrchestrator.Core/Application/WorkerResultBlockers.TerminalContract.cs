@@ -49,7 +49,7 @@ public static partial class WorkerResultBlockers
             (verification.DispatchAttemptAt is { } attemptAt && attemptAt != dispatch.DispatchedAt))
             return new(VerificationTerminalContractStatus.Stale, "Dispatch attempt identity is missing or mismatched.");
 
-        if (DispatchFailureClassifier.IsProviderInterruptionFailure(verification))
+        if (ProviderFailureSignals.IsProviderInterruptionFailure(verification))
             return new(VerificationTerminalContractStatus.Interrupted, "Provider terminal interruption evidence is present.");
 
         return AssessTerminalVerificationOutput(task.RequiredRole, verification.AuthoritativeStandardOutput);

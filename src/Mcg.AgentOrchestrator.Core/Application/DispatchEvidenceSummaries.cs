@@ -127,12 +127,12 @@ internal static partial class DispatchEvidenceSummaries
             return BuildPreflightFailureEvidenceSummary(preflightLine);
         }
 
-        if (TryGetProviderAuthenticationLine(verification, out var providerAuthLine))
+        if (ProviderFailureSignals.TryGetProviderAuthenticationLine(verification, out var providerAuthLine))
         {
             return TruncateEvidence(providerAuthLine);
         }
 
-        if (TryGetProviderConnectivityLine(verification, out var providerConnectivityLine))
+        if (ProviderFailureSignals.TryGetProviderConnectivityLine(verification, out var providerConnectivityLine))
         {
             return TruncateEvidence(providerConnectivityLine);
         }
@@ -262,7 +262,7 @@ internal static partial class DispatchEvidenceSummaries
     }
 
     internal static string BuildProviderConnectivityEvidenceSummary(TaskVerificationRecord verification) =>
-        TryGetProviderConnectivityLine(verification, out var line)
+        ProviderFailureSignals.TryGetProviderConnectivityLine(verification, out var line)
             ? TruncateEvidence(line)
             : BuildEvidenceSummary(verification);
 
@@ -281,7 +281,7 @@ internal static partial class DispatchEvidenceSummaries
     }
 
     internal static string BuildProviderModelRejectionEvidenceSummary(TaskVerificationRecord verification) =>
-        TryGetProviderModelRejectionLine(verification, out var line)
+        ProviderFailureSignals.TryGetProviderModelRejectionLine(verification, out var line)
             ? TruncateEvidence(line)
             : BuildEvidenceSummary(verification);
 

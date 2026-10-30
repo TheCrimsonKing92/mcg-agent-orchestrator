@@ -35,7 +35,7 @@ internal static class ReviewedCandidateEvidenceBinding
     {
         if (task.RequiredRole != AgentRole.Reviewer || !verification.WorkerResultPresent ||
             !verification.Succeeded || verification.ProviderFailureKind != ProviderFailureKind.Unknown ||
-            DispatchFailureClassifier.IsProviderInterruptionFailure(verification) ||
+            ProviderFailureSignals.IsProviderInterruptionFailure(verification) ||
             verification.ReviewFindingContractViolation is not null ||
             string.IsNullOrWhiteSpace(verification.ReviewedCommit) ||
             goal.RefinedSpec is not { AcceptanceCriteria.Count: > 0 } spec ||

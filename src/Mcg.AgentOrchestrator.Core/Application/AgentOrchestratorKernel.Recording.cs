@@ -453,7 +453,7 @@ public sealed partial class AgentOrchestratorKernel
         if (!verification.Succeeded &&
             outcome.Kind == DispatchOutcomeKind.ProviderConnectivity)
         {
-            var connectivityFailures = DispatchFailureClassifier.CountRecoverableProviderConnectivityFailures(task);
+            var connectivityFailures = ProviderFailureSignals.CountRecoverableProviderConnectivityFailures(task);
             if (connectivityFailures <= ProviderConnectivityRetryLimit)
             {
                 task.SetSubscriptionRetryAfter(_clock.UtcNow + BuildProviderConnectivityBackoff(connectivityFailures));
@@ -509,7 +509,7 @@ public sealed partial class AgentOrchestratorKernel
 
         if (outcome.Kind == DispatchOutcomeKind.ProviderInterruption)
         {
-            var interruptionFailures = DispatchFailureClassifier.CountConsecutiveProviderInterruptionFailures(task);
+            var interruptionFailures = ProviderFailureSignals.CountConsecutiveProviderInterruptionFailures(task);
             if (interruptionFailures <= ProviderInterruptionRetryLimit)
             {
                 task.SetSubscriptionRetryAfter(_clock.UtcNow + BuildProviderInterruptionBackoff(interruptionFailures));

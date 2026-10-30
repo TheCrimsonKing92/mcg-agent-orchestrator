@@ -17,7 +17,7 @@ internal sealed class ProviderSignInFailover(AgentOrchestratorKernel kernel, IRe
         if (failed.Length != 1)
             return false;
         var task = failed[0];
-        if (!DispatchFailureClassifier.HasRecoverableProviderAuthenticationFailure(task) ||
+        if (!ProviderFailureSignals.HasRecoverableProviderAuthenticationFailure(task) ||
             OfflineAssignedAgentRedelegation.IsOperatorPin(goal, task.Id))
             return false;
         var assigned = agents.FirstOrDefault(agent => agent.Id == task.AssignedAgentId);

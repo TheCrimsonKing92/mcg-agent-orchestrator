@@ -77,7 +77,7 @@ public sealed class TerminalContractRepairStreakKernelTests
         fixture.AssertRepair(1);
         fixture.Round(interrupted: true);
         Assert.Equal(WorkTaskStatus.Assigned, fixture.Task.Status);
-        Assert.True(DispatchFailureClassifier.IsProviderInterruptionFailure(fixture.Task.VerificationHistory[^1]));
+        Assert.True(ProviderFailureSignals.IsProviderInterruptionFailure(fixture.Task.VerificationHistory[^1]));
         fixture.Round();
         fixture.AssertExhausted();
         Assert.Equal(3, TerminalContractRepairStreak.Count(fixture.Goal.Timeline, fixture.Task));

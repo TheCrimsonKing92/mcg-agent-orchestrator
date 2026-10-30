@@ -24,7 +24,7 @@ public sealed class DetachedRoundWithoutWorkerResultRecordingTests
         Assert.Equal("detached-without-worker-result", history.CompletionVerdictRule);
         Assert.Equal(false, history.CompletionVerdictVerifiedSuccess);
         Assert.Equal(1, DispatchFailureClassifier.CountConsecutiveDetachedWithoutWorkerResultRounds(task));
-        Assert.Equal(0, DispatchFailureClassifier.CountConsecutiveProviderInterruptionFailures(task));
+        Assert.Equal(0, ProviderFailureSignals.CountConsecutiveProviderInterruptionFailures(task));
         var retry = Assert.Single(goal.Timeline.Where(
             evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskRetried));
         Assert.Equal(

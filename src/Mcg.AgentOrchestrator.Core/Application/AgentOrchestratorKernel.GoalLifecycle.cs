@@ -806,7 +806,7 @@ public sealed partial class AgentOrchestratorKernel
         {
             var connectivityFailures = Math.Max(
                 1,
-                DispatchFailureClassifier.CountRecoverableProviderConnectivityFailures(task));
+                ProviderFailureSignals.CountRecoverableProviderConnectivityFailures(task));
             task.SetSubscriptionRetryAfter(
                 _clock.UtcNow + BuildProviderConnectivityBackoff(connectivityFailures));
         }
