@@ -17,7 +17,7 @@ public sealed class GoalAcceptanceVerifierCrosswalkEvidenceTests
     [InlineData("duplicate", false, CrosswalkDiagnosticCategory.MalformedResults)]
     [InlineData("malformed", false, CrosswalkDiagnosticCategory.MalformedResults)]
     [InlineData("json", false, CrosswalkDiagnosticCategory.InvalidJson)]
-    [InlineData("extra-pass", true, null)]
+    [InlineData("extra-pass", false, CrosswalkDiagnosticCategory.MalformedResults)]
     [InlineData("extra-fail", false, CrosswalkDiagnosticCategory.TestFailures)]
     public async Task Verdict_RequiresUsableExecutedCoverage(string kind, bool passed, CrosswalkDiagnosticCategory? category)
     {

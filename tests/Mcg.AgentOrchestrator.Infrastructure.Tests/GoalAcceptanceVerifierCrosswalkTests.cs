@@ -15,7 +15,10 @@ public sealed class GoalAcceptanceVerifierCrosswalkTests
         Assert.Equal(2, fixture.Calls.Count);
         Assert.Contains(" list ", fixture.Calls[0].Command);
         Assert.Contains(" run ", fixture.Calls[1].Command);
-        Assert.EndsWith(" --id '" + CrosswalkAcceptanceFixture.Id.Replace("'", "''") + "'; exit $LASTEXITCODE", fixture.Calls[1].Command);
+        if (explicitSelection)
+            Assert.EndsWith(" --id '" + CrosswalkAcceptanceFixture.Id.Replace("'", "''") + "'; exit $LASTEXITCODE", fixture.Calls[1].Command);
+        else
+            Assert.DoesNotContain("--id", fixture.Calls[1].Command);
         Assert.DoesNotContain("--filter", fixture.Calls[1].Command);
         Assert.All(fixture.Calls, call => Assert.Equal(fixture.Root, call.Root));
         Assert.All(fixture.Calls, call => Assert.True(call.Token.CanBeCanceled));

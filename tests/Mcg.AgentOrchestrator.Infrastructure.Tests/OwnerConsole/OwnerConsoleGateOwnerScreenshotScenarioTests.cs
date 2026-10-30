@@ -72,18 +72,19 @@ public sealed class OwnerConsoleGateOwnerScreenshotScenarioTests
     private static void AssertCollapsed(OwnerConsoleGateProgress gate, IReadOnlyList<string> lines)
     {
         Assert.Equal("GATE train | elapsed 30m", lines[0]);
-        Assert.Equal("ca798e7c First + 171a09ca Second", lines[1]);
-        Assert.Equal(" x 0 failed   > 1 running   + 26 passed   = 0 cached   . 0 queued", lines[2]);
-        Assert.Equal(OwnerConsoleGateFormatter.ProgressLine(gate), lines[3]);
-        Assert.Equal("RUNNING (longest pole first)", lines[4]);
-        Assert.StartsWith(" > Remainder ", lines[5]);
-        Assert.Equal("BASELINE  6 comparison runs: 6 passed (Enter to expand)", lines[6]);
-        Assert.Equal("PASSED  20 lanes, 6 checks (Enter to expand)", lines[7]);
-        Assert.StartsWith("WHERE   ", lines[8]);
-        Assert.Equal(9, lines.Count);
+        Assert.Equal("  ca798e7c  First", lines[1]);
+        Assert.Equal("  171a09ca  Second", lines[2]);
+        Assert.Equal(" x 0 failed   > 1 running   + 26 passed   = 0 cached   . 0 queued", lines[3]);
+        Assert.Equal(OwnerConsoleGateFormatter.ProgressLine(gate), lines[4]);
+        Assert.Equal("RUNNING (longest pole first)", lines[5]);
+        Assert.StartsWith(" > Remainder ", lines[6]);
+        Assert.Equal("BASELINE  6 comparison runs: 6 passed (Enter to expand)", lines[7]);
+        Assert.Equal("PASSED  20 lanes, 6 checks (Enter to expand)", lines[8]);
+        Assert.StartsWith("WHERE   ", lines[9]);
+        Assert.Equal(10, lines.Count);
         Assert.Single(lines.Where(IsRow));
         Assert.DoesNotContain(lines, line => line.Contains("[trusted main baseline]"));
-        Assert.DoesNotContain(lines, line => line.StartsWith("  "));
+        Assert.DoesNotContain(lines.Skip(1 + gate.Members.Count), line => line.StartsWith("  "));
     }
 
     private static string[] Render(OwnerConsoleGateProgress gate, int width, bool expanded)

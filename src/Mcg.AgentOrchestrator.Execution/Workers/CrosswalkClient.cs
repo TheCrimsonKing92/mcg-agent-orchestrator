@@ -72,7 +72,7 @@ internal sealed class CrosswalkClient
     internal async Task<CrosswalkRunOutcome> RunAsync(string root, IEnumerable<string> ids, TimeSpan timeout,
         CancellationToken cancellationToken)
     {
-        var arguments = string.Concat(ids.Select(id => " --id " + Quote(id)));
+        var arguments = string.Concat(ids.Select(IdArgument));
         var outcome = await ExecuteAsync<TestResult>(root, "run", timeout, json =>
         {
             using var document = JsonDocument.Parse(json);
@@ -101,7 +101,7 @@ internal sealed class CrosswalkClient
                 return Failure(resolution.Status, resolution.DiagnosticCategory!.Value, resolution.Detail, resolution.ConfigurationDetail);
 
             var request = new WorkerProcessRunRequest(
-                $"& {Quote(executable.Path)} {verb} {Quote(root)}{arguments}; exit $LASTEXITCODE", root, timeout);
+                Command(executable.Path, verb, root, arguments), root, timeout);
             run = await _runProcessAsync(request, cancellationToken).ConfigureAwait(false);
             if (cancellationToken.IsCancellationRequested)
                 SetFailure("cancelled", CrosswalkDiagnosticCategory.Cancelled);
@@ -173,6 +173,11 @@ internal sealed class CrosswalkClient
             return null;
         }
     }
+
+    internal static string Command(string executablePath, string verb, string root, string arguments = "")
+        => $"& {Quote(executablePath)} {verb} {Quote(root)}{arguments}; exit $LASTEXITCODE";
+
+    internal static string IdArgument(string id) => " --id " + Quote(id);
 
     private static string Quote(string value) => "'" + value.Replace("'", "''") + "'";
 }

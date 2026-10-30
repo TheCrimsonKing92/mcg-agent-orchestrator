@@ -12,20 +12,15 @@ internal static class OwnerConsoleBoardRenderer
         string.Join('\n', OwnerConsoleSelectedPreview.Lines(preview, stage, zone ?? TimeZoneInfo.Local, width));
 
     internal static void Render(DataTable table, TableView view, IReadOnlyList<OwnerConsoleBoardRow> rows,
-        int paneWidth, int titleWidth, bool showProject = false)
+        int paneWidth, int titleWidth, bool sectioned = false)
     {
-        var hadProject = table.Columns.Contains("PROJECT");
-        if (showProject && !hadProject) table.Columns.Add("PROJECT").SetOrdinal(0);
-        else if (!showProject && hadProject) table.Columns.Remove("PROJECT");
-        if (hadProject != showProject) view.Table = new DataTableSource(table);
-        var titleColumn = showProject ? 3 : 2;
+        const int titleColumn = 2;
         var priorityColumn = titleColumn + 1;
         var statusColumn = titleColumn + 2;
         view.Style.RowColorGetter = args => args.RowIndex >= 0 && args.RowIndex < rows.Count && rows[args.RowIndex].Dimmed
             ? new Scheme(view.GetScheme().Disabled) : null;
-        var cells = rows.Select(row => showProject
-            ? new[] { row.Project, row.GoalPrefix, row.Epic, row.Title, row.Priority, row.Stage, Age(row.Age) }
-            : new[] { row.GoalPrefix, row.Epic, row.Title, row.Priority, row.Stage, Age(row.Age) }).ToArray();
+        var cells = rows.Select(row => new[] { row.GoalPrefix, row.Epic, row.Title, row.Priority, row.Stage,
+            sectioned && row.IsDiagnostic ? "" : Age(row.Age) }).ToArray();
         var widestTitle = cells.Select(row => row[titleColumn].GetColumns()).DefaultIfEmpty().Max();
         var widths = Enumerable.Range(0, table.Columns.Count).Select(column =>
             Math.Max(table.Columns[column].ColumnName.GetColumns(), cells.Select(row => row[column].GetColumns()).DefaultIfEmpty().Max())).ToArray();
@@ -68,6 +63,6 @@ internal static class OwnerConsoleBoardRenderer
         view.Update();
     }
 
-    private static string Age(TimeSpan? span) => span is null ? "unknown" :
+    internal static string Age(TimeSpan? span) => span is null ? "unknown" :
         span.Value.TotalMinutes < 1 ? $"{span.Value.TotalSeconds:0}s" : span.Value.TotalHours < 1 ? $"{span.Value.TotalMinutes:0}m" : $"{span.Value.TotalHours:0}h";
 }

@@ -2,7 +2,7 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed partial class GoalAcceptanceVerifier
 {
-    private const int MaxCmdCommandLineLength = 8191;
+    internal const int MaxCmdCommandLineLength = 8191;
 
     internal static void ThrowIfCmdCommandLineTooLong(string composedArguments, string[] arguments)
     {
