@@ -438,32 +438,13 @@ internal static partial class FocusedEvidenceRequestResolver
     internal static bool TryResolveFocusedEvidenceProject(
         string alias,
         out string project) =>
-        TryResolveFocusedEvidenceProject(alias, engineSettings: null, out project);
+        FocusedEvidenceProjectResolver.TryResolve(alias, engineSettings: null, out project);
 
     internal static bool TryResolveFocusedEvidenceProject(
         string alias,
         AcceptanceGateEngineSettings? engineSettings,
-        out string project)
-    {
-        if (CrosswalkFocusedEvidence.Applies(engineSettings))
-            return CrosswalkFocusedEvidence.TryResolveProject(alias, engineSettings, out project);
-        var normalized = alias.Replace('\\', '/').Trim();
-        project = normalized switch
-        {
-            "Core.Tests" or "Core" or "Mcg.AgentOrchestrator.Core.Tests" => CoreTestsProject,
-            "Infrastructure.Tests" or "Infrastructure" or "Mcg.AgentOrchestrator.Infrastructure.Tests" => InfrastructureTestsProject,
-            _ when normalized.EndsWith(CoreTestsProject, StringComparison.OrdinalIgnoreCase) => CoreTestsProject,
-            _ when normalized.EndsWith(InfrastructureTestsProject, StringComparison.OrdinalIgnoreCase) => InfrastructureTestsProject,
-            _ => string.Empty
-        };
-        if (project.Length > 0)
-        {
-            return true;
-        }
-
-        return DeclaredTestProjectInventory.TryResolve(
-            normalized, engineSettings, out project, engineSettings?.DeclaredDotnetTestChecks) || GoPackageFocusedEvidence.TryResolveProject(normalized, engineSettings, out project);
-    }
+        out string project) =>
+        FocusedEvidenceProjectResolver.TryResolve(alias, engineSettings, out project);
 
     private static bool TryNormalizeFocusedEvidenceFilter(
         string expression,
