@@ -343,6 +343,10 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             {
                 _ = BuildDotnetTestArguments(check);
             }
+            else if (type == "junit-command")
+            {
+                JunitCommandCheckDefinition.Validate(check);
+            }
             else if (type is not ("crosswalk-test" or "no-op" or "grep-absent" or "grep-present" or "file-exists" or "command-exit"))
             {
                 throw new InvalidOperationException(
@@ -2359,6 +2363,14 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             return (await CrosswalkAcceptanceCheck.RunOwnedAsync(check, worktreePath,
                 _executionContext, _invocationContext, _timeProvider, CrosswalkExecutable, _requiresTestTelemetryReceipt,
                 arguments => CreateGateHeartbeatContext(check, arguments, worktreePath, goalId, stableSlotIndex, null),
+                RunWithGateHeartbeatAsync, cancellationToken).ConfigureAwait(false), false);
+
+        if (check.Type.Equals("junit-command", StringComparison.OrdinalIgnoreCase))
+            return (await JunitCommandAcceptanceCheck.RunOwnedAsync(check, worktreePath,
+                _executionContext, _invocationContext, _timeProvider, CrosswalkExecutable, _requiresTestTelemetryReceipt,
+                arguments => CreateGateHeartbeatContext(check, arguments, worktreePath, goalId, stableSlotIndex, null),
+                (arguments, root, timeout, heartbeat, token, signal) => RunWithGateHeartbeatAsync(
+                    arguments, root, timeout, heartbeat, token, signal, resolveBareCommand: true),
                 RunWithGateHeartbeatAsync, cancellationToken).ConfigureAwait(false), false);
 
         if (check.Type.Equals("no-op", StringComparison.OrdinalIgnoreCase))
@@ -4400,6 +4412,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         public string? Command { get; init; }
         public string? Project { get; init; }
         public IReadOnlyList<string> Arguments { get; init; } = [];
+        public IReadOnlyList<string> Reports { get; init; } = [];
         public string? Pattern { get; init; }
         public string? FilePath { get; init; }
         public int? TimeoutMinutes { get; init; }
