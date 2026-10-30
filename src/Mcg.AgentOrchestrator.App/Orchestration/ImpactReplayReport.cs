@@ -7,4 +7,5 @@ internal sealed record ImpactReplayReport(
     IReadOnlyList<ImpactReplayDiagnostic> SkippedInputs,
     IReadOnlyList<ImpactReplayDiagnostic> UnreplayableAttempts,
     IReadOnlyList<string> CleanupErrors,
-    int AttemptsGainingChangedTestClasses = 0);
+    int AttemptsGainingChangedTestClasses = 0,
+    ImpactReplayUnmappedTestClasses? UnmappedTestClasses = null);
