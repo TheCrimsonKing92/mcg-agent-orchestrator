@@ -16,7 +16,10 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteShardInvalid
         var root = CreateManifestWorkspace("""{"version":1,"checks":[],"forbiddenChangedPathGlobs":[]}""");
         // A single offloaded lane leaves no local check monitor that could mask the remote-wait defect.
         ConfigureWorkspace(root, 1, 3, remote: true);
+        var storageRoot = new DotnetBuildStorageRoot(Path.Combine(root, "build-storage"));
+        TestOverrides.BuildStorageRootForTests = storageRoot;
         TestOverrides.ResolveShardCoreBudgetForTests = () => 3;
+        TestOverrides.RemoteLaneEarlyOfferDisabledForTests = true;
         SetPartitionVerdictKeyHooks("invalidated-tree", "invalidated-main", "invalidated-commit");
         var clock = new ManualRemoteLaneClock();
         var configuration = Path.Combine(root, "executors.json");
@@ -38,7 +41,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteShardInvalid
         TestOverrides.RemoteLaneExecutorForTests = remote;
         var cleanup = new ConcurrentQueue<string>();
         var localStarts = new ConcurrentQueue<string>();
-        var slotAcquired = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var slotAcquired = new TaskCompletionSource<DotnetBuildEnvironmentLease>(TaskCreationOptions.RunContinuationsAsynchronously);
         var goal = new AgentOrchestratorKernel().CreateGoal("Cancel an invalidated remote wait");
         var candidate = ConductorParallelAcceptanceCandidate.Create(goal, 0, [], "invalidated-commit", "invalidated-main");
         var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
@@ -46,8 +49,10 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteShardInvalid
             cleanupObservedForTests: (_, phase) => cleanup.Enqueue(phase),
             acquireStableSlotLease: (_, _) =>
             {
-                var lease = DotnetBuildEnvironmentManager.AcquireFirstAvailableStableSlotExecutionLock(TimeSpan.FromSeconds(30));
-                slotAcquired.TrySetResult(StableSlotIndex(lease.Environment.ArtifactsPath));
+                var lease = DotnetBuildEnvironmentManager.AcquireFirstAvailableStableSlotExecutionLock(
+                    TimeSpan.FromSeconds(30), storageRoot: storageRoot);
+                Assert.True(lease.IsExecutionLockHeld);
+                slotAcquired.TrySetResult(lease);
                 return lease;
             });
         var attempt = coordinator.CreateAttemptForTests(candidate);
@@ -93,7 +98,12 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteShardInvalid
                     await Event(handle.Polled.Task, "remote shard polled without a result");
                     var hostRoot = AcceptancePartitionVerdictCache.ResolveHostStateRoot(root);
                     Assert.True(RemoteExecutorOccupancy.IsOccupied(hostRoot, executorId));
-                    Assert.False(DotnetBuildEnvironmentManager.IsStableSlotExecutionLeaseAvailable(await slotAcquired.Task));
+                    var slotLease = await slotAcquired.Task;
+                    var custodyPath = Path.Combine(slotLease.Environment.ArtifactsPath, AcceptanceAttemptArtifactCustody.MarkerFileName);
+                    // Prebuild releases the build permit before remote waits; artifact custody lasts until teardown.
+                    Assert.True(File.Exists(custodyPath));
+                    Assert.DoesNotContain("artifact-custody-released", cleanup);
+                    Assert.DoesNotContain("stable-slot-released", cleanup);
                     Assert.Empty(localStarts);
                     Assert.Null(handle.TryGetResult());
                     Assert.Equal(clock.GetUtcNow(), handle.NewestHeartbeat);
@@ -110,7 +120,10 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteShardInvalid
                     Assert.False(RemoteExecutorOccupancy.IsOccupied(hostRoot, executorId));
                     using var nextClaim = RemoteExecutorOccupancy.TryClaimExclusive(hostRoot, executorId);
                     Assert.NotNull(nextClaim);
-                    Assert.True(DotnetBuildEnvironmentManager.IsStableSlotExecutionLeaseAvailable(await slotAcquired.Task));
+                    Assert.False(File.Exists(custodyPath));
+                    Assert.False(slotLease.IsExecutionLockHeld);
+                    Assert.True(DotnetBuildEnvironmentManager.IsStableSlotExecutionLeaseAvailable(
+                        StableSlotIndex(slotLease.Environment.ArtifactsPath), storageRoot));
                 }
                 finally
                 {

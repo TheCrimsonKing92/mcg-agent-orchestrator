@@ -113,11 +113,14 @@ public sealed class ConductorBatchLoopTestsInvalidatedAttemptGraceStop(ITestOutp
             Waiting = CreateVerifiedSimpleGoal(_kernel, "Wait for owner exit before re-gating");
             var ownerPath = Path.Combine(_root, "dotnet.exe");
             var ownerStartedAt = Now.AddSeconds(-10);
-            Coordinator = new(_root, TrunkBranchName.Default, utcNow: () => Now,
+            var starter = new ConductorParallelAcceptanceAttemptCoordinator(_root, TrunkBranchName.Default, utcNow: () => Now,
                 isProcessAlive: _ => _alive, recentHeartbeatGrace: TimeSpan.FromHours(1),
                 launchOwnedProcess: _ => new(OwnerPid, ownerStartedAt, ownerPath));
             var candidate = ConductorParallelAcceptanceCandidate.Create(Waiting, landFirst ? 1 : 0, [Scope], Branch, OldMain);
-            Attempt = Coordinator.Evaluate(candidate, _policy, PassingRun).Attempt;
+            Attempt = starter.Evaluate(candidate, _policy, PassingRun).Attempt;
+            // Reuse the live waiting attempt, but let the unrelated landing goal finish its gate inline.
+            Coordinator = new(_root, TrunkBranchName.Default, utcNow: () => Now, runInline: true,
+                isProcessAlive: _ => _alive, recentHeartbeatGrace: TimeSpan.FromHours(1));
             var main = OldMain;
             _driver = MakeDriver(
                 getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
