@@ -17,8 +17,10 @@ public static class LearnedAcceptanceManifest
         var (checks, unresolved) = LearnedTestCheckDeriver.Derive(model, applied);
         var isGo = model.Stack == ProjectStack.Go;
         var isNode = model.Stack == ProjectStack.Node;
-        var isDotnet = !isGo && !isNode;
+        var isLua = model.Stack == ProjectStack.Lua;
+        var isDotnet = !isGo && !isNode && !isLua;
         var nodeChecks = isNode ? NodeVerificationChecks.For(model) : default;
+        var luaChecks = isLua ? LuaProjectDiscoveryAdapter.For(model, applied) : default;
         var checkNames = isDotnet ? LearnedCheckNames.Assign(checks.Select(check => check.ProjectPath).ToArray()) : default;
         var learned = LearnedEngineSettingsDeriver.Derive(model);
         var settings = OwnerAnsweredEngineSettings.Overlay(learned, applied);
@@ -35,6 +37,8 @@ public static class LearnedAcceptanceManifest
             isGo ? $"no confident go runner for {unit.UnitId}" : $"no confident VSTest or MTP runner for {unit.UnitId}")).ToList();
         if (isNode)
             blockers.AddRange(nodeChecks.Blockers);
+        if (isLua)
+            blockers.AddRange(luaChecks.Blockers);
         if (isDotnet)
             foreach (var check in checks.Where(check => check.Runner == "mtp"))
                 if (mtpLayoutRefusals?.TryGetValue(check.ProjectPath, out var reason) == true)
@@ -58,9 +62,12 @@ public static class LearnedAcceptanceManifest
                     ["arguments"] = new JsonArray(check.Arguments.Select(argument => (JsonNode?)JsonValue.Create(argument)).ToArray())
                 });
         }
-        else if (isNode)
+        else if (isNode || isLua)
         {
-            foreach (var check in nodeChecks.Checks)
+            var ecosystemChecks = isLua
+                ? luaChecks.Checks.Select(check => (check.Name, check.Type, check.Command, check.Project, check.Arguments))
+                : nodeChecks.Checks.Select(check => (check.Name, check.Type, check.Command, check.Project, check.Arguments));
+            foreach (var check in ecosystemChecks)
             {
                 var emittedCheck = new JsonObject
                 {

@@ -47,6 +47,13 @@ public static class OwnerAnswerValidator
             throw new ArgumentException($"{factKey} requires VSTest or MTP with no surrounding whitespace.");
         }
 
-        throw new ArgumentException($"{factKey} has no answer rule in this slice. Known keys: {DefaultTimeoutKey}, {BuildServerShutdownKey}, {DiscoveryKey}, {DotnetSdkKey}, commands/<unit>/test, commands/<unit>/timeoutMinutes.");
+        if (factKey is LuaProjectDiscoveryAdapter.FrameworkQuestion or LuaProjectDiscoveryAdapter.InstallQuestion)
+        {
+            if (value.Equals("yes", StringComparison.OrdinalIgnoreCase)) return "yes";
+            if (value.Equals("no", StringComparison.OrdinalIgnoreCase)) return "no";
+            throw new ArgumentException($"{factKey} requires yes or no with no surrounding whitespace.");
+        }
+
+        throw new ArgumentException($"{factKey} has no answer rule in this slice. Known keys: {DefaultTimeoutKey}, {BuildServerShutdownKey}, {DiscoveryKey}, {DotnetSdkKey}, commands/<unit>/test, commands/<unit>/timeoutMinutes, {LuaProjectDiscoveryAdapter.FrameworkQuestion}, {LuaProjectDiscoveryAdapter.InstallQuestion}.");
     }
 }
