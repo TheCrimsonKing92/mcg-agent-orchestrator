@@ -194,7 +194,8 @@ public sealed class SupervisorRestartCapScenarioTests
                 supervisorHandoff: _handoffEnabled ? new ConductorSupervisorHandoffOptions(Seam,
                     new ConductorSupervisorBuildIdentity("commit-a", "C:\\run-a"),
                     TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(1)) : null,
-                raiseEscalationAttention: (title, body, key) => Attention.Add((title, body, key)));
+                raiseEscalationAttention: (title, body, key) => Attention.Add((title, body, key)),
+                verifyRunClosure: (folder, _, _) => new(true, folder, 0, 0, "none", "fixture"));
             return supervisor.RunAsync(["conduct", "--loop"], "C:\\repo", _root, "fixture", "fixture",
                 cancellationToken: Xunit.TestContext.Current.CancellationToken);
         }

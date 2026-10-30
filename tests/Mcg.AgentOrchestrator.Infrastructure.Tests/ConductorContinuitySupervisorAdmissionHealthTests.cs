@@ -161,7 +161,8 @@ public sealed class ConductorContinuitySupervisorAdmissionHealthTests
                 stageSuccessor: _ => stageCount++ == 0 ? successor : null!,
                 appendConductEvent: (_, _, detail) => ConductLines.Enqueue(detail),
                 activationHealthyTicks: 3, activationDelay: Deadlines.Delay,
-                activationStallTimeout: TimeSpan.FromMinutes(2));
+                activationStallTimeout: TimeSpan.FromMinutes(2),
+                verifyRunClosure: (folder, _, _) => new(true, folder, 0, 0, "none", "fixture"));
             Run = supervisor.RunAsync(["conduct", "--loop", "--daemon", "--poll-seconds", "120"],
                 "C:\\repo", _artifacts, "default", "default", cancellationToken: _stop.Token);
             await Deadlines.WaitForCountAsync(1);

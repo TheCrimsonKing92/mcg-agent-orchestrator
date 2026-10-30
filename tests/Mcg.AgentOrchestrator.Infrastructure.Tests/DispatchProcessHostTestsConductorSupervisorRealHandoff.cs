@@ -1,5 +1,7 @@
 using System.Diagnostics;
+using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Infrastructure;
@@ -366,6 +368,51 @@ public sealed class DispatchProcessHostTestsConductorSupervisorRealHandoff(Xunit
             Directory.CreateDirectory(Path.GetDirectoryName(target)!);
             File.Copy(file, target);
         }
+        SealClosure(destination);
+    }
+
+    private static void SealClosure(string directory, [CallerFilePath] string sourceFile = "")
+    {
+        var repositoryRoot = VerifiedRepositoryRoot.TryGetVerifiedRoot(out var verifiedRoot)
+            ? verifiedRoot : Path.GetFullPath(Path.Combine(Path.GetDirectoryName(sourceFile)!, "..", ".."));
+        var resolver = Path.Combine(repositoryRoot, "scripts", "resolve-run-dir.ps1").Replace("'", "''");
+        var folder = directory.Replace("'", "''");
+        // Use the launcher's snapshot function so the real, handed-off supervisor
+        // receives a sealed fixture with exactly the launcher's ordering and digest.
+        var script = $$"""
+            $ErrorActionPreference = 'Stop'
+            $tokens = $null
+            $errors = $null
+            $ast = [System.Management.Automation.Language.Parser]::ParseFile('{{resolver}}', [ref]$tokens, [ref]$errors)
+            if ($errors.Count -ne 0) { throw 'Resolver parse failed' }
+            $function = @($ast.FindAll({ param($node)
+                $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+                $node.Name -eq 'Get-OutputContentSnapshot'
+            }, $true))
+            if ($function.Count -ne 1) { throw 'Snapshot function not found' }
+            . ([scriptblock]::Create($function[0].Extent.Text))
+            $script:RunCacheMarkerName = '.mcg-run-closure.json'
+            $snapshot = Get-OutputContentSnapshot -Path '{{folder}}' -ExcludeRunCacheMarker
+            $marker = @{ schemaVersion = 2; digest = $snapshot.Digest; fileCount = $snapshot.FileCount }
+            [IO.File]::WriteAllText((Join-Path '{{folder}}' $script:RunCacheMarkerName),
+                ($marker | ConvertTo-Json -Compress), [Text.UTF8Encoding]::new($false))
+            """;
+        var info = new ProcessStartInfo("powershell.exe")
+        {
+            UseShellExecute = false, CreateNoWindow = true,
+            RedirectStandardOutput = true, RedirectStandardError = true
+        };
+        foreach (var arg in new[] { "-NoProfile", "-NonInteractive", "-EncodedCommand",
+            Convert.ToBase64String(Encoding.Unicode.GetBytes(script)) }) info.ArgumentList.Add(arg);
+        using var process = Process.Start(info)!;
+        var stdout = process.StandardOutput.ReadToEndAsync();
+        var stderr = process.StandardError.ReadToEndAsync();
+        if (!process.WaitForExit(60_000))
+        {
+            process.Kill(entireProcessTree: true);
+            throw new TimeoutException("PowerShell did not finish sealing the real supervisor fixture.");
+        }
+        Assert.True(process.ExitCode == 0, stdout.GetAwaiter().GetResult() + stderr.GetAwaiter().GetResult());
     }
 
     private static ConductorSupervisorProcessIdentity? ReadLaunchedIdentity(

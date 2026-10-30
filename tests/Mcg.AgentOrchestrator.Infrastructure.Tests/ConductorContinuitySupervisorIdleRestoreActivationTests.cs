@@ -105,7 +105,8 @@ public sealed class ConductorContinuitySupervisorIdleRestoreActivationTests
                 inspectStores: () => [new("fixture-store", "fixture.db", 1, 1)], stageSuccessor: _ => successor, activationHealthyTicks: 3,
                 activationDelay: Deadlines.Delay,
                 activationStallTimeout: TimeSpan.FromMinutes(2),
-                raiseActivationAttention: Attention.Add);
+                raiseActivationAttention: Attention.Add,
+                verifyRunClosure: (folder, _, _) => new(true, folder, 0, 0, "none", "fixture"));
             var run = supervisor.RunAsync(["conduct", "--loop", "--daemon", "--poll-seconds", "120"],
                 "C:\\repo", Path.Combine(Path.GetTempPath(), $"mcg-idle-restore-{Guid.NewGuid():N}"),
                 "default", "default");

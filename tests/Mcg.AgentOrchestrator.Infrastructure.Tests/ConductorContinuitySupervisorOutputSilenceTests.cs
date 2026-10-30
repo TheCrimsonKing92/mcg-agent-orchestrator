@@ -235,6 +235,7 @@ public sealed class ConductorContinuitySupervisorOutputSilenceTests
         Func<int?, string, CancellationToken, Task<ConductorDumpCaptureResult>> capture,
         int activationHealthyTicks = 3, TimeSpan? outputSilenceBudget = null) =>
         new(host, events, timeProvider: clock, delay: (_, _) => Task.CompletedTask,
+            verifyRunClosure: (folder, _, _) => new(true, folder, 0, 0, "none", "fixture"),
             inspectStores: () => [new("fixture-store", "fixture.db", 1, 1)], stageSuccessor: _ => Prepared(), dotnetPath: "dotnet-test",
             activationHealthyTicks: activationHealthyTicks,
             activationDelay: (_, _) => throw new InvalidOperationException("Already healthy"),

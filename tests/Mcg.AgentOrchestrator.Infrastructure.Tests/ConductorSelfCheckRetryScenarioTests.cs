@@ -157,7 +157,8 @@ public sealed class ConductorSelfCheckRetryScenarioTests
                     Assert.All(plan, store => Assert.False(store.IsNewer || store.RequiresMigration));
                     return plan;
                 }, appendConductEvent: (_, _, detail) => Events.Add(detail),
-                dotnetPath: "dotnet-fixture", activationHealthyTicks: 3);
+                dotnetPath: "dotnet-fixture", activationHealthyTicks: 3,
+                verifyRunClosure: (folder, _, _) => new(true, folder, 0, 0, "none", "fixture"));
             return supervisor.RunAsync(["conduct", "--loop", "--repository-root", Root,
                     "--expected-state-directory", Path.GetDirectoryName(Options.StateStorePath)!, "--disposable-fixture"],
                 Root, Path.Combine(Root, "continuity"), "fixture", "tenant");

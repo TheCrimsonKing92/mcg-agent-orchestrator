@@ -300,7 +300,8 @@ public sealed class ConductorContinuitySupervisorTests
             store,
             inspectStores: () => [new("fixture-store", "fixture.db", 1, 1)], stageSuccessor: _ => prepared,
             appendConductEvent: (_, _, detail) => conductEvents.Add(detail),
-            dotnetPath: "dotnet-test");
+            dotnetPath: "dotnet-test",
+            verifyRunClosure: (folder, _, _) => new(true, folder, 0, 0, "none", "fixture"));
 
         var exitCode = await supervisor.RunAsync(
             ["conduct", "--loop", "--max-duration", "60"],
@@ -364,7 +365,8 @@ public sealed class ConductorContinuitySupervisorTests
             delay: (_, _) => releaseReadinessTimeout.Task,
             inspectStores: () => [new("fixture-store", "fixture.db", 1, 1)], stageSuccessor: _ => prepared,
             appendConductEvent: (_, _, detail) => conductEvents.Add(detail),
-            readinessTimeout: TimeSpan.FromSeconds(30));
+            readinessTimeout: TimeSpan.FromSeconds(30),
+            verifyRunClosure: (folder, _, _) => new(true, folder, 0, 0, "none", "fixture"));
 
         supervisorTask = supervisor.RunAsync(
             ["conduct", "--loop", "--max-duration", "60"],
@@ -421,7 +423,8 @@ public sealed class ConductorContinuitySupervisorTests
             host,
             store,
             inspectStores: () => [new("fixture-store", "fixture.db", 1, 1)], stageSuccessor: _ => prepared,
-            appendConductEvent: (_, _, detail) => conductEvents.Add(detail));
+            appendConductEvent: (_, _, detail) => conductEvents.Add(detail),
+            verifyRunClosure: (folder, _, _) => new(true, folder, 0, 0, "none", "fixture"));
 
         supervisorTask = supervisor.RunAsync(
             ["conduct", "--loop", "--max-duration", "60"],
@@ -471,7 +474,8 @@ public sealed class ConductorContinuitySupervisorTests
             store,
             delay: (_, _) => Task.CompletedTask,
             inspectStores: () => [new("fixture-store", "fixture.db", 1, 1)], stageSuccessor: _ => prepared,
-            appendConductEvent: (_, _, detail) => conductEvents.Add(detail));
+            appendConductEvent: (_, _, detail) => conductEvents.Add(detail),
+            verifyRunClosure: (folder, _, _) => new(true, folder, 0, 0, "none", "fixture"));
 
         var exitCode = await supervisor.RunAsync(
             ["conduct", "--loop", "--max-duration", "60"],
@@ -522,7 +526,8 @@ public sealed class ConductorContinuitySupervisorTests
             inspectStores: () => [new("fixture-store", "fixture.db", 1, 1)], stageSuccessor: _ => throw new ConductorSelfRelaunchPreparationException(
                 "build",
                 "build rejected HEAD"),
-            appendConductEvent: (_, _, detail) => conductEvents.Add(detail));
+            appendConductEvent: (_, _, detail) => conductEvents.Add(detail),
+            verifyRunClosure: (folder, _, _) => new(true, folder, 0, 0, "none", "fixture"));
 
         supervisorTask = supervisor.RunAsync(
             ["conduct", "--loop", "--max-duration", "60"],
@@ -565,7 +570,8 @@ public sealed class ConductorContinuitySupervisorTests
                 stageCalls++;
                 throw new ConductorSelfRelaunchPreparationException("build", "broken tree");
             },
-            maxConsecutiveStagingFailures: 2);
+            maxConsecutiveStagingFailures: 2,
+            verifyRunClosure: (folder, _, _) => new(true, folder, 0, 0, "none", "fixture"));
 
         var exitCode = await supervisor.RunAsync(
             ["conduct", "--loop", "--max-duration", "60"],

@@ -152,7 +152,8 @@ public sealed class ConductorGenerationTerminationRecorderTests
             inspectStores: () => [new("fixture-store", "fixture.db", 1, 1)],
             stageSuccessor: _ => stageCount++ == 0 ? new("C:\\next", "C:\\next\\Mcg.AgentOrchestrator.App.dll", "head-next", "head-next", "LOOP_START selfCheck=true") : null!,
             appendConductEvent: (_, _, _) => { }, raiseActivationAttention: _ => { },
-            activationHealthyTicks: 3, activationDelay: (_, _) => throw new InvalidOperationException("Host must provide a completed decision"));
+            activationHealthyTicks: 3, activationDelay: (_, _) => throw new InvalidOperationException("Host must provide a completed decision"),
+            verifyRunClosure: (folder, _, _) => new(true, folder, 0, 0, "none", "fixture"));
         var exit = await supervisor.RunAsync(["conduct", "--loop", "--daemon", "--poll-seconds", "120"],
             "C:\\repo", artifacts, "default", "default").WaitAsync(TestContext.Current.CancellationToken);
         return (exit, launches);

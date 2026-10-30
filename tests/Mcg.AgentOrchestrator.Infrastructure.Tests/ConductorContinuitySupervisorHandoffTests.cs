@@ -94,7 +94,8 @@ internal sealed class SupervisorHandoffFixture
             supervisorHandoff: new ConductorSupervisorHandoffOptions(Seam,
                 new ConductorSupervisorBuildIdentity("commit-a", _ownRunDirectory),
                 TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(1)),
-            bindProtectedIdentity: BindProtectedIdentity);
+            bindProtectedIdentity: BindProtectedIdentity,
+            verifyRunClosure: (folder, _, _) => new(true, folder, 0, 0, "none", "fixture"));
         return supervisor.RunAsync(["conduct", "--loop", "--max-duration", "60"],
             "C:\\repo", Path.Combine(Path.GetTempPath(), $"mcg-handoff-{Guid.NewGuid():N}"),
             "default", "default", cancellationToken: cancellationToken);

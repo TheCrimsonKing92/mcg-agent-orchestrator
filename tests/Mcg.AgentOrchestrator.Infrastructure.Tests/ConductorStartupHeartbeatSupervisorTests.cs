@@ -126,7 +126,8 @@ public sealed class ConductorStartupHeartbeatSupervisorTests
                     if (!_deadlines.Writer.TryWrite(deadline))
                         throw new InvalidOperationException("Could not record activation delay");
                     return deadline.Release.Task;
-                });
+                },
+                verifyRunClosure: (folder, _, _) => new(true, folder, 0, 0, "none", "fixture"));
             Run = supervisor.RunAsync(["conduct", "--loop"], "C:\\repo", _outputDirectory,
                 "default", "default", cancellationToken: _runCts.Token);
         }

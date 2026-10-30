@@ -145,7 +145,8 @@ public sealed class ConductorContinuitySupervisorStalledRestartTests
                 Assert.Equal(4242, pid);
                 dumps++;
                 return Task.FromResult(new ConductorDumpCaptureResult(true, "fixture.dmp", "captured"));
-            }));
+            }),
+            verifyRunClosure: (folder, _, _) => new(true, folder, 0, 0, "none", "fixture"));
         try
         {
             var exit = await TestHangGuard.WaitAsync(supervisor.RunAsync(

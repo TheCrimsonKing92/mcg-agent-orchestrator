@@ -173,6 +173,7 @@ public sealed class ConductorContinuitySupervisorSuccessorLockRetryTests
             Func<CancellationToken, ConductorPreparedSuccessor> stage, bool retry,
             Func<CancellationToken, Task>? retryDelay = null, bool readinessTimesOut = false) =>
             new(host, Events, stageSuccessor: stage,
+                verifyRunClosure: (folder, _, _) => new(true, folder, 0, 0, "none", "fixture"),
                 inspectStores: () => [new("fixture-store", "fixture.db", 1, 1)],
                 appendConductEvent: (_, _, detail) => ConductEvents.Add(detail),
                 readinessTimeout: TimeSpan.FromMinutes(5), activationHealthyTicks: 3,

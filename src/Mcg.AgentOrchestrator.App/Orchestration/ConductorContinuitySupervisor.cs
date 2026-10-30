@@ -101,7 +101,8 @@ internal sealed partial class ConductorContinuitySupervisor(
     string? stopFilePath = null,
     Func<string, string, IReadOnlyList<string>>? changedPathsBetween = null,
     TimeSpan? successorExitRetryDelay = null,
-    Action<string, string, string>? raiseEscalationAttention = null)
+    Action<string, string, string>? raiseEscalationAttention = null,
+    Func<string, string, IReadOnlyCollection<string>?, ConductorRunClosureVerdict>? verifyRunClosure = null)
 {
     public const string ChildFlag = "--continuity-child";
     public const string ExitArtifactFlag = "--continuity-exit-artifact";
@@ -173,6 +174,7 @@ internal sealed partial class ConductorContinuitySupervisor(
         IReadOnlyList<StoreSetupPlanEntry>? fallbackStoreObservation = null;
         var attempt = 0;
         ConductorHandoffSchemaUpgrade.Outcome? appliedUpgrade = null;
+        var closureInventories = new Dictionary<string, IReadOnlyCollection<string>>(StringComparer.OrdinalIgnoreCase);
         bool EscalateUpgrade(string reason, ConductorHandoffSchemaUpgrade.Outcome upgrade, int pid, string stdout, string stderr)
         {
             var detail = $"SUPERVISOR_ESCALATED reason={reason} stores={upgrade.Stores} backup={upgrade.BackupDirectory} {upgrade.Progress}";
@@ -209,9 +211,7 @@ internal sealed partial class ConductorContinuitySupervisor(
         {
             var own = supervisorHandoff.OwnBuild;
             var ownDll = Path.Combine(own.RunDirectory, "Mcg.AgentOrchestrator.App.dll");
-            IDisposable? ownLease = File.Exists(ownDll)
-                ? File.Open(ownDll, FileMode.Open, FileAccess.Read, FileShare.Read)
-                : null;
+            var ownLease = TryAcquireRunDirectoryLease(ownDll);
             currentBuild = new ConductorActivationBuild(own.CommitSha, own.RunDirectory,
                 [_dotnetPath, ownDll], ownLease);
         }
@@ -223,9 +223,7 @@ internal sealed partial class ConductorContinuitySupervisor(
             _consecutiveSupervisorHandoffFailures = inherited.ConsecutiveFailures;
             if (inherited.PendingSuccessor is { } staged)
             {
-                IDisposable? stagedLease = File.Exists(staged.AppDllPath)
-                    ? File.Open(staged.AppDllPath, FileMode.Open, FileAccess.Read, FileShare.Read)
-                    : null;
+                var stagedLease = TryAcquireRunDirectoryLease(staged.AppDllPath);
                 pendingSuccessor = new ConductorPreparedSuccessor(staged.RunDirectory,
                     staged.AppDllPath, staged.RepositoryHead, staged.StagedSourceCommit,
                     staged.SelfCheckDetail, stagedLease);
@@ -283,6 +281,40 @@ internal sealed partial class ConductorContinuitySupervisor(
                     pendingSuccessor = null;
                     successor = null;
                     fallbackStoreObservation = null;
+                }
+            }
+            // This is the common launch boundary for first, renewal, restore and
+            // successor children. An inherited child is observed, never launched here.
+            if (activeChild is null && (successor is not null || currentBuild.CommandPrefix is not null))
+            {
+                var folder = successor?.RunDirectory ?? currentBuild.StagedBuildId;
+                var appLeaf = Path.GetFileName(successor?.AppDllPath ?? currentBuild.CommandPrefix![1]);
+                var launch = successor is not null ? "successor" : restoring ? "restore-child" :
+                    attempt == 1 ? "first-child" : "renewal-child";
+                if (!EnsureLaunchClosure(folder, appLeaf, launch, attempt, closureInventories,
+                    blockedActivationCommit, restoring ? currentBuild.CommitSha : null,
+                    cancellationToken, out var fresh, out var closureFailure))
+                {
+                    var detail = $"SUPERVISOR_ESCALATED reason=run-closure-damaged {closureFailure}";
+                    TryAppendConductEvent(detail);
+                    Record("restart", "escalated", attempt, detail, 0, stdoutPath, stderrPath);
+                    Console.Error.WriteLine($"[conduct supervisor] {detail}");
+                    RaiseEscalationAttention("run-closure-damaged", closureFailure!, attempt);
+                    return 1;
+                }
+                if (fresh is not null)
+                {
+                    if (successor is not null)
+                    {
+                        successor.RunDirectoryLease?.Dispose();
+                        pendingSuccessor = successor = fresh;
+                    }
+                    else
+                    {
+                        currentBuild.Lease?.Dispose();
+                        currentBuild = ConductorActivationBuild.FromSuccessor(fresh, _dotnetPath);
+                        NoteAdoptedBuild(currentBuild);
+                    }
                 }
             }
             var childArgs = args
@@ -853,6 +885,107 @@ internal sealed partial class ConductorContinuitySupervisor(
         {
             pendingSuccessor?.RunDirectoryLease?.Dispose();
             currentBuild.Lease?.Dispose();
+        }
+    }
+
+    private static IDisposable? TryAcquireRunDirectoryLease(string appDll)
+    {
+        try { return File.Open(appDll, FileMode.Open, FileAccess.Read, FileShare.Read); }
+        // Defer unavailable files to the closure check so damage gets the same
+        // logged recovery-or-escalation decision, including its counts.
+        catch (IOException) { return null; }
+        catch (UnauthorizedAccessException) { return null; }
+    }
+
+    private bool EnsureLaunchClosure(
+        string folder, string appLeaf, string launch, int attempt,
+        Dictionary<string, IReadOnlyCollection<string>> inventories,
+        string? blockedActivationCommit, string? retainedCommit, CancellationToken cancellationToken,
+        out ConductorPreparedSuccessor? fresh, out string? failure)
+    {
+        ConductorRunClosureVerdict Check(string directory, string leaf)
+        {
+            inventories.TryGetValue(directory, out var inventory);
+            var verdict = (verifyRunClosure ?? ConductorRunClosureCheck.Verify)(directory, leaf, inventory);
+            if (!verdict.Intact)
+                TryAppendConductEvent($"RUN_CLOSURE_CHECK_FAILED attempt={attempt} launch={launch} {Describe(verdict)}");
+            else if (verdict.VerifiedInventory is { } verifiedInventory)
+            {
+                // Retain only the inventory actually hashed by this successful check.
+                inventories[directory] = verifiedInventory;
+            }
+            return verdict;
+        }
+        static string Describe(ConductorRunClosureVerdict verdict) =>
+            $"folder={Sanitize(verdict.Folder)} expected={verdict.Expected?.ToString(CultureInfo.InvariantCulture) ?? "unavailable"} " +
+            $"actual={verdict.Actual?.ToString(CultureInfo.InvariantCulture) ?? "unavailable"} " +
+            $"firstMissing={Sanitize(verdict.FirstMissing)} reason={verdict.Reason}";
+
+        fresh = null;
+        failure = null;
+        cancellationToken.ThrowIfCancellationRequested();
+        var original = Check(folder, appLeaf);
+        if (original.Intact) return true;
+        failure = Describe(original);
+        if (stageSuccessor is null && stageSuccessorWithHook is null)
+        {
+            failure += " recovery=staging-unavailable";
+            return false;
+        }
+        ConductorPreparedSuccessor? replacement = null;
+        try
+        {
+            // Reuse the launcher's publication path. Recovery does not run schema
+            // upgrade hooks; it preserves the pending launch's continuity role.
+            replacement = stageSuccessor is not null ? stageSuccessor(cancellationToken) :
+                stageSuccessorWithHook!(static (_, _, _) => { }, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (replacement is null)
+            {
+                failure += " recovery=staging-unavailable";
+                return false;
+            }
+            // Publication proves closure, not activation eligibility. Recovery must
+            // honor a reverted HEAD and retain the fallback's identity on restore.
+            if (string.Equals(replacement.RepositoryHead, blockedActivationCommit, StringComparison.OrdinalIgnoreCase))
+            {
+                failure += $" recovery=blocked-commit commit={Sanitize(replacement.RepositoryHead)}";
+                return false;
+            }
+            if (retainedCommit is not null &&
+                !string.Equals(replacement.RepositoryHead, retainedCommit, StringComparison.OrdinalIgnoreCase))
+            {
+                failure += $" recovery=retained-commit-mismatch expectedCommit={Sanitize(retainedCommit)} " +
+                    $"actualCommit={Sanitize(replacement.RepositoryHead)}";
+                return false;
+            }
+            var validated = Check(replacement.RunDirectory, Path.GetFileName(replacement.AppDllPath));
+            if (!validated.Intact)
+            {
+                failure += $" recovery=validation-failed replacement=({Describe(validated)})";
+                return false;
+            }
+            if (string.Equals(Path.TrimEndingDirectorySeparator(Path.GetFullPath(folder)),
+                Path.TrimEndingDirectorySeparator(Path.GetFullPath(replacement.RunDirectory)), StringComparison.OrdinalIgnoreCase))
+            {
+                failure += " recovery=not-a-fresh-folder";
+                return false;
+            }
+            TryAppendConductEvent($"RUN_CLOSURE_RECOVERED attempt={attempt} launch={launch} folder={Sanitize(folder)} " +
+                $"fresh={Sanitize(replacement.RunDirectory)} commit={replacement.RepositoryHead}");
+            fresh = replacement;
+            replacement = null; // Ownership passes to pendingSuccessor or currentBuild.
+            return true;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+        catch (Exception ex)
+        {
+            failure += $" recovery=publication-failed detail={Sanitize($"{ex.GetType().Name}:{ex.Message}")}";
+            return false;
+        }
+        finally
+        {
+            replacement?.RunDirectoryLease?.Dispose();
         }
     }
 

@@ -73,7 +73,8 @@ public sealed class ConductorContinuitySupervisorReadinessTests
                     handoffRecorded.TrySetResult();
                 }
             },
-            readinessTimeout: TimeSpan.FromSeconds(30));
+            readinessTimeout: TimeSpan.FromSeconds(30),
+            verifyRunClosure: (folder, _, _) => new(true, folder, 0, 0, "none", "fixture"));
 
         var exitCode = await supervisor.RunAsync(
             ["conduct", "--loop", "--max-duration", "60"],
@@ -142,7 +143,8 @@ public sealed class ConductorContinuitySupervisorReadinessTests
             delay: (_, _) => releaseReadinessTimeout.Task,
             inspectStores: () => [new("fixture-store", "fixture.db", 1, 1)], stageSuccessor: _ => prepared,
             appendConductEvent: (_, _, detail) => conductEvents.Add(detail),
-            readinessTimeout: TimeSpan.FromSeconds(30));
+            readinessTimeout: TimeSpan.FromSeconds(30),
+            verifyRunClosure: (folder, _, _) => new(true, folder, 0, 0, "none", "fixture"));
 
         var supervisorTask = supervisor.RunAsync(
             ["conduct", "--loop", "--max-duration", "60"],

@@ -241,7 +241,8 @@ public sealed class ConductorContinuitySupervisorDeliberateHoldProbeTests(ITestO
                     Assert.Equal("incumbent", from);
                     Assert.Equal("head-next", to);
                     return ["src/Mcg.AgentOrchestrator.App/Orchestration/AcceptanceHolderLease.cs"];
-                });
+                },
+                verifyRunClosure: (folder, _, _) => new(true, folder, 0, 0, "none", "fixture"));
             _run = supervisor.RunAsync(["conduct", "--loop", "--daemon", "--poll-seconds", "4000"],
                 "C:\\fake-repo", _root, "default", "default", cancellationToken: _stop.Token);
             await Task.WhenAny(Clock.WaitForCountAsync(1, _stop.Token), _run).WaitAsync(_stop.Token);

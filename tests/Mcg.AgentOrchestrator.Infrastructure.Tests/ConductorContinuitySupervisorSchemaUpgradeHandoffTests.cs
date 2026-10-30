@@ -347,7 +347,8 @@ public sealed class ConductorContinuitySupervisorSchemaUpgradeHandoffTests
                     Assert.Contains("successor-launch", Steps);
                     Deadlines++;
                     return Task.CompletedTask; // An explicit deadline signal, independent of wall-clock pacing.
-                });
+                },
+                verifyRunClosure: (folder, _, _) => new(true, folder, 0, 0, "none", "fixture"));
             return supervisor.RunAsync(["conduct", "--loop", "--repository-root", _root,
                     "--expected-state-directory", StateDirectory, "--disposable-fixture"], _root,
                 Path.Combine(StateDirectory, "continuity"), "fixture", "tenant");
