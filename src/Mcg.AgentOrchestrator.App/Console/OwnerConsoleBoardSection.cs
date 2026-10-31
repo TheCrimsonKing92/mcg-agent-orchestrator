@@ -36,9 +36,14 @@ internal sealed record OwnerConsoleBoardSection(string Project, OwnerConsoleBoar
         if (model.BoardScope is not { Sections: { } projects }) return model;
         var groups = model.Board.ToLookup(row => row.Project, StringComparer.OrdinalIgnoreCase);
         var order = projects.Concat(model.Board.Select(row => row.Project)).Distinct(StringComparer.OrdinalIgnoreCase);
+        var attention = new OwnerConsoleBoardSectionOrder(model.Decisions);
+        var sectioned = model.BoardScope.ProjectCount > 1;
         return model with { Board = order.OrderBy(project => !groups[project].Any(row => !row.IsDiagnostic || row.State == "onboarding"))
+            .ThenBy(project => sectioned ? attention.Tier(groups[project]) : 0)
             .SelectMany(project => groups[project]
-            .OrderBy(row => row.IsDiagnostic ? 0 : 1)).ToImmutableArray() };
+            .OrderBy(row => row.IsDiagnostic ? 0 : 1)
+            .Select(row => sectioned && row.IsDiagnostic
+                ? row with { OwnerDecisions = attention.DecisionCount(groups[project]) } : row)).ToImmutableArray() };
     }
 
     // Arrange keeps footer-only projects in a trailing partition, preserving model/table indexes for goals.
@@ -46,18 +51,20 @@ internal sealed record OwnerConsoleBoardSection(string Project, OwnerConsoleBoar
     {
         if (!sectioned) return board.Count;
         for (var index = board.Count - 1; index >= 0; index--)
-            if (!board[index].IsDiagnostic || board[index].State == "onboarding") return index + 1;
+            if (!board[index].IsDiagnostic || board[index].State == "onboarding" || board[index].Collapsed) return index + 1;
         return 0;
     }
 
-    internal static string HeaderLine(OwnerConsoleBoardRow header) => $"── {header.Title} ──";
+    internal static string HeaderLine(OwnerConsoleBoardRow header) => header.OwnerDecisions > 0
+        ? $"── {header.Title} · {header.OwnerDecisions} {(header.OwnerDecisions == 1 ? "decision" : "decisions")} ──"
+        : $"── {header.Title} ──";
 
     internal static IReadOnlyList<(string Text, bool Dimmed)> Footer(OwnerConsoleViewModel model)
     {
         if (model.BoardScope is not { ProjectCount: > 1 }) return [];
         var goals = model.Board.Where(row => !row.IsDiagnostic).Select(row => row.Project)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var empty = model.Board.Where(row => row.IsDiagnostic && row.State != "onboarding" && !goals.Contains(row.Project)).ToArray();
+        var empty = model.Board.Where(row => row.IsDiagnostic && !row.Collapsed && row.State != "onboarding" && !goals.Contains(row.Project)).ToArray();
         var segments = new List<(string Text, bool Dimmed)>();
         foreach (var state in new[] { "running", "idle", "stopped", "unreadable" })
         {
@@ -75,7 +82,7 @@ internal sealed record OwnerConsoleBoardSection(string Project, OwnerConsoleBoar
     }
 
     internal static bool IsHeader(OwnerConsoleBoardRow row, OwnerConsoleBoardScope? scope) =>
-        scope is not null && (scope.ProjectCount > 1 || row.State == "onboarding") && row.IsDiagnostic;
+        scope is not null && (scope.ProjectCount > 1 || row.State == "onboarding") && row.IsDiagnostic && !row.Collapsed;
 
     internal static int NearestGoal(ImmutableArray<OwnerConsoleBoardRow> board,
         OwnerConsoleBoardScope? scope, int index, int direction)

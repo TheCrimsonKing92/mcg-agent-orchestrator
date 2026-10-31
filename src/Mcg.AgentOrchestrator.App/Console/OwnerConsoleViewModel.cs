@@ -31,6 +31,8 @@ internal sealed record OwnerConsoleBoardRow(string GoalPrefix, string Epic, stri
     internal bool IsDiagnostic { get; init; }
     internal OwnerConsoleBoardSortKey SortKey { get; init; }
     internal string? StageWithoutQuestion { get; init; }
+    internal int OwnerDecisions { get; init; }
+    internal bool Collapsed { get; init; }
 }
 
 internal sealed record OwnerConsoleActivityItem(DateTimeOffset Timestamp, string Kind, string Tag,
