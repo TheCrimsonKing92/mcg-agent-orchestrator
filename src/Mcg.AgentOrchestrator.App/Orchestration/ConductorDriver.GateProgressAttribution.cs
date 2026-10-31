@@ -86,15 +86,6 @@ internal sealed partial class ConductorDriver
         ConductEventLogWriter writer,
         string? goalId,
         string detail,
-        string eventKind = "gate-progress")
-    {
-        try
-        {
-            _ = writer.AppendRequired(eventKind, goalId, detail);
-        }
-        catch (Exception)
-        {
-            // Progress is observational; a log failure must not change a gate outcome.
-        }
-    }
+        string eventKind = "gate-progress") =>
+        ConductorGateProgressLog.TryAppend(writer, goalId, detail, eventKind);
 }

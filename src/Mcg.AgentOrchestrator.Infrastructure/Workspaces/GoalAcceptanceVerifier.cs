@@ -4221,29 +4221,14 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
     private void EmitGateProgress(AcceptanceGateProgress progress) => EmitGateProgress(progress, null);
 
-    private void EmitGateProgress(AcceptanceGateProgress progress, string? trailingTokens)
-    {
-        progress = AcceptanceGateProgressProvenance.Attach(progress, _executionContext);
-        var line =
-            $"PHASE_PROGRESS goal={FormatNullableToken(progress.GoalId, 8)} phase={progress.Phase} elapsed_ms={(long)progress.Elapsed.TotalMilliseconds} " +
-            $"target={QuoteProgressToken(progress.CurrentTarget)} child_pid={progress.ChildProcessId?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown"} " +
-            $"output_bytes={progress.OutputBytes} heartbeat={QuoteProgressToken(progress.HeartbeatPath)} {GateLoadContextProbe.FormatProgressTokens(progress.LoadContext)}" + progress.ProvenanceTokens;
-        Console.WriteLine($"{line}{(trailingTokens is null ? "" : " " + trailingTokens)} ts={progress.LastObservedAt:O}");
-        Console.Out.Flush();
-        _executionContext?.ReportProgress(progress);
-    }
+    private void EmitGateProgress(AcceptanceGateProgress progress, string? trailingTokens) =>
+        AcceptanceGateProgressReporter.Emit(progress, trailingTokens, _executionContext);
 
-    internal static string FormatNullableToken(string? value, int maxLength)
-    {
-        if (string.IsNullOrWhiteSpace(value))
-            return "unknown";
-        return value.Length <= maxLength ? value : value[..maxLength];
-    }
+    internal static string FormatNullableToken(string? value, int maxLength) =>
+        AcceptanceGateProgressReporter.FormatNullableToken(value, maxLength);
 
     internal static string QuoteProgressToken(string value) =>
-        value.IndexOfAny([' ', '\t', '\r', '\n', '"']) < 0
-            ? value
-            : $"\"{value.Replace("\"", "\\\"", StringComparison.Ordinal)}\"";
+        AcceptanceGateProgressReporter.QuoteProgressToken(value);
 
     private static string QuoteForDisplay(string value) =>
         value.Contains(' ', StringComparison.Ordinal) || value.Contains('"', StringComparison.Ordinal)
