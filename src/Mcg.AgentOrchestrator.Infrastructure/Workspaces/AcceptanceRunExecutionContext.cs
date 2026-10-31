@@ -211,7 +211,10 @@ internal abstract class AcceptanceRunExecutionOwner : IAcceptanceRunExecutionCon
         Interlocked.Exchange(ref _releaseOutcome, (int)OwnedRunRootReleaseOutcome.Cancelled);
 
     public void ReportProgress(AcceptanceGateProgress progress) =>
-        _options.ProgressSink?.Invoke(AcceptanceGateProgressProvenance.Attach(progress, this));
+        _options.ProgressSink?.Invoke(
+            this is AcceptanceFocusedVerificationOwner && FocusedRunBinding is null
+                ? progress
+                : AcceptanceGateProgressProvenance.Attach(progress, this));
     public void ReportRemoteLaneEvent(string detail) => _options.RemoteLaneEventSink?.Invoke(detail);
 
     public Func<bool>? ResolveCancellationProbe(bool boundary) =>
