@@ -21,7 +21,7 @@ public sealed class CliAttentionShowAgentReadEnvelopeContractTests : CliTaskQuer
             foreach (var args in Forms())
             {
                 using var json = JsonDocument.Parse(Run(args, seed.Workspace, seed.Kernel));
-                var payload = AssertEnvelope(json.RootElement);
+                var payload = AssertEnvelope(json.RootElement, includeDecisions: args.Length == 3);
                 Assert.Equal(args.Length == 3 ? null : seed.First.Id.Value,
                     payload.GetProperty("goalId").GetString());
                 var wait = Assert.Single(payload.GetProperty("waits").EnumerateArray());
@@ -80,7 +80,7 @@ public sealed class CliAttentionShowAgentReadEnvelopeContractTests : CliTaskQuer
             using var global = JsonDocument.Parse(Run(Forms()[0], seed.Workspace, seed.Kernel));
             using var scoped = JsonDocument.Parse(Run(Forms()[1], seed.Workspace, seed.Kernel));
             using var flagged = JsonDocument.Parse(Run(Forms()[2], seed.Workspace, seed.Kernel));
-            var all = AssertEnvelope(global.RootElement);
+            var all = AssertEnvelope(global.RootElement, includeDecisions: true);
             var first = AssertEnvelope(scoped.RootElement);
             Assert.Equal(first.GetRawText(), AssertEnvelope(flagged.RootElement).GetRawText());
             Assert.Equal(seed.First.Id.Value, first.GetProperty("goalId").GetString());
@@ -117,7 +117,7 @@ public sealed class CliAttentionShowAgentReadEnvelopeContractTests : CliTaskQuer
             foreach (var args in Forms())
             {
                 using var json = JsonDocument.Parse(Run(args, seed.Workspace, seed.Kernel));
-                var items = AssertEnvelope(json.RootElement).GetProperty("items").EnumerateArray();
+                var items = AssertEnvelope(json.RootElement, includeDecisions: args.Length == 3).GetProperty("items").EnumerateArray();
                 var clarification = Assert.Single(items, item => item.GetProperty("id").GetString() == seed.Clarification.Id);
                 Assert.Equal(expectedId, clarification.GetProperty("clarificationId").GetString());
                 Assert.Equal(JsonValueKind.Null, Assert.Single(items, item => item.GetProperty("id").GetString() == seed.Decision.Id)
@@ -145,7 +145,7 @@ public sealed class CliAttentionShowAgentReadEnvelopeContractTests : CliTaskQuer
             var kernel = new AgentOrchestratorKernel();
             var goal = kernel.CreateGoal(new GoalId("abc10000aaaaaaaaaaaaaaaaaaaaaaaa"), "Empty goal");
             using var json = JsonDocument.Parse(Run(args, workspace, kernel));
-            var payload = AssertEnvelope(json.RootElement);
+            var payload = AssertEnvelope(json.RootElement, includeDecisions: args.Length == 3);
             Assert.Equal(args.Length == 3 ? null : goal.Id.Value, payload.GetProperty("goalId").GetString());
             Assert.Equal(JsonValueKind.Array, payload.GetProperty("waits").ValueKind);
             Assert.Equal(JsonValueKind.Array, payload.GetProperty("items").ValueKind);
@@ -188,9 +188,12 @@ public sealed class CliAttentionShowAgentReadEnvelopeContractTests : CliTaskQuer
                     ? "[choose-path] Choose path\r\n    Clarification body\r\n"
                     : $"[{seed.Decision.Id[..8]}] (Decision) Goal decision\r\n";
             scoped += "Answer with: attention answer abc10000 <id> <answer> or --text-file <path> (ids are stable; answering one does not renumber the rest)\r\n";
+            // Decisions reads persisted state; this fixture has only in-memory goals.
+            Assert.False(File.Exists(seed.Workspace.SqliteStatePath));
+            var decisions = "Decisions (0):\r\n  none\r\nHidden decisions: 1 (goal-missing=1)\r\n\r\n";
             foreach (var (args, expected) in new[]
             {
-                (new[] { "attention", "show" }, waits),
+                (new[] { "attention", "show" }, decisions + waits),
                 (new[] { "attention", "show", "abc10000" }, scoped)
             })
             {
@@ -299,7 +302,7 @@ public sealed class CliAttentionShowAgentReadEnvelopeContractTests : CliTaskQuer
         finally { Directory.Delete(root, true); }
     }
 
-    private static JsonElement AssertEnvelope(JsonElement envelope)
+    private static JsonElement AssertEnvelope(JsonElement envelope, bool includeDecisions = false)
     {
         Assert.Equal(new[] { "schema", "schemaVersion", "generatedAt", "payload" },
             envelope.EnumerateObject().Select(property => property.Name));
@@ -312,7 +315,9 @@ public sealed class CliAttentionShowAgentReadEnvelopeContractTests : CliTaskQuer
         Assert.Equal(TimeSpan.Zero, DateTimeOffset.ParseExact(timestamp, "O", CultureInfo.InvariantCulture).Offset);
         Assert.EndsWith("Z", timestamp);
         var payload = envelope.GetProperty("payload");
-        Assert.Equal(new[] { "goalId", "waits", "gateEvidence", "items", "ownerQuestionHolds" }, payload.EnumerateObject().Select(property => property.Name));
+        string[] fields = ["goalId", "waits", "gateEvidence", "items", "ownerQuestionHolds"];
+        if (includeDecisions) fields = [.. fields, "decisions", "hiddenByReason"];
+        Assert.Equal(fields, payload.EnumerateObject().Select(property => property.Name));
         return payload;
     }
 

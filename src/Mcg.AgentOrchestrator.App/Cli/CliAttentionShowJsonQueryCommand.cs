@@ -1,3 +1,4 @@
+using Mcg.AgentOrchestrator.App.OwnerConsole;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -38,8 +39,11 @@ internal static class CliAttentionShowJsonQueryCommand
         }
         var waits = CliCommandHandlers.HumanWaitsForAttention(kernel, goal?.Id, includeHistory: false);
         items = CliCommandHandlers.CollaborationItemsForAttention(items, kernel, goal?.Id, includeHistory: false);
+        var decisions = prefix is null
+            ? OwnerDecisionReader.ReadAsync(OwnerQuestionReadModelFactory.ForWorkspace(workspace)).GetAwaiter().GetResult()
+            : null;
         Console.WriteLine(AttentionShowAgentReadView.Render(goal?.Id.Value, waits, items,
             item => CliCommandHandlers.IsSpecClarification(item)
-                ? CliCommandHandlers.ClarificationId(item, identityUniverse) : null, time, kernel.Goals));
+                ? CliCommandHandlers.ClarificationId(item, identityUniverse) : null, time, kernel.Goals, decisions));
     }
 }

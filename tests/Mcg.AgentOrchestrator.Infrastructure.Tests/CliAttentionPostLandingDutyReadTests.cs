@@ -43,6 +43,7 @@ public sealed class CliAttentionPostLandingDutyReadTests
             : form.StartsWith("summary", StringComparison.Ordinal)
                 ? ["waits", "items", "providerHolds", "ownerQuestionHolds"]
                 : ["waits", "gateEvidence", "items", "providerHolds", "ownerQuestionHolds"];
+        if (form == "show") legacyFields = [.. legacyFields, "decisions", "hiddenByReason"];
         Assert.Equal(legacyFields.Concat(["postLandingDuties"]),
             payload.EnumerateObject().Select(property => property.Name));
         var row = Assert.Single(payload.GetProperty("postLandingDuties").EnumerateArray());

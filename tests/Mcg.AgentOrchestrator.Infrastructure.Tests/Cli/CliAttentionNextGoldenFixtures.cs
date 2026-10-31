@@ -15,6 +15,12 @@ internal static class CliAttentionNextGoldenFixtures
 
     internal const string EmptyAttentionHistory = "\r\nAttention queue: 0 reach-up item(s)\r\n  none\r\n\r\n";
 
+    private const string EmptyDecisions = "Decisions (0):\r\n  none\r\nHidden decisions: 0\r\n\r\n";
+
+    internal const string EmptyAttentionShow = EmptyDecisions + EmptyAttention;
+
+    internal const string EmptyAttentionShowHistory = EmptyDecisions + EmptyAttentionHistory;
+
     internal static string EmptyGoalAttention(string goalId) =>
         $"No open attention items for goal {goalId}.\r\n";
 
