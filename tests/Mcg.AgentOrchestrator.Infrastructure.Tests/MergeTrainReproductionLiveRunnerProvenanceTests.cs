@@ -34,7 +34,9 @@ public sealed class MergeTrainReproductionLiveRunnerProvenanceTests : Acceptance
             var members = Enumerable.Range(1, 3).Select(index =>
             {
                 var path = $"member-{index}.txt";
-                var candidate = CreateCandidate(repo, index.ToString("x32"), path, "member " + index);
+                // Goal branches use the first eight characters, so vary that prefix.
+                var goalValue = index.ToString("x8").PadRight(32, '0');
+                var candidate = CreateCandidate(repo, goalValue, path, "member " + index);
                 return TrainBind(candidate.GoalId, candidate.Revision, path, "resource-" + index);
             }).ToArray();
             var process = new RecordingProcess(foreignAssembly, Path.Combine(repo, "foreign-output"));
