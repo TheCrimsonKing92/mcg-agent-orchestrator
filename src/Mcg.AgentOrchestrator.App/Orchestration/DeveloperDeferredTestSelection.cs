@@ -10,7 +10,8 @@ internal sealed record DeveloperDeferredTestSelection(
 internal static class DeveloperDeferredTestSelections
 {
     internal static DeveloperDeferredTestSelection Resolve(string worktreePath, string testsField)
-        => ResolveNames(worktreePath, DeveloperDeferredTestClassNames.Parse(testsField));
+        => DeclaredTestEvidenceSelectors.ForProject(worktreePath, testsField) ??
+            ResolveNames(worktreePath, DeveloperDeferredTestClassNames.Parse(testsField));
 
     internal static DeveloperDeferredTestSelection ResolveNames(
         string worktreePath, IReadOnlyList<string> distinctNames, bool requireUniqueSourceFile = false)

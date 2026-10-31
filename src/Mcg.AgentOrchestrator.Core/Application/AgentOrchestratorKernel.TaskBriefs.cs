@@ -410,6 +410,7 @@ public sealed partial class AgentOrchestratorKernel
                 complexity,
                 SdlcRolePromptRequirements.HasHighRiskOrComplexIntakeRiskLabel(goal),
                 hasDurableResearch), roleRequirementStack), acceptanceManifestPromptPath), integrationBranchPromptName));
+        roleLines.AddRange(DeclaredTestSelectorGuidance.For(roleRequirementStack));
         if (!string.IsNullOrWhiteSpace(contextDirectory))
             CriteriaSelfCheckPromptContext.Externalize(roleLines, task.RequiredRole, includeReference: false);
         roleLines.Add(string.Empty);

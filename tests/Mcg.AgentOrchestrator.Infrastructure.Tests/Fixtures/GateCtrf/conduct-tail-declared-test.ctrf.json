@@ -1,0 +1,10 @@
+{
+  "results": {
+    "tool": { "name": "declared-test" },
+    "summary": { "tests": 2, "passed": 2, "failed": 0, "pending": 0, "skipped": 0, "other": 0, "start": 0, "stop": 1 },
+    "tests": [
+      { "testId": "conduct-tail::tests::no_arguments_prints_usage_and_exits_2", "name": "tests::no_arguments_prints_usage_and_exits_2", "suite": ["conduct-tail"], "status": "passed", "duration": 0 },
+      { "testId": "conduct-tail::version::version_flag_prints_package_version", "name": "version_flag_prints_package_version", "suite": ["conduct-tail::version"], "status": "passed", "duration": 0 }
+    ]
+  }
+}
