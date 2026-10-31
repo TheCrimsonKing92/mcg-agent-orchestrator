@@ -1029,7 +1029,7 @@ public sealed class CliCommandTestsGoalLifecycleCleanupHooksAcceptance : CliComm
             force: false);
     }
 
-    private static async Task<(
+    private async Task<(
         string Root,
         OrchestratorWorkspace Workspace,
         BacklogStore BacklogStore,
@@ -1062,7 +1062,7 @@ public sealed class CliCommandTestsGoalLifecycleCleanupHooksAcceptance : CliComm
         return (root, workspace, backlogStore, backlogItem, kernel, goal);
     }
 
-    private static async Task AssertGoalMarkLandedRefusalHasNoDurableSideEffectsAsync(
+    private async Task AssertGoalMarkLandedRefusalHasNoDurableSideEffectsAsync(
         string root,
         OrchestratorWorkspace workspace,
         BacklogStore backlogStore,

@@ -22,7 +22,7 @@ public sealed class SettledCleanupBackoffSweepTests : CliCommandTestBase
     [Fact]
     public void CancelledWithBranch_KeepsBackoff() => Check(cancelled: true, withBranch: true);
 
-    private static void Check(
+    private void Check(
         bool landed = false, bool cancelled = false, bool withBackoff = true,
         bool withFolder = false, bool withBranch = false, bool expectCleared = false)
     {

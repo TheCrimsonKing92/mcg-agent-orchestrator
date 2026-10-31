@@ -31,7 +31,8 @@ internal static class ProjectCompareManifestEngineCommand
         try
         {
             var manifestJson = File.ReadAllText(Path.GetFullPath(manifestPath));
-            comparisons = ManifestEngineSettingsComparer.Compare(manifestJson, learned);
+            comparisons = ManifestEngineSettingsComparer.Compare(manifestJson, learned,
+                DeclaredToolHomeValidator.FromAnswers(applied));
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or
             NotSupportedException or ArgumentException or JsonException or InvalidDataException)

@@ -12,10 +12,7 @@ public static class OwnerAnswerApplier
     {
         ArgumentNullException.ThrowIfNull(model);
         ArgumentNullException.ThrowIfNull(answers);
-        var liveKeys = model.OwnerQuestions.Concat(LearnedEngineSettingsDeriver.Derive(model).OwnerQuestions)
-            .Select(question => question.FactKey).ToHashSet(StringComparer.Ordinal);
-        liveKeys.UnionWith(model.Units.Where(unit => unit.IsTest?.Value == true)
-            .Select(unit => $"commands/{unit.Id}/timeoutMinutes"));
+        var liveKeys = LiveKeys(model);
         var facts = new List<AppliedOwnerAnswers.AnsweredFact>();
         var stale = new List<AppliedOwnerAnswers.StaleAnswer>();
         foreach (var answer in answers)
@@ -30,7 +27,7 @@ public static class OwnerAnswerApplier
                 stale.Add(new(answer, exception.Message));
                 continue;
             }
-            if (!liveKeys.Contains(answer.FactKey))
+            if (!liveKeys.Contains(answer.FactKey) && !DeclaredToolHomeValidator.IsToolHomeKey(answer.FactKey))
             {
                 stale.Add(new(answer, NotLiveReason));
                 continue;
@@ -43,6 +40,17 @@ public static class OwnerAnswerApplier
         var answeredKeys = facts.Select(fact => fact.FactKey).ToHashSet(StringComparer.Ordinal);
         return new(model.OwnerQuestions.Where(question => !answeredKeys.Contains(question.FactKey)).ToArray(),
             facts.AsReadOnly(), stale.AsReadOnly());
+    }
+
+    public static bool IsLiveKey(ProjectModel model, string key) => LiveKeys(model).Contains(key);
+
+    private static HashSet<string> LiveKeys(ProjectModel model)
+    {
+        var keys = model.OwnerQuestions.Concat(LearnedEngineSettingsDeriver.Derive(model).OwnerQuestions)
+            .Select(question => question.FactKey).ToHashSet(StringComparer.Ordinal);
+        keys.UnionWith(model.Units.Where(unit => unit.IsTest?.Value == true)
+            .Select(unit => $"commands/{unit.Id}/timeoutMinutes"));
+        return keys;
     }
 
     public static string FormatRecorded(DateTimeOffset recordedUtc) =>

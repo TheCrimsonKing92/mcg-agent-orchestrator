@@ -16,7 +16,8 @@ internal static class GateTestObligationEvaluator
         string? WaiverReason = null, IReadOnlyList<TestClassRenameEvidence.ClassRename>? RenameFollows = null,
         IReadOnlyList<AnsweredSelectorRebinding.Rebind>? AnswerRebinds = null,
         CarryForwardFollow? CarryForward = null, string? CarryForwardDiagnostic = null,
-        IReadOnlyList<GoTestPackageResolution.Resolution>? PackageResolutions = null)
+        IReadOnlyList<GoTestPackageResolution.Resolution>? PackageResolutions = null,
+        IReadOnlyList<string>? ClosestIdentities = null)
     {
         internal string RenameProvenance => string.Join("; ", (RenameFollows ?? []).Select(rename =>
             $"GATE_TEST_OBLIGATION_RENAME_FOLLOWED id={Obligation.Id[..Math.Min(8, Obligation.Id.Length)]} " +
@@ -158,6 +159,10 @@ internal static class GateTestObligationEvaluator
             if (obligation.PlannerIdentity is not null && source.BriefVersion != obligation.PlannerIdentity.BriefVersion) continue;
             var evidence = GroupedGateReceiptTrxEvidence.Evaluate(
                 obligation.Selectors, source.Paths, orchestratorDirectory).ToArray();
+            var declared = DeclaredTestReportRows.Read(source.Paths, orchestratorDirectory, source.Checks);
+            if (declared.Applies)
+                evidence = obligation.Selectors.Select(selector =>
+                    DeclaredTestSelectorResolver.Evaluate(selector, declared.Rows)).ToArray();
             var pending = new HashSet<string>(StringComparer.Ordinal);
             for (var index = 0; index < evidence.Length; index++)
             {
@@ -183,6 +188,8 @@ internal static class GateTestObligationEvaluator
             // Pending check evidence is not an unmatched test selector. Failures and
             // unmatched row selectors still use the existing grading and precedence.
             newest = Grade(obligation, source.Id, evidence.Where(item => !pending.Contains(item.Selector)).ToArray());
+            if (newest.Outcome == Outcome.SelectorNotFound && declared.Applies)
+                newest = newest with { ClosestIdentities = DeclaredTestClosestIdentities.Find(newest.Selectors, declared.Rows) };
             if (pending.Count > 0 && newest.Outcome == Outcome.Satisfied)
                 newest = new(obligation, Outcome.Pending, obligation.Selectors.Where(pending.Contains).ToArray(), source.Id);
         }

@@ -36,6 +36,11 @@ public sealed class CliCommandTestsCleanupCadence : CliCommandTestBase
             var orphan = Path.Combine(root, GoalWorktrees.DirectoryName, "cadence-orphan");
             Directory.CreateDirectory(Path.Combine(orphan, ".mcg-sandbox"));
             File.WriteAllText(Path.Combine(orphan, ".mcg-sandbox", "marker.txt"), "Created after the owner's sweep");
+            // Exercise cadence independently of the orphan sweep's freshness protection.
+            var old = now.UtcDateTime.AddHours(-1);
+            File.SetLastWriteTimeUtc(Path.Combine(orphan, ".mcg-sandbox", "marker.txt"), old);
+            Directory.SetLastWriteTimeUtc(Path.Combine(orphan, ".mcg-sandbox"), old);
+            Directory.SetLastWriteTimeUtc(orphan, old);
             if (cadence == "due") now = now.AddHours(1);
             if (cadence == "independent") context = new WorktreeCleanupContext(hooks);
             string[] commandArgs = command == "conduct"

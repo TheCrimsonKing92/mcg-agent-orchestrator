@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.Json;
+using Mcg.AgentOrchestrator.App.OwnerConsole;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -9,9 +10,9 @@ internal static class AttentionShowAgentReadView
 {
     internal static string Render(string? goalId, IReadOnlyList<HumanInputRequest> waits,
         IReadOnlyList<CollaborationItem> items, Func<CollaborationItem, string?> clarificationId,
-        TimeProvider? time = null, IReadOnlyCollection<Goal>? goals = null) =>
+        TimeProvider? time = null, IReadOnlyCollection<Goal>? goals = null, OwnerDecisionRead? decisions = null) =>
         AgentReadEnvelope.Serialize(AgentReadEnvelope.AttentionShowSchema, AgentReadEnvelope.AttentionShowSchemaVersion,
-            AttentionAgentReadView.WithPostLandingDuties(new Dictionary<string, object?>
+            AttentionAgentReadView.WithPostLandingDuties(WithDecisions(new Dictionary<string, object?>
             {
                 ["goalId"] = goalId,
                 ["waits"] = waits.Select(wait => new
@@ -65,7 +66,23 @@ internal static class AttentionShowAgentReadView
                         resolvingVerb = hold.ResolvingVerb,
                         nextAction = hold.NextAction
                     }).ToArray()
-            }, AttentionAgentReadView.DutyRows(null,
+            }, decisions), AttentionAgentReadView.DutyRows(null,
                 (goals ?? []).Where(goal => goalId is null || goal.Id.Value == goalId).ToArray())),
             new JsonSerializerOptions(JsonSerializerDefaults.Web), time);
+
+    private static Dictionary<string, object?> WithDecisions(Dictionary<string, object?> payload,
+        OwnerDecisionRead? decisions)
+    {
+        if (decisions is null) return payload;
+        payload["decisions"] = decisions.Entries.Select(entry => new
+        {
+            kind = entry.Kind.ToString(),
+            goalPrefix = entry.GoalPrefix,
+            itemId = entry.ItemId,
+            raisedAt = entry.RaisedAt?.UtcDateTime.ToString("O", CultureInfo.InvariantCulture),
+            text = entry.Text
+        }).ToArray();
+        payload["hiddenByReason"] = decisions.HiddenByReason;
+        return payload;
+    }
 }

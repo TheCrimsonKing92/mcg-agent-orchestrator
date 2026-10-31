@@ -40,6 +40,7 @@ internal static class RoleRequirementStackGuidance
             if (replacement is not null)
                 result.Add(replacement);
         }
+        result.AddRange(DeclaredTestSelectorGuidance.For(stack));
         return result;
     }
 }

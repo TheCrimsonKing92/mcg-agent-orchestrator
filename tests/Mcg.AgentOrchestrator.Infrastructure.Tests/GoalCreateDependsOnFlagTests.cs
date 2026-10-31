@@ -363,7 +363,7 @@ public sealed class GoalCreateDependsOnFlagTests : CliCommandTestBase
         return path;
     }
 
-    private static OrchestratorWorkspace CreateWorkspace()
+    private OrchestratorWorkspace CreateWorkspace()
     {
         var workspace = CreateRefinedWorkspace(CreateTempDirectory());
         ModelFunctionCatalogStore.Save(workspace.ModelFunctionCatalogPath, new ModelFunctionCatalog([

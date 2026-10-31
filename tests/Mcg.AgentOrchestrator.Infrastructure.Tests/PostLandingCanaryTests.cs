@@ -1959,7 +1959,7 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
         return result;
     }
 
-    private static string ReadGitStatus(string repositoryRoot) =>
+    private string ReadGitStatus(string repositoryRoot) =>
         RunGit(repositoryRoot, "status", "--porcelain", "--untracked-files=all").Output;
 
     private static string CreateFailingCanaryTool(string root)

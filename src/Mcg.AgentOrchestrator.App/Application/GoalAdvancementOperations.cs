@@ -576,7 +576,11 @@ public sealed class GoalAdvancementOperations
 
         var admission = SqliteOperatorIntentStore.ForDirectories(workspace.OrchestratorDirectory, workspace.LogDirectory)
             .GetPreparedAdmission(goal.Id.Value, taskId.Value, kernel.GetTask(goal.Id, taskId).LastDispatch!.DispatchedAt);
-        var startResult = new BackgroundDispatchRunner().TryStartLatestDispatch(kernel, goal.Id, taskId, workspace.LogDirectory,
+        var startResult = new BackgroundDispatchRunner
+        {
+            DeclaredToolHomes = () => AcceptanceGateEngineSettings.Load(
+                workspace.RootDirectory, workspace.ProjectHomeDirectoryOrNull).DeclaredToolHomes
+        }.TryStartLatestDispatch(kernel, goal.Id, taskId, workspace.LogDirectory,
             taskIntentAdmission: admission);
         if (startResult.RecoveryAction is { } recoveryAction)
         {

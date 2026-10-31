@@ -13,6 +13,17 @@ using Microsoft.Data.Sqlite;
 
 public sealed class GoalWorktreeTestsOrphanEphemeralSweep : GoalWorktreeTestBase
 {
+    private static void AgeOrphanTree(string path)
+    {
+        // Earlier than both real time and the fixed July cleanup clocks used below.
+        var old = new DateTime(2020, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        foreach (var file in Directory.EnumerateFiles(path, "*", SearchOption.AllDirectories))
+            File.SetLastWriteTimeUtc(file, old);
+        foreach (var directory in Directory.EnumerateDirectories(path, "*", SearchOption.AllDirectories))
+            Directory.SetLastWriteTimeUtc(directory, old);
+        Directory.SetLastWriteTimeUtc(path, old);
+    }
+
     [Xunit.Fact(DisplayName = "GoalWorktrees_sweep_deletes_orphaned_worktree_directory")]
     public void GoalWorktreesSweepDeletesOrphanedWorktreeDirectory()
     {
@@ -25,6 +36,7 @@ public sealed class GoalWorktreeTestsOrphanEphemeralSweep : GoalWorktreeTestBase
             var orphanPath = Path.Combine(repo, GoalWorktrees.DirectoryName, "orphaned1");
             Directory.CreateDirectory(Path.Combine(orphanPath, ".mcg-sandbox"));
             File.WriteAllText(Path.Combine(orphanPath, ".mcg-sandbox", "leftover.txt"), "low-il residue");
+            AgeOrphanTree(orphanPath);
             var acl = new RecordingSandboxAclHelper();
             CleanupHooks.SandboxAclHelper = acl;
             CleanupHooks.BuildServerShutdown = (_, _) => { };
@@ -91,6 +103,7 @@ public sealed class GoalWorktreeTestsOrphanEphemeralSweep : GoalWorktreeTestBase
             var orphanPath = Path.Combine(repo, GoalWorktrees.DirectoryName, "orphaned-scheduler");
             Directory.CreateDirectory(Path.Combine(orphanPath, ".mcg-sandbox"));
             File.WriteAllText(Path.Combine(orphanPath, ".mcg-sandbox", "leftover.txt"), "low-il residue");
+            AgeOrphanTree(orphanPath);
             var acl = new RecordingSandboxAclHelper();
             var scheduler = new GoalWorktreeOrphanSweepScheduler(new GoalWorktreeCleanupHooks
             {
@@ -224,6 +237,7 @@ public sealed class GoalWorktreeTestsOrphanEphemeralSweep : GoalWorktreeTestBase
             var orphanPath = Path.Combine(repo, GoalWorktrees.DirectoryName, "orphaned-access-denied");
             Directory.CreateDirectory(Path.Combine(orphanPath, ".mcg-sandbox"));
             File.WriteAllText(Path.Combine(orphanPath, ".mcg-sandbox", "leftover.txt"), "low-il residue");
+            AgeOrphanTree(orphanPath);
             var deleteAttempts = 0;
             var acl = new RecordingSandboxAclHelper();
             CleanupHooks.DeleteDirectoryForCleanup = path =>
@@ -274,6 +288,7 @@ public sealed class GoalWorktreeTestsOrphanEphemeralSweep : GoalWorktreeTestBase
             var orphanPath = Path.Combine(repo, GoalWorktrees.DirectoryName, "orphaned-timeout");
             Directory.CreateDirectory(Path.Combine(orphanPath, ".mcg-sandbox"));
             File.WriteAllText(Path.Combine(orphanPath, ".mcg-sandbox", "leftover.txt"), "low-il residue");
+            AgeOrphanTree(orphanPath);
             var now = DateTimeOffset.Parse("2026-07-02T05:00:00Z");
             long elapsedMilliseconds = 0;
             var warnings = new List<GoalWorktreeCleanupWarning>();
@@ -327,6 +342,7 @@ public sealed class GoalWorktreeTestsOrphanEphemeralSweep : GoalWorktreeTestBase
             var orphanPath = Path.Combine(repo, GoalWorktrees.DirectoryName, "orphaned-quiet-skip");
             Directory.CreateDirectory(orphanPath);
             File.WriteAllText(Path.Combine(orphanPath, "leftover.txt"), "residue");
+            AgeOrphanTree(orphanPath);
             var now = DateTimeOffset.Parse("2026-07-02T05:00:00Z");
             CleanupHooks.DeleteDirectoryForCleanup = _ => GoalWorktreeDeleteResult.Failed(
                 GoalWorktreeDeleteFailureKind.Transient,
@@ -374,6 +390,7 @@ public sealed class GoalWorktreeTestsOrphanEphemeralSweep : GoalWorktreeTestBase
             var orphanPath = Path.Combine(repo, GoalWorktrees.DirectoryName, "orphaned-escalates-once");
             Directory.CreateDirectory(orphanPath);
             File.WriteAllText(Path.Combine(orphanPath, "leftover.txt"), "residue");
+            AgeOrphanTree(orphanPath);
             var now = DateTimeOffset.Parse("2026-07-02T05:00:00Z");
             var warnings = new List<GoalWorktreeCleanupWarning>();
             CleanupHooks.DeleteDirectoryForCleanup = _ => GoalWorktreeDeleteResult.Failed(
@@ -498,6 +515,7 @@ public sealed class GoalWorktreeTestsOrphanEphemeralSweep : GoalWorktreeTestBase
             var orphanPath = Path.Combine(repo, GoalWorktrees.DirectoryName, "orphaned-transient");
             Directory.CreateDirectory(Path.Combine(orphanPath, ".mcg-sandbox"));
             File.WriteAllText(Path.Combine(orphanPath, ".mcg-sandbox", "leftover.txt"), "transient residue");
+            AgeOrphanTree(orphanPath);
             var warnings = new List<GoalWorktreeCleanupWarning>();
             CleanupHooks.DeleteDirectoryForCleanup = _ => GoalWorktreeDeleteResult.Failed(
                 GoalWorktreeDeleteFailureKind.Transient,
@@ -532,6 +550,7 @@ public sealed class GoalWorktreeTestsOrphanEphemeralSweep : GoalWorktreeTestBase
             var orphanPath = Path.Combine(repo, GoalWorktrees.DirectoryName, "orphaned-second-delete");
             Directory.CreateDirectory(Path.Combine(orphanPath, ".mcg-sandbox"));
             File.WriteAllText(Path.Combine(orphanPath, ".mcg-sandbox", "leftover.txt"), "acl residue");
+            AgeOrphanTree(orphanPath);
             var deleteAttempts = 0;
             var warnings = new List<GoalWorktreeCleanupWarning>();
             var acl = new RecordingSandboxAclHelper();

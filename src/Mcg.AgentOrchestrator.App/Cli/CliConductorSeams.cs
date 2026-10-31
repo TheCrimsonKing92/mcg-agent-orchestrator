@@ -10,7 +10,9 @@ internal sealed record ConductorLaunchRequest(
     IReadOnlyList<string> Arguments,
     string WorkingDirectory,
     IReadOnlyDictionary<string, string> Environment,
-    IReadOnlyCollection<string> EnvironmentVariablesToRemove);
+    IReadOnlyCollection<string> EnvironmentVariablesToRemove,
+    string? StdoutPath = null,
+    string? StderrPath = null);
 
 internal sealed record ConductorLaunchResult(int ExitCode, string? StandardOutput, string? StandardError);
 

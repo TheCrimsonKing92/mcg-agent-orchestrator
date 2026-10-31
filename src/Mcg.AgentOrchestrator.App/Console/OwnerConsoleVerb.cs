@@ -43,7 +43,7 @@ internal static class OwnerConsoleVerb
                 Path.GetDirectoryName(workspace.ConductEventsLogPath) ?? ".", ChangeStreamWriter.FileName));
             using var session = new OwnerConsoleSession(
                 state,
-                new OwnerQuestionReadModel(state, workspace.OrchestratorDirectory),
+                OwnerQuestionReadModelFactory.Create(state, workspace.OrchestratorDirectory),
                 new AttentionAnswerHandlerAdapter(workspace),
                 liveness,
                 new OwnerDigestSummaryAdapter(workspace),

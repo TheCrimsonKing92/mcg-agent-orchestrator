@@ -47,7 +47,7 @@ public sealed class CliCommandTestsPersistentRunnerCommandsConductDaemonPollInte
         Xunit.Assert.Equal(watchError.Message, daemonError.Message);
     }
 
-    private static string ExecuteLoop(string[] args)
+    private string ExecuteLoop(string[] args)
     {
         var root = CreateShortAcceptanceRepository();
         try

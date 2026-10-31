@@ -64,7 +64,7 @@ public sealed class ProjectDiscoveryTrackedFilesTests
     }
 
     [Fact]
-    public void GoOutsideRepository_WalksCacheAndExtraPackage()
+    public void GoOutsideRepository_SkipsModuleCacheAndWalksExtraPackage()
     {
         var root = SharedTestSupport.CreateTempDirectory();
         try
@@ -74,8 +74,9 @@ public sealed class ProjectDiscoveryTrackedFilesTests
 
             var model = new GoProjectDiscoveryAdapter().Discover(root);
 
-            Assert.Contains(model.OwnerQuestions, question => question.FactKey ==
+            Assert.DoesNotContain(model.OwnerQuestions, question => question.FactKey ==
                 "units/go-path/pkg/mod/example.com/dep@v1.0.0/module");
+            Assert.DoesNotContain(model.Units, unit => unit.Id.StartsWith("go-path/pkg/mod/", StringComparison.Ordinal));
             Assert.Contains(model.Units, unit => unit.Id == "scratch");
             Assert.DoesNotContain(model.OwnerQuestions, question => question.FactKey == "discovery/tracked-files");
         }

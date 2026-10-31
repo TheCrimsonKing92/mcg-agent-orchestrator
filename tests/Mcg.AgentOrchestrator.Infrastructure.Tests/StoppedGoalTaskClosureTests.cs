@@ -130,7 +130,7 @@ public sealed class StoppedGoalTaskClosureTests : CliCommandTestBase
         finally { SharedTestSupport.RemoveTempDirectory(root); }
     }
 
-    private static void ExecuteStop(string[] parts, AgentOrchestratorKernel kernel, OrchestratorWorkspace workspace)
+    private void ExecuteStop(string[] parts, AgentOrchestratorKernel kernel, OrchestratorWorkspace workspace)
     {
         IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
         var profiles = WorkerProfileCatalog.Default();

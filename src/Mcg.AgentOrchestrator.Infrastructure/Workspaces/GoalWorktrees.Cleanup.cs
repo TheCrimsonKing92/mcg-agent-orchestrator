@@ -404,7 +404,8 @@ public static partial class GoalWorktrees
     public static GoalWorktreeSweepResult SweepOrphanedWorktrees(
         string executionDirectory,
         AgentOrchestratorKernel? kernel = null,
-        GoalWorktreeCleanupHooks? hooks = null)
+        GoalWorktreeCleanupHooks? hooks = null,
+        string? callerRole = null)
     {
         hooks ??= new GoalWorktreeCleanupHooks();
         if (!IsGitWorkTree(executionDirectory))
@@ -412,35 +413,11 @@ public static partial class GoalWorktrees
             return new GoalWorktreeSweepResult(0, []);
         }
 
-        var worktreesRoot = Path.Combine(Path.GetFullPath(executionDirectory), DirectoryName);
-        if (!Directory.Exists(worktreesRoot))
+        return OrphanWorktreeSweep.Run(executionDirectory, kernel, hooks, directory =>
         {
-            return new GoalWorktreeSweepResult(0, []);
-        }
-
-        var registered = RegisteredWorktreePaths(executionDirectory);
-        var removed = 0;
-        var leftovers = new List<string>();
-
-        foreach (var directory in Directory.EnumerateDirectories(worktreesRoot))
-        {
-            var normalized = NormalizePath(directory);
-            if (registered.Contains(normalized))
-            {
-                continue;
-            }
-
-            if (ClearOrphanDirectory(directory, kernel, "orphan-sweep", hooks))
-            {
-                removed++;
-            }
-            else if (Directory.Exists(directory))
-            {
-                leftovers.Add(directory);
-            }
-        }
-
-        return new GoalWorktreeSweepResult(removed, leftovers);
+            var cleared = ClearOrphanDirectory(directory, kernel, "orphan-sweep", hooks, out var reason);
+            return cleared ? "removed" : reason;
+        }, callerRole);
     }
 
     public static GoalOwnedEphemeralSweepResult SweepOwnedEphemeralDirectories(
@@ -798,11 +775,21 @@ public static partial class GoalWorktrees
         string path,
         AgentOrchestratorKernel? kernel,
         string operation,
-        GoalWorktreeCleanupHooks hooks)
+        GoalWorktreeCleanupHooks hooks) =>
+        ClearOrphanDirectory(path, kernel, operation, hooks, out _);
+
+    private static bool ClearOrphanDirectory(
+        string path,
+        AgentOrchestratorKernel? kernel,
+        string operation,
+        GoalWorktreeCleanupHooks hooks,
+        out string reason)
     {
+        reason = "removal-failed";
         if (!Directory.Exists(path))
         {
             ClearOrphanCleanupBackoff(path, hooks: hooks);
+            reason = "removed";
             return true;
         }
 
@@ -810,6 +797,7 @@ public static partial class GoalWorktrees
         if (IsCleanupBackedOff(path, operation, out var backoff, hooks: hooks))
         {
             JournalCleanupBackoffSkip(path, operation + ":skip-backoff", backoff, hooks);
+            reason = "backoff";
             return false;
         }
 
@@ -817,6 +805,7 @@ public static partial class GoalWorktrees
         if (firstDelete.Succeeded)
         {
             ClearOrphanCleanupBackoff(path, hooks: hooks);
+            reason = "removed";
             return true;
         }
 
@@ -845,6 +834,7 @@ public static partial class GoalWorktrees
         if (secondDelete.Succeeded)
         {
             ClearOrphanCleanupBackoff(path, hooks: hooks);
+            reason = "removed";
             return true;
         }
 

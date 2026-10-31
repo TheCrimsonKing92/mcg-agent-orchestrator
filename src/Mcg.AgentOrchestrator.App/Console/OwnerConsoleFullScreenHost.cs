@@ -64,7 +64,10 @@ internal static class OwnerConsoleFullScreenHost
                 ? SqliteOrchestratorStateRepository.OpenReadOnly(workspace.SqliteStatePath) : new EmptyOwnerConsoleStateQueries();
             var refreshFilter = new OwnerConsoleEventRefreshFilter();
             var snapshots = new OwnerConsoleRefreshGoalSnapshots(state);
-            var questions = new SerializedOwnerQuestionSource(new OwnerQuestionReadModel(state, workspace.OrchestratorDirectory, snapshots));
+            IOwnerQuestionSource questions = new SerializedOwnerQuestionSource(OwnerQuestionReadModelFactory.Create(state, workspace.OrchestratorDirectory, snapshots));
+            if (boardSource is not null)
+                questions = new OnboardingQuestionSource(questions, boardSource.InScopeProjects, clock,
+                    () => coalescer?.Request(null, OwnerConsoleRefreshScope.All));
             var cohortEvidence = new OwnerActivityEvidenceReader(Path.Combine(workspace.OrchestratorDirectory, "cohort-acceptance.db"));
             var gateEvidence = new OwnerGateFailureEvidence(workspace.OrchestratorDirectory);
             var jointEvidence = new OwnerJointGateFailureEvidence(workspace.OrchestratorDirectory);

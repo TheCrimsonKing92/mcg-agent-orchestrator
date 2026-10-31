@@ -1683,7 +1683,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     };
                     TerminalGoalSweepTextView.PrintTerminalGoalSweep(terminalSweep, includeBlockers: false);
                     TerminalGoalSweepAttention.Surface(loopKernel, terminalSweep, context.Workspace.OrchestratorDirectory);
-                    context.CleanupContext.Scheduler.SweepIfDue(context.Workspace.ExecutionDirectory, loopKernel);
+                    context.CleanupContext.Scheduler.SweepIfDue(context.Workspace.ExecutionDirectory, loopKernel, "conductor-tick");
                     if (!suppressGoalRefinementForMaxDurationDeferral)
                     {
                         ConductorTickStepLedger.Measure("goal-refinement", () => GoalRefinementWorkCoordinator.TryLaunchFirstPending(

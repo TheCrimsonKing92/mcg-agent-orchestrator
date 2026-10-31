@@ -17,9 +17,9 @@ internal sealed record OwnerConsoleStatus(bool ConductorRunning, int ActiveGoals
 
 internal sealed record OwnerConsoleDecision(string Id, int Number, string GoalId, string GoalPrefix,
     OwnerQuestionKind Kind, string Summary, string FullText, string? BlastRadius,
-    string? Confidence, string? ProposedDefault, DateTimeOffset? RaisedAt = null)
+    string? Confidence, string? ProposedDefault, DateTimeOffset? RaisedAt = null, bool CanAnswer = true)
 {
-    internal OwnerQuestion ToQuestion() => new(Id, GoalId, Kind, FullText, BlastRadius, Confidence, ProposedDefault);
+    internal OwnerQuestion ToQuestion() => new(Id, GoalId, Kind, FullText, BlastRadius, Confidence, ProposedDefault, CanAnswer);
 }
 
 internal sealed record OwnerConsoleBoardRow(string GoalPrefix, string Epic, string Title,
@@ -31,6 +31,8 @@ internal sealed record OwnerConsoleBoardRow(string GoalPrefix, string Epic, stri
     internal bool IsDiagnostic { get; init; }
     internal OwnerConsoleBoardSortKey SortKey { get; init; }
     internal string? StageWithoutQuestion { get; init; }
+    internal int OwnerDecisions { get; init; }
+    internal bool Collapsed { get; init; }
 }
 
 internal sealed record OwnerConsoleActivityItem(DateTimeOffset Timestamp, string Kind, string Tag,

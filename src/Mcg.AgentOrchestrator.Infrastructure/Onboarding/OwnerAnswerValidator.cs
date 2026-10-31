@@ -16,50 +16,65 @@ public static class OwnerAnswerValidator
         @"\A[0-9]+(\.[0-9]+){1,3}(-[A-Za-z0-9]+(\.[A-Za-z0-9]+)*)?\z",
         RegexOptions.CultureInvariant | RegexOptions.NonBacktracking);
 
+    public static bool HasRule(string factKey) => FindRule(factKey) is not null;
+
     public static string Validate(string factKey, string value)
     {
-        value ??= "";
+        var rule = FindRule(factKey);
+        if (rule is not null) return rule(value ?? "");
+        throw new ArgumentException($"{factKey} has no answer rule in this slice. Known keys: {DefaultTimeoutKey}, {BuildServerShutdownKey}, {DiscoveryKey}, {DotnetSdkKey}, {DeclaredToolHomeValidator.KeyPrefix}<VARIABLE>, commands/<unit>/test, commands/<unit>/timeoutMinutes, {LuaProjectDiscoveryAdapter.FrameworkQuestion}, {LuaProjectDiscoveryAdapter.InstallQuestion}, {DeclaredProjectDiscoveryAdapter.BuildQuestion}, {DeclaredProjectDiscoveryAdapter.TestQuestion}, {DeclaredProjectDiscoveryAdapter.ReportsQuestion}.");
+    }
+
+    // Recognition and validation select the same rule, so the console cannot offer an unsupported key.
+    private static Func<string, string>? FindRule(string factKey)
+    {
+        if (DeclaredToolHomeValidator.IsToolHomeKey(factKey))
+            return value => DeclaredToolHomeValidator.Validate(factKey[DeclaredToolHomeValidator.KeyPrefix.Length..], value);
         if (factKey is DefaultTimeoutKey or BuildServerShutdownKey or DiscoveryKey ||
             (factKey.StartsWith("commands/", StringComparison.Ordinal) &&
              factKey.EndsWith("/timeoutMinutes", StringComparison.Ordinal) &&
              factKey.Length > "commands/".Length + "/timeoutMinutes".Length))
-        {
-            if (value.Length == 0 || value.Any(character => character is < '0' or > '9') ||
-                !int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var minutes) ||
-                minutes is < 1 or > MaxMinutes)
-                throw new ArgumentException($"{factKey} requires a positive integer from 1 to {MaxMinutes} with no sign, decimal point or whitespace.");
-            return minutes.ToString(CultureInfo.InvariantCulture);
-        }
+            return value =>
+            {
+                if (value.Length == 0 || value.Any(character => character is < '0' or > '9') ||
+                    !int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var minutes) ||
+                    minutes is < 1 or > MaxMinutes)
+                    throw new ArgumentException($"{factKey} requires a positive integer from 1 to {MaxMinutes} with no sign, decimal point or whitespace.");
+                return minutes.ToString(CultureInfo.InvariantCulture);
+            };
 
         if (factKey == DotnetSdkKey)
-        {
-            if (!SdkVersion.IsMatch(value))
-                throw new ArgumentException($"{factKey} requires two to four dot-separated numeric version parts with an optional hyphen suffix of letters, digits and dots; wildcards, ranges and latest are refused.");
-            return value;
-        }
+            return value =>
+            {
+                if (!SdkVersion.IsMatch(value))
+                    throw new ArgumentException($"{factKey} requires two to four dot-separated numeric version parts with an optional hyphen suffix of letters, digits and dots; wildcards, ranges and latest are refused.");
+                return value;
+            };
 
         if (factKey is DeclaredProjectDiscoveryAdapter.BuildQuestion or DeclaredProjectDiscoveryAdapter.TestQuestion)
-            return string.Join(" ", DeclaredCommandLine.Parse(value));
+            return value => string.Join(" ", DeclaredCommandLine.Parse(value));
 
         if (factKey == DeclaredProjectDiscoveryAdapter.ReportsQuestion)
-            return string.Join(",", DeclaredCommandLine.ParseReports(value));
+            return value => string.Join(",", DeclaredCommandLine.ParseReports(value));
 
         if (factKey.StartsWith("commands/", StringComparison.Ordinal) &&
             factKey.EndsWith("/test", StringComparison.Ordinal) &&
             factKey.Length > "commands/".Length + "/test".Length)
-        {
-            if (value.Equals("VSTest", StringComparison.OrdinalIgnoreCase)) return "VSTest";
-            if (value.Equals("MTP", StringComparison.OrdinalIgnoreCase)) return "MTP";
-            throw new ArgumentException($"{factKey} requires VSTest or MTP with no surrounding whitespace.");
-        }
+            return value =>
+            {
+                if (value.Equals("VSTest", StringComparison.OrdinalIgnoreCase)) return "VSTest";
+                if (value.Equals("MTP", StringComparison.OrdinalIgnoreCase)) return "MTP";
+                throw new ArgumentException($"{factKey} requires VSTest or MTP with no surrounding whitespace.");
+            };
 
         if (factKey is LuaProjectDiscoveryAdapter.FrameworkQuestion or LuaProjectDiscoveryAdapter.InstallQuestion)
-        {
-            if (value.Equals("yes", StringComparison.OrdinalIgnoreCase)) return "yes";
-            if (value.Equals("no", StringComparison.OrdinalIgnoreCase)) return "no";
-            throw new ArgumentException($"{factKey} requires yes or no with no surrounding whitespace.");
-        }
+            return value =>
+            {
+                if (value.Equals("yes", StringComparison.OrdinalIgnoreCase)) return "yes";
+                if (value.Equals("no", StringComparison.OrdinalIgnoreCase)) return "no";
+                throw new ArgumentException($"{factKey} requires yes or no with no surrounding whitespace.");
+            };
 
-        throw new ArgumentException($"{factKey} has no answer rule in this slice. Known keys: {DefaultTimeoutKey}, {BuildServerShutdownKey}, {DiscoveryKey}, {DotnetSdkKey}, commands/<unit>/test, commands/<unit>/timeoutMinutes, {LuaProjectDiscoveryAdapter.FrameworkQuestion}, {LuaProjectDiscoveryAdapter.InstallQuestion}, {DeclaredProjectDiscoveryAdapter.BuildQuestion}, {DeclaredProjectDiscoveryAdapter.TestQuestion}, {DeclaredProjectDiscoveryAdapter.ReportsQuestion}.");
+        return null;
     }
 }

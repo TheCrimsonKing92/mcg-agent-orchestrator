@@ -36,16 +36,19 @@ internal sealed class OwnerConsoleViewModelBuilder(IOrchestratorStateQueries sta
     internal async Task<(ImmutableArray<OwnerConsoleDecision> Decisions, int Hidden)> ReadDecisionsAsync(
         CancellationToken cancellationToken)
     {
-        var snapshot = await questions.ReadAsync(cancellationToken);
-        cancellationToken.ThrowIfCancellationRequested();
-        var decisions = snapshot.Live.Select(question =>
+        var read = await OwnerDecisionReader.ReadAsync(questions, cancellationToken);
+        var snapshot = read.Snapshot;
+        var decisions = read.Entries.Zip(snapshot.Live, (question, source) =>
         {
             if (!_numbers.TryGetValue(question.ItemId, out var number))
                 _numbers.Add(question.ItemId, number = _numbers.Count + 1);
-            return new OwnerConsoleDecision(question.ItemId, number, question.GoalId, Prefix(question.GoalId),
+            var label = question.Kind == OwnerQuestionKind.Onboarding &&
+                OnboardingQuestionSource.TryIdentify(question.ItemId, out var project, out _, out _)
+                ? project : question.GoalPrefix;
+            return new OwnerConsoleDecision(question.ItemId, number, question.GoalId, label,
                 question.Kind, Summary(question.Text), question.Text, question.BlastRadius,
                 question.Confidence, question.ProposedDefault,
-                snapshot.RaisedAt?.TryGetValue(question.ItemId, out var raisedAt) == true ? raisedAt : null);
+                question.RaisedAt, source.CanAnswer);
         }).ToImmutableArray();
         lock (_observationGate)
         {

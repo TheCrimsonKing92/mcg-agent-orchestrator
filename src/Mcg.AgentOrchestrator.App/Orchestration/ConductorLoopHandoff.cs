@@ -1,3 +1,4 @@
+using WindowsCreationFlags = Mcg.AgentOrchestrator.App.Orchestration.WindowsHandleListProcessLauncher.WindowsCreationFlags;
 using System.Diagnostics;
 using System.Globalization;
 using System.ComponentModel;
@@ -895,146 +896,114 @@ internal static partial class ConductorLoopHandoff
 
         try
         {
-            stdoutHandle = CreateInheritedOutputFile(request.StdoutPath);
-            stderrHandle = CreateInheritedOutputFile(request.StderrPath);
-            var startupInfo = new WindowsProcessStartupInfoEx
+            stdoutHandle = WindowsHandleListProcessLauncher.CreateInheritedOutputFile(request.StdoutPath);
+            stderrHandle = WindowsHandleListProcessLauncher.CreateInheritedOutputFile(request.StderrPath);
+            var incumbentConsole = ProbeWindowsConsoleState();
+            ProcessTreeGuiSuppression.ConsoleSpawnScope? suppressionScope = null;
+            Exception? suppressionFailure = null;
+            try
             {
-                cb = Marshal.SizeOf<WindowsProcessStartupInfoEx>(),
-                dwFlags = (int)WindowsStartupInfoFlags.UseStdHandles,
-                hStdOutput = stdoutHandle,
-                hStdError = stderrHandle
-            };
-            var attributeList = CreateInheritedHandleList(stdoutHandle, stderrHandle);
-            startupInfo.lpAttributeList = attributeList.AttributeList;
+                suppressionScope = (acquireConsoleSuppression ?? ProcessTreeGuiSuppression.AcquireConsoleForChildSpawn)();
+            }
+            catch (Exception ex)
+            {
+                suppressionFailure = ex;
+                var nativeError = ex is Win32Exception win32Exception
+                    ? win32Exception.NativeErrorCode.ToString(CultureInfo.InvariantCulture)
+                    : "not-applicable";
+                TryAppendWindowsSpawnEvent(
+                    request,
+                    FormatWindowsSpawnEventDetail(request,
+                        $"spawnPath=windows-createprocess error={ex.GetType().Name} nativeError={nativeError} message={ex.Message}"),
+                    eventKind: "loop-handoff-console-suppression-failed");
+            }
 
             try
             {
-                var incumbentConsole = ProbeWindowsConsoleState();
-                ProcessTreeGuiSuppression.ConsoleSpawnScope? suppressionScope = null;
-                Exception? suppressionFailure = null;
+                var spawnConsole = ProbeWindowsConsoleState();
+                var suppression = suppressionFailure is not null
+                    ? "acquisition-failed"
+                    : suppressionScope?.ChildConsolePolicyApplied == true
+                        ? "child-owned-hidden-console"
+                        : "existing-console-preserved";
+                TryAppendWindowsSpawnEvent(
+                    request,
+                    FormatWindowsSpawnEventDetail(request,
+                        $"spawnPath=windows-createprocess incumbentConsole={incumbentConsole.Window} " +
+                        $"incumbentConsoleAttached={ToLowerInvariant(incumbentConsole.Attached)} " +
+                        $"incumbentConsoleVisible={ToLowerInvariant(incumbentConsole.Visible)} " +
+                        $"spawnConsoleAttached={ToLowerInvariant(spawnConsole.Attached)} " +
+                        $"spawnConsoleVisible={ToLowerInvariant(spawnConsole.Visible)} suppression={suppression}"));
+
+                beforeCreateProcess?.Invoke();
+                var creationFlags = WindowsSuccessorCreationFlags | (suppressionScope?.ChildCreationFlags ?? 0);
+                DetachedProcessCreationOutcome CreateNativeProcess(uint flags) =>
+                    WindowsHandleListProcessLauncher.Launch(nativeCommand[0], commandLine, environment,
+                        request.WorkingDirectory, flags, stdoutHandle, stderrHandle);
+
+                DetachedProcessCreationOutcome Attempt(uint flags, string? fallback, out object authority)
+                {
+                    authority = CaptureWindowsLaunchAuthority(flags, nativeCommand[0]);
+                    var outcome = createProcess is null
+                        ? CreateNativeProcess(flags)
+                        : createProcess(flags, CreateNativeProcess);
+                    processCreated = outcome.Created;
+                    if (!outcome.Created)
+                        TryAppendWindowsLaunchAuthority(request, authority, outcome.NativeError, null, fallback: fallback);
+                    return outcome;
+                }
+
+                string? fallback = null;
+                var processInformation = Attempt(creationFlags, fallback, out var authority);
+                if (!processInformation.Created && DetachedLaunchBreakawayFallback.TryGetRetryFlags(
+                        creationFlags, processInformation.NativeError, out var retryFlags))
+                {
+                    fallback = "inherit-job";
+                    processInformation = Attempt(retryFlags, fallback, out authority);
+                }
+                if (!processInformation.Created)
+                {
+                    throw new Win32Exception(
+                        processInformation.NativeError,
+                        $"Failed to start detached launch '{request.Name}' (nativeError={processInformation.NativeError}).");
+                }
+
                 try
                 {
-                    suppressionScope = (acquireConsoleSuppression ?? ProcessTreeGuiSuppression.AcquireConsoleForChildSpawn)();
-                }
-                catch (Exception ex)
-                {
-                    suppressionFailure = ex;
-                    var nativeError = ex is Win32Exception win32Exception
-                        ? win32Exception.NativeErrorCode.ToString(CultureInfo.InvariantCulture)
-                        : "not-applicable";
-                    TryAppendWindowsSpawnEvent(
-                        request,
-                        FormatWindowsSpawnEventDetail(request,
-                            $"spawnPath=windows-createprocess error={ex.GetType().Name} nativeError={nativeError} message={ex.Message}"),
-                        eventKind: "loop-handoff-console-suppression-failed");
-                }
+                    var successorStartedAt = ReadSuccessorStartTimeFromHandle(processInformation.ProcessHandle);
+                    TryAppendWindowsLaunchAuthority(request, authority, 0,
+                        processInformation.ProcessId, successorStartedAt, fallback);
+                    // In a nested hierarchy, CREATE_BREAKAWAY_FROM_JOB escapes the immediate job
+                    // and each permissive ancestor until the first non-breakaway ancestor. A true
+                    // any-job probe can therefore mean the successor escaped the incumbent's
+                    // kill-on-close job but remains in a longer-lived host job.
+                    var residualJobMembership = ProbeProcessJobMembership(processInformation.ProcessHandle);
 
-                try
-                {
-                    var spawnConsole = ProbeWindowsConsoleState();
-                    var suppression = suppressionFailure is not null
-                        ? "acquisition-failed"
-                        : suppressionScope?.ChildConsolePolicyApplied == true
-                            ? "child-owned-hidden-console"
-                            : "existing-console-preserved";
-                    TryAppendWindowsSpawnEvent(
-                        request,
-                        FormatWindowsSpawnEventDetail(request,
-                            $"spawnPath=windows-createprocess incumbentConsole={incumbentConsole.Window} " +
-                            $"incumbentConsoleAttached={ToLowerInvariant(incumbentConsole.Attached)} " +
-                            $"incumbentConsoleVisible={ToLowerInvariant(incumbentConsole.Visible)} " +
-                            $"spawnConsoleAttached={ToLowerInvariant(spawnConsole.Attached)} " +
-                            $"spawnConsoleVisible={ToLowerInvariant(spawnConsole.Visible)} suppression={suppression}"));
-
-                    beforeCreateProcess?.Invoke();
-                    var creationFlags = WindowsSuccessorCreationFlags | (suppressionScope?.ChildCreationFlags ?? 0);
-                    DetachedProcessCreationOutcome CreateNativeProcess(uint flags)
+                    var result = CreateBreakawayLaunchResult(request, processInformation.ProcessId,
+                        residualJobMembership, successorStartedAt);
+                    return fallback is null ? result : result with
                     {
-                        // CreateProcessW may mutate this buffer, so each attempt starts from the original.
-                        var created = CreateProcessW(
-                            lpApplicationName: nativeCommand[0],
-                            lpCommandLine: new StringBuilder(commandLine),
-                            lpProcessAttributes: IntPtr.Zero,
-                            lpThreadAttributes: IntPtr.Zero,
-                            bInheritHandles: true,
-                            dwCreationFlags: (WindowsCreationFlags)flags,
-                            lpEnvironment: environment,
-                            lpCurrentDirectory: request.WorkingDirectory,
-                            lpStartupInfo: ref startupInfo,
-                            lpProcessInformation: out var information);
-                        var nativeError = created ? 0 : Marshal.GetLastWin32Error();
-                        return new DetachedProcessCreationOutcome(created, information.hProcess,
-                            information.hThread, (int)information.dwProcessId, nativeError);
-                    }
-
-                    DetachedProcessCreationOutcome Attempt(uint flags, string? fallback, out object authority)
-                    {
-                        authority = CaptureWindowsLaunchAuthority(flags, nativeCommand[0]);
-                        var outcome = createProcess is null
-                            ? CreateNativeProcess(flags)
-                            : createProcess(flags, CreateNativeProcess);
-                        processCreated = outcome.Created;
-                        if (!outcome.Created)
-                            TryAppendWindowsLaunchAuthority(request, authority, outcome.NativeError, null, fallback: fallback);
-                        return outcome;
-                    }
-
-                    string? fallback = null;
-                    var processInformation = Attempt(creationFlags, fallback, out var authority);
-                    if (!processInformation.Created && DetachedLaunchBreakawayFallback.TryGetRetryFlags(
-                            creationFlags, processInformation.NativeError, out var retryFlags))
-                    {
-                        fallback = "inherit-job";
-                        processInformation = Attempt(retryFlags, fallback, out authority);
-                    }
-                    if (!processInformation.Created)
-                    {
-                        throw new Win32Exception(
-                            processInformation.NativeError,
-                            $"Failed to start detached launch '{request.Name}' (nativeError={processInformation.NativeError}).");
-                    }
-
-                    try
-                    {
-                        var successorStartedAt = ReadSuccessorStartTimeFromHandle(processInformation.ProcessHandle);
-                        TryAppendWindowsLaunchAuthority(request, authority, 0,
-                            processInformation.ProcessId, successorStartedAt, fallback);
-                        // In a nested hierarchy, CREATE_BREAKAWAY_FROM_JOB escapes the immediate job
-                        // and each permissive ancestor until the first non-breakaway ancestor. A true
-                        // any-job probe can therefore mean the successor escaped the incumbent's
-                        // kill-on-close job but remains in a longer-lived host job.
-                        var residualJobMembership = ProbeProcessJobMembership(processInformation.ProcessHandle);
-
-                        var result = CreateBreakawayLaunchResult(request, processInformation.ProcessId,
-                            residualJobMembership, successorStartedAt);
-                        return fallback is null ? result : result with
-                        {
-                            LaunchDetail = result.LaunchDetail.Replace("breakawaySucceeded=true", "breakawaySucceeded=false",
-                                StringComparison.Ordinal) + $" fallback={fallback}"
-                        };
-                    }
-                    finally
-                    {
-                        CloseHandle(processInformation.ThreadHandle);
-                        CloseHandle(processInformation.ProcessHandle);
-                    }
+                        LaunchDetail = result.LaunchDetail.Replace("breakawaySucceeded=true", "breakawaySucceeded=false",
+                            StringComparison.Ordinal) + $" fallback={fallback}"
+                    };
                 }
                 finally
                 {
-                    suppressionScope?.Dispose();
+                    WindowsHandleListProcessLauncher.CloseHandle(processInformation.ThreadHandle);
+                    WindowsHandleListProcessLauncher.CloseHandle(processInformation.ProcessHandle);
                 }
             }
             finally
             {
-                attributeList.Dispose();
+                suppressionScope?.Dispose();
             }
         }
         finally
         {
             if (stdoutHandle != IntPtr.Zero)
-                CloseHandle(stdoutHandle);
+                WindowsHandleListProcessLauncher.CloseHandle(stdoutHandle);
             if (stderrHandle != IntPtr.Zero)
-                CloseHandle(stderrHandle);
+                WindowsHandleListProcessLauncher.CloseHandle(stderrHandle);
             if (!processCreated)
             {
                 // Only paths opened by this invocation are owned; close both handles before deletion.
@@ -1050,47 +1019,6 @@ internal static partial class ConductorLoopHandoff
             try { File.Delete(path); }
             catch (IOException) { }
             catch (UnauthorizedAccessException) { }
-        }
-    }
-
-    private static WindowsInheritedHandleList CreateInheritedHandleList(params IntPtr[] handles)
-    {
-        var size = IntPtr.Zero;
-        _ = InitializeProcThreadAttributeList(IntPtr.Zero, 1, 0, ref size);
-        if (size == IntPtr.Zero)
-            throw new Win32Exception(Marshal.GetLastWin32Error(), "Failed to size Windows process attribute list.");
-
-        var attributeList = Marshal.AllocHGlobal(size);
-        var handleList = Marshal.AllocHGlobal(IntPtr.Size * handles.Length);
-        var initialized = false;
-        try
-        {
-            if (!InitializeProcThreadAttributeList(attributeList, 1, 0, ref size))
-                throw new Win32Exception(Marshal.GetLastWin32Error(), "Failed to initialize Windows process attribute list.");
-
-            initialized = true;
-            Marshal.Copy(handles, 0, handleList, handles.Length);
-            if (!UpdateProcThreadAttribute(
-                    attributeList,
-                    0,
-                    new IntPtr(ProcThreadAttributeHandleList),
-                    handleList,
-                    new IntPtr(IntPtr.Size * handles.Length),
-                    IntPtr.Zero,
-                    IntPtr.Zero))
-            {
-                throw new Win32Exception(Marshal.GetLastWin32Error(), "Failed to restrict inherited Windows process handles.");
-            }
-
-            return new WindowsInheritedHandleList(attributeList, handleList, initialized);
-        }
-        catch
-        {
-            if (initialized)
-                DeleteProcThreadAttributeList(attributeList);
-            Marshal.FreeHGlobal(handleList);
-            Marshal.FreeHGlobal(attributeList);
-            throw;
         }
     }
 
@@ -1170,29 +1098,6 @@ internal static partial class ConductorLoopHandoff
         return QuoteCommandArgument(cmdPath) + " /d /s /c \"" + innerCommand + "\"";
     }
 
-    private static IntPtr CreateInheritedOutputFile(string path)
-    {
-        Directory.CreateDirectory(Path.GetDirectoryName(path) ?? ".");
-        var securityAttributes = new WindowsSecurityAttributes
-        {
-            nLength = Marshal.SizeOf<WindowsSecurityAttributes>(),
-            bInheritHandle = true
-        };
-
-        var handle = CreateFileW(
-            path,
-            WindowsFileAccess.GenericWrite,
-            WindowsFileShare.Read | WindowsFileShare.Delete,
-            ref securityAttributes,
-            WindowsCreationDisposition.CreateAlways,
-            WindowsFileFlags.FileAttributeNormal,
-            IntPtr.Zero);
-        if (handle == new IntPtr(-1))
-            throw new Win32Exception(Marshal.GetLastWin32Error(), $"Failed to open conduct loop successor log file: {path}");
-
-        return handle;
-    }
-
     private static string BuildWindowsEnvironmentBlock(ConductLoopLaunchRequest request)
     {
         var values = Environment.GetEnvironmentVariables()
@@ -1221,17 +1126,7 @@ internal static partial class ConductorLoopHandoff
             foreach (var (key, value) in request.AdditionalEnvironment)
                 values[key] = value;
 
-        var builder = new StringBuilder();
-        foreach (var pair in values.OrderBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase))
-        {
-            builder.Append(pair.Key);
-            builder.Append('=');
-            builder.Append(pair.Value);
-            builder.Append('\0');
-        }
-
-        builder.Append('\0');
-        return builder.ToString();
+        return WindowsHandleListProcessLauncher.BuildEnvironmentBlock(values);
     }
 
     private static void AddHandoffEnvironment(
@@ -1535,171 +1430,6 @@ internal static partial class ConductorLoopHandoff
         return string.IsNullOrWhiteSpace(safe) ? "conduct-loop" : safe;
     }
 
-    [Flags]
-    private enum WindowsCreationFlags : uint
-    {
-        CreateNewProcessGroup = 0x00000200,
-        CreateUnicodeEnvironment = 0x00000400,
-        CreateBreakawayFromJob = 0x01000000,
-        CreateNoWindow = 0x08000000,
-        ExtendedStartupInfoPresent = 0x00080000
-    }
-
-    private const int ProcThreadAttributeHandleList = 0x00020002;
-
-    [Flags]
-    private enum WindowsStartupInfoFlags : int
-    {
-        UseStdHandles = 0x00000100
-    }
-
-    [Flags]
-    private enum WindowsFileAccess : uint
-    {
-        GenericWrite = 0x40000000
-    }
-
-    [Flags]
-    private enum WindowsFileShare : uint
-    {
-        Read = 0x00000001,
-        Delete = 0x00000004
-    }
-
-    private enum WindowsCreationDisposition : uint
-    {
-        CreateAlways = 2
-    }
-
-    [Flags]
-    private enum WindowsFileFlags : uint
-    {
-        FileAttributeNormal = 0x00000080
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct WindowsSecurityAttributes
-    {
-        public int nLength;
-        public IntPtr lpSecurityDescriptor;
-        [MarshalAs(UnmanagedType.Bool)]
-        public bool bInheritHandle;
-    }
-
-    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
-    private struct WindowsProcessStartupInfo
-    {
-        public int cb;
-        public string? lpReserved;
-        public string? lpDesktop;
-        public string? lpTitle;
-        public int dwX;
-        public int dwY;
-        public int dwXSize;
-        public int dwYSize;
-        public int dwXCountChars;
-        public int dwYCountChars;
-        public int dwFillAttribute;
-        public int dwFlags;
-        public short wShowWindow;
-        public short cbReserved2;
-        public IntPtr lpReserved2;
-        public IntPtr hStdInput;
-        public IntPtr hStdOutput;
-        public IntPtr hStdError;
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct WindowsProcessInformation
-    {
-        public IntPtr hProcess;
-        public IntPtr hThread;
-        public uint dwProcessId;
-        public uint dwThreadId;
-    }
-
-    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
-    private struct WindowsProcessStartupInfoEx
-    {
-        public int cb;
-        public string? lpReserved;
-        public string? lpDesktop;
-        public string? lpTitle;
-        public int dwX;
-        public int dwY;
-        public int dwXSize;
-        public int dwYSize;
-        public int dwXCountChars;
-        public int dwYCountChars;
-        public int dwFillAttribute;
-        public int dwFlags;
-        public short wShowWindow;
-        public short cbReserved2;
-        public IntPtr lpReserved2;
-        public IntPtr hStdInput;
-        public IntPtr hStdOutput;
-        public IntPtr hStdError;
-        public IntPtr lpAttributeList;
-    }
-
-    private sealed class WindowsInheritedHandleList : IDisposable
-    {
-        public WindowsInheritedHandleList(IntPtr attributeList, IntPtr handleList, bool initialized)
-        {
-            AttributeList = attributeList;
-            HandleList = handleList;
-            Initialized = initialized;
-        }
-
-        public IntPtr AttributeList { get; }
-        private IntPtr HandleList { get; }
-        private bool Initialized { get; }
-
-        public void Dispose()
-        {
-            if (Initialized)
-                DeleteProcThreadAttributeList(AttributeList);
-            Marshal.FreeHGlobal(HandleList);
-            Marshal.FreeHGlobal(AttributeList);
-        }
-    }
-
-    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-    private static extern bool CreateProcessW(
-        string? lpApplicationName,
-        StringBuilder lpCommandLine,
-        IntPtr lpProcessAttributes,
-        IntPtr lpThreadAttributes,
-        bool bInheritHandles,
-        WindowsCreationFlags dwCreationFlags,
-        string? lpEnvironment,
-        string? lpCurrentDirectory,
-        ref WindowsProcessStartupInfoEx lpStartupInfo,
-        out WindowsProcessInformation lpProcessInformation);
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern bool InitializeProcThreadAttributeList(
-        IntPtr lpAttributeList,
-        int dwAttributeCount,
-        int dwFlags,
-        ref IntPtr lpSize);
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern bool UpdateProcThreadAttribute(
-        IntPtr lpAttributeList,
-        uint dwFlags,
-        IntPtr attribute,
-        IntPtr lpValue,
-        IntPtr cbSize,
-        IntPtr lpPreviousValue,
-        IntPtr lpReturnSize);
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern void DeleteProcThreadAttributeList(IntPtr lpAttributeList);
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern bool CloseHandle(IntPtr hObject);
-
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool IsProcessInJob(
         IntPtr processHandle,
@@ -1716,13 +1446,5 @@ internal static partial class ConductorLoopHandoff
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool IsWindowVisible(IntPtr hWnd);
 
-    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-    private static extern IntPtr CreateFileW(
-        string lpFileName,
-        WindowsFileAccess dwDesiredAccess,
-        WindowsFileShare dwShareMode,
-        ref WindowsSecurityAttributes lpSecurityAttributes,
-        WindowsCreationDisposition dwCreationDisposition,
-        WindowsFileFlags dwFlagsAndAttributes,
-        IntPtr hTemplateFile);
+
 }

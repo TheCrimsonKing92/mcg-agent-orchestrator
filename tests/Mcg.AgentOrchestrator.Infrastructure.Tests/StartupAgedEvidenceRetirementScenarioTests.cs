@@ -169,7 +169,7 @@ public sealed class StartupAgedEvidenceRetirementScenarioTests : CliCommandTestB
         });
     }
 
-    private static MergeTrainReceipt SaveFinalizedReceipt(string root, MergeTrainAcceptanceStore store, GoalId id, string tip, string landing)
+    private MergeTrainReceipt SaveFinalizedReceipt(string root, MergeTrainAcceptanceStore store, GoalId id, string tip, string landing)
     {
         MergeTrainMemberBinding Member(GoalId memberId, string file) => new MergeTrainMemberBinding(
             memberId, tip, tip, [file], [file], ChangeRiskTier.Behavior, ConductorTransitionDecision.Auto,
