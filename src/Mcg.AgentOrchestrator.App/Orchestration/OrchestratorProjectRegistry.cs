@@ -84,6 +84,7 @@ public sealed class OrchestratorProjectRegistry
                     IntegrationBranch = resolution.Branch,
                     IntegrationBranchSource = resolution.Source,
                     IntegrationBranchNote = resolution.Note,
+                    UseLearnedIntegrationBranch = entry.UseLearnedIntegrationBranch == true,
                     DataRootDirectory = DataRootDirectory,
                     Delivery = entry.DeliveryAnswer?.Value ?? ProjectDelivery.Direct,
                     DeliveryDecider = entry.DeliveryDeciderAnswer?.Value,

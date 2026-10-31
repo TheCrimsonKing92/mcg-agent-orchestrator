@@ -10,6 +10,8 @@ internal sealed class OwnerOnboardingDecisionFlow(IOwnerQuestionSource questions
         { await Show("Onboarding answers are unavailable."); return; }
         if (!OnboardingQuestionSource.TryIdentify(decision.Id, out _, out _, out var stale))
         { await Show("Unknown onboarding item."); return; }
+        if (!stale && !decision.CanAnswer)
+        { await Show(decision.FullText); return; }
         var dismiss = stale && accept;
         string? text = null;
         if (dismiss)

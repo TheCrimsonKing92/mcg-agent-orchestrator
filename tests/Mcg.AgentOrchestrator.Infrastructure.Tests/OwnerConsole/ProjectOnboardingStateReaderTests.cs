@@ -54,18 +54,19 @@ public sealed class ProjectOnboardingStateReaderTests
     }
 
     [Fact]
-    public void MissingPrerequisites_WinOverLaterEvidence_AndReadsPreserveArtifacts()
+    public void RuntimeEvidence_CompletesWithoutModel_AndReadsPreserveArtifacts()
     {
         using var fixture = new OnboardingConsoleFixture();
         var project = fixture.Register("incomplete");
         Directory.CreateDirectory(project.OrchestratorDirectory);
-        // Malformed later files must not be read before discovery is complete.
+        // Runtime evidence ends onboarding even when earlier artifacts are absent or malformed.
         File.WriteAllText(Path.Combine(project.OrchestratorDirectory, OwnerAnswerFile.FileName), "broken");
         OnboardingConsoleFixture.InstallManifest(project);
         fixture.StartConductor(project);
         var before = OnboardingConsoleFixture.Snapshot(project);
         var state = OnboardingConsoleFixture.Read(project);
-        Assert.Equal(ProjectOnboardingStep.Discovered, state.CurrentStep);
+        Assert.False(state.IsOnboarding);
+        Assert.Empty(state.OpenQuestions);
         Assert.Null(state.Unavailable);
         Assert.Equal(before.OrderBy(pair => pair.Key), OnboardingConsoleFixture.Snapshot(project).OrderBy(pair => pair.Key));
     }

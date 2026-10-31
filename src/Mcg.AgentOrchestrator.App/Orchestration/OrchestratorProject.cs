@@ -8,6 +8,7 @@ public sealed record OrchestratorProject(string Name, string RootDirectory)
     public string IntegrationBranch { get; init; } = TrunkBranchName.Default;
     public string IntegrationBranchSource { get; init; } = IntegrationBranchResolution.Default;
     public string? IntegrationBranchNote { get; init; }
+    public bool UseLearnedIntegrationBranch { get; init; }
     public string? DataRootDirectory { get; init; }
     public string Delivery { get; init; } = ProjectDelivery.Direct;
     public string? DeliveryDecider { get; init; }

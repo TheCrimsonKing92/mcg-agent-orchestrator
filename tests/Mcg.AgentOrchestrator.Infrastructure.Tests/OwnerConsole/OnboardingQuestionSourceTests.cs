@@ -75,7 +75,7 @@ public sealed class OnboardingQuestionSourceTests
     }
 
     [Fact]
-    public async Task StaleNonLiveAnswer_IsDismissOnly_RemovalPersistsAndProtectsLiveAnswer()
+    public async Task StaleNonLiveAnswer_IsNotDecision_DismissalProtectsLiveAnswer()
     {
         using var fixture = new OnboardingConsoleFixture();
         var project = fixture.Register("stale");
@@ -90,26 +90,24 @@ public sealed class OnboardingQuestionSourceTests
         var harness = new OwnerConsoleHarness(fixture.Clock);
         var source = new OnboardingQuestionSource(harness.Questions,
             () => [OnboardingConsoleFixture.Describe(project)], fixture.Clock);
-        var stale = Assert.Single((await source.ReadAsync(Token)).Live);
-        Assert.False(stale.CanAnswer);
-        Assert.Contains("Stale answer: MTP", stale.Text);
+        Assert.Empty((await source.ReadAsync(Token)).Live);
+        Assert.Single(OnboardingConsoleFixture.Read(project).StaleAnswers);
+        var staleId = $"onboarding-stale:{project.ProjectName}:{Uri.EscapeDataString(oldKey)}";
         var before = File.ReadAllBytes(Path.Combine(project.OrchestratorDirectory, OwnerAnswerFile.FileName));
-        var refused = await source.AnswerAsync(stale.ItemId, "VSTest", Token);
+        var refused = await source.AnswerAsync(staleId, "VSTest", Token);
         Assert.False(refused.Success);
         Assert.Contains(OwnerAnswerApplier.NotLiveReason, refused.Message);
         Assert.Equal(before, File.ReadAllBytes(Path.Combine(project.OrchestratorDirectory, OwnerAnswerFile.FileName)));
 
         var builder = new OwnerConsoleViewModelBuilder(harness.State, source, harness.Liveness, new Epics(), fixture.Clock);
-        var decision = Assert.Single((await builder.ReadDecisionsAsync(Token)).Decisions);
-        var dialogs = new Dialogs();
-        using var tracking = new AnswerIntentStatusTracker(harness.Answers.ReadStatusAsync, fixture.Clock);
-        var workflow = new OwnerDecisionWorkflow(source, harness.Answers, dialogs, tracking, null, fixture.Clock);
-        await workflow.AnswerAsync(decision, true, null, Token);
-        Assert.Equal("Stale answer dismissed", Assert.Single(dialogs.Texts));
+        Assert.Empty((await builder.ReadDecisionsAsync(Token)).Decisions);
+        var dismissed = await source.DismissAsync(staleId, Token);
+        Assert.True(dismissed.Success);
+        Assert.Equal("Stale answer dismissed", dismissed.Message);
         Assert.Equal(OnboardingConsoleFixture.TestKey, Assert.Single(OwnerAnswerFile.Read(project.OrchestratorDirectory)).FactKey);
         Assert.Empty((await source.ReadAsync(Token)).Live);
         // An old stale item must not delete a now-valid answer for its key.
-        Assert.False((await source.DismissAsync(stale.ItemId, Token)).Success);
+        Assert.False((await source.DismissAsync(staleId, Token)).Success);
         Assert.False(ProjectOwnerAnswerRecorder.Remove(project.OrchestratorDirectory, OnboardingConsoleFixture.TestKey).Success);
         Assert.Single(OwnerAnswerFile.Read(project.OrchestratorDirectory));
     }
@@ -126,18 +124,18 @@ public sealed class OnboardingQuestionSourceTests
         var source = new OnboardingQuestionSource(harness.Questions,
             () => [OnboardingConsoleFixture.Describe(project)], fixture.Clock);
         var builder = new OwnerConsoleViewModelBuilder(harness.State, source, harness.Liveness, new Epics(), fixture.Clock);
-        var stale = Assert.Single((await builder.ReadDecisionsAsync(Token)).Decisions.Where(item => item.FullText.Contains("Stale answer:")));
-        Assert.True(stale.CanAnswer);
-        Assert.Contains("Recorded answer: npm test | tee", (await source.ReadAsync(Token)).Live
-            .Single(item => !item.Text.Contains("Stale answer:")).Text);
+        var decision = Assert.Single((await builder.ReadDecisionsAsync(Token)).Decisions);
+        Assert.DoesNotContain("Stale answer:", decision.FullText);
+        Assert.True(decision.CanAnswer);
+        Assert.Contains("Recorded answer: npm test | tee", decision.FullText);
         var before = OnboardingConsoleFixture.Snapshot(project);
         var dialogs = new Dialogs { Answer = null };
         using var tracking = new AnswerIntentStatusTracker(harness.Answers.ReadStatusAsync, fixture.Clock);
         var workflow = new OwnerDecisionWorkflow(source, harness.Answers, dialogs, tracking, null, fixture.Clock);
-        await workflow.AnswerAsync(stale, false, null, Token);
+        await workflow.AnswerAsync(decision, false, null, Token);
         Assert.Equal(before.OrderBy(pair => pair.Key), OnboardingConsoleFixture.Snapshot(project).OrderBy(pair => pair.Key));
         dialogs.Answer = "npm test";
-        await workflow.AnswerAsync(stale, false, null, Token);
+        await workflow.AnswerAsync(decision, false, null, Token);
         Assert.Equal("npm test", Assert.Single(OwnerAnswerFile.Read(project.OrchestratorDirectory)).Value);
         Assert.Empty((await source.ReadAsync(Token)).Live);
     }
