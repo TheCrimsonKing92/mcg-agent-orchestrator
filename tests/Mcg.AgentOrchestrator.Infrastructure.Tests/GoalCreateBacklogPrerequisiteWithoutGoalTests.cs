@@ -142,7 +142,7 @@ public sealed class GoalCreateBacklogPrerequisiteWithoutGoalTests : CliCommandTe
         Assert.Empty(goal.DependsOn);
     }
 
-    private static async Task AssertOwnedPrerequisiteDependencyAsync(bool closePrerequisite)
+    private async Task AssertOwnedPrerequisiteDependencyAsync(bool closePrerequisite)
     {
         var (workspace, repository, backlog, prerequisite, dependent) = await CreateDependencyAsync();
         GoalId? prerequisiteGoalId = null;
@@ -161,7 +161,7 @@ public sealed class GoalCreateBacklogPrerequisiteWithoutGoalTests : CliCommandTe
         Assert.Equal(prerequisiteGoalId, Assert.Single(goal.DependsOn));
     }
 
-    private static async Task<(OrchestratorWorkspace Workspace, SqliteOrchestratorStateRepository Repository,
+    private async Task<(OrchestratorWorkspace Workspace, SqliteOrchestratorStateRepository Repository,
         BacklogStore Backlog, BacklogItem Prerequisite, BacklogItem Dependent)> CreateDependencyAsync()
     {
         var workspace = CreateWorkspace();
@@ -174,7 +174,7 @@ public sealed class GoalCreateBacklogPrerequisiteWithoutGoalTests : CliCommandTe
         return (workspace, repository, backlog, prerequisite, dependent);
     }
 
-    private static OrchestratorWorkspace CreateWorkspace()
+    private OrchestratorWorkspace CreateWorkspace()
     {
         var workspace = CreateRefinedWorkspace(CreateTempDirectory());
         ModelFunctionCatalogStore.Save(workspace.ModelFunctionCatalogPath, new ModelFunctionCatalog([

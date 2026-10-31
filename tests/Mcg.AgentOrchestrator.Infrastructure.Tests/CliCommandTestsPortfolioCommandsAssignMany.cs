@@ -179,7 +179,7 @@ public sealed class CliCommandTestsPortfolioCommandsAssignMany : CliCommandTestB
             ""
         ]);
 
-    private static (OrchestratorWorkspace, PortfolioStore, PortfolioEpic, BacklogItem) Seed(string root)
+    private (OrchestratorWorkspace, PortfolioStore, PortfolioEpic, BacklogItem) Seed(string root)
     {
         var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();

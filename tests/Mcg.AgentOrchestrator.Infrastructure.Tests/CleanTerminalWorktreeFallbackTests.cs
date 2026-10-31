@@ -21,7 +21,7 @@ public sealed class CleanTerminalWorktreeFallbackTests : CliCommandTestBase
     [Fact]
     public void CleanActiveWorktree_RemoveFailureDefers() => Check("clean", GoalStatus.Active, false);
 
-    private static void Check(string contents, GoalStatus status, bool complete, bool hideUntracked = false)
+    private void Check(string contents, GoalStatus status, bool complete, bool hideUntracked = false)
     {
         var root = CreateAcceptanceRepository();
         try

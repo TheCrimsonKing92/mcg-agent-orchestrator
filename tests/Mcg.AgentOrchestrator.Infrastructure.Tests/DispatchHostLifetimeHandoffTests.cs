@@ -168,7 +168,7 @@ public sealed class DispatchHostLifetimeHandoffTests : CliCommandTestBase
         }
     }
 
-    private static async Task<ArmReceipt> RunArmAsync(bool holdCaller)
+    private async Task<ArmReceipt> RunArmAsync(bool holdCaller)
     {
         var fixture = await CreateFixtureAsync();
         await using var unrelated = UnrelatedSleeper.Start();
@@ -348,7 +348,7 @@ public sealed class DispatchHostLifetimeHandoffTests : CliCommandTestBase
         }
     }
 
-    private static async Task<DispatchFixture> CreateFixtureAsync()
+    private async Task<DispatchFixture> CreateFixtureAsync()
     {
         var root = CreateTempDirectory();
         var workspace = OrchestratorWorkspace.ForDirectory(root);

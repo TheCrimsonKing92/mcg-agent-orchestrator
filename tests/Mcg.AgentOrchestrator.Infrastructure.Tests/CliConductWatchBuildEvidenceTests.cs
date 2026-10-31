@@ -104,7 +104,7 @@ public sealed class CliConductWatchBuildEvidenceTests : CliCommandTestBase
         }
     }
 
-    private static OrchestratorWorkspace CreateWatchWorkspace(CompletionBuildEvidenceFixture fixture)
+    private OrchestratorWorkspace CreateWatchWorkspace(CompletionBuildEvidenceFixture fixture)
     {
         var workspace = CreateRefinedWorkspace(fixture.Root) with { SqliteStatePath = fixture.StatePath };
         // Manual escalates Running and reaps the pending build. Allow only the running hold;
@@ -116,7 +116,7 @@ public sealed class CliConductWatchBuildEvidenceTests : CliCommandTestBase
         return workspace;
     }
 
-    private static int RunOneWatchTick(CompletionBuildEvidenceFixture fixture, OrchestratorWorkspace workspace,
+    private int RunOneWatchTick(CompletionBuildEvidenceFixture fixture, OrchestratorWorkspace workspace,
         bool stopFromCheckpoint = false)
     {
         var policy = CliConductLoopStartup.ResolveConductorPolicy(null, workspace.OrchestratorDirectory).Policy;

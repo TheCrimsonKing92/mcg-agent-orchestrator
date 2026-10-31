@@ -223,7 +223,7 @@ public sealed class AcceptanceCriterionEvidenceRecoveryTests : CliCommandTestBas
         }
     }
 
-    private static RecoveryFixture CreateFixture(bool withOperatorObligation)
+    private RecoveryFixture CreateFixture(bool withOperatorObligation)
     {
         var root = CreateAcceptanceRepository();
         var kernel = new AgentOrchestratorKernel();
@@ -278,10 +278,10 @@ public sealed class AcceptanceCriterionEvidenceRecoveryTests : CliCommandTestBas
             new CohortAcceptanceStore(Path.Combine(workspace.OrchestratorDirectory, "cohort-acceptance.db")));
     }
 
-    private static void MergeCandidateIntoMain(RecoveryFixture fixture) =>
+    private void MergeCandidateIntoMain(RecoveryFixture fixture) =>
         RunGit(fixture.Root, "merge", "--ff-only", GoalWorktrees.BranchName(fixture.Goal.Id));
 
-    private static void SavePassedTrainReceipt(RecoveryFixture fixture, string receiptId, string candidateSha)
+    private void SavePassedTrainReceipt(RecoveryFixture fixture, string receiptId, string candidateSha)
     {
         var otherGoalId = GoalId.New();
         var members = new[]
@@ -304,7 +304,7 @@ public sealed class AcceptanceCriterionEvidenceRecoveryTests : CliCommandTestBas
             ValidForLanding: true));
     }
 
-    private static void SavePassedCohortReceipt(RecoveryFixture fixture, string receiptId, string candidateSha)
+    private void SavePassedCohortReceipt(RecoveryFixture fixture, string receiptId, string candidateSha)
     {
         var otherGoalId = GoalId.New();
         var members = new[]
@@ -415,7 +415,7 @@ public sealed class AcceptanceCriterionEvidenceRecoveryTests : CliCommandTestBas
         Assert.Null(obligation.CandidateSha);
     }
 
-    private static void Cleanup(RecoveryFixture fixture) =>
+    private void Cleanup(RecoveryFixture fixture) =>
         CleanupAcceptanceRepository(fixture.Root, fixture.Goal.Id);
 
     private sealed record RecoveryFixture(

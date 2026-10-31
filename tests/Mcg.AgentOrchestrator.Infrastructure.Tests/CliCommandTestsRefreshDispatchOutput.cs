@@ -89,7 +89,7 @@ public sealed class CliCommandTestsRefreshDispatchOutput : CliCommandTestBase
         }
     }
 
-    private static DeepHistoryFixture CreateDeepHistoryFixture()
+    private DeepHistoryFixture CreateDeepHistoryFixture()
     {
         var root = CreateTempDirectory();
         var workspace = CreateRefinedWorkspace(root);

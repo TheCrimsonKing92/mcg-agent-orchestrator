@@ -72,7 +72,7 @@ public sealed class CliBacklogUpdateWorkspaceTemplateTests : CliCommandTestBase
         }
     }
 
-    private static async Task<(string Title, string Body, BacklogItemStatus Status, string? Priority, string Output)>
+    private async Task<(string Title, string Body, BacklogItemStatus Status, string? Priority, string Output)>
         UpdateDescription(OrchestratorWorkspace workspace, BacklogStore store)
     {
         var item = await store.AddAsync("Original title", "Original body");

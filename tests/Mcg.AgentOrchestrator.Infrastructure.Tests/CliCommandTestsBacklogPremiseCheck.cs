@@ -118,7 +118,7 @@ public sealed class CliCommandTestsBacklogPremiseCheck : CliCommandTestBase
         finally { Directory.Delete(root, recursive: true); }
     }
 
-    private static async Task<Seed> CreateSeedAsync()
+    private async Task<Seed> CreateSeedAsync()
     {
         var workspace = CreateRefinedWorkspace(CreateTempDirectory());
         var store = new BacklogStore(workspace.BacklogStorePath);

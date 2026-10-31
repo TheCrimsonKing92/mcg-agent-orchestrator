@@ -183,7 +183,7 @@ public sealed class CliCommandTestsPersistentRunnerGoalScopedCreate : CliCommand
         Assert.Equal(prerequisiteGoal, Assert.Single(dependent.DependsOn));
     }
 
-    private static OrchestratorWorkspace CreateWorkspace()
+    private OrchestratorWorkspace CreateWorkspace()
     {
         var workspace = CreateRefinedWorkspace(CreateTempDirectory());
         ModelFunctionCatalogStore.Save(workspace.ModelFunctionCatalogPath, new ModelFunctionCatalog([
