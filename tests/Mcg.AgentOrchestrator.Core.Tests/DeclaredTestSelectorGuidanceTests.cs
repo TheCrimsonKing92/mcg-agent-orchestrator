@@ -4,6 +4,17 @@ using Xunit;
 // Parallel-safe: brief construction uses an in-memory kernel.
 public sealed class DeclaredTestSelectorGuidanceTests
 {
+    [Fact]
+    public void StackGuidance_OwnsDeclaredTestSelectors()
+    {
+        var guidance = Assert.Single(DeclaredTestSelectorGuidance.For(ProjectStack.Declared));
+        Assert.Equal(new[] { "Existing requirement", guidance },
+            RoleRequirementStackGuidance.Apply(["Existing requirement"], ProjectStack.Declared));
+        foreach (var stack in new ProjectStack?[] { ProjectStack.Dotnet, ProjectStack.Go, ProjectStack.Node, null })
+            Assert.Equal(new[] { "Existing requirement" },
+                RoleRequirementStackGuidance.Apply(["Existing requirement"], stack));
+    }
+
     [Theory]
     [InlineData(AgentRole.Planner)]
     [InlineData(AgentRole.Tester)]
