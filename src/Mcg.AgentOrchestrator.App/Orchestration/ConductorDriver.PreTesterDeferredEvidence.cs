@@ -60,7 +60,8 @@ internal sealed partial class ConductorDriver
                 DeveloperDeferredTestClassNames.Parse(testsField));
             return false;
         }
-        var declaration = DeveloperDeferredTestSelections.Resolve(worktreePath, testsField);
+        var declaration = DeveloperDeferredTestSelections.Resolve(
+            worktreePath, testsField, _cohortWorkspace?.ProjectHomeDirectoryOrNull);
         if (declaration.Selections.Count == 0)
         {
             if (prior?.Outcome == "started")

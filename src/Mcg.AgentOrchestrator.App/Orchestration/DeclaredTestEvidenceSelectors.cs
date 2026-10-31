@@ -23,11 +23,12 @@ internal static class DeclaredTestEvidenceSelectors
             }).Distinct(StringComparer.Ordinal).ToArray();
     }
 
-    internal static DeveloperDeferredTestSelection? ForProject(string worktree, string testsField)
+    internal static DeveloperDeferredTestSelection? ForProject(
+        string worktree, string testsField, string? projectHomeDirectory)
     {
         try
         {
-            var path = AcceptanceManifestLocator.Resolve(worktree, Path.Combine(worktree, ".orchestrator"));
+            var path = AcceptanceManifestLocator.Resolve(worktree, projectHomeDirectory);
             using var document = JsonDocument.Parse(File.ReadAllText(path));
             var checks = document.RootElement.GetProperty("checks")
                 .Deserialize<GoalAcceptanceVerifier.AcceptanceManifestCheck[]>(new JsonSerializerOptions(JsonSerializerDefaults.Web));

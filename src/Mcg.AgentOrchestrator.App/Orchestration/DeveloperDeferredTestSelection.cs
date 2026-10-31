@@ -9,8 +9,9 @@ internal sealed record DeveloperDeferredTestSelection(
 
 internal static class DeveloperDeferredTestSelections
 {
-    internal static DeveloperDeferredTestSelection Resolve(string worktreePath, string testsField)
-        => DeclaredTestEvidenceSelectors.ForProject(worktreePath, testsField) ??
+    internal static DeveloperDeferredTestSelection Resolve(
+        string worktreePath, string testsField, string? projectHomeDirectory = null)
+        => DeclaredTestEvidenceSelectors.ForProject(worktreePath, testsField, projectHomeDirectory) ??
             ResolveNames(worktreePath, DeveloperDeferredTestClassNames.Parse(testsField));
 
     internal static DeveloperDeferredTestSelection ResolveNames(

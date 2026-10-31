@@ -52,7 +52,8 @@ internal sealed partial class ConductorDriver
             throw new InvalidDataException("Deferred no-change evidence has no Tester evidence owner.");
         var worktreePath = GoalWorktrees.WorktreePath(_executionDirectory, goal.Id);
         var declaration = DeveloperDeferredTestSelections.Resolve(
-            worktreePath, "deferred - " + string.Join(", ", outcome.TestClasses));
+            worktreePath, "deferred - " + string.Join(", ", outcome.TestClasses),
+            _cohortWorkspace?.ProjectHomeDirectoryOrNull);
         var settings = _getFindingEvidenceEngineSettings(goal);
         var selected = new List<FindingEvidenceSelection>();
         var notRun = new List<string>(declaration.NotRun);
