@@ -1264,6 +1264,8 @@ internal sealed class GoalWorktreeCleanupHooksBuilder
     public Action<string, int, TimeSpan>? DeleteRetryWait { get; set; }
     public Func<string, int, string, bool, GitCli.GitResult> RunWorktreeRemove { get; set; }
     public Func<string, int, bool, GitCli.GitResult> RunWorktreePrune { get; set; }
+    public Func<string, GitCli.GitResult> RunWorktreeList { get; set; }
+    public Action<OrphanWorktreeSweepOutcome> OrphanSweepOutcomeSink { get; set; }
     public Func<string, IReadOnlyList<WorktreeLockHolder>> FindLockHoldersForCleanup { get; set; }
     public Action<GoalWorktreeCleanupWarning> CleanupWarningSink { get; set; }
     private Func<Func<long>?> cleanupElapsedFactory;
@@ -1288,6 +1290,8 @@ internal sealed class GoalWorktreeCleanupHooksBuilder
         defaultDeleteForCleanup = DeleteDirectoryForCleanup;
         RunWorktreeRemove = defaults.RunWorktreeRemove;
         RunWorktreePrune = defaults.RunWorktreePrune;
+        RunWorktreeList = defaults.RunWorktreeList;
+        OrphanSweepOutcomeSink = defaults.OrphanSweepOutcomeSink;
         FindLockHoldersForCleanup = defaults.FindLockHoldersForCleanup;
         CleanupWarningSink = defaults.CleanupWarningSink;
         cleanupElapsedFactory = defaults.CleanupElapsedMilliseconds;
@@ -1318,6 +1322,8 @@ internal sealed class GoalWorktreeCleanupHooksBuilder
             DeleteRetryWait = DeleteRetryWait,
             RunWorktreeRemove = RunWorktreeRemove,
             RunWorktreePrune = RunWorktreePrune,
+            RunWorktreeList = RunWorktreeList,
+            OrphanSweepOutcomeSink = OrphanSweepOutcomeSink,
             FindLockHoldersForCleanup = FindLockHoldersForCleanup,
             CleanupWarningSink = CleanupWarningSink,
             CleanupElapsedMilliseconds = elapsedFactory,
@@ -2519,6 +2525,7 @@ public sealed class GoalWorktreeIsolatedDotnetTests : GoalWorktreeTestBase
 
         using var process = Process.Start(startInfo)
             ?? throw new InvalidOperationException("Failed to start PowerShell.");
+        var rootIdentity = TestOwnedProcessStop.Identify(process);
         process.StandardInput.Close();
         var stdoutTask = process.StandardOutput.ReadToEndAsync();
         var stderrTask = process.StandardError.ReadToEndAsync();
@@ -2536,7 +2543,8 @@ public sealed class GoalWorktreeIsolatedDotnetTests : GoalWorktreeTestBase
             {
                 if (!process.HasExited)
                 {
-                    process.Kill(entireProcessTree: true);
+                    Assert.True(TestOwnedProcessStop.StopTreeIfSame(rootIdentity) || process.HasExited,
+                        "Could not stop the recorded PowerShell process after readiness failed.");
                 }
                 await process.WaitForExitAsync();
                 await stdoutTask;
@@ -2556,7 +2564,8 @@ public sealed class GoalWorktreeIsolatedDotnetTests : GoalWorktreeTestBase
         {
             if (!process.HasExited)
             {
-                process.Kill(entireProcessTree: true);
+                Assert.True(TestOwnedProcessStop.StopTreeIfSame(rootIdentity) || process.HasExited,
+                    "Could not stop the recorded PowerShell process after the hang guard expired.");
             }
 
             await process.WaitForExitAsync();

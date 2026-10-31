@@ -146,6 +146,8 @@ public sealed record GoalWorktreeCleanupHooks
         GoalWorktrees.DefaultRunWorktreeRemove;
     internal Func<string, int, bool, GitCli.GitResult> RunWorktreePrune { get; init; } =
         GoalWorktrees.DefaultRunWorktreePrune;
+    internal Func<string, GitCli.GitResult> RunWorktreeList { get; init; } = GoalWorktreeRegistrationListing.RunGit;
+    public Action<OrphanWorktreeSweepOutcome> OrphanSweepOutcomeSink { get; init; } = OrphanWorktreeSweepOutcome.Write;
     private Func<string, IReadOnlyList<WorktreeLockHolder>>? FindLockHoldersForCleanupOverride { get; init; }
     public Func<IEnumerable<string>, ProcessCommandLineSnapshot> ProcessCommandLineSnapshot { get; init; } =
         ProcessCommandLines.SnapshotByNames;
