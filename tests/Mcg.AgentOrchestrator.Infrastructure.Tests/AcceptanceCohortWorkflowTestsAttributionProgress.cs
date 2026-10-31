@@ -55,8 +55,13 @@ public sealed class AcceptanceCohortWorkflowTestsAttributionProgress : Acceptanc
                 record.EventKind == "gate-progress") > startIndex);
 
             var comparisonPath = Path.Combine(repo, "combined-progress-comparison.jsonl");
+            var expectedProgress = verifier.Progresses[0] with
+            {
+                TreeRevision = identity.CombinedTreeRevision,
+                EvidenceKind = "candidate"
+            };
             ConductorDriver.AppendCohortGateProgressEvents(
-                new ConductEventLogWriter(comparisonPath), identity, identity.Members, verifier.Progresses[0]);
+                new ConductEventLogWriter(comparisonPath), identity, identity.Members, expectedProgress);
             var expectedCombined = GateProgressReportingVerifier.ReadEvents(comparisonPath)
                 .Select(record => (record.EventKind, record.GoalId, record.Detail));
             var actualCombined = events[..startIndex]
