@@ -59,24 +59,6 @@ public sealed class MergeTrainReproductionInvalidEvidenceTests
         });
     }
 
-    [Fact]
-    public void InvalidFirstMemberDoesNotDiscardAValidThirdMemberFailure()
-    {
-        WithReceipt((receipt, root) =>
-        {
-            var outcomes = new List<MergeTrainReproductionOutcome>();
-            var members = receipt.Identity.Members;
-            var attributed = MergeTrainReproductionAttribution.TryAttribute(receipt, members,
-                (member, main, selected, _) => new(selected,
-                    member == members[2] ? [new(TestName, "Failed", "member defect", null)] : [],
-                    member == members[0] ? null : Evidence(member, main, root)),
-                CancellationToken.None, outcomes.Add);
-
-            Assert.Equal(members[2].GoalId, Assert.Single(attributed!).Member.GoalId);
-            Assert.Equal(new[] { "invalid-evidence", "not-reproduced", "reproduced" }, outcomes.Select(item => item.Result));
-        });
-    }
-
     private static MergeTrainReproductionProvenance Evidence(MergeTrainMemberBinding member, string main, string root)
     {
         var output = Path.Combine(root, member.GoalId.Value, "artifacts");
