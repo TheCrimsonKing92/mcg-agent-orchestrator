@@ -82,6 +82,8 @@ internal static class OwnerConsoleGateLayout
                         if (row.SkippedTestCount > 0) lines.Add($"     ({row.SkippedTestCount} skipped, not failures)");
                         if (row.Confirmation is { } confirmation)
                             lines.AddRange(Wrap(confirmation.Line, width, "     "));
+                        foreach (var reproduction in row.Reproductions ?? [])
+                            lines.AddRange(Wrap(reproduction.Line, width, "     "));
                     }
                 }
             }

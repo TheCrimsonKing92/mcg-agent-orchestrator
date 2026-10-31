@@ -4,12 +4,12 @@ namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 
 // A summary of an existing confirmation attempt, not a confirmation policy decision.
 internal sealed record OwnerConsoleGateConfirmation(string SourceName, int TargetCount, TimeSpan Elapsed,
-    bool Running, OwnerConsoleGateTrxOutcomes? Results)
+    bool Running, OwnerConsoleGateTrxOutcomes? Results, bool SameCandidateRerun = false)
 {
     private static readonly Regex FilterNames = new(@"FullyQualifiedName[~=](?<name>[^|&()]+)",
         RegexOptions.CultureInvariant);
     internal bool Confirmed => !Running && Results is { Available: true, FailureCount: > 0 };
-    internal bool NotReproduced => !Running && Results?.AllPassed == true;
+    internal bool NotReproduced => !Running && SameCandidateRerun && Results?.AllPassed == true;
     internal string Line => Running
         ? $"confirming: re-running {TargetCount} failed test(s), {(int)Elapsed.TotalSeconds}s"
         : Confirmed ? "confirmed: failed again (real failure)"
@@ -25,6 +25,8 @@ internal sealed record OwnerConsoleGateConfirmation(string SourceName, int Targe
             row.State == OwnerConsoleGateLaneState.Done && row.Outcome == "failed").ToArray();
         var links = new Dictionary<string, OwnerConsoleGateLane>(StringComparer.Ordinal);
         foreach (var rerun in rows.Where(row => row.IsAttribution &&
+            row.EvidenceKind != "baseline" && !row.Name.EndsWith(" [trusted main baseline]", StringComparison.Ordinal) &&
+            row.EvidenceKind != "member-reproduction" && string.IsNullOrWhiteSpace(row.ReproductionMemberId) &&
             row.State is OwnerConsoleGateLaneState.Running or OwnerConsoleGateLaneState.Done))
         {
             var targets = Targets(rerun);
@@ -44,9 +46,10 @@ internal sealed record OwnerConsoleGateConfirmation(string SourceName, int Targe
             if (!links.TryGetValue(lane.Name, out var rerun) || lane.Confirmation is not null && reader is null) return lane;
             var count = Targets(rerun).Length;
             if (count == 0) count = lane.FailingTestNames?.Count ?? 0;
+            var results = rerun.State == OwnerConsoleGateLaneState.Done ? reader?.ReadConfirmation(rerun, lane) : null;
             return lane with { Confirmation = new(rerun.Name, count, rerun.Elapsed,
                 rerun.State == OwnerConsoleGateLaneState.Running,
-                rerun.State == OwnerConsoleGateLaneState.Done ? reader?.ReadConfirmation(rerun, lane) : null) };
+                results, OwnerConsoleGateCandidateRerunEvidence.Covers(lane, rerun, reader?.ReadOutcomes(lane), results)) };
         }).ToArray();
     }
 

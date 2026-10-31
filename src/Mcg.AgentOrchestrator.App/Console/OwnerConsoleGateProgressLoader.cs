@@ -38,16 +38,18 @@ internal sealed class OwnerConsoleGateProgressLoader(string logPath, string mani
                 id => titles.FirstOrDefault(pair => pair.Key.StartsWith(id, StringComparison.Ordinal)).Value,
                 capacity: capacity.LocalBudget, executors: executors, planReader: new OwnerConsoleGateLanePlanReader());
             var evidence = _conductTail.Select("host-evidence", OwnerConsoleHostEvidenceRuns.Parse, 1_048_576).ToArray();
+            var reproductions = _conductTail.Select("train-reproduction", OwnerConsoleGateProgress.ParseEvent, 1_048_576)
+                .OfType<OwnerConductEvent>().ToArray();
             return gate with
             {
                 Ended = OwnerConsoleGateEnd.Read(events),
                 Capacity = capacity,
                 HostActivity = OwnerConsoleHostEvidenceRuns.Fold(evidence, now),
                 EvidenceEnded = evidence.Select(entry => entry?.End).OfType<OwnerConsoleEvidenceAttemptEnd>().ToArray(),
-                Lanes = LoadLanes(gate.Lanes),
+                Lanes = OwnerConsoleGateReproduction.Attach(gate with { Lanes = LoadLanes(gate.Lanes) }, reproductions),
                 OtherLiveGates = gate.OtherLiveGates?.Select(other => other with
                 {
-                    Lanes = LoadLanes(other.Lanes)
+                    Lanes = OwnerConsoleGateReproduction.Attach(other with { Lanes = LoadLanes(other.Lanes) }, reproductions)
                 }).ToArray()
             };
         }

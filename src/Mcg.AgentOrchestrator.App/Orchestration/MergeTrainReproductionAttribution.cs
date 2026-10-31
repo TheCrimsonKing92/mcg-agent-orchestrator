@@ -11,35 +11,67 @@ internal static class MergeTrainReproductionAttribution
     internal delegate RunResult? Runner(MergeTrainMemberBinding member, string mainRevision,
         IReadOnlyList<string> selectedTests, CancellationToken cancellationToken);
 
-    internal sealed record RunResult(IReadOnlyList<string> ExecutedTests, IReadOnlyList<AcceptanceTrxFailure> Failures);
+    internal sealed record RunResult(IReadOnlyList<string> ExecutedTests, IReadOnlyList<AcceptanceTrxFailure> Failures,
+        MergeTrainReproductionProvenance? Provenance = null);
     internal sealed record Attribution(MergeTrainMemberBinding Member, IReadOnlyList<AcceptanceTrxFailure> Failures);
 
     internal static IReadOnlyList<Attribution>? TryAttribute(MergeTrainReceipt receipt,
-        IReadOnlyList<MergeTrainMemberBinding> members, Runner? runner, CancellationToken cancellationToken)
+        IReadOnlyList<MergeTrainMemberBinding> members, Runner? runner, CancellationToken cancellationToken,
+        Action<MergeTrainReproductionOutcome>? observe = null)
     {
-        if (runner is null || !MergeTrainRedAttribution.IsGenuineTrainRed(receipt)) return null;
+        if (!MergeTrainRedAttribution.IsGenuineTrainRed(receipt)) return null;
         var fatal = MergeTrainRedAttribution.ReadFatalFailures(receipt.GateTestResultPaths);
         if (fatal.Any(MergeTrainRedAttribution.IsMessageSubjectGuard)) return null;
         var identities = fatal.Select(failure => failure.TestName ?? "").Distinct(StringComparer.Ordinal).ToArray();
         if (ConductorAcceptanceCohortFocusedAttribution.TrySelect(identities, []) is null) return null;
         var selected = identities.ToHashSet(StringComparer.Ordinal);
         var reproduced = new List<Attribution>();
-        foreach (var member in members)
+        if (runner is null)
         {
+            NotRun(0);
+            return null;
+        }
+        for (var index = 0; index < members.Count; index++)
+        {
+            var member = members[index];
             cancellationToken.ThrowIfCancellationRequested();
             RunResult? result;
             try { result = runner(member, receipt.Identity.ObservedMainRevision, identities, cancellationToken); }
             catch (OperationCanceledException) { throw; }
-            catch (Exception) { return null; } // Unavailable evidence preserves the ordinary split.
+            catch (Exception)
+            {
+                observe?.Invoke(new(member.GoalId.Value, "unavailable", "runner-failed", identities, null));
+                NotRun(index + 1);
+                return null; // Unavailable evidence preserves the ordinary split.
+            }
             if (result is null || !selected.IsSubsetOf(result.ExecutedTests) ||
                 result.Failures.Any(failure => selected.Contains(failure.TestName ?? "") &&
                     (!AcceptanceTrxOutcomeTaxonomy.IsFatal(failure.Outcome) ||
-                     ApparatusInfrastructureSignatures.Match(failure.Message, failure.StackTrace) is not null))) return null;
+                     ApparatusInfrastructureSignatures.Match(failure.Message, failure.StackTrace) is not null)))
+            {
+                observe?.Invoke(new(member.GoalId.Value, "unavailable", "unusable-result", identities, result?.Provenance));
+                NotRun(index + 1);
+                return null;
+            }
+            if (MergeTrainReproductionEvidenceCheck.InvalidReason(result.Provenance, member,
+                receipt.Identity.ObservedMainRevision) is { } invalid)
+            {
+                observe?.Invoke(new(member.GoalId.Value, "invalid-evidence", invalid, identities, result.Provenance));
+                continue; // Invalid evidence cannot erase valid failures from another member.
+            }
             var failures = result.Failures.Where(failure => selected.Contains(failure.TestName ?? "")).ToArray();
+            observe?.Invoke(new(member.GoalId.Value, failures.Length > 0 ? "reproduced" : "not-reproduced",
+                null, identities, result.Provenance));
             if (failures.Length > 0) reproduced.Add(new(member, failures));
         }
-        // Do not publish partial attribution before every member has usable results.
+        // Only validated failures participate; unavailable runs retain the ordinary fallback.
         return reproduced.Count == 0 ? null : reproduced;
+
+        void NotRun(int start)
+        {
+            foreach (var member in members.Skip(start))
+                observe?.Invoke(new(member.GoalId.Value, "not-run", null, identities, null));
+        }
     }
 
     // The parent owns goal checkpoints. Keep the member's reproduction evidence with
@@ -76,16 +108,28 @@ internal static class MergeTrainReproductionAttribution
             using var partition = GoalWorktrees.CreateAcceptancePartitionWorkspace(workspace.ExecutionDirectory,
                 mainRevision, binding, workspace.IntegrationBranch, cleanupHooks, requireCurrentMain: false);
             using var lease = acquireLease($"train-reproduction-{member.GoalId.Value}", cancellationToken);
+            using var build = new MergeTrainReproductionBuildScope(lease.Environment);
+            var tree = MergeTrainReproductionTree.Read(partition.Path);
             var result = AcceptanceExecutionRunner.RunFocusedVerification(verifier, partition.Path, member.GoalId,
                 selection.Request, lease.Environment.BuildPermitIndex, lease, runBaselineArm: false,
                 cancellationToken, integrationBranch: workspace.IntegrationBranch,
-                projectHomeDirectory: workspace.ProjectHomeDirectoryOrNull);
+                projectHomeDirectory: workspace.ProjectHomeDirectoryOrNull,
+                focusedRunBinding: new(build.Environment, member.GoalId.Value));
             partition.AssertGoalBranchesUnchanged();
             var interpreted = ConductorAcceptanceCohortFocusedAttribution.Interpret(result, selection);
             if (interpreted.Kind != ConductorCohortFocusedPassKind.Executed ||
                 result.OutcomeReason == FindingEvidenceOutcomeReason.CandidateInconclusive ||
                 result.Arms?.Any(arm => arm.NotRunSelections?.Count > 0) == true) return null;
-            return ReadResults(interpreted.TestResultPaths);
+            var afterTree = MergeTrainReproductionTree.Read(partition.Path);
+            var provenance = new MergeTrainReproductionProvenance(mainRevision, member.CandidateRevision,
+                partition.TreeRevision, tree == afterTree ? tree : "changed-during-run", build.Environment.ArtifactsPath,
+                result.Checks.Select(check => check.ArtifactsPath ?? "").ToArray(),
+                AcceptanceTrxCodeBaseReader.Read(interpreted.TestResultPaths));
+            // Resolve links while the fresh build output still exists; cleanup must
+            // not turn an assembly outside the recorded root into valid evidence.
+            provenance = provenance with { ValidationFailure =
+                MergeTrainReproductionEvidenceCheck.InvalidReason(provenance, member, mainRevision) };
+            return ReadResults(interpreted.TestResultPaths) is { } read ? read with { Provenance = provenance } : null;
         };
 
     internal static RunResult? ReadResults(IReadOnlyList<string> paths)

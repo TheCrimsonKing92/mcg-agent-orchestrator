@@ -341,7 +341,9 @@ internal sealed partial class ConductorDriver
             var messageSubjectFailure = MergeTrainRedAttribution.ReadFatalFailures(receipt.GateTestResultPaths)
                 .Any(MergeTrainRedAttribution.IsMessageSubjectGuard);
             var reproduced = attributed is null && !messageSubjectFailure && MergeTrainRedAttribution.IsGenuineTrainRed(receipt)
-                ? MergeTrainReproductionAttribution.TryAttribute(receipt, members, MergeTrainReproductionRunner, cancellationToken) : null;
+                ? MergeTrainReproductionAttribution.TryAttribute(receipt, members, MergeTrainReproductionRunner, cancellationToken,
+                    evidence => TryAppendGateProgressEvent(new ConductEventLogWriter(_cohortWorkspace.ConductEventsLogPath),
+                        evidence.MemberId, evidence.LogLine(receipt.ReceiptId), eventKind: "train-reproduction")) : null;
             if (reproduced is not null)
             {
                 var completions = new List<Action>();

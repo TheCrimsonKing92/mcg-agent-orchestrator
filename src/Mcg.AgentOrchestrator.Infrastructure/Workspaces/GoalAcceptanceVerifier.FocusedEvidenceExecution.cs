@@ -289,7 +289,9 @@ internal static class FocusedEvidenceExecution
         {
             var armContext = new AcceptanceRunExecutionContextView(
                 executionOwner,
-                $"{executionOwner.ResultsPrefix}-{arm.ToString().ToLowerInvariant()}");
+                $"{executionOwner.ResultsPrefix}-{arm.ToString().ToLowerInvariant()}",
+                GoalAcceptanceVerifier.ResolveGitScalarForExecutionOwner(worktreePath, "rev-parse", "HEAD^{tree}") ?? "unavailable",
+                arm == FindingEvidenceArm.Candidate ? null : "baseline");
             return await scopeFocusedEvidenceArm(armContext)(
                 arm,
                 sha,

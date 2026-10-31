@@ -24,7 +24,10 @@ public sealed record AcceptanceGateProgress(
     AcceptanceGatePhaseBreakdown? PhaseBreakdown = null,
     string? Outcome = null,
     int FailedTestCount = 0,
-    string? Executor = null)
+    string? Executor = null,
+    string? TreeRevision = null,
+    string? EvidenceKind = null,
+    string? ReproductionMemberId = null)
 {
     internal GateLaneSlowdownDiff.GateLaneSlowdownResult? Slowdown { get; init; }
     public string ShardOutcomeTokens => Phase switch
@@ -34,7 +37,11 @@ public sealed record AcceptanceGateProgress(
         "remote-shard-complete" or "check-complete" => $" outcome={Outcome ?? "unknown"} failed={FailedTestCount}",
         "lane-slowdown" => GateLaneSlowdownDiff.FormatProgressSuffix(Slowdown, CurrentTarget),
         _ => string.Empty
-    } + (string.IsNullOrEmpty(Executor) ? string.Empty : $" executor={Executor}");
+    } + (string.IsNullOrEmpty(Executor) ? string.Empty : $" executor={Executor}") + ProvenanceTokens;
+    public string ProvenanceTokens =>
+        (string.IsNullOrWhiteSpace(TreeRevision) ? "" : $" tree={TreeRevision}") +
+        (string.IsNullOrWhiteSpace(EvidenceKind) ? "" : $" evidence_kind={EvidenceKind}") +
+        (string.IsNullOrWhiteSpace(ReproductionMemberId) ? "" : $" reproduction_member={ReproductionMemberId}");
 }
 
 public sealed record GateHeartbeatSnapshot(

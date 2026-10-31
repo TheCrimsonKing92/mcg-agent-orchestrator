@@ -8,6 +8,7 @@ namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 internal sealed record OwnerConsoleGateTrxOutcomes(bool Available,
     IReadOnlyList<string> FailureTestNames, int SkippedCount, int PassedCount, int TotalCount)
 {
+    internal IReadOnlyList<string> PassedTestNames { get; init; } = [];
     internal static OwnerConsoleGateTrxOutcomes Unavailable { get; } = new(false, [], 0, 0, 0);
     internal IReadOnlyList<string> FailureNames { get; } = FailureTestNames
         .Select(name => string.Join(".", name.Split('(')[0].Split('.').TakeLast(2))).ToArray();
@@ -27,6 +28,7 @@ internal sealed record OwnerConsoleGateTrxOutcomes(bool Available,
             var results = document.Descendants()
                 .Where(element => element.Name.LocalName == "UnitTestResult").ToArray();
             var failures = new List<string>();
+            var passes = new List<string>();
             var skipped = 0;
             var passed = 0;
             foreach (var result in results)
@@ -38,10 +40,14 @@ internal sealed record OwnerConsoleGateTrxOutcomes(bool Available,
                         failures.Add(AcceptanceTrxTestIdentityResolver.Resolve(result, definition) ?? "");
                         break;
                     case "NOTEXECUTED": case "SKIPPED": skipped++; break;
-                    case "PASSED": passed++; break;
+                    case "PASSED":
+                        passed++;
+                        definitionsByTestId.TryGetValue((string?)result.Attribute("testId") ?? "", out var passedDefinition);
+                        passes.Add(AcceptanceTrxTestIdentityResolver.Resolve(result, passedDefinition) ?? "");
+                        break;
                 }
             }
-            return new(true, failures, skipped, passed, results.Length);
+            return new(true, failures, skipped, passed, results.Length) { PassedTestNames = passes };
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or XmlException or
             ArgumentException or NotSupportedException or System.Security.SecurityException)
