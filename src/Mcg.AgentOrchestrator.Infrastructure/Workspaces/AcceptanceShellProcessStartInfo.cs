@@ -18,7 +18,8 @@ internal static class AcceptanceShellProcessStartInfo
             environment =>
             {
                 AcceptanceHermeticEnvironment.ConfigureHermeticVerificationEnvironment(
-                    environment, workingDirectory, request.HeartbeatContext?.BuildEnvironmentRoot);
+                    environment, workingDirectory, request.HeartbeatContext?.BuildEnvironmentRoot,
+                    request.EngineSettings?.DeclaredToolHomes);
                 if (string.IsNullOrWhiteSpace(request.GateInvocationId))
                     TempRootApparatusLossReceiptStore.ApplyCurrentScope(environment);
                 else

@@ -80,7 +80,11 @@ internal sealed class ProgressiveReviewSteeringCoordinator
         _getLineageDescendants = getLineageDescendants ??
             (process => GetLiveLineageDescendants(process, listConservativeLineageDescendants));
         _cancelProcess = cancelProcess ?? ((kernel, goalId, taskId) => new BackgroundDispatchRunner().CancelLatestProcess(kernel, goalId, taskId));
-        _startProcess = startProcess ?? ((kernel, goalId, taskId) => new BackgroundDispatchRunner().StartLatestDispatch(kernel, goalId, taskId, workspace.LogDirectory,
+        _startProcess = startProcess ?? ((kernel, goalId, taskId) => new BackgroundDispatchRunner
+        {
+            DeclaredToolHomes = () => AcceptanceGateEngineSettings.Load(
+                workspace.RootDirectory, workspace.ProjectHomeDirectoryOrNull).DeclaredToolHomes
+        }.StartLatestDispatch(kernel, goalId, taskId, workspace.LogDirectory,
             taskIntentAdmission: SqliteOperatorIntentStore.ForDirectories(workspace.OrchestratorDirectory, workspace.LogDirectory)
                 .GetPreparedAdmission(goalId.Value, taskId.Value, kernel.GetTask(goalId, taskId).LastDispatch!.DispatchedAt)));
         _prepareFreshDispatch = prepareFreshDispatch;

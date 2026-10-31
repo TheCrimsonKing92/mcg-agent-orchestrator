@@ -14,6 +14,8 @@ public static class OperatorCancelAwareDispatchRunner
         {
             WorkerBuildInvocations = new WorkerBuildInvocationOperations(workspace.SqliteStatePath, workspace.ExecutionDirectory),
             ExecutionThrottlingOptOut = () => DispatchJobExecutionQos.IsEnabled(workspace.SqliteStatePath),
+            DeclaredToolHomes = () => AcceptanceGateEngineSettings.Load(
+                workspace.RootDirectory, workspace.ProjectHomeDirectoryOrNull).DeclaredToolHomes,
             OperatorIntents = SqliteOperatorIntentStore.ForDirectories(
                 workspace.OrchestratorDirectory, workspace.LogDirectory)
         };

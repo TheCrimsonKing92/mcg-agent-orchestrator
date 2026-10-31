@@ -55,12 +55,16 @@ internal static class ProjectCompareManifestCommand
                 applied = OwnerAnswerApplier.Apply(model, read.Answers);
         }
         IReadOnlyList<ManifestCheckComparison> comparisons;
+        IReadOnlyList<ManifestFactComparison> toolHomeComparisons;
         try
         {
             comparisons = applied is null ? ManifestCheckComparer.Compare(model, manifestJson)
                 : ManifestCheckComparer.Compare(model, manifestJson, applied);
+            toolHomeComparisons = ManifestEngineSettingsComparer.Compare(manifestJson,
+                toolHomes: DeclaredToolHomeValidator.FromAnswers(applied))
+                .Where(comparison => comparison.Fact.StartsWith("toolHome[", StringComparison.Ordinal)).ToArray();
         }
-        catch (JsonException exception)
+        catch (Exception exception) when (exception is JsonException or InvalidDataException)
         {
             throw ManifestError(exception);
         }
@@ -70,10 +74,13 @@ internal static class ProjectCompareManifestCommand
             var reason = string.IsNullOrEmpty(comparison.Reason) ? "" : $" ({comparison.Reason})";
             output.WriteLine($"{comparison.Kind} {comparison.ProjectPath} learned={comparison.LearnedRunner ?? "-"} manifest={comparison.ManifestRunner ?? "-"}{reason}");
         }
+        foreach (var comparison in toolHomeComparisons)
+            output.WriteLine($"{comparison.Kind} {comparison.Fact} hand={comparison.Hand} learned={comparison.Learned} ({comparison.Reason})");
         if (answerError is not null)
             output.WriteLine($"Owner answers unreadable: {answerError}");
 
-        return comparisons.All(comparison => comparison.Kind == ManifestCheckResultKind.Match) ? 0 : 1;
+        return comparisons.All(comparison => comparison.Kind == ManifestCheckResultKind.Match) &&
+            toolHomeComparisons.All(comparison => comparison.Kind == ManifestFactResultKind.Match) ? 0 : 1;
     }
 
     private static (string? Root, string Manifest) ParseOptions(IReadOnlyList<string> parts)

@@ -124,6 +124,7 @@
       {
         "name": "Goal acceptance verifier",
         "filter": "FullyQualifiedName~PreReviewFocusedEvidenceVerifierTests|FullyQualifiedName~AcceptanceOutputCaptureTests|FullyQualifiedName~HermeticVerificationEnvironmentTests|FullyQualifiedName~AcceptanceGateEngineSettingsTests|FullyQualifiedName~AcceptanceOverlappedCheckSchedulingTests|FullyQualifiedName~GoalAcceptanceVerifierTests|FullyQualifiedName~GoalAcceptanceVerifierCrosswalk|FullyQualifiedName~GoalAcceptanceVerifierCancellationTests|FullyQualifiedName~RealProcessShardAlphaSmokeTests|FullyQualifiedName~RealProcessShardBetaSmokeTests|FullyQualifiedName~WorkerDispatchJobAccountingTests",
+        "ownedCollections": [ "GoalAcceptanceVerifier" ],
         "estimatedSerialSeconds": 41.0,
         "exclusiveResourceKeys": [
           "xunit:GoalAcceptanceVerifier",

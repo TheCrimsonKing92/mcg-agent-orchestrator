@@ -12,7 +12,8 @@ public static class ManifestEngineSettingsComparer
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };
 
-    public static IReadOnlyList<ManifestFactComparison> Compare(string manifestJson, LearnedEngineSettings? learned = null)
+    public static IReadOnlyList<ManifestFactComparison> Compare(string manifestJson, LearnedEngineSettings? learned = null,
+        IReadOnlyList<DeclaredToolHome>? toolHomes = null)
     {
         using var document = JsonDocument.Parse(manifestJson);
         var root = document.RootElement;
@@ -80,6 +81,7 @@ public static class ManifestEngineSettingsComparer
             }
         }
 
+        facts.AddRange(DeclaredToolHomeComparer.Compare(hand.DeclaredToolHomes, toolHomes));
         return facts;
     }
 

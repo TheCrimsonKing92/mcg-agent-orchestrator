@@ -2329,6 +2329,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         string? testResultsDirectoryOverride = null)
     {
         using var targetScope = AcceptanceGatePhaseAccountant.BeginCurrentTarget(check.Name);
+        if (DeclaredToolHomeEnvironment.DescribeMissing(EngineSettings.DeclaredToolHomes) is { } missingToolHome)
+            return (new AcceptanceCheckResult(check.Name, false, null, missingToolHome, Advisory: check.Advisory), false);
         try
         {
         if (check.Type.Equals("crosswalk-test", StringComparison.OrdinalIgnoreCase))
@@ -2801,7 +2803,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             AcceptanceArtifactFileNames.Slug,
             () => _testOverrides.BaseBuildCacheForTests ?? DotnetBaseBuildCache.Default(_storageRoot),
             (candidate, environment) => DotnetBaseBuildCacheIdentityResolver.ResolveForBuildPhaseAsync(
-                candidate, environment, worktreePath, AcceptanceHermeticEnvironment.ConfigureHermeticVerificationEnvironment,
+                candidate, environment, worktreePath, (variables, root, buildRoot) =>
+                    AcceptanceHermeticEnvironment.ConfigureHermeticVerificationEnvironment(variables, root, buildRoot),
                 () => stableSlotLease?.IsExecutionLockHeld == true
                     ? null : AcquireCheckPermit(environment, goalId, wait: false, cancellationToken),
                 arguments => RunLaneTestHostWithShardPermitAsync(arguments, worktreePath,
@@ -4350,6 +4353,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         public int Version { get; init; } = 1;
         public IReadOnlyList<AcceptanceManifestCheck> Checks { get; init; } = [AcceptanceManifestCheck.DefaultDotnetTest];
         public IReadOnlyList<string> ForbiddenChangedPathGlobs { get; init; } = [];
+        public IReadOnlyList<DeclaredToolHome> ToolHomes { get; init; } = [];
 
         public static AcceptanceManifest Load(string worktreePath, IReadOnlyList<string>? changedFiles,
             string? projectHomeDirectory = null)

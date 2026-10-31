@@ -27,7 +27,7 @@ public static class OwnerAnswerApplier
                 stale.Add(new(answer, exception.Message));
                 continue;
             }
-            if (!liveKeys.Contains(answer.FactKey))
+            if (!liveKeys.Contains(answer.FactKey) && !DeclaredToolHomeValidator.IsToolHomeKey(answer.FactKey))
             {
                 stale.Add(new(answer, NotLiveReason));
                 continue;

@@ -24,7 +24,8 @@ public static class AcceptanceHermeticEnvironment
     public static void ConfigureHermeticVerificationEnvironment(
         IDictionary<string, string?> environment,
         string repositoryRoot,
-        string? buildEnvironmentRoot = null)
+        string? buildEnvironmentRoot = null,
+        IReadOnlyList<DeclaredToolHome>? toolHomes = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(repositoryRoot);
         environment.TryGetValue(NuGetPackagesVariable, out var nugetPackages);
@@ -144,6 +145,7 @@ public static class AcceptanceHermeticEnvironment
             HermeticToolCacheEnvironment.Apply(environment, profileRoot);
         }
 
+        DeclaredToolHomeEnvironment.Apply(environment, toolHomes);
         environment["MCG_ORCHESTRATOR_REPOSITORY_ROOT"] = Path.GetFullPath(repositoryRoot);
     }
 
@@ -162,7 +164,8 @@ public static class AcceptanceHermeticEnvironment
         (string.IsNullOrWhiteSpace(appDataVariable) ? appDataKnownFolder : appDataVariable,
          string.IsNullOrWhiteSpace(localAppDataVariable) ? localAppDataKnownFolder : localAppDataVariable);
 
-    internal static bool IsHermeticVerificationEnvironmentVariable(string name) =>
+    internal static bool IsHermeticVerificationEnvironmentVariable(string name,
+        IReadOnlyList<DeclaredToolHome>? toolHomes = null) =>
         IsInheritedHermeticVerificationEnvironmentVariable(name) ||
         name.Equals("HOME", StringComparison.OrdinalIgnoreCase) ||
         name.Equals("USERPROFILE", StringComparison.OrdinalIgnoreCase) ||
@@ -187,7 +190,8 @@ public static class AcceptanceHermeticEnvironment
         name.Equals(GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable, StringComparison.OrdinalIgnoreCase) || name.Equals(DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable, StringComparison.OrdinalIgnoreCase) ||
         name.Equals(TempRootApparatusLossReceiptStore.GateInvocationIdVariable, StringComparison.OrdinalIgnoreCase) ||
         name.Equals(TempRootApparatusLossReceiptStore.ReceiptPathVariable, StringComparison.OrdinalIgnoreCase) ||
-        name.Equals("MCG_ORCHESTRATOR_REPOSITORY_ROOT", StringComparison.OrdinalIgnoreCase) || GoToolCacheEnvironment.IsVariable(name);
+        name.Equals("MCG_ORCHESTRATOR_REPOSITORY_ROOT", StringComparison.OrdinalIgnoreCase) || GoToolCacheEnvironment.IsVariable(name) ||
+        DeclaredToolHomeEnvironment.Declares(name, toolHomes);
 
     private static bool IsInheritedHermeticVerificationEnvironmentVariable(string name) =>
         IsHermeticSystemLocationVariable(name) ||

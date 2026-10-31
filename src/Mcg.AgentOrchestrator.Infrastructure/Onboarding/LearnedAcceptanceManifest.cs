@@ -49,6 +49,8 @@ public static class LearnedAcceptanceManifest
                 if (mtpLayoutRefusals?.TryGetValue(check.ProjectPath, out var reason) == true)
                     blockers.Add(new ManifestBlocker("engine/mtpInvocations", reason));
         blockers.AddRange(questions.Select(question => new ManifestBlocker(question.FactKey, question.Question)));
+        blockers.AddRange(applied.StaleAnswers.Where(stale => DeclaredToolHomeValidator.IsToolHomeKey(stale.Answer.FactKey))
+            .Select(stale => new ManifestBlocker(stale.Answer.FactKey, stale.Reason)));
         if (isDotnet && checkNames.Collisions.Count > 0)
             blockers.Add(new ManifestBlocker("checks/names",
                 $"Two or more test projects produce the same check name: {string.Join(", ", checkNames.Collisions)}."));
@@ -139,6 +141,10 @@ public static class LearnedAcceptanceManifest
             ["checks"] = emittedChecks,
             ["forbiddenChangedPathGlobs"] = new JsonArray()
         };
+        var toolHomes = DeclaredToolHomeValidator.FromAnswers(applied);
+        if (toolHomes.Count > 0)
+            manifest["toolHomes"] = JsonSerializer.SerializeToNode(toolHomes,
+                new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
         if (isDotnet)
         {
             var mtpInvocations = new JsonArray();
