@@ -19,9 +19,10 @@ internal sealed class GoalWorktreeOrphanSweepScheduler
 
     public GoalWorktreeSweepResult SweepNow(
         string executionDirectory,
-        AgentOrchestratorKernel? kernel = null)
+        AgentOrchestratorKernel? kernel = null,
+        string? callerRole = null)
     {
-        var result = GoalWorktrees.SweepOrphanedWorktrees(executionDirectory, kernel, hooks);
+        var result = GoalWorktrees.SweepOrphanedWorktrees(executionDirectory, kernel, hooks, callerRole);
         lock (gate)
         {
             lastSweepByDirectory[Normalize(executionDirectory)] = hooks.CleanupUtcNow();
@@ -32,7 +33,8 @@ internal sealed class GoalWorktreeOrphanSweepScheduler
 
     public GoalWorktreeSweepResult SweepIfDue(
         string executionDirectory,
-        AgentOrchestratorKernel? kernel = null)
+        AgentOrchestratorKernel? kernel = null,
+        string? callerRole = null)
     {
         lock (gate)
         {
@@ -43,7 +45,7 @@ internal sealed class GoalWorktreeOrphanSweepScheduler
             }
         }
 
-        return SweepNow(executionDirectory, kernel);
+        return SweepNow(executionDirectory, kernel, callerRole);
     }
 
     private static string Normalize(string path) =>

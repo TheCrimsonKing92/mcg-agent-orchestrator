@@ -28,11 +28,13 @@ internal sealed class OnboardingQuestionSource(IOwnerQuestionSource inner,
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (project.Name.Equals("home", StringComparison.OrdinalIgnoreCase) || project.Error is not null) continue;
-            var state = Read(project);
-            if (state.Model is null) continue;
+            var goalLanded = await ProjectOnboardingCompletion.HasLandedGoalAsync(project.StatePath, cancellationToken);
+            var state = Read(project, goalLanded);
+            if (!state.IsOnboarding || state.Model is null) continue;
             var answers = ProjectOwnerAnswerRecorder.ReadAnswers(DirectoryFor(project)).Answers;
             foreach (var question in state.OpenQuestions)
             {
+                var resolution = OnboardingQuestionResolution.Classify(question.FactKey, project.Name, project.UseLearnedBranch);
                 var recorded = answers.FirstOrDefault(answer => answer.FactKey == question.FactKey);
                 var text = $"{question.FactKey}: {question.Question}\nProject: {project.Name}\nFact key: {question.FactKey}";
                 if (CurrentValue(state.Model, question.FactKey) is { } current) text += $"\nCurrent value: {current}";
@@ -40,20 +42,10 @@ internal sealed class OnboardingQuestionSource(IOwnerQuestionSource inner,
                 if (recorded is not null) text += $"\nRecorded answer: {recorded.Value}";
                 if (question.FactKey is ProjectDelivery.ModeKey or ProjectDelivery.DeciderKey)
                     text += $"\nUse project answer {project.Name} {question.FactKey} <value> for this registry answer.";
+                if (resolution.Command is { } command) text += $"\nResolve with: {command}";
                 live.Add(new(Id(project.Name, question.FactKey, false), "", OwnerQuestionKind.Onboarding, text,
-                    ProposedDefault: question.SuggestedValue));
-            }
-            foreach (var stale in state.StaleAnswers)
-            {
-                var key = stale.Answer.FactKey;
-                var canAnswer = OwnerAnswerApplier.IsLiveKey(state.Model, key);
-                var text = $"{key}: stale answer\nProject: {project.Name}\nFact key: {key}\nStale answer: {stale.Answer.Value}\n{stale.Reason}";
-                if (CurrentValue(state.Model, key) is { } current) text += $"\nCurrent value: {current}";
-                var question = state.Model.OwnerQuestions.FirstOrDefault(question => question.FactKey == key);
-                if (question is not null) text += $"\n{question.Question}";
-                text += canAnswer ? "\nAnswer to replace it, or accept default to dismiss." : "\nAccept default to dismiss; this key can no longer be answered.";
-                live.Add(new(Id(project.Name, key, true), "", OwnerQuestionKind.Onboarding, text,
-                    ProposedDefault: "Dismiss stale answer", CanAnswer: canAnswer));
+                    ProposedDefault: resolution.Command is null ? question.SuggestedValue : null,
+                    CanAnswer: resolution.Kind != OnboardingQuestionResolutionKind.Command));
             }
         }
         return snapshot with { Live = live };
@@ -83,6 +75,8 @@ internal sealed class OnboardingQuestionSource(IOwnerQuestionSource inner,
         if (dismiss && !stale) result = new(false, "Only a stale answer can be dismissed.");
         else if (!dismiss && key is ProjectDelivery.ModeKey or ProjectDelivery.DeciderKey)
             result = new(false, $"Use project answer {name} {key} <value> for this registry answer.");
+        else if (!dismiss && key == LearnedIntegrationBranch.OwnerQuestionKey)
+            result = new(false, $"Resolve with: project use-learned-branch {name}");
         else if (dismiss) result = ProjectOwnerAnswerRecorder.Remove(DirectoryFor(project), key);
         else if (stale) result = ProjectOwnerAnswerRecorder.ReplaceStale(DirectoryFor(project), key, text!, null, clock.GetUtcNow());
         else result = ProjectOwnerAnswerRecorder.Record(DirectoryFor(project), key, text!, null, clock.GetUtcNow());
@@ -103,8 +97,9 @@ internal sealed class OnboardingQuestionSource(IOwnerQuestionSource inner,
         $"{(stale ? "onboarding-stale" : "onboarding")}:{Uri.EscapeDataString(project)}:{Uri.EscapeDataString(key)}";
     private static string DirectoryFor(OwnerConsoleBoardProject project) =>
         project.OrchestratorDirectory ?? Path.GetDirectoryName(project.PortfolioPath)!;
-    private static ProjectOnboardingState Read(OwnerConsoleBoardProject project) =>
-        ProjectOnboardingStateReader.Read(project.Name, DirectoryFor(project), project.ConductEventsLogPath, project.DeliveryAnswered);
+    private static ProjectOnboardingState Read(OwnerConsoleBoardProject project, bool goalLanded) =>
+        ProjectOnboardingStateReader.Read(project.Name, DirectoryFor(project), project.ConductEventsLogPath,
+            project.DeliveryAnswered, project.UseLearnedBranch, goalLanded);
 
     private static string? CurrentValue(ProjectModel model, string key)
     {

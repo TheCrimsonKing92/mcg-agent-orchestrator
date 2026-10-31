@@ -29,10 +29,12 @@ public sealed class CliAttentionNextGoldenOutputTests : CliTaskQueryTestSupport
             var legacy = CaptureConsole(() => Xunit.Assert.False(CliCommandDispatcher.ExecuteCommand(
                 args, kernel, workspace, ref legacyAgents, providers, ref legacyProfiles, ref legacyGoal)));
             var fixture = args.Length == 3 && args[2] == "--all"
-                ? CliAttentionNextGoldenFixtures.EmptyAttentionHistory
+                ? CliAttentionNextGoldenFixtures.EmptyAttentionShowHistory
                 : args.Length == 3
                     ? CliAttentionNextGoldenFixtures.EmptyGoalAttention(goal.Id.Value)
-                    : CliAttentionNextGoldenFixtures.EmptyAttention;
+                    : args.Length == 2 && args[1] == "show"
+                        ? CliAttentionNextGoldenFixtures.EmptyAttentionShow
+                        : CliAttentionNextGoldenFixtures.EmptyAttention;
             Xunit.Assert.Equal(Encoding.UTF8.GetBytes(fixture), Encoding.UTF8.GetBytes(legacy));
 
             var repository = new ProbeStateRepository(kernel) { ThrowOnOutbox = true };

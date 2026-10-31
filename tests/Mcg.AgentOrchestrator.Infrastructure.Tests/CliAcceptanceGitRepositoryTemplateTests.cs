@@ -33,7 +33,7 @@ public sealed class CliAcceptanceGitRepositoryTemplateTests : CliCommandTestBase
         }
     }
 
-    private static void AssertRepositoryShape(string root)
+    private void AssertRepositoryShape(string root)
     {
         Assert.Equal("seed", File.ReadAllText(Path.Combine(root, "seed.txt")));
         Assert.Equal("# Dogfood Log" + Environment.NewLine, File.ReadAllText(Path.Combine(root, "DOGFOOD_LOG.md")));

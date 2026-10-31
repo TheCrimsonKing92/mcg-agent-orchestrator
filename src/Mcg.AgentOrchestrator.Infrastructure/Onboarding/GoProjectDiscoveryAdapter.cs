@@ -135,6 +135,7 @@ public sealed class GoProjectDiscoveryAdapter : IProjectDiscoveryAdapter
             {
                 if (directory != root)
                 {
+                    if (GoModuleCacheTree.IsCacheSubtree(directory)) return;
                     var name = Path.GetFileName(directory);
                     if (!tracked.IncludesDirectory(directory) || exclusions.Contains(name) || name.StartsWith('.') ||
                         name.StartsWith('_') || !IsSafePath(root, directory))

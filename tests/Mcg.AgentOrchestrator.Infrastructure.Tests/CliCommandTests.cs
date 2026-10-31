@@ -10,18 +10,22 @@ using System.Text.Json.Nodes;
 
 public abstract class CliCommandTestBase : HostCapacityBoundTestBase
 {
-    private protected static WorktreeCleanupContext CreateIsolatedCleanupContext(
+    public override ValueTask InitializeAsync() => ValueTask.CompletedTask;
+
+    private protected WorktreeCleanupContext CreateIsolatedCleanupContext(
         OrchestratorWorkspace workspace,
         GoalWorktreeCleanupHooks? hooks = null)
     {
+        EnsureHostCapacity();
         var root = new DotnetBuildStorageRoot(Path.Combine(workspace.ExecutionDirectory, ".orchestrator", "test-dotnet"));
         return hooks is null
             ? WorktreeCleanupContext.Load(attentionStoreDirectory: workspace.OrchestratorDirectory, buildStorageRoot: root)
             : new WorktreeCleanupContext(hooks with { BuildStorageRoot = root });
     }
 
-    private protected static OrchestratorWorkspace CreateRefinedWorkspace(string root)
+    private protected OrchestratorWorkspace CreateRefinedWorkspace(string root)
     {
+        EnsureHostCapacity();
         SeedLocalSkillCatalog(root);
         var workspace = OrchestratorWorkspace.ForDirectory(root);
         _ = StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath);
@@ -57,13 +61,14 @@ public abstract class CliCommandTestBase : HostCapacityBoundTestBase
         DateTimeOffset? updatedAt = null) =>
         new(Guid.NewGuid().ToString("n"), title, body, status, DateTimeOffset.UtcNow, updatedAt ?? DateTimeOffset.UtcNow, null);
 
-    private protected static string ExecuteCliAndCapture(
+    private protected string ExecuteCliAndCapture(
         IReadOnlyList<string> parts,
         AgentOrchestratorKernel kernel,
         OrchestratorWorkspace workspace,
         TextReader? standardInput = null,
         bool? isStandardInputRedirected = null)
     {
+        EnsureHostCapacity();
         IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
         var providers = new InMemoryModelProviderRegistry([]);
         var profiles = WorkerProfileCatalog.Default();
@@ -81,11 +86,12 @@ public abstract class CliCommandTestBase : HostCapacityBoundTestBase
             isStandardInputRedirected: isStandardInputRedirected));
     }
 
-    private protected static (string Output, bool Changed, Goal? CurrentGoal) ExecuteCliAndCaptureResult(
+    private protected (string Output, bool Changed, Goal? CurrentGoal) ExecuteCliAndCaptureResult(
         IReadOnlyList<string> parts,
         AgentOrchestratorKernel kernel,
         OrchestratorWorkspace workspace)
     {
+        EnsureHostCapacity();
         IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
         var providers = new InMemoryModelProviderRegistry([]);
         var profiles = WorkerProfileCatalog.Default();
@@ -104,8 +110,9 @@ public abstract class CliCommandTestBase : HostCapacityBoundTestBase
         return (output, changed, currentGoal);
     }
 
-    private protected static void AssertHelpCommandDoesNotResolveGoal(IReadOnlyList<string> parts, string expectedUsage)
+    private protected void AssertHelpCommandDoesNotResolveGoal(IReadOnlyList<string> parts, string expectedUsage)
     {
+        EnsureHostCapacity();
         var root = CreateTempDirectory();
         var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
@@ -133,11 +140,14 @@ public abstract class CliCommandTestBase : HostCapacityBoundTestBase
         Xunit.Assert.Equal(beforeFiles, SnapshotFiles(root));
     }
 
-    private protected static string[] SnapshotFiles(string root) =>
-        Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories)
+    private protected string[] SnapshotFiles(string root)
+    {
+        EnsureHostCapacity();
+        return Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories)
             .Select(path => Path.GetRelativePath(root, path))
             .OrderBy(path => path, StringComparer.Ordinal)
             .ToArray();
+    }
 
     private protected static string NormalizeVolatileTimes(GoalSnapshot snapshot)
     {
@@ -176,8 +186,9 @@ public abstract class CliCommandTestBase : HostCapacityBoundTestBase
         }
     }
 
-    private protected static CliProcessResult RunAppCommand(string workingDirectory, params string[] arguments)
+    private protected CliProcessResult RunAppCommand(string workingDirectory, params string[] arguments)
     {
+        EnsureHostCapacity();
         var appAssembly = Path.Combine(AppContext.BaseDirectory, "Mcg.AgentOrchestrator.App.dll");
         var startInfo = new ProcessStartInfo
         {
@@ -216,8 +227,9 @@ public abstract class CliCommandTestBase : HostCapacityBoundTestBase
 
     private protected sealed record CliProcessResult(int ExitCode, string Stdout, string Stderr);
 
-    private protected static void WritePlanningBacklog(string root)
+    private protected void WritePlanningBacklog(string root)
     {
+        EnsureHostCapacity();
         SeedBacklog(root, """
         # Backlog
 
@@ -239,8 +251,9 @@ public abstract class CliCommandTestBase : HostCapacityBoundTestBase
         """);
     }
 
-    private protected static void WriteCompilationBacklog(string root)
+    private protected void WriteCompilationBacklog(string root)
     {
+        EnsureHostCapacity();
         SeedBacklog(root, """
         # Backlog
 
@@ -254,8 +267,9 @@ public abstract class CliCommandTestBase : HostCapacityBoundTestBase
         """);
     }
 
-    private protected static void WriteConflictingCompilationBacklog(string root)
+    private protected void WriteConflictingCompilationBacklog(string root)
     {
+        EnsureHostCapacity();
         SeedBacklog(root, """
         # Backlog
 
@@ -269,8 +283,9 @@ public abstract class CliCommandTestBase : HostCapacityBoundTestBase
         """);
     }
 
-    private protected static void MakeLeaseOwnerStale(string metadataPath)
+    private protected void MakeLeaseOwnerStale(string metadataPath)
     {
+        EnsureHostCapacity();
         var text = File.ReadAllText(metadataPath);
         File.WriteAllText(metadataPath, text.Replace(
             $"\"ownerProcessId\": {Environment.ProcessId}",
@@ -294,16 +309,18 @@ public abstract class CliCommandTestBase : HostCapacityBoundTestBase
         ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
         Subscription: new SubscriptionLaunchProfile("codex-cli"));
 
-    private protected static void DirtyGoalWorktree(string root, Goal goal)
+    private protected void DirtyGoalWorktree(string root, Goal goal)
     {
+        EnsureHostCapacity();
         EnsureGitRepository(root);
         var worktree = GoalWorktrees.Ensure(root, goal.Id);
         Directory.CreateDirectory(Path.Combine(worktree, "src"));
         File.WriteAllText(Path.Combine(worktree, "src", "dirty.txt"), "dirty");
     }
 
-    private protected static void EnsureGitRepository(string root)
+    private protected void EnsureGitRepository(string root)
     {
+        EnsureHostCapacity();
         RunGit(root, "init");
         RunGit(root, "config", "user.email", "tests@example.invalid");
         RunGit(root, "config", "user.name", "Tests");
@@ -340,13 +357,14 @@ public abstract class CliCommandTestBase : HostCapacityBoundTestBase
         return goal.Tasks.Single(task => task.RequiredRole == role).AssignedAgentId!.Value;
     }
 
-    private protected static void RecordRunningProcess(
+    private protected void RecordRunningProcess(
         AgentOrchestratorKernel kernel,
         Goal goal,
         TaskSpec task,
         string workingDirectory,
         int processId = 999999)
     {
+        EnsureHostCapacity();
         var stdout = Path.Combine(workingDirectory, $"{task.Id.Value}-out.log");
         var stderr = Path.Combine(workingDirectory, $"{task.Id.Value}-err.log");
         var exit = Path.Combine(workingDirectory, $"{task.Id.Value}-exit.txt");
@@ -359,8 +377,9 @@ public abstract class CliCommandTestBase : HostCapacityBoundTestBase
             new TaskProcessRecord(processId, "codex exec prompt.md", workingDirectory, stdout, stderr, exit, DateTimeOffset.UtcNow, null, null));
     }
 
-    private protected static void WriteIdentityBoundHeartbeat(TaskProcessRecord process, int processId)
+    private protected void WriteIdentityBoundHeartbeat(TaskProcessRecord process, int processId)
     {
+        EnsureHostCapacity();
         var identity = DispatchProcessIdentityEvidence.ReadCurrent(processId)
             ?? throw new InvalidOperationException($"Could not read process identity for PID {processId}.");
         var observedAt = DateTimeOffset.UtcNow;
@@ -403,15 +422,17 @@ public abstract class CliCommandTestBase : HostCapacityBoundTestBase
         });
     }
 
-    private protected static string CreateAcceptanceRepository()
+    private protected string CreateAcceptanceRepository()
     {
+        EnsureHostCapacity();
         var root = CreateTempDirectory();
         CliAcceptanceGitRepositoryTemplate.CopyTo(root);
         return root;
     }
 
-    private protected static string CreateShortAcceptanceRepository()
+    private protected string CreateShortAcceptanceRepository()
     {
+        EnsureHostCapacity();
         var baseDirectory = Path.Combine(Path.GetTempPath(), "mcg-short-tests");
         Directory.CreateDirectory(baseDirectory);
         var root = Path.Combine(baseDirectory, Guid.NewGuid().ToString("N")[..12]);
@@ -420,8 +441,9 @@ public abstract class CliCommandTestBase : HostCapacityBoundTestBase
         return root;
     }
 
-    private protected static string CommitGoalWork(string root, GoalId goalId, string relativePath, string content)
+    private protected string CommitGoalWork(string root, GoalId goalId, string relativePath, string content)
     {
+        EnsureHostCapacity();
         var worktree = GoalWorktrees.Ensure(root, goalId);
         var path = Path.Combine(worktree, relativePath);
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
@@ -431,8 +453,9 @@ public abstract class CliCommandTestBase : HostCapacityBoundTestBase
         return worktree;
     }
 
-    private protected static void CleanupAcceptanceRepository(string root, GoalId? goalId)
+    private protected void CleanupAcceptanceRepository(string root, GoalId? goalId)
     {
+        EnsureHostCapacity();
         try
         {
             if (goalId is not null && Directory.Exists(root))
@@ -475,10 +498,11 @@ public abstract class CliCommandTestBase : HostCapacityBoundTestBase
         return JsonSerializer.Serialize(landingRelevantState);
     }
 
-    private protected static (int ExitCode, string StandardOutput, string StandardError) RunAppCli(
+    private protected (int ExitCode, string StandardOutput, string StandardError) RunAppCli(
         string workingDirectory,
         IReadOnlyList<string> args)
     {
+        EnsureHostCapacity();
         var startInfo = new ProcessStartInfo
         {
             FileName = "dotnet",
@@ -512,11 +536,12 @@ public abstract class CliCommandTestBase : HostCapacityBoundTestBase
         return (process.ExitCode, output, error);
     }
 
-    private protected static async Task<AppCliTimeoutResult> RunAppCliWithExitTimeout(
+    private protected async Task<AppCliTimeoutResult> RunAppCliWithExitTimeout(
         string workingDirectory,
         IReadOnlyList<string> args,
         TimeSpan timeout)
     {
+        await EnsureHostCapacityAsync();
         var startInfo = new ProcessStartInfo
         {
             FileName = "dotnet",
@@ -560,13 +585,15 @@ public abstract class CliCommandTestBase : HostCapacityBoundTestBase
         string StandardOutput,
         string StandardError);
 
-    private protected static void RunGit(string workingDirectory, params string[] arguments)
+    private protected void RunGit(string workingDirectory, params string[] arguments)
     {
+        EnsureHostCapacity();
         _ = RunGitOutput(workingDirectory, arguments);
     }
 
-    private protected static string RunGitOutput(string workingDirectory, params string[] arguments)
+    private protected string RunGitOutput(string workingDirectory, params string[] arguments)
     {
+        EnsureHostCapacity();
         var result = InfrastructureTestSupport.RunGitProbe(workingDirectory, arguments);
         InfrastructureTestSupport.RequireCompleteGitOutput(result);
         if (!result.Succeeded)
@@ -1120,4 +1147,3 @@ public abstract class CliCommandTestBase : HostCapacityBoundTestBase
     }
 
 }
-

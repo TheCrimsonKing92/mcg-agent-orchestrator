@@ -52,18 +52,12 @@ internal sealed partial class ConductorDriver
             throw new InvalidDataException("Deferred no-change evidence has no Tester evidence owner.");
         var worktreePath = GoalWorktrees.WorktreePath(_executionDirectory, goal.Id);
         var declaration = DeveloperDeferredTestSelections.Resolve(
-            worktreePath, "deferred - " + string.Join(", ", outcome.TestClasses));
+            worktreePath, "deferred - " + string.Join(", ", outcome.TestClasses),
+            _cohortWorkspace?.ProjectHomeDirectoryOrNull);
         var settings = _getFindingEvidenceEngineSettings(goal);
-        var selected = new List<FindingEvidenceSelection>();
-        var notRun = new List<string>(declaration.NotRun);
-        foreach (var selection in declaration.Selections)
-        {
-            if (TryNormalizeFindingEvidenceRequest(
-                    new FindingEvidenceRequest([selection]), settings, (_, _) => [],
-                    out var normalized, out _, out _, out _))
-                selected.AddRange(normalized.Selections);
-            else notRun.Add(selection.TestClass);
-        }
+        var normalizedDeclaration = DeveloperDeferredTestSelectionNormalization.Normalize(declaration, settings);
+        var selected = new List<FindingEvidenceSelection>(normalizedDeclaration.Selections);
+        var notRun = new List<string>(normalizedDeclaration.NotRun);
         var distinct = selected.DistinctBy(FormatFindingEvidenceSelection).ToArray();
         var selectionNames = distinct.Select(FormatFindingEvidenceSelection).ToArray();
         if (prior is { Outcome: "started" } &&

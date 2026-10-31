@@ -59,10 +59,12 @@ public sealed class CliAttentionNextReadOnlyWriterHeldTests : CliTaskQueryTestSu
                     if (args[0] == "attention")
                     {
                         var expected = args.Length == 3 && args[2] == "--all"
-                            ? CliAttentionNextGoldenFixtures.EmptyAttentionHistory
+                            ? CliAttentionNextGoldenFixtures.EmptyAttentionShowHistory
                             : args.Length == 3
                                 ? CliAttentionNextGoldenFixtures.EmptyGoalAttention(goal.Id.Value)
-                                : CliAttentionNextGoldenFixtures.EmptyAttention;
+                                : args.Length == 2 && args[1] == "show"
+                                    ? CliAttentionNextGoldenFixtures.EmptyAttentionShow
+                                    : CliAttentionNextGoldenFixtures.EmptyAttention;
                         Xunit.Assert.Equal(expected, result.Output);
                     }
                     else

@@ -56,9 +56,10 @@ internal sealed class OnboardingConsoleFixture : IDisposable
         Assert.True(new ConductorLeaseLiveness(workspace.OrchestratorDirectory).IsRunning(), "Fixture must own a live lease.");
     }
 
-    internal static OwnerConsoleBoardProject Describe(OrchestratorWorkspace workspace) =>
+    internal static OwnerConsoleBoardProject Describe(OrchestratorWorkspace workspace, bool useLearnedBranch = false) =>
         new(workspace.ProjectName, workspace.SqliteStatePath, workspace.PortfolioStorePath,
-            OrchestratorDirectory: workspace.OrchestratorDirectory, ConductEventsLogPath: workspace.ConductEventsLogPath);
+            OrchestratorDirectory: workspace.OrchestratorDirectory, ConductEventsLogPath: workspace.ConductEventsLogPath,
+            UseLearnedBranch: useLearnedBranch);
 
     internal static ProjectOnboardingState Read(OrchestratorWorkspace workspace) =>
         ProjectOnboardingStateReader.Read(workspace.ProjectName, workspace.OrchestratorDirectory, workspace.ConductEventsLogPath);

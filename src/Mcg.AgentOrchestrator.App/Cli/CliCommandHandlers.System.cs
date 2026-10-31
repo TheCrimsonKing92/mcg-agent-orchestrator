@@ -369,7 +369,7 @@ internal static partial class CliCommandHandlers
 
                     if (goalPrefix is null)
                     {
-                        PostLandingDutiesTextView.Print(context.Kernel.Goals);
+                        AttentionShowDecisionsTextView.PrintThenDuties(context.Workspace, context.Kernel.Goals);
                         var showWaits = HumanWaitsForAttention(context.Kernel, null, includeHistory);
                         if (showWaits.Count > 0 || context.Kernel.Goals.Any(goal => goal.GateTestObligations.Count > 0))
                         {

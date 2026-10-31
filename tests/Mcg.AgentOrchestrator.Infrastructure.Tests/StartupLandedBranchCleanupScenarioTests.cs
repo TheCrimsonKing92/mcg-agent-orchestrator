@@ -156,14 +156,14 @@ public sealed class StartupLandedBranchCleanupScenarioTests : CliCommandTestBase
         });
     }
 
-    private static void AssertKept(string root, GoalId id, string path, string tip, string registrations)
+    private void AssertKept(string root, GoalId id, string path, string tip, string registrations)
     {
         Assert.True(Directory.Exists(path));
         Assert.Contains(path.Replace('\\', '/'), registrations, StringComparison.OrdinalIgnoreCase);
         Assert.Equal(tip, RunGitOutput(root, "rev-parse", GoalWorktrees.BranchName(id)).Trim());
     }
 
-    private static void SaveFinalizedReceipt(string root, MergeTrainAcceptanceStore store, GoalId id, string tip, string landing)
+    private void SaveFinalizedReceipt(string root, MergeTrainAcceptanceStore store, GoalId id, string tip, string landing)
     {
         MergeTrainMemberBinding Member(GoalId memberId, string file) => new MergeTrainMemberBinding(
             memberId, tip, tip, [file], [file], ChangeRiskTier.Behavior, ConductorTransitionDecision.Auto,

@@ -556,7 +556,8 @@ try
             authorityTransferRequested,
             workspace.SqliteStatePath,
             workspace.ExecutionDirectory,
-            cleanupContext);
+            cleanupContext,
+            $"cli-startup:{startupArgs.FirstOrDefault() ?? "interactive"}");
     }
     stateRepository = StartupSqliteRetry.Run(workspace.SqliteStatePath, "state-repository-open", () => defersStateUpgrade
         ? SqliteOrchestratorStateRepository.OpenReadOnly(workspace.SqliteStatePath)
@@ -583,7 +584,8 @@ if (startupArgs.Count > 0)
                     ProgramStartupLifecycle.IsAuthorityTransferRequested(startupArgs),
                     workspace.SqliteStatePath,
                     workspace.ExecutionDirectory,
-                    cleanupContext)
+                    cleanupContext,
+                    $"cli-startup:{startupArgs.FirstOrDefault() ?? "interactive"}")
                 : null);
         return ExitCompletedStartupCommand(0);
     }
@@ -779,7 +781,8 @@ internal static class ProgramStartupLifecycle
         bool authorityTransferRequested,
         string stateStorePath,
         string executionDirectory,
-        WorktreeCleanupContext? cleanupContext = null)
+        WorktreeCleanupContext? cleanupContext = null,
+        string? callerRole = null)
     {
         WorkerProcessJobs.ConfigureRegistry(stateStorePath);
         if (authorityTransferRequested)
@@ -791,7 +794,7 @@ internal static class ProgramStartupLifecycle
         if (runsStartupCleanup)
         {
             (cleanupContext ?? new WorktreeCleanupContext(GoalWorktreeCleanupOptions.Default))
-                .Scheduler.SweepNow(executionDirectory);
+                .Scheduler.SweepNow(executionDirectory, callerRole: callerRole ?? "cli-startup");
         }
     }
 }

@@ -15,7 +15,7 @@ public sealed class GoalCreationSummaryTests : CliCommandTestBase
     [InlineData("--text-file")]
     public async Task RealCliSummaryOmitsLongBodyAndPreservesDurableScoutData(string inputFlag)
     {
-        using var fixture = new Fixture();
+        using var fixture = new Fixture(this);
         var workspace = fixture.Workspace;
         Directory.CreateDirectory(Path.Combine(fixture.Root, "src"));
         File.WriteAllText(Path.Combine(fixture.Root, "src", "Receipt.cs"), "// fixture");
@@ -80,7 +80,7 @@ public sealed class GoalCreationSummaryTests : CliCommandTestBase
     [Fact]
     public async Task DefaultOutputStillContainsThePlanAndGoal()
     {
-        using var fixture = new Fixture();
+        using var fixture = new Fixture(this);
         const string objective = "Update the receipt formatter with a focused regression assertion.";
         var result = await RunIsolatedApp(fixture, "goal", objective, "--pipeline", "scout");
         Assert.True(result.ExitCode == 0, result.Stdout + result.Stderr);
@@ -113,7 +113,7 @@ public sealed class GoalCreationSummaryTests : CliCommandTestBase
     [InlineData("plan", "")]
     public async Task InvalidSummaryOptionsFailBeforeReservationOrMutation(string command, string option)
     {
-        using var fixture = new Fixture();
+        using var fixture = new Fixture(this);
         var args = new List<string> { command, "Update receipt formatting", "--summary", "--request-key", "invalid" };
         if (option.Length > 0) args.Add(option);
         var before = File.ReadAllBytes(fixture.Workspace.SqliteStatePath);
@@ -127,7 +127,7 @@ public sealed class GoalCreationSummaryTests : CliCommandTestBase
     [Fact]
     public void UnknownGoalOptionWithoutSummaryAlsoFailsBeforeReservation()
     {
-        using var fixture = new Fixture();
+        using var fixture = new Fixture(this);
         Assert.Throws<ArgumentException>(() => Execute(fixture,
             ["goal", "Update receipt formatting.", "--unknown-option", "--request-key", "unknown"]));
         Assert.Empty(fixture.Repository.LoadAsync().GetAwaiter().GetResult().Goals);
@@ -137,7 +137,7 @@ public sealed class GoalCreationSummaryTests : CliCommandTestBase
     [Fact]
     public async Task SummaryRetainsExistingStandaloneDependencyAndAutonomyOptions()
     {
-        using var fixture = new Fixture();
+        using var fixture = new Fixture(this);
         Execute(fixture, ["goal", "Update prerequisite formatting.", "--pipeline", "scout"]);
         var prerequisite = Assert.Single((await fixture.Repository.LoadAsync()).Goals);
         var output = Execute(fixture, ["goal", "Update dependent receipt formatting.", "--summary", "--pipeline", "scout",
@@ -152,7 +152,7 @@ public sealed class GoalCreationSummaryTests : CliCommandTestBase
     [Fact]
     public async Task ReplayUsesCurrentDurableGoalAndDoesNotChangeRequestIdentity()
     {
-        using var fixture = new Fixture();
+        using var fixture = new Fixture(this);
         string[] args = ["goal", "Update the compact receipt formatter.", "--pipeline", "scout", "--request-key", "replay"];
         Execute(fixture, args);
         var state = await fixture.Repository.LoadAsync();
@@ -183,7 +183,7 @@ public sealed class GoalCreationSummaryTests : CliCommandTestBase
     [InlineData("created")]
     public async Task IncompleteOrInvalidReplayNeverClaimsSuccess(string state)
     {
-        using var fixture = new Fixture();
+        using var fixture = new Fixture(this);
         string[] args = ["goal", "Update receipt formatting.", "--pipeline", "scout", "--summary", "--request-key", "incomplete"];
         var request = GoalIntakeRequestMapper.Map(args, fixture.Workspace, AgentCatalog.Default().Agents)!;
         var store = new GoalIntakeRequestStore(fixture.Workspace.SqliteStatePath);
@@ -220,7 +220,7 @@ public sealed class GoalCreationSummaryTests : CliCommandTestBase
     [Fact]
     public void BlockedSummaryDoesNotInventDurableIdentity()
     {
-        using var fixture = new Fixture();
+        using var fixture = new Fixture(this);
         using var output = new StringWriter();
         var error = Assert.Throws<InvalidOperationException>(() => AsyncLocalConsoleRouter.Out.CaptureLocal(
             () => Execute(fixture, ["goal", "fix it", "--summary"], capture: false), output));
@@ -234,7 +234,7 @@ public sealed class GoalCreationSummaryTests : CliCommandTestBase
     [Fact]
     public void CommitFailurePrintsNoAppliedReceipt()
     {
-        using var fixture = new Fixture();
+        using var fixture = new Fixture(this);
         var repository = new InMemoryTransactionalStateRepository(new AgentOrchestratorKernel())
         {
             BeforeSaveCommit = _ => throw new InvalidOperationException("fixture commit rejected")
@@ -251,7 +251,7 @@ public sealed class GoalCreationSummaryTests : CliCommandTestBase
     [Fact]
     public async Task FailedEpicAssignmentReportsOnlyConfirmedLinks()
     {
-        using var fixture = new Fixture();
+        using var fixture = new Fixture(this);
         var portfolio = new PortfolioStore(fixture.Workspace.PortfolioStorePath);
         var epic = await portfolio.AddEpicAsync("Rejected membership");
         using (var connection = new SqliteConnection($"Data Source={fixture.Workspace.PortfolioStorePath};Pooling=False"))
@@ -274,7 +274,7 @@ public sealed class GoalCreationSummaryTests : CliCommandTestBase
     [Fact]
     public void RendererBoundsTaskRowsAndUnicodeTitlesWithoutTruncatingWarnings()
     {
-        using var fixture = new Fixture();
+        using var fixture = new Fixture(this);
         var title = string.Concat(Enumerable.Repeat("😀e\u0301", 90)) + "\nsecond line";
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal("Body must not be printed", Enumerable.Range(0, 13)
@@ -387,9 +387,9 @@ public sealed class GoalCreationSummaryTests : CliCommandTestBase
         public string Root { get; } = Directory.CreateTempSubdirectory("goal-summary-").FullName;
         public OrchestratorWorkspace Workspace { get; }
         public ITransactionalOrchestratorStateRepository Repository { get; }
-        public Fixture()
+        public Fixture(GoalCreationSummaryTests owner)
         {
-            Workspace = CreateRefinedWorkspace(Root);
+            Workspace = owner.CreateRefinedWorkspace(Root);
             AgentCatalogStore.Save(Workspace.AgentCatalogPath, AgentCatalog.Default());
             Repository = CreateMigratedStateRepository(Workspace.SqliteStatePath);
         }

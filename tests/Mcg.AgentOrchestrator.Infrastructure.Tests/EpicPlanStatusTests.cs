@@ -145,9 +145,9 @@ public sealed class EpicPlanStatusTests : CliCommandTestBase
         Assert.Contains("1 of 1 slices landed; next: complete", Execute(workspace, "epic-show", epic.Id));
     }
 
-    private static void AssertStatus(OrchestratorWorkspace workspace, string epicId, BacklogItem item, string status) =>
+    private void AssertStatus(OrchestratorWorkspace workspace, string epicId, BacklogItem item, string status) =>
         Assert.Contains($"{item.Id[..8]} {item.Title} — {status}{Environment.NewLine}", Execute(workspace, "epic-plan", epicId));
-    private static string Execute(OrchestratorWorkspace workspace, params string[] args) =>
+    private string Execute(OrchestratorWorkspace workspace, params string[] args) =>
         ExecuteCliAndCapture(args, new AgentOrchestratorKernel(), workspace);
     private static void AssertNoStatusColumn(string path)
     {

@@ -50,8 +50,10 @@ internal static partial class LandingExecutor
                     _ => throw new InvalidOperationException($"Unexpected obligation outcome: {result.Outcome}")
                 };
                 var selectors = result.Selectors.Count == 0 ? "none" : string.Join(", ", result.Selectors);
+                var closest = result.ClosestIdentities is { Count: > 0 }
+                    ? $"; closest: {string.Join(", ", result.ClosestIdentities)}" : "";
                 return $"gate test obligation {result.Obligation.Id[..Math.Min(8, result.Obligation.Id.Length)]} " +
-                    $"(brief v{result.Obligation.BriefVersion}) {outcome}: {selectors}; source {result.SourceId ?? "none"}";
+                    $"(brief v{result.Obligation.BriefVersion}) {outcome}: {selectors}; source {result.SourceId ?? "none"}{closest}";
             }).ToArray();
         var pending = PostLandingOperatorCheck.HoldingLanding(kernel.GetPendingHumanInput(goal.Id));
         if (pending.Count == 0)

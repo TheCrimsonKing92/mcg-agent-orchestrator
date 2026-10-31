@@ -958,7 +958,7 @@ internal static partial class CliPersistentStateRunner
                     startupKernel = LoadLoopKernel();
                     tickBaselines = startupKernel.ExportSnapshot().Goals.ToDictionary(goal => goal.Id, StringComparer.Ordinal);
                 });
-                heartbeat.Run(ConductorStartupHeartbeat.Phases.OrphanWorktreeSweep, () => cleanupContext.Scheduler.SweepIfDue(workspace.ExecutionDirectory, sweepKernel));
+                heartbeat.Run(ConductorStartupHeartbeat.Phases.OrphanWorktreeSweep, () => cleanupContext.Scheduler.SweepIfDue(workspace.ExecutionDirectory, sweepKernel, "conductor-startup"));
                 heartbeat.Run(ConductorStartupHeartbeat.Phases.RemoteMirrorStart, () => RemoteGitMirror.TryStartBackgroundProcessing(sweepKernel, workspace.ExecutionDirectory, watchGoalId, workspace.IntegrationBranch));
             }
             catch (Exception ex)
@@ -2423,7 +2423,7 @@ internal static partial class CliPersistentStateRunner
         var runner = OperatorCancelAwareDispatchRunner.ForWorkspace(workspace);
         var reconciled = runner.SweepExitedProcesses(kernel);
         cleanupContext ??= WorktreeCleanupContext.Load(attentionStoreDirectory: workspace.OrchestratorDirectory);
-        cleanupContext.Scheduler.SweepIfDue(workspace.ExecutionDirectory, kernel);
+        cleanupContext.Scheduler.SweepIfDue(workspace.ExecutionDirectory, kernel, "reconcile");
         RemoteGitMirror.TryStartBackgroundProcessing(kernel, workspace.ExecutionDirectory, integrationBranch: workspace.IntegrationBranch);
         Console.WriteLine($"Reconciled dispatches: {reconciled}");
 

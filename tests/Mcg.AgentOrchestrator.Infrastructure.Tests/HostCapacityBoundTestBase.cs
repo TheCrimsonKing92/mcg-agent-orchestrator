@@ -10,7 +10,10 @@
 /// </summary>
 public abstract class HostCapacityBoundTestBase : Xunit.IAsyncLifetime
 {
-    private IAsyncDisposable? capacitySlot;
+    private readonly object capacityGate = new();
+    private Task<IAsyncDisposable>? capacityAcquisition;
+    private Task? capacityDisposal;
+    private bool disposed;
 
     /// <summary>
     /// The budget this fixture draws from. Overridden only by the controls that verify the
@@ -18,14 +21,50 @@ public abstract class HostCapacityBoundTestBase : Xunit.IAsyncLifetime
     /// </summary>
     private protected virtual HostCapacityTestBudget CapacityBudget => HostCapacityTestBudget.Shared;
 
-    public virtual async ValueTask InitializeAsync() =>
-        capacitySlot = await CapacityBudget.EnterAsync();
+    public virtual ValueTask InitializeAsync() => EnsureHostCapacityAsync();
 
-    public virtual async ValueTask DisposeAsync()
+    /// <summary>One acquisition point for both eager fixtures and resource-using CLI helpers.</summary>
+    private protected async ValueTask EnsureHostCapacityAsync()
     {
-        if (Interlocked.Exchange(ref capacitySlot, null) is { } slot)
+        Task<IAsyncDisposable> acquisition;
+        lock (capacityGate)
         {
-            await slot.DisposeAsync();
+            ObjectDisposedException.ThrowIf(disposed, this);
+            if (capacityAcquisition is null || capacityAcquisition.IsFaulted || capacityAcquisition.IsCanceled)
+            {
+                capacityAcquisition = CapacityBudget.EnterAsync().AsTask();
+            }
+
+            acquisition = capacityAcquisition;
         }
+
+        await acquisition.ConfigureAwait(false);
+        lock (capacityGate)
+        {
+            ObjectDisposedException.ThrowIf(disposed, this);
+        }
+    }
+
+    private protected void EnsureHostCapacity() =>
+        EnsureHostCapacityAsync().GetAwaiter().GetResult();
+
+    public virtual ValueTask DisposeAsync()
+    {
+        lock (capacityGate)
+        {
+            disposed = true;
+            return new ValueTask(capacityDisposal ??= ReleaseCapacityAsync(capacityAcquisition));
+        }
+    }
+
+    private static async Task ReleaseCapacityAsync(Task<IAsyncDisposable>? acquisition)
+    {
+        if (acquisition is null || acquisition.IsFaulted || acquisition.IsCanceled)
+        {
+            return;
+        }
+
+        var slot = await acquisition.ConfigureAwait(false);
+        await slot.DisposeAsync().ConfigureAwait(false);
     }
 }

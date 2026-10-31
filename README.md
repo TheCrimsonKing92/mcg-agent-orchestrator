@@ -81,7 +81,7 @@ Start with the [operator runbook](docs/operator-runbook.md) for setup, operation
 ## Projects
 
 The current project inventory is derived from `src/**/*.csproj` (6 production projects) and
-`tests/**/*.csproj` (13 test/support projects). See the
+`tests/**/*.csproj` (14 test/support projects). See the
 [architecture map](docs/architecture.md) for the dependency graph, state ownership, current seams,
 and the separately labelled modular-monolith target.
 
@@ -107,6 +107,7 @@ and the separately labelled modular-monolith target.
 | `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Fixtures/IsolatedDotnetProbe/Mcg.AgentOrchestrator.IsolatedDotnetProbe.csproj` | Minimal executable fixture for isolated `dotnet` invocation tests. | Product tooling or a standalone test suite. |
 | `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Fixtures/ConsoleIoProbe/Mcg.AgentOrchestrator.ConsoleIoProbe.csproj` | Executable fixture for redirected Console I/O preservation tests. | Product tooling or a standalone test suite. |
 | `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Fixtures/SupervisorLaunchProbe/Mcg.AgentOrchestrator.SupervisorLaunchProbe.csproj` | Executable fixture for Windows launch-authority comparisons and real supervisor handoff lifetime tests. | Product hosting or general test execution. |
+| `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Fixtures/WorktreeSerializationProbe/Mcg.AgentOrchestrator.WorktreeSerializationProbe.csproj` | Executable fixture for cross-process worktree creation and deterministically paused git checkout tests. | Product hosting or general test execution. |
 <!-- current-project-inventory:end -->
 
 `scripts/OrchestratorSqliteTools/OrchestratorSqliteTools.csproj` and

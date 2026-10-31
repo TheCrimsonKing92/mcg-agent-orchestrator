@@ -72,7 +72,7 @@ public sealed class CliCommandTestsGoalAmendWaiveCriterionText : CliCommandTestB
             lines[confirmationIndex + 1]);
     }
 
-    private static async Task<string> WaiveSecondCriterion(string criterion)
+    private async Task<string> WaiveSecondCriterion(string criterion)
     {
         var workspace = CreateRefinedWorkspace(CreateTempDirectory());
         var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);

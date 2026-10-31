@@ -72,7 +72,8 @@ internal static class CliConductorCommand
                 case "apply-intents" when args.Count == 3:
                     return ApplyIntents(args, workspace, owner, stateRepository, output, error);
                 case "start":
-                    return Start(workspace, owner, args.Count == 3, launcher ?? new SystemConductorProcessLauncher(),
+                    return Start(workspace, owner, args.Count == 3, launcher ?? (OperatingSystem.IsWindows()
+                             ? new HandleListConductorProcessLauncher() : new SystemConductorProcessLauncher()),
                          output, error, home ?? OrchestratorHome.ResolveForProcess(), storeSetup, invocationBinding,
                          jobProbe ?? (launcher is null ? ProcessJobTrapProbe.Native : ProcessJobTrapProbe.UnknownProbe));
                 case "status":
@@ -226,23 +227,38 @@ internal static class CliConductorCommand
         }
         if (!TryRunStoreSetup(workspace, storeSetup, error, out _))
             return 1;
-        List<string> launchArguments = ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
-                Path.Combine(home.InstallRootDirectory, "scripts", "Start-OrchestratorCommand.ps1"),
-                "-Name", "conduct-loop-daemon", "-RepositoryRoot", workspace.RootDirectory,
-                "-ExpectedStateDirectory", workspace.OrchestratorDirectory];
-        if (invocationBinding?.DisposableFixture == true) launchArguments.Add("-DisposableFixture");
-        if (invocationBinding is not null)
-            launchArguments.AddRange(["-AppDll", typeof(OrchestratorWorkspace).Assembly.Location]);
-        launchArguments.AddRange(["conduct", "--loop", "--daemon", "--watch",
-                "--poll-seconds", "120", "--max-duration", "43200"]);
-        launchArguments.Add($"--project={workspace.ProjectName}");
-        launchArguments.Add($"--tenant={workspace.TenantName}");
-        var request = new ConductorLaunchRequest("pwsh",
-            launchArguments,
-            workspace.ExecutionDirectory,
-            new Dictionary<string, string> { ["MCG_DISPATCH_MAX_RUNTIME_MIN"] = "120" },
-            [CliProtectedProcessEnvironment.ProtectedPidVariable,
-                CliProtectedProcessEnvironment.ProtectedStartTicksVariable]);
+        ConductorLaunchRequest request;
+        if (OperatingSystem.IsWindows())
+        {
+            // The script used to make this second check after setup and binding validation.
+            invocationBinding?.Verify(workspace);
+            if (File.Exists(stopFile))
+            {
+                error.WriteLine($"Refused: stop file exists: {stopFile}.");
+                return 1;
+            }
+            request = ConductorStartLaunchPlan.Create(workspace, invocationBinding);
+        }
+        else
+        {
+            List<string> launchArguments = ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+                    Path.Combine(home.InstallRootDirectory, "scripts", "Start-OrchestratorCommand.ps1"),
+                    "-Name", "conduct-loop-daemon", "-RepositoryRoot", workspace.RootDirectory,
+                    "-ExpectedStateDirectory", workspace.OrchestratorDirectory];
+            if (invocationBinding?.DisposableFixture == true) launchArguments.Add("-DisposableFixture");
+            if (invocationBinding is not null)
+                launchArguments.AddRange(["-AppDll", typeof(OrchestratorWorkspace).Assembly.Location]);
+            launchArguments.AddRange(["conduct", "--loop", "--daemon", "--watch",
+                    "--poll-seconds", "120", "--max-duration", "43200"]);
+            launchArguments.Add($"--project={workspace.ProjectName}");
+            launchArguments.Add($"--tenant={workspace.TenantName}");
+            request = new ConductorLaunchRequest("pwsh",
+                launchArguments,
+                workspace.ExecutionDirectory,
+                new Dictionary<string, string> { ["MCG_DISPATCH_MAX_RUNTIME_MIN"] = "120" },
+                [CliProtectedProcessEnvironment.ProtectedPidVariable,
+                    CliProtectedProcessEnvironment.ProtectedStartTicksVariable]);
+        }
         var result = launcher.Launch(request);
         if (result.ExitCode != 0)
         {

@@ -79,7 +79,7 @@ public sealed class AcceptanceCriterionEvidenceRecoveryTestsLandingCarry : CliCo
         }
     }
 
-    private static void SavePassedReceipt(
+    private void SavePassedReceipt(
         string root, GoalId goalId, string candidate, MergeTrainAcceptanceStore store)
     {
         var members = new[]

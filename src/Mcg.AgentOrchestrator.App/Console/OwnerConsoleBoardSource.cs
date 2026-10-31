@@ -6,7 +6,7 @@ namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 
 internal sealed record OwnerConsoleBoardProject(string Name, string StatePath, string PortfolioPath,
     string? Error = null, string? OrchestratorDirectory = null, string? ConductEventsLogPath = null,
-    bool DeliveryAnswered = false);
+    bool DeliveryAnswered = false, bool UseLearnedBranch = false);
 internal sealed record OwnerConsoleBoardScope(string Label, int ProjectCount, string? DisclosureWorkspace,
     IReadOnlyList<string>? Sections = null);
 internal sealed record OwnerConsoleScopeCommandResult(string Message, bool Success, bool Changed);
@@ -34,7 +34,9 @@ internal sealed class OwnerConsoleBoardSource(string launchProject, OwnerConsole
                     return new(name, target.SqliteStatePath, target.PortfolioStorePath,
                         OrchestratorDirectory: target.OrchestratorDirectory, ConductEventsLogPath: target.ConductEventsLogPath,
                         DeliveryAnswered: registered.FirstOrDefault(project =>
-                            project.Name.Equals(name, StringComparison.OrdinalIgnoreCase))?.DeliveryAnswer is not null);
+                            project.Name.Equals(name, StringComparison.OrdinalIgnoreCase))?.DeliveryAnswer is not null,
+                        UseLearnedBranch: registered.FirstOrDefault(project =>
+                            project.Name.Equals(name, StringComparison.OrdinalIgnoreCase))?.UseLearnedIntegrationBranch == true);
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 { return new(name, "", "", ex.Message); }
@@ -105,8 +107,12 @@ internal sealed class OwnerConsoleBoardSource(string launchProject, OwnerConsole
                 {
                     if (project?.Error is { } error) throw new IOException(error);
                     if (project is not null && !name.Equals("home", StringComparison.OrdinalIgnoreCase))
+                    {
+                        var goalLanded = await ProjectOnboardingCompletion.HasLandedGoalAsync(project.StatePath, token);
                         onboarding[name] = ProjectOnboardingStateReader.Read(name, project.OrchestratorDirectory ??
-                            Path.GetDirectoryName(project.PortfolioPath)!, project.ConductEventsLogPath, project.DeliveryAnswered);
+                            Path.GetDirectoryName(project.PortfolioPath)!, project.ConductEventsLogPath,
+                            project.DeliveryAnswered, project.UseLearnedBranch, goalLanded);
+                    }
                     // GetAttributes distinguishes confirmed absence from inaccessible state.
                     if (project is null || !Exists(project.StatePath))
                     {

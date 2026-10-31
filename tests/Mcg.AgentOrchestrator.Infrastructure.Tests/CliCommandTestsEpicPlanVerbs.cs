@@ -150,7 +150,7 @@ public sealed class CliCommandTestsEpicPlanVerbs : CliCommandTestBase
         File.WriteAllText(path, text);
         return path;
     }
-    private static string Execute(OrchestratorWorkspace workspace, params string[] args) =>
+    private string Execute(OrchestratorWorkspace workspace, params string[] args) =>
         ExecuteCliAndCapture(args, new AgentOrchestratorKernel(), workspace);
 
     private static string Dump(string path)

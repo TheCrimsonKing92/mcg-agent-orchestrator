@@ -13,6 +13,9 @@ public static partial class GoalWorktrees
         string? trunkBranch = null)
     {
         cleanupHooks ??= new GoalWorktreeCleanupHooks();
+        var worktreesRoot = Path.Combine(Path.GetFullPath(executionDirectory), DirectoryName);
+        using var rootLock = GoalWorktreeRootLock.TryAcquire(worktreesRoot, TimeSpan.FromMilliseconds(GitCli.DefaultTimeoutMilliseconds))
+            ?? throw new InvalidOperationException($"Timed out waiting for the worktree creation/sweep lock at '{worktreesRoot}'.");
         var existing = TryResolve(executionDirectory, goalId);
         if (existing is not null)
         {

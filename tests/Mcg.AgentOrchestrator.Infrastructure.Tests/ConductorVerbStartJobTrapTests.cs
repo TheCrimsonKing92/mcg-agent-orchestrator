@@ -63,7 +63,7 @@ public sealed class ConductorVerbStartJobTrapTests
             storeSetup: _ => { setupCalls++; return []; }, jobProbe: probe);
         Assert.Equal(0, exit);
         var request = Assert.Single(launcher.Requests);
-        Assert.Equal("pwsh", request.FileName);
+        Assert.Equal(OperatingSystem.IsWindows() ? ConductorVerbStartTests.ExpectedHost() : "pwsh", request.FileName);
         Assert.Equal("Conductor launched: pid 1234; stdout log: stdout.log" + Environment.NewLine +
             "Check status: mcg-orchestrator.cmd conductor status" + Environment.NewLine, output.ToString());
         Assert.Equal("", error.ToString());
