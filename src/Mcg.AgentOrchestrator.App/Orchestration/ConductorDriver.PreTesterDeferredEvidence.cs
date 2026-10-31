@@ -72,18 +72,9 @@ internal sealed partial class ConductorDriver
         }
 
         var settings = _getFindingEvidenceEngineSettings(goal);
-        var selected = new List<FindingEvidenceSelection>();
-        var notRun = new List<string>(declaration.NotRun);
-        foreach (var selection in declaration.Selections)
-        {
-            if (TryNormalizeFindingEvidenceRequest(
-                    new FindingEvidenceRequest([selection]), settings,
-                    (_, _) => [],
-                    out var normalized, out _, out _, out _))
-                selected.AddRange(normalized.Selections);
-            else
-                notRun.Add(selection.TestClass);
-        }
+        var normalizedDeclaration = DeveloperDeferredTestSelectionNormalization.Normalize(declaration, settings);
+        var selected = new List<FindingEvidenceSelection>(normalizedDeclaration.Selections);
+        var notRun = new List<string>(normalizedDeclaration.NotRun);
         if (selected.Count == 0)
         {
             if (prior?.Outcome == "started")
