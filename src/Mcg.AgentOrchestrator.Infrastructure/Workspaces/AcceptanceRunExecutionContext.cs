@@ -16,6 +16,9 @@ internal interface IAcceptanceRunExecutionContext : IAsyncDisposable
     AcceptanceGateEngineSettings Settings { get; }
     CancellationToken CancellationToken { get; }
     AcceptanceAttemptArtifactCustodyContext? ArtifactCustody { get; }
+    AcceptanceFocusedRunBinding? FocusedRunBinding => null;
+    string? TreeRevision => null;
+    string? EvidenceKind => null;
     AcceptanceInvocationContext CreateInvocation(string name);
     T TrackStarted<T>(T task) where T : Task;
     void Cancel();
@@ -46,7 +49,7 @@ internal sealed record AcceptanceFocusedVerificationIdentity(
     string WorktreePath,
     string CandidateSha,
     string ResultsPrefix,
-    int? SlotIndex);
+    int? SlotIndex, string? TreeRevision = null);
 
 internal sealed record AcceptanceInvocationContext(
     string InvocationId,
@@ -75,7 +78,8 @@ public sealed record AcceptanceRunExecutionOptions(
     string? IntegrationBranch = null,
     IReadOnlyList<MemberDeclaredTestRemoval>? MemberTestRemovals = null,
     AcceptanceAttributionLaneScope? AttributionLaneScope = null,
-    IReadOnlyList<GoalId>? AttemptMemberGoalIds = null);
+    IReadOnlyList<GoalId>? AttemptMemberGoalIds = null,
+    AcceptanceFocusedRunBinding? FocusedRunBinding = null);
 
 public sealed record AcceptanceOwnerProtectedCohortMember(GoalId GoalId, string CandidateSha);
 
@@ -126,6 +130,8 @@ internal abstract class AcceptanceRunExecutionOwner : IAcceptanceRunExecutionCon
     public string IntegrationBranch { get; }
     internal string? GateRunIdentity => _options.GateRunIdentity;
     internal string? ProjectHomeDirectory => _options.ProjectHomeDirectory;
+    public AcceptanceFocusedRunBinding? FocusedRunBinding => _options.FocusedRunBinding;
+    public virtual string? TreeRevision => null;
     internal bool CohortRemoteLanes => _options.CohortRemoteLanes;
     public string ResultsPrefix { get; }
     public string ApparatusReceiptPath { get; }
@@ -204,7 +210,8 @@ internal abstract class AcceptanceRunExecutionOwner : IAcceptanceRunExecutionCon
     internal void MarkCancelled() =>
         Interlocked.Exchange(ref _releaseOutcome, (int)OwnedRunRootReleaseOutcome.Cancelled);
 
-    public void ReportProgress(AcceptanceGateProgress progress) => _options.ProgressSink?.Invoke(progress);
+    public void ReportProgress(AcceptanceGateProgress progress) =>
+        _options.ProgressSink?.Invoke(AcceptanceGateProgressProvenance.Attach(progress, this));
     public void ReportRemoteLaneEvent(string detail) => _options.RemoteLaneEventSink?.Invoke(detail);
 
     public Func<bool>? ResolveCancellationProbe(bool boundary) =>
@@ -332,6 +339,7 @@ internal sealed class AcceptanceAttemptExecutionOwner : AcceptanceRunExecutionOw
     }
 
     internal AcceptanceAttemptIdentity Identity { get; }
+    public override string? TreeRevision => Identity.CandidateTreeSha;
     internal string? ArtifactResultsPrefix { get; }
 
     internal async Task<AcceptanceVerificationResult> ExecuteAsync(
@@ -434,6 +442,7 @@ internal sealed class AcceptanceFocusedVerificationOwner : AcceptanceRunExecutio
     }
 
     internal AcceptanceFocusedVerificationIdentity Identity { get; }
+    public override string? TreeRevision => Identity.TreeRevision;
 
     internal async Task<FocusedEvidenceRunResult> ExecuteAsync(
         GoalAcceptanceVerifier verifier,
@@ -477,7 +486,7 @@ internal sealed class AcceptanceFocusedVerificationOwner : AcceptanceRunExecutio
 
 internal sealed class AcceptanceRunExecutionContextView(
     IAcceptanceRunExecutionContext owner,
-    string resultsPrefix) : IAcceptanceRunExecutionContext
+    string resultsPrefix, string? treeRevision = null, string? evidenceKind = null) : IAcceptanceRunExecutionContext
 {
     internal IAcceptanceRunExecutionContext Owner => owner;
     public string RunId => owner.RunId;
@@ -489,12 +498,16 @@ internal sealed class AcceptanceRunExecutionContextView(
     public AcceptanceGateEngineSettings Settings => owner.Settings;
     public CancellationToken CancellationToken => owner.CancellationToken;
     public AcceptanceAttemptArtifactCustodyContext? ArtifactCustody => owner.ArtifactCustody;
+    public AcceptanceFocusedRunBinding? FocusedRunBinding => owner.FocusedRunBinding;
+    public string? TreeRevision => treeRevision ?? owner.TreeRevision;
+    public string? EvidenceKind => evidenceKind ?? owner.EvidenceKind;
     public AcceptanceInvocationContext CreateInvocation(string name) => owner.CreateInvocation(name);
     public T TrackStarted<T>(T task) where T : Task => owner.TrackStarted(task);
     public void Cancel() => owner.Cancel();
     public void TrackEnvironment(DotnetBuildEnvironment environment) => owner.TrackEnvironment(environment);
     public void MarkSuccessful() => owner.MarkSuccessful();
-    public void ReportProgress(AcceptanceGateProgress progress) => owner.ReportProgress(progress);
+    public void ReportProgress(AcceptanceGateProgress progress) =>
+        owner.ReportProgress(AcceptanceGateProgressProvenance.Attach(progress, this));
     public void ReportRemoteLaneEvent(string detail) => owner.ReportRemoteLaneEvent(detail);
     public Func<bool>? ResolveCancellationProbe(bool boundary) => owner.ResolveCancellationProbe(boundary);
     public void ApplyApparatusReceiptEnvironment(IDictionary<string, string?> environment) =>
@@ -638,7 +651,8 @@ public static partial class AcceptanceExecutionOwners
                 Path.GetFullPath(worktreePath),
                 GoalAcceptanceVerifier.ResolveGitScalarForExecutionOwner(worktreePath, "rev-parse", "HEAD") ?? "unavailable",
                 resultsPrefix,
-                stableSlotIndex),
+                stableSlotIndex,
+                GoalAcceptanceVerifier.ResolveGitScalarForExecutionOwner(worktreePath, "rev-parse", "HEAD^{tree}")),
             AcceptanceGateEngineSettings.Load(worktreePath, options.ProjectHomeDirectory),
             cancellationToken,
             options);

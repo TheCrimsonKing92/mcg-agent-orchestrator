@@ -1267,10 +1267,16 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             focusedChecks,
             changedFiles: null,
             PolicyShardPlan.NotApplicable("focused evidence")));
-        dotnetTestBuildPhase.BuildEnvironment = executionEnvironment;
+        dotnetTestBuildPhase.BuildEnvironment = executionEnvironment ?? _executionContext?.FocusedRunBinding?.Environment;
         var shardCoreBudget =
             _testOverrides.ResolveShardCoreBudgetForTests?.Invoke() ?? Math.Max(1, Environment.ProcessorCount / 2);
         var shardConcurrencyBudget = Math.Min(EngineSettings.MaxConcurrentShards, shardCoreBudget);
+        // A reproduction owns its fresh output root; a remote or shadow run cannot
+        // establish that this partition's local build produced the loaded assembly.
+        if (_executionContext?.FocusedRunBinding is not null)
+            return (await RunCheckBatchAsync(focusedChecks, cacheContext: null, worktreePath, goalId,
+                stableSlotIndex, stableSlotLease, dotnetTestBuildPhase, shardConcurrencyBudget,
+                cancellationToken, continueAfterFailure, executionOwner).ConfigureAwait(false)).Results;
         await using var shadow = RemoteFocusedEvidenceShadow.Start(
             _testOverrides, _timeProvider, worktreePath, focusedChecks, goalId, executionOwner, cancellationToken);
         var batch = await RemoteFirstFocusedEvidence.RunAsync(_testOverrides, _timeProvider, worktreePath, focusedChecks, goalId, executionOwner,
@@ -3718,7 +3724,11 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         // Goal-scoped artifacts remain reusable across attempts, while ownerless commands use
         // an invocation-local environment.
         DotnetBuildEnvironment environment;
-        if (buildLease is not null)
+        if (_executionContext?.FocusedRunBinding is { } binding)
+        {
+            environment = binding.Environment;
+        }
+        else if (buildLease is not null)
         {
             environment = buildLease.Environment;
         }
@@ -4213,10 +4223,11 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
     private void EmitGateProgress(AcceptanceGateProgress progress, string? trailingTokens)
     {
+        progress = AcceptanceGateProgressProvenance.Attach(progress, _executionContext);
         var line =
             $"PHASE_PROGRESS goal={FormatNullableToken(progress.GoalId, 8)} phase={progress.Phase} elapsed_ms={(long)progress.Elapsed.TotalMilliseconds} " +
             $"target={QuoteProgressToken(progress.CurrentTarget)} child_pid={progress.ChildProcessId?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown"} " +
-            $"output_bytes={progress.OutputBytes} heartbeat={QuoteProgressToken(progress.HeartbeatPath)} {GateLoadContextProbe.FormatProgressTokens(progress.LoadContext)}";
+            $"output_bytes={progress.OutputBytes} heartbeat={QuoteProgressToken(progress.HeartbeatPath)} {GateLoadContextProbe.FormatProgressTokens(progress.LoadContext)}" + progress.ProvenanceTokens;
         Console.WriteLine($"{line}{(trailingTokens is null ? "" : " " + trailingTokens)} ts={progress.LastObservedAt:O}");
         Console.Out.Flush();
         _executionContext?.ReportProgress(progress);

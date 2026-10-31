@@ -43,6 +43,12 @@ internal static class OwnerConsoleGateFormatter
 
     internal static string AttributionName(OwnerConsoleGateLane lane)
     {
+        if (lane.EvidenceKind == "member-reproduction" || !string.IsNullOrWhiteSpace(lane.ReproductionMemberId))
+        {
+            var member = lane.ReproductionMemberId ?? "unknown";
+            return $"reproduction {member[..Math.Min(8, member.Length)]}: " +
+                (lane.ReproductionResult ?? (lane.State == OwnerConsoleGateLaneState.Running ? "running" : lane.Outcome));
+        }
         var target = lane.Target ?? lane.Name;
         var prefix = target.StartsWith("reviewer focused evidence: ", StringComparison.Ordinal)
             ? "reviewer focused evidence: " : "reviewer mapped project evidence: ";

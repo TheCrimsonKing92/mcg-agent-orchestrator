@@ -11,7 +11,9 @@ internal sealed record OwnerConsoleGateLane(string Name, OwnerConsoleGateLaneSta
     double? QuietSeconds = null, bool IsManifestLane = true,
     string? Target = null, string? HeartbeatPath = null, bool IsAttribution = false,
     IReadOnlyList<string>? FailingTestNames = null, int SkippedTestCount = 0,
-    OwnerConsoleGateConfirmation? Confirmation = null, string? SkipReason = null);
+    OwnerConsoleGateConfirmation? Confirmation = null, string? SkipReason = null,
+    string? TreeRevision = null, string? EvidenceKind = null, string? ReproductionMemberId = null,
+    IReadOnlyList<OwnerConsoleGateReproduction>? Reproductions = null, string? ReproductionResult = null);
 internal sealed record OwnerConsoleGateManifestLane(string Name, double EstimatedSerialSeconds);
 internal sealed record OwnerConsoleGateDuration(string LaneName, double DurationSeconds, DateTimeOffset RecordedAt);
 
@@ -196,7 +198,9 @@ internal sealed record OwnerConsoleGateProgress(bool Live, string Kind,
                 return new OwnerConsoleGateLane(name, state, latest?.Get("outcome") is "passed" or "failed" ?
                     latest.Get("outcome") : "unknown", location, elapsed, median, samples.Length == 0, quiet, lane is not null,
                     latest?.Get("target"), observations.LastOrDefault(item => AttemptFromHeartbeat(item.Get("heartbeat")).Length > 0)?.Get("heartbeat"),
-                    IsAttributionTarget(latest?.Get("target") ?? name));
+                    IsAttributionTarget(latest?.Get("target") ?? name),
+                    TreeRevision: latest?.Get("tree"), EvidenceKind: latest?.Get("evidence_kind"),
+                    ReproductionMemberId: latest?.Get("reproduction_member"));
             }).ToArray();
             var counted = rows.Where(row => row.State != OwnerConsoleGateLaneState.Skipped &&
                 (row.IsManifestLane || row.MedianSeconds is not null)).ToArray();

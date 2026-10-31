@@ -112,10 +112,10 @@ public sealed class MergeTrainReproductionAttributionTests : AcceptanceCohortWor
         {
             var calls = 0;
             Assert.Throws<OperationCanceledException>(() => MergeTrainReproductionAttribution.TryAttribute(
-                train.FailedReceipt, train.FailedReceipt.Identity.Members, (_, _, tests, _) =>
+                train.FailedReceipt, train.FailedReceipt.Identity.Members, (member, main, tests, _) =>
                 {
                     if (++calls == 2) throw new OperationCanceledException();
-                    return new(tests, [new(TestName, "Failed", FailureMessage, null)]);
+                    return Result(member, main, tests, [new(TestName, "Failed", FailureMessage, null)]);
                 }, CancellationToken.None));
             Assert.Equal(2, calls);
         });
@@ -182,6 +182,14 @@ public sealed class MergeTrainReproductionAttributionTests : AcceptanceCohortWor
         Assert.Contains(FailureMessage, feedback);
     }
 
+    private static MergeTrainReproductionAttribution.RunResult Result(MergeTrainMemberBinding member, string main,
+        IReadOnlyList<string> tests, IReadOnlyList<AcceptanceTrxFailure> failures)
+    {
+        var root = Path.Combine(Path.GetTempPath(), "reproduction-" + member.GoalId.Value);
+        return new(tests, failures, new(main, member.CandidateRevision, member.CandidateRevision,
+            member.CandidateRevision, root, [root], [Path.Combine(root, "tests.dll")]));
+    }
+
     private void WithTrain(int[] guilty, string mode, Action<Scenario> assert, bool readOnlyChild = false)
     {
         var repo = CreateReducedAcceptanceCohortRepository();
@@ -218,7 +226,7 @@ public sealed class MergeTrainReproductionAttributionTests : AcceptanceCohortWor
             if (mode != "absent") driver.MergeTrainReproductionRunner = (member, main, tests, _) =>
             {
                 calls.Add(new(member, main, tests));
-                if (mode == "second-attempt" && calls.Count <= 3) return new(tests, []);
+                if (mode == "second-attempt" && calls.Count <= 3) return Result(member, main, tests, []);
                 var index = Array.FindIndex(goals, goal => goal.Id == member.GoalId);
                 if (index == 1)
                 {
@@ -227,7 +235,7 @@ public sealed class MergeTrainReproductionAttributionTests : AcceptanceCohortWor
                     if (mode == "skipped") return new(tests, [new(TestName, "NotExecuted", "skipped", null)]);
                     if (mode == "exception") throw new IOException("unavailable fixture result");
                 }
-                return new(tests, guilty.Contains(index) ? [new(TestName, "Failed", FailureMessage, null)] :
+                return Result(member, main, tests, guilty.Contains(index) ? [new(TestName, "Failed", FailureMessage, null)] :
                     mode == "unrelated" ? [new("Ns.OtherTests.Fails", "Failed", "unrelated", null)] : []);
             };
             var selection = new ConductorMergeTrainSelection(goals.Select(goal =>

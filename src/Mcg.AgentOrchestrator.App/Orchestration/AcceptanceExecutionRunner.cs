@@ -46,7 +46,8 @@ internal static class AcceptanceExecutionRunner
         string integrationBranch,
         FindingEvidenceNegativeControl? negativeControl = null, IReadOnlyList<string>? revertPaths = null, FindingEvidenceMutation? mutation = null, IReadOnlyList<string>? declaredPaths = null,
         string? projectHomeDirectory = null, Action<AcceptanceGateProgress>? progressSink = null,
-        SourceRevertedEvidenceContinuation? continuation = null)
+        SourceRevertedEvidenceContinuation? continuation = null,
+        AcceptanceFocusedRunBinding? focusedRunBinding = null)
     {
         ArgumentNullException.ThrowIfNull(verifier);
         var executionOwner = AcceptanceExecutionOwners.CreateFocusedVerification(
@@ -54,7 +55,8 @@ internal static class AcceptanceExecutionRunner
             goalId,
             stableSlotIndex,
             cancellationToken,
-            new AcceptanceRunExecutionOptions(ProjectHomeDirectory: projectHomeDirectory, IntegrationBranch: integrationBranch, ProgressSink: progressSink));
+            new AcceptanceRunExecutionOptions(ProjectHomeDirectory: projectHomeDirectory, IntegrationBranch: integrationBranch,
+                ProgressSink: progressSink, FocusedRunBinding: focusedRunBinding));
         if (continuation is not null && verifier is GoalAcceptanceVerifier concrete &&
             executionOwner is IAcceptanceRunExecutionContext context)
             verifier = new GoalAcceptanceVerifier(concrete, context) { SourceRevertedContinuation = continuation };

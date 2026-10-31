@@ -138,7 +138,7 @@ public sealed class OwnerConsoleGateConfirmationViewTests
         const string otherTarget = "infrastructure tests: Other";
         fixture.WriteDefinedFailure(Target, "Sample.Tests.RealFailure", "Fails");
         fixture.WriteDefinedFailure(otherTarget, "Sample.Tests.OtherFailure", "Fails");
-        fixture.WriteResults(Focused, "-run-1", (Failure, outcome));
+        fixture.WriteResults(Focused, "-run-1", (Failure + "(value: 1)", outcome));
 
         var gate = fixture.Load(phase, outcome, otherFailedLane: true);
         Assert.Equal(3, gate.Lanes.Count);
@@ -251,7 +251,8 @@ public sealed class OwnerConsoleGateConfirmationViewTests
 
         private string Progress(int age, string phase, string target, string slug, string outcome) =>
             JsonSerializer.Serialize(new { timestamp = Now.AddSeconds(age), eventKind = "gate-progress", goalId = "31bcecc5",
-                detail = $"PHASE_PROGRESS goal=31bcecc5 phase={phase} target=\"{target}\" elapsed_ms=0 outcome={outcome} heartbeat=\"{Path.Combine(_directory, Prefix + "." + slug + ".gate-heartbeat.json")}\"" });
+                detail = $"PHASE_PROGRESS goal=31bcecc5 phase={phase} target=\"{target}\" elapsed_ms=0 outcome={outcome} heartbeat=\"{Path.Combine(_directory, Prefix + "." + slug + ".gate-heartbeat.json")}\" " +
+                    $"tree={new string('a', 40)} evidence_kind={(target == Focused ? "candidate-rerun" : "candidate")}" });
 
         public void Dispose() => Directory.Delete(_directory, true);
     }
