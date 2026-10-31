@@ -57,6 +57,8 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
     private bool _acting;
     private OwnerConsolePane _focusedPane = OwnerConsolePane.Decisions;
     private int _selectedBoardIndex = -1;
+    private readonly OwnerConsoleBoardCollapse _collapse = new();
+    private OwnerConsoleViewModel? _arrangedBoard;
     private int _activityWidth;
     private int _boardTitleWidth;
     internal bool ActivityFollowing => _activityPane.Following;
@@ -220,15 +222,20 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
         _rendering = true;
         try
         {
-            model = OwnerConsoleBoardSection.Arrange(model);
+            _arrangedBoard = OwnerConsoleBoardSection.Arrange(model);
+            model = _collapse.Apply(_arrangedBoard);
             _controller.Apply(model);
             if (model.BoardScope is { } scope) Window.Title = $"Owner console - {OwnerConsoleProjectLabel.ForScope(scope)}";
             _refreshedAt = _clock.GetUtcNow();
             RenderStatus();
             RenderDecisions();
             RenderBoard();
-            var index = Array.FindIndex(model.Board.ToArray(), row => row.GoalId == SelectedGoalId && row.Project == SelectedProject);
-            SelectBoard(index < 0 ? _selectedBoardIndex : index, refresh: true);
+            var selectedHeader = OwnerConsoleBoardCollapse.Enabled(model) && SelectedGoalId is null && SelectedProject is not null;
+            var index = Array.FindIndex(model.Board.ToArray(), row =>
+                (selectedHeader ? row.IsDiagnostic : row.GoalId == SelectedGoalId) &&
+                string.Equals(row.Project, SelectedProject, StringComparison.OrdinalIgnoreCase));
+            SelectBoard(index < 0 ? _selectedBoardIndex : index, refresh: true,
+                allowHeader: selectedHeader && index >= 0);
             RenderActivity();
             RenderHints();
             NoticeStrip.RefreshSucceeded();
@@ -459,6 +466,29 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
             return;
         }
         var character = (char)key.AsRune.Value;
+        if (!key.IsCtrl && !key.IsAlt && char.ToLowerInvariant(character) == 'c' &&
+            FocusedPane == OwnerConsolePane.Board && OwnerConsoleBoardCollapse.Enabled(_arrangedBoard))
+        {
+            key.Handled = true;
+            if (ActionRunning || SelectedProject is not { } project || _arrangedBoard is null ||
+                !_arrangedBoard.Board.Any(row => row.IsDiagnostic &&
+                    string.Equals(row.Project, project, StringComparison.OrdinalIgnoreCase))) return;
+            _collapse.Toggle(project);
+            _rendering = true;
+            try
+            {
+                var collapsed = _collapse.Apply(_arrangedBoard);
+                _controller.Apply(collapsed);
+                RenderBoard();
+                var header = Array.FindIndex(collapsed.Board.ToArray(), row => row.IsDiagnostic &&
+                    string.Equals(row.Project, project, StringComparison.OrdinalIgnoreCase));
+                SelectBoard(header, allowHeader: true);
+            }
+            finally { _rendering = false; }
+            RenderHints();
+            RenderOverflow();
+            return;
+        }
         if (!key.IsCtrl && !key.IsAlt && OwnerConsoleBindings.ForKey(character, FocusedPane) is { } keyBinding)
         {
             key.Handled = true;
@@ -698,15 +728,17 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
 
     private void RenderHints() => _hints.Text = _editingCommand || _command.HasFocus
         ? _completionHint ?? OwnerConsoleKeyHints.CommandLineHint
-        : OwnerConsoleKeyHints.Hint(FocusedPane,
+        : (FocusedPane == OwnerConsolePane.Board && OwnerConsoleBoardCollapse.Enabled(_controller.Model)
+            ? OwnerConsoleBoardCollapse.KeyHint + "  " : "") + OwnerConsoleKeyHints.Hint(FocusedPane,
             _controller.SelectedDecision is { } decision && OwnerConsoleScreenController.AnswersInConsole(decision), _activityPane.Following);
 
-    private void SelectBoard(int index, bool refresh = false, int direction = 0)
+    private void SelectBoard(int index, bool refresh = false, int direction = 0, bool allowHeader = false)
     {
         using var trace = _diagnostics?.Begin("select-board", TraceState);
         if (_controller.Model is not { Board.Length: > 0 } model)
         { _selectedBoardIndex = -1; SelectedGoalId = null; SelectedProject = null; _summary.Select(null); RenderPreview(); return; }
-        var selectable = OwnerConsoleBoardSection.NearestGoal(model.Board, model.BoardScope, index, direction);
+        var selectable = allowHeader && index >= 0 && index < BoardTable.Rows.Count && model.Board[index].IsDiagnostic
+            ? index : OwnerConsoleBoardSection.NearestGoal(model.Board, model.BoardScope, index, direction);
         _selectedBoardIndex = selectable < 0 ? 0 : selectable;
         var row = model.Board[_selectedBoardIndex];
         SelectedGoalId = row.IsDiagnostic ? null : row.GoalId;
