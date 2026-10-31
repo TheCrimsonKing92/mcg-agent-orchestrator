@@ -142,14 +142,14 @@ internal static partial class DispatchEvidenceSummaries
             return TruncateEvidence(providerLimitLine);
         }
 
-        if (!HasVerificationEvidence(verification))
+        if (!DispatchCompletionEvidence.HasVerificationEvidence(verification))
         {
             return string.Empty;
         }
 
         foreach (var rawLine in EnumerateEvidenceLines(verification, includeStandardOutput: true, includeStandardError: true))
         {
-            if (HasVerificationEvidence(rawLine, string.Empty))
+            if (DispatchCompletionEvidence.HasVerificationEvidence(rawLine, string.Empty))
             {
                 return TruncateEvidence(rawLine);
             }
@@ -235,7 +235,7 @@ internal static partial class DispatchEvidenceSummaries
 
     internal static string BuildVerifiedNoNewCommitEvidenceSummary(TaskSpec task, TaskVerificationRecord verification)
     {
-        var commitEvidence = TryGetKnownWorkerResultCommitSha(task, verification, out var commitSha)
+        var commitEvidence = DispatchCompletionEvidence.TryGetKnownWorkerResultCommitSha(task, verification, out var commitSha)
             ? $"commit {commitSha}"
             : "known commit";
         var testsEvidence = WorkerResultBlockers.TryFindTests(verification, out var tests)
